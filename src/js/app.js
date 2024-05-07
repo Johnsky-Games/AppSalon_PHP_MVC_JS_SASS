@@ -120,10 +120,7 @@ function paginaSiguiente() {
 async function consultarAPI() {
     try {
         const url = `${location.origin}/api/servicios`;
-        const resultado = await fetch(url, {
-            mode: 'no-cors',
-            credentials: 'includes',
-        });
+        const resultado = await fetch(url);
         const servicios = await resultado.json();
         mostrarServicios(servicios);
     } catch (error) {
