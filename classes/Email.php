@@ -25,7 +25,7 @@ class Email
         $email->SMTPAuth = true;
         $email->Port = $_ENV['EMAIL_PORT'];
         $email->Username = $_ENV['EMAIL_USER'];
-        $email->Password = $_ENV['EMAIL_PASS'];
+        $email->Password = $_ENV['EMAIL_PASSWORD'];
 
         $email->setFrom('cuentas@appsalon.com');
         $email->addAddress('cuentas@appsalon.com', 'AppSalon.com');
@@ -58,7 +58,7 @@ class Email
         $email->SMTPAuth = true;
         $email->Port = $_ENV['EMAIL_PORT'];
         $email->Username = $_ENV['EMAIL_USER'];
-        $email->Password = $_ENV['EMAIL_PASS'];
+        $email->Password = $_ENV['EMAIL_PASSWORD'];
 
         $email->setFrom('cuentas@appsalon.com');
         $email->addAddress('cuentas@appsalon.com', 'AppSalon.com');
