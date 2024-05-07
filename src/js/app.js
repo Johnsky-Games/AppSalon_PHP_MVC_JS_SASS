@@ -121,7 +121,7 @@ async function consultarAPI() {
     try {
         const url = `${location.origin}/api/servicios`;
         const resultado = await fetch(url, {
-            mode: 'cors',
+            mode: 'no-cors',
             credentials: 'includes',
         });
         const servicios = await resultado.json();
