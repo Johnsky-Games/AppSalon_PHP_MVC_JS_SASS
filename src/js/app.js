@@ -121,7 +121,11 @@ async function consultarAPI() {
     try {
         const url = `${location.origin}/api/servicios`;
         const resultado = await fetch(url, {
-            mode: 'cors'
+            method: 'GET',
+            headers: {
+                'Content-Type': 'services/json',
+                'Origin': location.origin
+            }
         });
         const servicios = await resultado.json();
         mostrarServicios(servicios);
@@ -129,6 +133,7 @@ async function consultarAPI() {
         console.log(error);
     }
 }
+
 
 function mostrarServicios(servicios) {
     servicios.forEach(servicio => {
