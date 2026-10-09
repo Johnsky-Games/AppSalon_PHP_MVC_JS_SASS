@@ -2,7 +2,7 @@
 
 /**
  * Worker auxiliar para pruebas de concurrencia simultánea en el flujo de login.
- * Se sincroniza mediante STDIN para disparar peticiones paralelas exactas.
+ * Se sincroniza mediante STDIN tras emitir señal READY para disparar peticiones paralelas exactas.
  */
 
 require_once __DIR__ . '/../../includes/app.php';
@@ -44,31 +44,42 @@ $_POST['csrf_token'] = $csrf;
 $_POST['email'] = $emailTarget;
 $_POST['password'] = 'clave_invalida_concurrente';
 
+// Señal explícita de que este trabajador terminó su inicialización y está listo
+echo "READY\n";
+flush();
+
 // Barrera de sincronización: esperar señal de inicio por STDIN
-fgets(STDIN);
+$senal = fgets(STDIN);
 
 // Ejecutar flujo real de LoginController::login
 $router = new Router();
 $codigo = 200;
+$errorMsg = null;
 ob_start();
 try {
     LoginController::login($router);
-    $codigo = http_response_code();
+    $codigo = http_response_code() ?: 200;
 } catch (\Classes\AppTerminationException $e) {
     $codigo = $e->getStatusCode();
 } catch (\AppTerminationException $e) {
     $codigo = $e->getStatusCode();
 } catch (\Throwable $e) {
     $codigo = 500;
+    $errorMsg = $e->getMessage();
 } finally {
     ob_end_clean();
 }
 
 $alertas = Usuario::getAlertas();
 $bloqueado = false;
+$alcanzoCredenciales = false;
+
 foreach ($alertas['error'] ?? [] as $err) {
     if (str_contains($err, 'Demasiados intentos')) {
         $bloqueado = true;
+    }
+    if (str_contains($err, 'Credenciales incorrectas')) {
+        $alcanzoCredenciales = true;
     }
 }
 
@@ -76,5 +87,7 @@ $db->close();
 
 echo json_encode([
     'status' => $codigo,
-    'bloqueado' => $bloqueado
+    'bloqueado' => $bloqueado,
+    'alcanzo_credenciales' => $alcanzoCredenciales,
+    'error_msg' => $errorMsg
 ]);

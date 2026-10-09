@@ -8,6 +8,22 @@ use mysqli;
  * Gestor de limitación de tasa (Rate Limiting) atómico y basado en base de datos.
  * Aplica ventana fija de 15 minutos (900s) y duración de bloqueo para mitigar fuerza bruta.
  * Serializa conteo y evaluación atómicamente en MySQL bajo InnoDB.
+ *
+ * POLÍTICA DE GESTIÓN Y LIMPIEZA DE CONTADORES:
+ * 1. Presupuesto Compartido de IP (TIPO_IP_*):
+ *    Representa el vector de origen de red. Su contador es compartido entre todas las solicitudes
+ *    provenientes de dicha IP y NUNCA se reinicia tras una autenticación exitosa. Su presupuesto
+ *    expira exclusivamente por el paso del tiempo transcurrida la ventana de 15 minutos (900s).
+ *    Esta política previene que un atacante eluda el límite de solicitudes por IP realizando
+ *    inicios de sesión válidos en una cuenta de control intercalados con intentos hacia cuentas víctimas.
+ * 2. Contador por Cuenta / Identidad (TIPO_EMAIL_*):
+ *    Representa la cuenta individual objetivo. Ante un inicio de sesión exitoso, se limpia
+ *    exclusivamente el contador asociado a ese correo mediante DELETE en MySQL.
+ * 3. Comportamiento ante Solicitudes Concurrentes:
+ *    La limpieza opera mediante DELETE indexado por clave única (tipo, identificador).
+ *    Si una solicitud concurrente de login fallido para la misma cuenta se ejecuta antes del DELETE,
+ *    sus intentos acumulados se borran limpiamente. Si se ejecuta inmediatamente después,
+ *    inicia una nueva serie con 1 intento sin bloquear ni interferir con la sesión exitosa.
  */
 class RateLimiter
 {

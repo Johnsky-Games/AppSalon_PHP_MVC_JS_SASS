@@ -9,6 +9,8 @@ use Model\Servicio;
 use Model\Cita;
 use Model\CitaServicio;
 use Classes\RateLimiter;
+use Classes\Email;
+use PHPMailer\PHPMailer\PHPMailer;
 use Controllers\APIController;
 use Controllers\LoginController;
 use MVC\Router;
@@ -539,45 +541,60 @@ class SecurityIntegrationTest extends TestCase
             $pipes[$i] = $procPipes;
         }
 
-        // Breve pausa para asegurar que los 10 procesos alcancen la barrera de sincronización en fgets(STDIN)
-        usleep(300000); // 300 ms
+        // 4. Esperar señal explícita de READY de cada uno de los 10 trabajadores
+        for ($i = 0; $i < $numProcesos; $i++) {
+            $readyLine = trim(fgets($pipes[$i][1]));
+            $this->assertSame('READY', $readyLine, "El trabajador #{$i} no emitió la señal READY esperada");
+        }
 
-        // 4. Liberar la barrera para todos los procesos concurrentemente
+        // 5. Liberar la barrera para todos los procesos concurrentemente
         for ($i = 0; $i < $numProcesos; $i++) {
             fwrite($pipes[$i][0], "GO\n");
             fflush($pipes[$i][0]);
             fclose($pipes[$i][0]);
         }
 
-        // 5. Recolectar resultados de los 10 procesos
+        // 6. Recolectar resultados de los 10 procesos con validación estricta de respuestas
         $admitidos = 0;
         $rechazados429 = 0;
+        $credencialesVerificadas = 0;
 
         for ($i = 0; $i < $numProcesos; $i++) {
             $stdout = stream_get_contents($pipes[$i][1]);
             fclose($pipes[$i][1]);
+            $stderr = stream_get_contents($pipes[$i][2]);
             fclose($pipes[$i][2]);
             $exitCode = proc_close($procesos[$i]);
 
-            $this->assertSame(0, $exitCode, "El proceso hijo #{$i} terminó con error inesperado");
-            $data = json_decode($stdout, true);
-            $this->assertIsArray($data, "El subproceso #{$i} no retornó JSON válido. Salida: {$stdout}");
+            $this->assertSame(0, $exitCode, "El proceso hijo #{$i} terminó con código {$exitCode}. STDERR: {$stderr}");
+            $data = json_decode(trim($stdout), true);
+            $this->assertIsArray($data, "El subproceso #{$i} no retornó JSON válido. Salida: '{$stdout}' | STDERR: '{$stderr}'");
 
-            if ($data['status'] === 429 || $data['bloqueado'] === true) {
+            // No clasificar cualquier respuesta distinta de 429 como válida; fallar ante 500, excepciones o anomalías
+            $this->assertContains($data['status'], [200, 429], "Respuesta inesperada en proceso #{$i}: status={$data['status']}. Error: " . ($data['error_msg'] ?? 'ninguno'));
+
+            if ($data['status'] === 429) {
+                $this->assertTrue($data['bloqueado'], "El proceso #{$i} rechazado con 429 debe reportar bloqueado=true");
+                $this->assertFalse($data['alcanzo_credenciales'], "El proceso #{$i} con 429 no debe alcanzar verificación de credenciales");
                 $rechazados429++;
-            } else {
+            } elseif ($data['status'] === 200) {
+                $this->assertFalse($data['bloqueado'], "El proceso #{$i} admitido no debe reportar bloqueo");
+                $this->assertTrue($data['alcanzo_credenciales'], "El proceso #{$i} admitido debe evidenciar alcance de verificación de credenciales");
                 $admitidos++;
+                $credencialesVerificadas++;
             }
         }
 
-        // 6. Verificar conteo exacto de peticiones admitidas vs rechazadas bajo concurrencia
+        // 7. Verificar conteo exacto de peticiones admitidas vs rechazadas bajo concurrencia
         // Con MAX_INTENTOS_EMAIL = 5, exactamente 5 peticiones deben ser admitidas antes del bloqueo,
-        // y exactamente 5 deben ser rechazadas con HTTP 429 / bloqueado sin llegar a verificación redundante.
+        // exactamente 5 deben alcanzar verificación de credenciales,
+        // y exactamente 5 deben ser rechazadas con HTTP 429 sin llegar a verificación costosa redundante.
         $this->assertSame(5, $admitidos, 'Exactamente 5 peticiones deben ser admitidas por el rate limiter');
         $this->assertSame(5, $rechazados429, 'Exactamente 5 peticiones deben ser rechazadas con 429 bajo concurrencia');
+        $this->assertSame(5, $credencialesVerificadas, 'Exactamente 5 peticiones deben alcanzar verificación de credenciales');
         $this->assertSame(10, $admitidos + $rechazados429, 'El total de procesos admitidos + rechazados debe ser 10');
 
-        // 7. Verificar estado final en MySQL
+        // 8. Verificar estado final en MySQL
         $estado = RateLimiter::consultarEstado(self::$db, RateLimiter::TIPO_EMAIL_LOGIN, $emailTarget);
         $this->assertTrue($estado['bloqueado'], 'La cuenta debe permanecer en estado bloqueado tras alcanzar el umbral');
         $this->assertSame(5, $estado['intentos'], 'El número de intentos registrados en BD debe ser exactamente 5');
@@ -692,6 +709,257 @@ class SecurityIntegrationTest extends TestCase
         $outC = ob_get_clean();
 
         $this->assertStringContainsString('Si la cuenta existe y está pendiente de confirmación', $outC);
+    }
+
+    public function testEmisionTokenRecuperacionConcurrenteNoRevierteCambioDePassword(): void
+    {
+        $email = 'concurrente_pwd@correo.com';
+        $passOriginalHash = password_hash('clave_original_123', PASSWORD_BCRYPT);
+        $passNuevoHash = password_hash('clave_nueva_456', PASSWORD_BCRYPT);
+
+        $usuario = new Usuario([
+            'nombre' => 'Ana',
+            'apellido' => 'Lopez',
+            'email' => $email,
+            'password' => $passOriginalHash,
+            'telefono' => '1122334455',
+            'confirmado' => '1',
+            'admin' => '0'
+        ]);
+        $usuario->guardar();
+        $id = (int)$usuario->id;
+
+        // Simulación de concurrencia:
+        // Hilo 1: Lee el objeto usuario en memoria con la contraseña original
+        $hilo1Usuario = Usuario::where('email', $email);
+        $this->assertSame($passOriginalHash, $hilo1Usuario->password);
+
+        // Hilo 2 (intercalado): El usuario cambia su contraseña en otra petición
+        self::$db->query("UPDATE usuarios SET password = '{$passNuevoHash}' WHERE id = {$id}");
+
+        // Hilo 1: Emite token de recuperación mediante actualización preparada específica
+        $tokenRaw = $hilo1Usuario->generarYPersistirTokenRecuperacion(2);
+        $this->assertNotNull($tokenRaw, 'Debe emitir token exitosamente para cuenta confirmada');
+
+        // Verificación en base de datos: La nueva contraseña de Hilo 2 NO fue revertida por Hilo 1
+        $usuarioFinal = Usuario::where('email', $email);
+        $this->assertSame($passNuevoHash, $usuarioFinal->password, 'El cambio de contraseña concurrente NO debe ser revertido');
+        $this->assertSame('recuperacion', $usuarioFinal->token_tipo);
+        $this->assertSame(hash('sha256', $tokenRaw), $usuarioFinal->token_hash);
+        $this->assertNull($usuarioFinal->token);
+    }
+
+    public function testEmisionTokenConfirmacionConcurrenteNoRevierteConfirmacion(): void
+    {
+        $email = 'concurrente_conf@correo.com';
+        $usuario = new Usuario([
+            'nombre' => 'Pedro',
+            'apellido' => 'Soto',
+            'email' => $email,
+            'password' => password_hash('clave123', PASSWORD_BCRYPT),
+            'telefono' => '9988776655',
+            'confirmado' => '0',
+            'admin' => '0'
+        ]);
+        $usuario->guardar();
+        $id = (int)$usuario->id;
+
+        // Hilo 1: Lee usuario no confirmado
+        $hilo1Usuario = Usuario::where('email', $email);
+        $this->assertSame('0', (string)$hilo1Usuario->confirmado);
+
+        // Hilo 2: Se confirma la cuenta concurrentemente
+        self::$db->query("UPDATE usuarios SET confirmado = '1' WHERE id = {$id}");
+
+        // Hilo 1: Intenta emitir token de confirmación condicionado a confirmado = '0'
+        $tokenRaw = $hilo1Usuario->generarYPersistirTokenConfirmacion(24);
+
+        // Debe retornar null porque afectó 0 filas (ya estaba confirmada)
+        $this->assertNull($tokenRaw, 'No debe emitir token si la cuenta fue confirmada concurrentemente');
+
+        $usuarioFinal = Usuario::where('email', $email);
+        $this->assertSame('1', (string)$usuarioFinal->confirmado, 'La confirmación concurrente debe mantenerse intacta');
+        $this->assertNull($usuarioFinal->token_hash);
+    }
+
+    public function testLoginExitosoNoReiniciaPresupuestoIpAtaqueMultiplesCuentas(): void
+    {
+        $ip = '198.51.100.99';
+        $controlEmail = 'cuenta_control@correo.com';
+        $controlPassword = 'clave_control_123';
+
+        // Crear cuenta de control legítima
+        $usuarioControl = new Usuario([
+            'nombre' => 'Control',
+            'apellido' => 'Owner',
+            'email' => $controlEmail,
+            'password' => $controlPassword,
+            'telefono' => '1234567890',
+            'confirmado' => '1'
+        ]);
+        $usuarioControl->hashPassword();
+        $usuarioControl->guardar();
+
+        // Limpiar registros previos de rate limiting
+        RateLimiter::limpiarIntentos(self::$db, RateLimiter::TIPO_IP_LOGIN, $ip);
+        RateLimiter::limpiarIntentos(self::$db, RateLimiter::TIPO_EMAIL_LOGIN, $controlEmail);
+
+        $router = new Router();
+        $_SERVER['REMOTE_ADDR'] = $ip;
+        $_SERVER['REQUEST_METHOD'] = 'POST';
+
+        // 1. Simular 4 intentos fallidos hacia cuenta victima1 desde la misma IP
+        for ($i = 1; $i <= 4; $i++) {
+            $csrf = bin2hex(random_bytes(32));
+            $_SESSION['csrf_token'] = $csrf;
+            $_POST['csrf_token'] = $csrf;
+            $_POST['email'] = 'victima1@correo.com';
+            $_POST['password'] = 'clave_invalida';
+
+            ob_start();
+            LoginController::login($router);
+            ob_end_clean();
+        }
+
+        // 2. Realizar 1 inicio de sesión exitoso hacia la cuenta de control desde la misma IP
+        $csrf = bin2hex(random_bytes(32));
+        $_SESSION['csrf_token'] = $csrf;
+        $_POST['csrf_token'] = $csrf;
+        $_POST['email'] = $controlEmail;
+        $_POST['password'] = $controlPassword;
+
+        ob_start();
+        try {
+            LoginController::login($router);
+        } catch (\Classes\AppTerminationException $e) {
+            // Esperado redirect 302
+        } catch (\AppTerminationException $e) {
+            // Esperado redirect 302
+        }
+        ob_end_clean();
+
+        // Verificar que el contador de la cuenta de control fue limpiado
+        $estadoControl = RateLimiter::consultarEstado(self::$db, RateLimiter::TIPO_EMAIL_LOGIN, $controlEmail);
+        $this->assertFalse($estadoControl['bloqueado']);
+        $this->assertSame(0, $estadoControl['intentos']);
+
+        // Verificar que el presupuesto de la IP NO se reinició (registra intentos previos sin ser borrado)
+        $estadoIp = RateLimiter::consultarEstado(self::$db, RateLimiter::TIPO_IP_LOGIN, $ip);
+        $this->assertGreaterThanOrEqual(4, $estadoIp['intentos'], 'El presupuesto de la IP NO debe ser reiniciado por un login exitoso');
+
+        // 3. Continuar intentos hacia otras cuentas víctimas desde la misma IP hasta agotar el límite de IP (MAX_INTENTOS_IP = 15)
+        $intentosRestantes = RateLimiter::MAX_INTENTOS_IP - $estadoIp['intentos'];
+        for ($k = 0; $k < $intentosRestantes; $k++) {
+            $csrf = bin2hex(random_bytes(32));
+            $_SESSION['csrf_token'] = $csrf;
+            $_POST['csrf_token'] = $csrf;
+            $_POST['email'] = "victima_extra_{$k}@correo.com";
+            $_POST['password'] = 'clave_invalida';
+
+            ob_start();
+            LoginController::login($router);
+            ob_end_clean();
+        }
+
+        // 4. El siguiente intento desde esa IP (incluso hacia la cuenta de control) debe ser bloqueado con 429
+        $csrf = bin2hex(random_bytes(32));
+        $_SESSION['csrf_token'] = $csrf;
+        $_POST['csrf_token'] = $csrf;
+        $_POST['email'] = $controlEmail;
+        $_POST['password'] = $controlPassword;
+
+        ob_start();
+        LoginController::login($router);
+        ob_end_clean();
+
+        $this->assertSame(429, http_response_code(), 'La IP debe bloquearse con 429 al agotar su presupuesto compartido');
+        $alertas = Usuario::getAlertas();
+        $this->assertNotEmpty($alertas['error']);
+        $this->assertStringContainsString('Demasiados intentos fallidos', $alertas['error'][0]);
+    }
+
+    public function testOlvideNoIntentaEnviarCorreoSiFallaPersistenciaToken(): void
+    {
+        $email = 'falla_persistencia_olvide@correo.com';
+        $usuario = new Usuario([
+            'nombre' => 'TestPersist',
+            'apellido' => 'Olvide',
+            'email' => $email,
+            'password' => password_hash('clave123', PASSWORD_BCRYPT),
+            'telefono' => '1122334455',
+            'confirmado' => '1'
+        ]);
+        $usuario->guardar();
+
+        $enviosIntentados = 0;
+        Email::setTransport(function(PHPMailer $mailer, string $proposito, array $meta) use (&$enviosIntentados): bool {
+            $enviosIntentados++;
+            return true;
+        });
+
+        // Crear trigger temporal que hace fallar la actualización de tokens de recuperación
+        self::$db->query("DROP TRIGGER IF EXISTS trg_fail_token_update");
+        self::$db->query(
+            "CREATE TRIGGER trg_fail_token_update BEFORE UPDATE ON usuarios
+             FOR EACH ROW BEGIN
+                 IF NEW.token_tipo = 'recuperacion' AND NEW.email = '{$email}' THEN
+                     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Forced update failure';
+                 END IF;
+             END"
+        );
+
+        $router = new Router();
+        $csrf = bin2hex(random_bytes(32));
+        $_SESSION['csrf_token'] = $csrf;
+        $_POST['csrf_token'] = $csrf;
+        $_POST['email'] = $email;
+        $_SERVER['REQUEST_METHOD'] = 'POST';
+
+        try {
+            ob_start();
+            LoginController::olvide($router);
+            ob_end_clean();
+
+            // Comprobar que NO se intentó enviar ningún correo
+            $this->assertSame(0, $enviosIntentados, 'Si la persistencia del token falla, no debe llamarse al transporte de correo');
+            $this->assertEmpty(Email::$emailsEnviados, 'No debe registrarse ningún correo enviado si la persistencia falló');
+        } finally {
+            self::$db->query("DROP TRIGGER IF EXISTS trg_fail_token_update");
+        }
+    }
+
+    public function testReenviarConfirmacionNoEnviaCorreoSiCuentaYaEstaConfirmada(): void
+    {
+        $email = 'confirmada_no_envio@correo.com';
+        $usuario = new Usuario([
+            'nombre' => 'Usuario',
+            'apellido' => 'Confirmado',
+            'email' => $email,
+            'password' => password_hash('clave123', PASSWORD_BCRYPT),
+            'telefono' => '1122334455',
+            'confirmado' => '1'
+        ]);
+        $usuario->guardar();
+
+        $enviosIntentados = 0;
+        Email::setTransport(function(PHPMailer $mailer, string $proposito, array $meta) use (&$enviosIntentados): bool {
+            $enviosIntentados++;
+            return true;
+        });
+
+        $router = new Router();
+        $csrf = bin2hex(random_bytes(32));
+        $_SESSION['csrf_token'] = $csrf;
+        $_POST['csrf_token'] = $csrf;
+        $_POST['email'] = $email;
+        $_SERVER['REQUEST_METHOD'] = 'POST';
+
+        ob_start();
+        LoginController::reenviarConfirmacion($router);
+        ob_end_clean();
+
+        $this->assertSame(0, $enviosIntentados, 'No debe intentar enviar correo de confirmación para cuenta ya confirmada');
+        $this->assertEmpty(Email::$emailsEnviados);
     }
 }
 

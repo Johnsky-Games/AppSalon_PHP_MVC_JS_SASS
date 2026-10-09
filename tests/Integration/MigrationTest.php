@@ -120,22 +120,47 @@ class MigrationTest extends TestCase
         $this->assertStringContainsString('[+] Aplicando migración: 002_innodb_and_rate_limit_window', $resUpgrade['stdout']);
         $this->assertStringContainsString('[OK] Migración 002_innodb_and_rate_limit_window aplicada exitosamente.', $resUpgrade['stdout']);
 
-        // 4. Demostrar preservación íntegra de los datos existentes
+        // 4. Demostrar preservación íntegra de los datos existentes completos
         $resUsuario = $upgradeDb->query("SELECT * FROM usuarios WHERE id = {$clienteId}")->fetch_assoc();
         $this->assertSame('Carlos', $resUsuario['nombre']);
+        $this->assertSame('Gomez', $resUsuario['apellido']);
         $this->assertSame('carlos@cliente.com', $resUsuario['email']);
+        $this->assertSame('5511223344', $resUsuario['telefono']);
+        $this->assertSame('0', (string)$resUsuario['admin']);
         $this->assertSame('1', (string)$resUsuario['confirmado']);
+        $this->assertSame($passwordHash, $resUsuario['password']);
+
+        $resAdmin = $upgradeDb->query("SELECT * FROM usuarios WHERE id = {$adminId}")->fetch_assoc();
+        $this->assertSame('Admin', $resAdmin['nombre']);
+        $this->assertSame('Salon', $resAdmin['apellido']);
+        $this->assertSame('admin@appsalon.com', $resAdmin['email']);
+        $this->assertSame('5599887766', $resAdmin['telefono']);
+        $this->assertSame('1', (string)$resAdmin['admin']);
+        $this->assertSame('1', (string)$resAdmin['confirmado']);
+        $this->assertSame($passwordHash, $resAdmin['password']);
 
         $resServicios = $upgradeDb->query("SELECT COUNT(*) AS total FROM servicios")->fetch_assoc();
         $this->assertSame(2, (int)$resServicios['total']);
+
+        $resS1 = $upgradeDb->query("SELECT * FROM servicios WHERE id = {$servicio1Id}")->fetch_assoc();
+        $this->assertSame('Corte de Cabello Premium', $resS1['nombre']);
+        $this->assertEquals(150.00, (float)$resS1['precio']);
+
+        $resS2 = $upgradeDb->query("SELECT * FROM servicios WHERE id = {$servicio2Id}")->fetch_assoc();
+        $this->assertSame('Tratamiento Capilar', $resS2['nombre']);
+        $this->assertEquals(250.00, (float)$resS2['precio']);
 
         $resCitas = $upgradeDb->query("SELECT * FROM citas WHERE id = {$citaId}")->fetch_assoc();
         $this->assertSame('2026-11-15', $resCitas['fecha']);
         $this->assertSame('11:00:00', $resCitas['hora']);
         $this->assertSame((string)$clienteId, (string)$resCitas['usuarioId']);
 
-        $resCS = $upgradeDb->query("SELECT COUNT(*) AS total FROM citasservicios WHERE citaId = {$citaId}")->fetch_assoc();
-        $this->assertSame(2, (int)$resCS['total']);
+        $resCS = $upgradeDb->query("SELECT servicioId FROM citasservicios WHERE citaId = {$citaId} ORDER BY servicioId ASC");
+        $csRows = [];
+        while ($row = $resCS->fetch_assoc()) {
+            $csRows[] = (int)$row['servicioId'];
+        }
+        $this->assertEquals([(int)$servicio1Id, (int)$servicio2Id], $csRows);
 
         // 5. Preparar y ejecutar instalación desde cero ejecutada también a través del migrador
         self::$db->query("DROP DATABASE IF EXISTS appsalon_fresh_migrador_test");
@@ -150,22 +175,53 @@ class MigrationTest extends TestCase
         $this->assertStringContainsString('[+] Aplicando migración: 001_security_hardening', $resFresh['stdout']);
         $this->assertStringContainsString('[+] Aplicando migración: 002_innodb_and_rate_limit_window', $resFresh['stdout']);
 
-        // 6. Comparar esquemas exactos entre ambas instalaciones
+        // 6. Comparar esquemas exactos entre ambas instalaciones: columnas, tipos, nulabilidad, defaults, índices y motores
         $tablas = ['usuarios', 'servicios', 'citas', 'citasservicios', 'intentos_login', 'migraciones'];
         foreach ($tablas as $tabla) {
             $colsUpgrade = [];
-            $resColsU = $upgradeDb->query("SHOW COLUMNS FROM {$tabla}");
+            $resColsU = $upgradeDb->query("SHOW FULL COLUMNS FROM {$tabla}");
             while ($row = $resColsU->fetch_assoc()) {
-                $colsUpgrade[$row['Field']] = $row['Type'];
+                $colsUpgrade[$row['Field']] = [
+                    'type' => $row['Type'],
+                    'null' => $row['Null'],
+                    'default' => $row['Default'],
+                    'extra' => $row['Extra']
+                ];
             }
 
             $colsFresh = [];
-            $resColsF = $freshDb->query("SHOW COLUMNS FROM {$tabla}");
+            $resColsF = $freshDb->query("SHOW FULL COLUMNS FROM {$tabla}");
             while ($row = $resColsF->fetch_assoc()) {
-                $colsFresh[$row['Field']] = $row['Type'];
+                $colsFresh[$row['Field']] = [
+                    'type' => $row['Type'],
+                    'null' => $row['Null'],
+                    'default' => $row['Default'],
+                    'extra' => $row['Extra']
+                ];
             }
 
-            $this->assertEquals($colsFresh, $colsUpgrade, "Las columnas de la tabla {$tabla} deben coincidir 100% entre fresh y upgrade");
+            $this->assertEquals($colsFresh, $colsUpgrade, "Las columnas, tipos, nulabilidad y defaults de la tabla {$tabla} deben coincidir 100% entre fresh y upgrade");
+
+            // Comparar índices, claves y unicidad
+            $idxUpgrade = [];
+            $resIdxU = $upgradeDb->query("SHOW INDEX FROM {$tabla}");
+            while ($row = $resIdxU->fetch_assoc()) {
+                $idxUpgrade[$row['Key_name']][$row['Seq_in_index']] = [
+                    'column' => $row['Column_name'],
+                    'non_unique' => (int)$row['Non_unique']
+                ];
+            }
+
+            $idxFresh = [];
+            $resIdxF = $freshDb->query("SHOW INDEX FROM {$tabla}");
+            while ($row = $resIdxF->fetch_assoc()) {
+                $idxFresh[$row['Key_name']][$row['Seq_in_index']] = [
+                    'column' => $row['Column_name'],
+                    'non_unique' => (int)$row['Non_unique']
+                ];
+            }
+
+            $this->assertEquals($idxFresh, $idxUpgrade, "Los índices y restricciones de unicidad de la tabla {$tabla} deben coincidir 100% entre fresh y upgrade");
 
             // Validar motor InnoDB
             $motorU = $upgradeDb->query("SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'appsalon_upgrade_data_test' AND TABLE_NAME = '{$tabla}'")->fetch_assoc();

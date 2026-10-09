@@ -66,7 +66,11 @@ class LoginController
 
                 if ($usuario && $usuario->comprobarPasswordAndVerificado($auth->password)) {
                     if ($db) {
-                        RateLimiter::limpiarIntentos($db, RateLimiter::TIPO_IP_LOGIN, $ip);
+                        // Política de rate limiting: Un login exitoso limpia ÚNICAMENTE el contador
+                        // de la cuenta (email) autenticada. El presupuesto de la IP es compartido y
+                        // NO se reinicia aquí; solo expira naturalmente por ventana temporal para
+                        // evitar que un atacante eluda el límite de IP intercalando accesos válidos
+                        // a una cuenta de control con ataques de fuerza bruta hacia otras cuentas.
                         RateLimiter::limpiarIntentos($db, RateLimiter::TIPO_EMAIL_LOGIN, $email);
                     }
 
@@ -180,11 +184,11 @@ class LoginController
             } else {
                 $usuario = Usuario::where('email', $email);
                 if ($usuario && (string)$usuario->confirmado === '1') {
-                    $tokenRaw = $usuario->generarTokenSeguro('recuperacion', 2);
-                    $guardado = $usuario->guardar();
-                    $exitoGuardado = is_array($guardado) ? !empty($guardado['resultado']) : (bool)$guardado;
+                    // Actualización preparada atómica exclusiva de los campos del token condicionada a confirmado = '1'.
+                    // No sobreescribe password, rol admin ni datos del perfil ante peticiones concurrentes.
+                    $tokenRaw = $usuario->generarYPersistirTokenRecuperacion(2);
 
-                    if ($exitoGuardado) {
+                    if ($tokenRaw !== null) {
                         $emailObj = new Email($usuario->nombre, $usuario->email, $tokenRaw);
                         $enviado = $emailObj->enviarInstrucciones();
                         if (!$enviado) {
@@ -254,11 +258,11 @@ class LoginController
             } else {
                 $usuario = Usuario::where('email', $email);
                 if ($usuario && (string)$usuario->confirmado !== '1') {
-                    $tokenRaw = $usuario->generarTokenSeguro('confirmacion', 24);
-                    $guardado = $usuario->guardar();
-                    $exitoGuardado = is_array($guardado) ? !empty($guardado['resultado']) : (bool)$guardado;
+                    // Actualización preparada atómica exclusiva de los campos del token condicionada a confirmado = '0'.
+                    // No sobreescribe password, rol admin ni estado de confirmación ante peticiones concurrentes.
+                    $tokenRaw = $usuario->generarYPersistirTokenConfirmacion(24);
 
-                    if ($exitoGuardado) {
+                    if ($tokenRaw !== null) {
                         $emailObj = new Email($usuario->nombre, $usuario->email, $tokenRaw);
                         $enviado = $emailObj->enviarConfirmacion();
                         if (!$enviado) {

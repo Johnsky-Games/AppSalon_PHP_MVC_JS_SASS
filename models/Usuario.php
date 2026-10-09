@@ -248,6 +248,102 @@ class Usuario extends ActiveRecord
         return $filas === 1;
     }
 
+    /**
+     * Emite y persiste de forma atómica un nuevo token de recuperación.
+     * Actualiza EXCLUSIVAMENTE las columnas del token condicionado a que la cuenta esté confirmada (confirmado = '1').
+     * No modifica password, rol admin ni estado de confirmación, evitando sobreescrituras en concurrencia.
+     * Retorna el token raw solo si la actualización afectó exactamente una fila.
+     */
+    public function generarYPersistirTokenRecuperacion(int $horasExpiracion = 2): ?string
+    {
+        if (!$this->id || !self::$db) {
+            return null;
+        }
+
+        $tokenRaw = bin2hex(random_bytes(32));
+        $hash = hash('sha256', $tokenRaw);
+        $expira = date('Y-m-d H:i:s', time() + ($horasExpiracion * 3600));
+        $tipo = 'recuperacion';
+
+        $query = "UPDATE " . static::$tabla . " 
+                  SET token = NULL, token_hash = ?, token_tipo = ?, token_expira = ? 
+                  WHERE id = ? AND confirmado = '1' 
+                  LIMIT 1";
+
+        $stmt = self::$db->prepare($query);
+        if (!$stmt) {
+            return null;
+        }
+
+        $id = (int)$this->id;
+        $stmt->bind_param('sssi', $hash, $tipo, $expira, $id);
+        if (!$stmt->execute()) {
+            $stmt->close();
+            return null;
+        }
+
+        $filas = $stmt->affected_rows;
+        $stmt->close();
+
+        if ($filas === 1) {
+            $this->token = null;
+            $this->token_hash = $hash;
+            $this->token_tipo = $tipo;
+            $this->token_expira = $expira;
+            return $tokenRaw;
+        }
+
+        return null;
+    }
+
+    /**
+     * Emite y persiste de forma atómica un nuevo token de confirmación.
+     * Actualiza EXCLUSIVAMENTE las columnas del token condicionado a que la cuenta NO esté confirmada (confirmado = '0').
+     * No modifica password, rol admin ni estado de confirmación, evitando sobreescrituras en concurrencia.
+     * Retorna el token raw solo si la actualización afectó exactamente una fila.
+     */
+    public function generarYPersistirTokenConfirmacion(int $horasExpiracion = 24): ?string
+    {
+        if (!$this->id || !self::$db) {
+            return null;
+        }
+
+        $tokenRaw = bin2hex(random_bytes(32));
+        $hash = hash('sha256', $tokenRaw);
+        $expira = date('Y-m-d H:i:s', time() + ($horasExpiracion * 3600));
+        $tipo = 'confirmacion';
+
+        $query = "UPDATE " . static::$tabla . " 
+                  SET token = NULL, token_hash = ?, token_tipo = ?, token_expira = ? 
+                  WHERE id = ? AND confirmado = '0' 
+                  LIMIT 1";
+
+        $stmt = self::$db->prepare($query);
+        if (!$stmt) {
+            return null;
+        }
+
+        $id = (int)$this->id;
+        $stmt->bind_param('sssi', $hash, $tipo, $expira, $id);
+        if (!$stmt->execute()) {
+            $stmt->close();
+            return null;
+        }
+
+        $filas = $stmt->affected_rows;
+        $stmt->close();
+
+        if ($filas === 1) {
+            $this->token = null;
+            $this->token_hash = $hash;
+            $this->token_tipo = $tipo;
+            $this->token_expira = $expira;
+            return $tokenRaw;
+        }
+
+        return null;
+    }
+
     public function validarLogin()
     {
         self::$alertas = [];
