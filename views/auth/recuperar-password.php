@@ -8,6 +8,7 @@
 } ?>
 
 <form method='POST' class="formulario">
+    <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
     <div class="campo">
         <label for="password">Password</label>
         <input type="password" id="password" name="password" placeholder="Tu nuevo password">

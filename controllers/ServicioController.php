@@ -9,80 +9,104 @@ class ServicioController
 {
     public static function index(Router $router)
     {
-        session_start();
-
+        iniciar_sesion_segura();
         isAdmin();
 
         $servicios = Servicio::all();
 
         $router->render('servicios/index', [
-            'nombre' => $_SESSION['nombre'],
-            'apellido' => $_SESSION['apellido'],
+            'nombre' => $_SESSION['nombre'] ?? '',
+            'apellido' => $_SESSION['apellido'] ?? '',
             'servicios' => $servicios
         ]);
     }
+
     public static function crear(Router $router)
     {
-        session_start();
-
+        iniciar_sesion_segura();
         isAdmin();
+
         $servicio = new Servicio;
         $alertas = [];
-        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-            $servicio->sincronizar($_POST);
 
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            exigir_csrf();
+
+            $servicio->sincronizar($_POST);
             $alertas = $servicio->validar();
 
             if (empty($alertas)) {
                 $servicio->guardar();
                 header('Location: /servicios');
+                exit;
             }
         }
 
         $router->render('servicios/crear', [
-            'nombre' => $_SESSION['nombre'],
-            'apellido' => $_SESSION['apellido'],
+            'nombre' => $_SESSION['nombre'] ?? '',
+            'apellido' => $_SESSION['apellido'] ?? '',
             'servicio' => $servicio,
             'alertas' => $alertas
         ]);
     }
+
     public static function actualizar(Router $router)
     {
-        session_start();
-
+        iniciar_sesion_segura();
         isAdmin();
-        if (!is_numeric($_GET['id']))
-            return;
-        $servicio = Servicio::find($_GET['id']);
-        $alertas = [];
-        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-            $servicio->sincronizar($_POST);
 
+        $id = $_GET['id'] ?? null;
+        if (!is_numeric($id)) {
+            header('Location: /servicios');
+            exit;
+        }
+
+        $servicio = Servicio::find($id);
+        if (!$servicio) {
+            header('Location: /servicios');
+            exit;
+        }
+
+        $alertas = [];
+
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            exigir_csrf();
+
+            $servicio->sincronizar($_POST);
             $alertas = $servicio->validar();
 
             if (empty($alertas)) {
                 $servicio->guardar();
                 header('Location: /servicios');
+                exit;
             }
         }
 
         $router->render('servicios/actualizar', [
-            'nombre' => $_SESSION['nombre'],
-            'apellido' => $_SESSION['apellido'],
+            'nombre' => $_SESSION['nombre'] ?? '',
+            'apellido' => $_SESSION['apellido'] ?? '',
             'servicio' => $servicio,
             'alertas' => $alertas
         ]);
     }
+
     public static function eliminar()
     {
-        session_start();
+        iniciar_sesion_segura();
         isAdmin();
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-            $id = $_POST['id'];
-            $servicio = Servicio::find($id);
-            $servicio->eliminar();
+            exigir_csrf();
+
+            $id = $_POST['id'] ?? null;
+            if (is_numeric($id)) {
+                $servicio = Servicio::find($id);
+                if ($servicio) {
+                    $servicio->eliminar();
+                }
+            }
             header('Location: /servicios');
+            exit;
         }
     }
 }

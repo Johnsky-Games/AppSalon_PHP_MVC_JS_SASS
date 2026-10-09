@@ -7,6 +7,7 @@ include __DIR__ . '/../templates/alertas.php';
 ?>
 
 <form method="POST" class="formulario">
+    <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
     <?php include_once __DIR__ . '/formulario.php' ?>
     <input type="submit" value="Actualizar" class="boton">
 </form>

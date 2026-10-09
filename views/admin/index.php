@@ -46,6 +46,7 @@ include_once __DIR__ . '/../templates/barra.php';
                 if (esUltimo($actual, $proximo)) { ?>
             <p class="total">Total: <span>$ <?php echo $total; ?></span></p>
             <form action="/api/eliminar" method="POST">
+                <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
                 <input type="hidden" name="id" value="<?php echo $cita->id; ?>">
                 <input type="submit" class="boton-eliminar" value="Eliminar">
             </form>

@@ -4,51 +4,69 @@ namespace Controllers;
 
 use MVC\Router;
 use Classes\Email;
+use Classes\RateLimiter;
 use Model\Usuario;
+use Model\ActiveRecord;
 
 class LoginController
 {
     /**
-     * Método estático para manejar el inicio de sesión.
-     *
-     * @param Router $router El enrutador de la aplicación.
-     * @return void
+     * Maneja el inicio de sesión con validación CSRF, Rate Limiting y regeneración de sesión.
      */
     public static function login(Router $router)
     {
+        iniciar_sesion_segura();
         $auth = new Usuario;
         $alertas = [];
+        $db = ActiveRecord::getDB();
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            exigir_csrf();
+
             $auth = new Usuario($_POST);
             $alertas = $auth->validarLogin();
 
-            if (empty($alertas)) {
-                // Comprobar si el usuario existe
+            $ip = RateLimiter::obtenerIP();
+
+            // Verificación de Rate Limiting por IP y por Email
+            if ($db && (RateLimiter::estaBloqueado($db, RateLimiter::TIPO_IP_LOGIN, $ip) ||
+                RateLimiter::estaBloqueado($db, RateLimiter::TIPO_EMAIL_LOGIN, (string)$auth->email))) {
+                Usuario::setAlerta('error', 'Demasiados intentos fallidos. Por seguridad, intente de nuevo en 15 minutos.');
+                $alertas = Usuario::getAlertas();
+            } elseif (empty($alertas)) {
+                // Comprobar si el usuario existe mediante consulta preparada
                 $usuario = Usuario::where('email', $auth->email);
 
-                if ($usuario) {
-                    // Verificar el password
-                    if ($usuario->comprobarPasswordAndVerificado($auth->password)) {
-                        // Autenticar el usuario
-                        session_start();
-                        
-                        $_SESSION['id'] = $usuario->id;
-                        $_SESSION['nombre'] = $usuario->nombre;
-                        $_SESSION['apellido'] = $usuario->apellido;
-                        $_SESSION['email'] = $usuario->email;
-                        $_SESSION['login'] = true;
-
-                        // Redireccionamiento
-                        if (($usuario->admin) === '1') {
-                            $_SESSION['admin'] = $usuario->admin ?? null;
-                            header('Location: /admin');
-                        } else {
-                            header('Location: /cita');
-                        }
+                if ($usuario && $usuario->comprobarPasswordAndVerificado($auth->password)) {
+                    // Limpiar intentos fallidos al autenticar exitosamente
+                    if ($db) {
+                        RateLimiter::limpiarIntentos($db, RateLimiter::TIPO_IP_LOGIN, $ip);
+                        RateLimiter::limpiarIntentos($db, RateLimiter::TIPO_EMAIL_LOGIN, (string)$auth->email);
                     }
+
+                    // Regenerar identificador de sesión para mitigar fijación de sesión
+                    session_regenerate_id(true);
+
+                    $_SESSION['id'] = $usuario->id;
+                    $_SESSION['nombre'] = $usuario->nombre;
+                    $_SESSION['apellido'] = $usuario->apellido;
+                    $_SESSION['email'] = $usuario->email;
+                    $_SESSION['login'] = true;
+
+                    if ((string)$usuario->admin === '1') {
+                        $_SESSION['admin'] = '1';
+                        header('Location: /admin');
+                    } else {
+                        header('Location: /cita');
+                    }
+                    exit;
                 } else {
-                    Usuario::setAlerta('error', 'El usuario no existe');
+                    // Registrar intento fallido en ambos vectores (IP y Email)
+                    if ($db) {
+                        RateLimiter::registrarIntentoFallido($db, RateLimiter::TIPO_IP_LOGIN, $ip, RateLimiter::MAX_INTENTOS_IP);
+                        RateLimiter::registrarIntentoFallido($db, RateLimiter::TIPO_EMAIL_LOGIN, (string)$auth->email, RateLimiter::MAX_INTENTOS_EMAIL);
+                    }
+                    Usuario::setAlerta('error', 'Credenciales incorrectas o la cuenta no ha sido verificada');
                 }
             }
         }
@@ -62,49 +80,66 @@ class LoginController
     }
 
     /**
-     * Método estático para manejar el cierre de sesión.
-     *
-     * @return void
+     * Cierre efectivo de sesión destruyendo la cookie y limpiando el estado.
      */
     public static function logout()
     {
-        session_start();
+        iniciar_sesion_segura();
         $_SESSION = [];
-        
+
+        if (ini_get("session.use_cookies")) {
+            $params = session_get_cookie_params();
+            setcookie(session_name(), '', time() - 42000,
+                $params["path"], $params["domain"],
+                $params["secure"], $params["httponly"]
+            );
+        }
+
+        session_destroy();
         header('Location: /');
+        exit;
     }
 
     /**
-     * Método estático para manejar la solicitud de olvidar la contraseña.
-     *
-     * @param Router $router El enrutador de la aplicación.
-     * @return void
+     * Solicitud de restablecimiento de contraseña con tokens criptográficos con vencimiento.
      */
     public static function olvide(Router $router)
     {
+        iniciar_sesion_segura();
         $alertas = [];
+        $db = ActiveRecord::getDB();
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            exigir_csrf();
+
             $auth = new Usuario($_POST);
             $alertas = $auth->validarEmail();
 
-            if (empty($alertas)) {
+            $ip = RateLimiter::obtenerIP();
+
+            if ($db && (RateLimiter::estaBloqueado($db, RateLimiter::TIPO_IP_RECOVERY, $ip) ||
+                RateLimiter::estaBloqueado($db, RateLimiter::TIPO_EMAIL_RECOVERY, (string)$auth->email))) {
+                Usuario::setAlerta('error', 'Demasiadas solicitudes de recuperación. Intente en 15 minutos.');
+                $alertas = Usuario::getAlertas();
+            } elseif (empty($alertas)) {
+                if ($db) {
+                    RateLimiter::registrarIntentoFallido($db, RateLimiter::TIPO_IP_RECOVERY, $ip, RateLimiter::MAX_INTENTOS_IP);
+                    RateLimiter::registrarIntentoFallido($db, RateLimiter::TIPO_EMAIL_RECOVERY, (string)$auth->email, RateLimiter::MAX_INTENTOS_EMAIL);
+                }
+
                 $usuario = Usuario::where('email', $auth->email);
-                if ($usuario && $usuario->confirmado === '1') {
-                    // Generar un token
-                    $usuario->generarToken();
-                    // Guardar en la base de datos
+                if ($usuario && (string)$usuario->confirmado === '1') {
+                    // Token seguro con vencimiento de 2 horas para recuperación
+                    $tokenRaw = $usuario->generarTokenSeguro('recuperacion', 2);
                     $usuario->guardar();
 
-                    // To Do: Enviar un email con el token
-                    $email = new Email($usuario->nombre, $usuario->email, $usuario->token);
+                    // Enviar email con el token raw
+                    $email = new Email($usuario->nombre, $usuario->email, $tokenRaw);
                     $email->enviarInstrucciones();
-
-                    // Alerta de éxito
-                    Usuario::setAlerta('exito', 'Se ha enviado un email con las instrucciones para recuperar tu contraseña');
-                } else {
-                    Usuario::setAlerta('error', 'El usuario no existe o no está confirmado');
                 }
+
+                // Mensaje genérico para prevenir enumeración de usuarios
+                Usuario::setAlerta('exito', 'Si el correo electrónico está registrado, recibirás las instrucciones para restablecer tu contraseña en breve.');
             }
         }
 
@@ -116,39 +151,36 @@ class LoginController
     }
 
     /**
-     * Método estático para manejar la recuperación de la contraseña.
-     *
-     * @param Router $router El enrutador de la aplicación.
-     * @return void
+     * Recuperación de contraseña consumiendo token de uso único no expirado.
      */
     public static function recuperar(Router $router)
     {
+        iniciar_sesion_segura();
         $alertas = [];
         $error = false;
-        $token = s($_GET['token']);
+        $token = trim((string)($_GET['token'] ?? ''));
 
-        // Buscar usuario por su token
-        $usuario = Usuario::where('token', $token);
-        if (empty($usuario)) {
-            Usuario::setAlerta('error', 'Token no válido');
+        $usuario = Usuario::buscarPorTokenSeguro($token, 'recuperacion');
+        if (!$usuario) {
+            Usuario::setAlerta('error', 'Token no válido o expirado');
             $error = true;
         }
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-            // Leer el nuevo password y guardarlo
-            $password = new Usuario($_POST);
-            $alertas = $password->validarPassword();
+            exigir_csrf();
 
-            if (empty($alertas)) {
-                $usuario->password = null;
-                $usuario->password = $password->password;
-                $usuario->hashPassword();
-                $usuario->token = null;
+            if ($usuario) {
+                $password = new Usuario($_POST);
+                $alertas = $password->validarPassword();
 
-                $resultado = $usuario->guardar();
+                if (empty($alertas)) {
+                    $usuario->password = $password->password;
+                    $usuario->hashPassword();
+                    $usuario->consumirToken(); // Invalida el token inmediatamente
+                    $usuario->guardar();
 
-                if ($resultado) {
                     header('Location: /');
+                    exit;
                 }
             }
         }
@@ -161,87 +193,71 @@ class LoginController
     }
 
     /**
-     * Método estático para manejar la creación de una nueva cuenta de usuario.
-     *
-     * @param Router $router El enrutador de la aplicación.
-     * @return void
+     * Creación de nueva cuenta con whitelist estricta (anti-mass assignment).
      */
     public static function crear(Router $router)
     {
+        iniciar_sesion_segura();
         $usuario = new Usuario;
         $alertas = [];
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-            $usuario->sincronizar($_POST);
+            exigir_csrf();
+
+            // Asignación segura con lista blanca explícita
+            $usuario->sincronizarRegistro($_POST);
             $alertas = $usuario->validarNuevaCuenta();
 
-            // Revisar que las alertas estén vacías
             if (empty($alertas)) {
-                // Crear el usuario
-                $resultado = $usuario->existeUsuario();
-
-                if ($resultado->num_rows) {
+                if ($usuario->existeUsuario()) {
                     $alertas = Usuario::getAlertas();
                 } else {
-                    // Hashear el password
                     $usuario->hashPassword();
+                    $tokenRaw = $usuario->generarTokenSeguro('confirmacion', 24);
 
-                    // Generar un token único
-                    $usuario->generarToken();
-
-                    // Enviar un email de confirmación
-                    $email = new Email($usuario->nombre, $usuario->email, $usuario->token);
-                    $email->enviarConfirmacion();
-
-                    // Crear el usuario
                     $resultado = $usuario->guardar();
 
-                    if ($resultado) {
-                        // Redireccionar
+                    if ($resultado && !empty($resultado['resultado'])) {
+                        $email = new Email($usuario->nombre, $usuario->email, $tokenRaw);
+                        $email->enviarConfirmacion();
+
                         header('Location: /mensaje');
+                        exit;
                     }
                 }
             }
         }
+
         $router->render('auth/crear-cuenta', [
             'usuario' => $usuario,
             'alertas' => $alertas
         ]);
     }
 
-    /**
-     * Método estático para mostrar un mensaje.
-     *
-     * @param Router $router El enrutador de la aplicación.
-     * @return void
-     */
     public static function mensaje(Router $router)
     {
         $router->render('auth/mensaje', []);
     }
 
     /**
-     * Método estático para confirmar una cuenta de usuario.
-     *
-     * @param Router $router El enrutador de la aplicación.
-     * @return void
+     * Confirmación de cuenta atómica verificando token y expiración.
      */
     public static function confirmar(Router $router)
     {
+        iniciar_sesion_segura();
         $alertas = [];
-        $token = s($_GET['token']);
-        $usuario = Usuario::where('token', $token);
+        $token = trim((string)($_GET['token'] ?? ''));
 
-        if (empty($usuario)) {
-            // Mostrar mensaje de error
-            Usuario::setAlerta('error', 'Token no válido');
+        $usuario = Usuario::buscarPorTokenSeguro($token, 'confirmacion');
+
+        if (!$usuario) {
+            Usuario::setAlerta('error', 'Token no válido o expirado');
         } else {
-            // Modificar a usuario confirmado
-            $usuario->confirmado = 1;
-            $usuario->token = null;
+            $usuario->consumirToken();
             $usuario->guardar();
             Usuario::setAlerta('exito', 'Cuenta confirmada correctamente');
         }
+
         $alertas = Usuario::getAlertas();
         $router->render('auth/confirmar-cuenta', [
             'alertas' => $alertas

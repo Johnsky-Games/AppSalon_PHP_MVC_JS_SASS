@@ -3,7 +3,6 @@ namespace Model;
 
 class ActiveRecord
 {
-
     // Base DE DATOS
     protected static $db;
     protected static $tabla = '';
@@ -17,6 +16,11 @@ class ActiveRecord
     public static function setDB($database)
     {
         self::$db = $database;
+    }
+
+    public static function getDB()
+    {
+        return self::$db;
     }
 
     public static function setAlerta($tipo, $mensaje)
@@ -39,8 +43,15 @@ class ActiveRecord
     // Consulta SQL para crear un objeto en Memoria
     public static function consultarSQL($query)
     {
+        if (!self::$db) {
+            return [];
+        }
+
         // Consultar la base de datos
         $resultado = self::$db->query($query);
+        if (!$resultado) {
+            return [];
+        }
 
         // Iterar los resultados
         $array = [];
@@ -52,6 +63,38 @@ class ActiveRecord
         $resultado->free();
 
         // retornar los resultados
+        return $array;
+    }
+
+    // Consulta SQL con Sentencias Preparadas (Previene inyección SQL)
+    public static function consultarSQLPreparado(string $query, string $tipos = '', array $params = [])
+    {
+        if (!self::$db) {
+            return [];
+        }
+
+        if (empty($params)) {
+            return self::consultarSQL($query);
+        }
+
+        $stmt = self::$db->prepare($query);
+        if (!$stmt) {
+            return [];
+        }
+
+        $stmt->bind_param($tipos, ...$params);
+        $stmt->execute();
+        $resultado = $stmt->get_result();
+
+        $array = [];
+        if ($resultado) {
+            while ($registro = $resultado->fetch_assoc()) {
+                $array[] = static::crearObjeto($registro);
+            }
+            $resultado->free();
+        }
+        $stmt->close();
+
         return $array;
     }
 
@@ -74,20 +117,25 @@ class ActiveRecord
     {
         $atributos = [];
         foreach (static::$columnasDB as $columna) {
-            if ($columna === 'id')
+            if ($columna === 'id') {
                 continue;
+            }
             $atributos[$columna] = $this->$columna;
         }
         return $atributos;
     }
 
-    // Sanitizar los datos antes de guardarlos en la BD
+    // Sanitizar los datos antes de guardarlos en la BD (Compatibilidad)
     public function sanitizarAtributos()
     {
         $atributos = $this->atributos();
         $sanitizado = [];
         foreach ($atributos as $key => $value) {
-            $sanitizado[$key] = self::$db->escape_string($value);
+            if (!is_null($value)) {
+                $sanitizado[$key] = self::$db ? self::$db->escape_string((string)$value) : (string)$value;
+            } else {
+                $sanitizado[$key] = null;
+            }
         }
         return $sanitizado;
     }
@@ -124,79 +172,121 @@ class ActiveRecord
         return $resultado;
     }
 
-    // Busca un registro por su id
+    // Busca un registro por su id usando consulta preparada
     public static function find($id)
     {
-        $query = "SELECT * FROM " . static::$tabla . " WHERE id = $id";
-        $resultado = self::consultarSQL($query);
+        if (is_null($id) || !is_numeric($id)) {
+            return null;
+        }
+
+        $query = "SELECT * FROM " . static::$tabla . " WHERE id = ? LIMIT 1";
+        $resultado = self::consultarSQLPreparado($query, 'i', [(int)$id]);
         return array_shift($resultado);
     }
 
-    // Consulta plana de SQl 
+    // Búsqueda genérica por columna con lista blanca de columnas y consulta preparada
+    public static function where($columna, $valor)
+    {
+        if (!in_array($columna, static::$columnasDB, true)) {
+            return null;
+        }
+
+        $query = "SELECT * FROM " . static::$tabla . " WHERE {$columna} = ? LIMIT 1";
+        $resultado = self::consultarSQLPreparado($query, 's', [(string)$valor]);
+        return array_shift($resultado);
+    }
+
+    // Consulta plana de SQL 
     public static function SQL($query)
     {
         $resultado = self::consultarSQL($query);
         return $resultado;
     }
 
-
-    // Obtener Registros con cierta cantidad (Utilizar cuando los métodos del mdoelo no son suficientes)
+    // Obtener Registros con cierta cantidad
     public static function get($limite)
     {
-        $query = "SELECT * FROM " . static::$tabla . " LIMIT $limite";
-        $resultado = self::consultarSQL($query);
+        if (!is_numeric($limite)) {
+            return [];
+        }
+        $query = "SELECT * FROM " . static::$tabla . " LIMIT ?";
+        $resultado = self::consultarSQLPreparado($query, 'i', [(int)$limite]);
         return array_shift($resultado);
     }
 
-    // crea un nuevo registro
+    // Crea un nuevo registro usando consultas preparadas
     public function crear()
     {
-        // Sanitizar los datos
-        $atributos = $this->sanitizarAtributos();
+        $atributos = $this->atributos();
+        $columnas = array_keys($atributos);
+        $placeholders = array_fill(0, count($columnas), '?');
 
-        // Insertar en la base de datos
-        $query = " INSERT INTO " . static::$tabla . " ( ";
-        $query .= join(', ', array_keys($atributos));
-        $query .= " ) VALUES (' ";
-        $query .= join("', '", array_values($atributos));
-        $query .= " ') ";
+        $query = "INSERT INTO " . static::$tabla . " (" . join(', ', $columnas) . ") VALUES (" . join(', ', $placeholders) . ")";
+        $stmt = self::$db->prepare($query);
+        if (!$stmt) {
+            return [
+                'resultado' => false,
+                'id' => null
+            ];
+        }
 
-        // Resultado de la consulta
-        $resultado = self::$db->query($query);
+        $tipos = str_repeat('s', count($atributos));
+        $valores = array_values($atributos);
+        $stmt->bind_param($tipos, ...$valores);
+        $resultado = $stmt->execute();
+        $insertId = self::$db->insert_id;
+        $stmt->close();
+
         return [
             'resultado' => $resultado,
-            'id' => self::$db->insert_id
+            'id' => $insertId
         ];
     }
 
-    // Actualizar el registro
+    // Actualizar el registro usando consultas preparadas
     public function actualizar()
     {
-        // Sanitizar los datos
-        $atributos = $this->sanitizarAtributos();
-
-        // Iterar para ir agregando cada campo de la BD
+        $atributos = $this->atributos();
         $valores = [];
-        foreach ($atributos as $key => $value) {
-            $valores[] = "{$key}='" . (string)$value . "'";
+        foreach (array_keys($atributos) as $key) {
+            $valores[] = "{$key} = ?";
         }
 
-        // Consulta SQL
-        $query = "UPDATE " . static::$tabla . " SET ";
-        $query .= join(', ', $valores);
-        $query .= " WHERE id = '" . self::$db->escape_string($this->id) . "' ";
-        $query .= " LIMIT 1 ";
+        $query = "UPDATE " . static::$tabla . " SET " . join(', ', $valores) . " WHERE id = ? LIMIT 1";
+        $stmt = self::$db->prepare($query);
+        if (!$stmt) {
+            return false;
+        }
 
-        // Actualizar BD
-        $resultado = self::$db->query($query);
+        $tipos = str_repeat('s', count($atributos)) . 'i';
+        $params = array_values($atributos);
+        $params[] = (int)$this->id;
+
+        $stmt->bind_param($tipos, ...$params);
+        $resultado = $stmt->execute();
+        $stmt->close();
+
         return $resultado;
     }
 
-    // Eliminar un Registro por su ID
+    // Eliminar un Registro por su ID usando consulta preparada
     public function eliminar()
     {
-        $query = "DELETE FROM " . static::$tabla . " WHERE id = " . self::$db->escape_string($this->id) . " LIMIT 1";
-        $resultado = self::$db->query($query);
+        if (is_null($this->id) || !is_numeric($this->id)) {
+            return false;
+        }
+
+        $query = "DELETE FROM " . static::$tabla . " WHERE id = ? LIMIT 1";
+        $stmt = self::$db->prepare($query);
+        if (!$stmt) {
+            return false;
+        }
+
+        $id = (int)$this->id;
+        $stmt->bind_param('i', $id);
+        $resultado = $stmt->execute();
+        $stmt->close();
+
         return $resultado;
     }
 }

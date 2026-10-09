@@ -2,17 +2,14 @@
 
 namespace Model;
 
-// Se importa la clase ActiveRecord para poder extenderla y utilizar sus métodos y propiedades en la clase Usuario 
 class Usuario extends ActiveRecord
 {
-    // Variables de la clase Usuario
-    
-    // Se definen las columnas de la tabla usuarios
     protected static $tabla = 'usuarios';
-    protected static $columnasDB = ['id', 'nombre', 'apellido', 'email', 'password', 'telefono', 'admin', 'confirmado', 'token'];
-    
-    //Se definen las propiedades de la clase Usuario
-    
+    protected static $columnasDB = [
+        'id', 'nombre', 'apellido', 'email', 'password', 'telefono', 
+        'admin', 'confirmado', 'token', 'token_hash', 'token_tipo', 'token_expira'
+    ];
+
     public $id;
     public $nombre;
     public $apellido;
@@ -22,8 +19,9 @@ class Usuario extends ActiveRecord
     public $admin;
     public $confirmado;
     public $token;
-
-    // Constructor de la clase Usuario con un array de argumentos vacío por defecto para poder crear un nuevo usuario   
+    public $token_hash;
+    public $token_tipo;
+    public $token_expira;
 
     public function __construct($args = [])
     {
@@ -33,35 +31,51 @@ class Usuario extends ActiveRecord
         $this->email = $args['email'] ?? '';
         $this->password = $args['password'] ?? '';
         $this->telefono = $args['telefono'] ?? '';
-        $this->admin = $args['admin'] ?? 0;
-        $this->confirmado = $args['confirmado'] ?? 0;
+        $this->admin = $args['admin'] ?? "0";
+        $this->confirmado = $args['confirmado'] ?? "0";
         $this->token = $args['token'] ?? '';
+        $this->token_hash = $args['token_hash'] ?? null;
+        $this->token_tipo = $args['token_tipo'] ?? null;
+        $this->token_expira = $args['token_expira'] ?? null;
     }
 
-    // Mensajes de Validación para la creación de la cuenta
-
     /**
-     * Valida los datos de la cuenta al crear un nuevo usuario
-     * @return array Alertas de error
+     * Sincroniza datos de registro público asegurando que únicamente los campos permitidos
+     * sean asignados y los privilegios sean forzados desde el servidor.
+     * @param array $args
      */
+    public function sincronizarRegistro(array $args = []): void
+    {
+        $permitidos = ['nombre', 'apellido', 'email', 'password', 'telefono'];
+        foreach ($permitidos as $campo) {
+            if (isset($args[$campo]) && is_string($args[$campo])) {
+                $this->$campo = trim($args[$campo]);
+            }
+        }
+        // Inmutables desde el cliente:
+        $this->admin = "0";
+        $this->confirmado = "0";
+        $this->id = null;
+        $this->token = '';
+        $this->token_hash = null;
+        $this->token_tipo = null;
+        $this->token_expira = null;
+    }
+
     public function validarNuevaCuenta()
     {
         if (!$this->nombre) {
             self::$alertas['error'][] = 'Debes añadir un nombre';
         }
-
         if (!$this->apellido) {
             self::$alertas['error'][] = 'Debes añadir un apellido';
         }
-
         if (!$this->telefono) {
             self::$alertas['error'][] = 'El teléfono es obligatorio';
         }
-
         if (!$this->email) {
             self::$alertas['error'][] = 'El email es obligatorio';
         }
-
         if (!$this->password) {
             self::$alertas['error'][] = 'El password es obligatorio';
         }
@@ -70,70 +84,142 @@ class Usuario extends ActiveRecord
         }
         return self::$alertas;
     }
-    
-    // Método para verificar si un usuario ya existe
 
     /**
-     * Verifica si un usuario ya existe en la base de datos
-     * @return mixed Resultado de la consulta
+     * Verifica si un usuario ya existe en la base de datos usando consulta preparada.
      */
     public function existeUsuario()
     {
-        $query = "SELECT * FROM " . self::$tabla . " WHERE email = '" . $this->email . "' LIMIT 1";
-        $resultado = self::$db->query($query);
-        if ($resultado->num_rows) {
+        if (!self::$db) {
+            return false;
+        }
+
+        $query = "SELECT id FROM " . self::$tabla . " WHERE email = ? LIMIT 1";
+        $stmt = self::$db->prepare($query);
+        if (!$stmt) {
+            return false;
+        }
+
+        $email = $this->email;
+        $stmt->bind_param('s', $email);
+        $stmt->execute();
+        $resultado = $stmt->get_result();
+        $existe = $resultado && $resultado->num_rows > 0;
+        $stmt->close();
+
+        if ($existe) {
             self::$alertas['error'][] = 'El usuario ya está registrado';
         }
 
-        return $resultado;
+        return $existe;
     }
 
-    /**
-     * Hashea la contraseña del usuario
-     */
     public function hashPassword()
     {
         $this->password = password_hash($this->password, PASSWORD_BCRYPT);
     }
 
     /**
-     * Genera un token único para el usuario
+     * Genera un token criptográfico seguro con hash SHA-256, tipo y fecha de expiración.
+     * Retorna el token raw para ser enviado por correo/enlace.
+     */
+    public function generarTokenSeguro(string $tipo = 'confirmacion', int $horasExpiracion = 24): string
+    {
+        $tokenRaw = bin2hex(random_bytes(32));
+        $this->token = $tokenRaw; // Compatibilidad temporal
+        $this->token_hash = hash('sha256', $tokenRaw);
+        $this->token_tipo = $tipo;
+        $this->token_expira = date('Y-m-d H:i:s', time() + ($horasExpiracion * 3600));
+
+        return $tokenRaw;
+    }
+
+    /**
+     * Compatibilidad hacia atrás con el método generarToken()
      */
     public function generarToken()
     {
-        $this->token = uniqid();
+        return $this->generarTokenSeguro('confirmacion', 24);
     }
 
     /**
-     * Realiza una consulta SQL con una cláusula WHERE
-     * @param string $columna Nombre de la columna
-     * @param mixed $valor Valor de la columna
-     * @return Usuario|null Objeto Usuario si se encuentra, null si no se encuentra
+     * Busca un usuario por token raw validando su hash, tipo y vigencia temporal.
      */
-    public static function where($columna, $valor)
+    public static function buscarPorTokenSeguro(string $tokenRaw, string $tipo): ?self
     {
-        $query = "SELECT * FROM " . static::$tabla . " WHERE $columna = " . "'$valor'";
-        $resultado = self::consultarSQL($query);
-        $arrayUsuario = array_shift($resultado);
-
-        $usuario = new Usuario();
-
-        if ($arrayUsuario) {
-            foreach ($arrayUsuario as $key => $value) {
-                if (property_exists($usuario, $key)) {
-                    $usuario->$key = $value;
-                }
-            }
-            return $usuario;
-        } else {
+        if (trim($tokenRaw) === '' || !self::$db) {
             return null;
         }
+
+        $hash = hash('sha256', $tokenRaw);
+
+        // 1. Buscar por token_hash y verificar expiración
+        $query = "SELECT * FROM " . static::$tabla . " 
+                  WHERE token_hash = ? AND token_tipo = ? AND token_expira >= NOW() 
+                  LIMIT 1";
+        $stmt = self::$db->prepare($query);
+        if ($stmt) {
+            $stmt->bind_param('ss', $hash, $tipo);
+            $stmt->execute();
+            $res = $stmt->get_result();
+            if ($res && $registro = $res->fetch_assoc()) {
+                $stmt->close();
+                return static::crearObjeto($registro);
+            }
+            $stmt->close();
+        }
+
+        // 2. Fallback de compatibilidad únicamente para registros antiguos donde token_hash es NULL
+        $queryLegacy = "SELECT * FROM " . static::$tabla . " WHERE token = ? AND token_hash IS NULL LIMIT 1";
+        $stmtLegacy = self::$db->prepare($queryLegacy);
+        if ($stmtLegacy) {
+            $stmtLegacy->bind_param('s', $tokenRaw);
+            $stmtLegacy->execute();
+            $res = $stmtLegacy->get_result();
+            if ($res && $registro = $res->fetch_assoc()) {
+                $stmtLegacy->close();
+                return static::crearObjeto($registro);
+            }
+            $stmtLegacy->close();
+        }
+
+        return null;
     }
 
     /**
-     * Valida los datos de inicio de sesión
-     * @return array Alertas de error
+     * Consume un token de forma atómica para evitar reutilización por solicitudes concurrentes.
      */
+    public function consumirToken(): bool
+    {
+        if (!$this->id || !self::$db) {
+            return false;
+        }
+
+        $query = "UPDATE " . static::$tabla . " 
+                  SET token = NULL, token_hash = NULL, token_tipo = NULL, token_expira = NULL, confirmado = '1' 
+                  WHERE id = ? LIMIT 1";
+        $stmt = self::$db->prepare($query);
+        if (!$stmt) {
+            return false;
+        }
+
+        $id = (int)$this->id;
+        $stmt->bind_param('i', $id);
+        $stmt->execute();
+        $actualizado = $stmt->affected_rows > 0;
+        $stmt->close();
+
+        if ($actualizado) {
+            $this->token = null;
+            $this->token_hash = null;
+            $this->token_tipo = null;
+            $this->token_expira = null;
+            $this->confirmado = '1';
+        }
+
+        return $actualizado;
+    }
+
     public function validarLogin()
     {
         if (!$this->email) {
@@ -145,27 +231,17 @@ class Usuario extends ActiveRecord
         return self::$alertas;
     }
 
-    /**
-     * Comprueba si la contraseña es correcta y la cuenta está verificada
-     * @param string $password Contraseña a comprobar
-     * @return bool True si la contraseña es correcta y la cuenta está verificada, false de lo contrario
-     */
     public function comprobarPasswordAndVerificado($password)
     {
         $resultado = password_verify($password, $this->password);
 
-        if (!$resultado || !$this->confirmado) {
+        if (!$resultado || (string)$this->confirmado !== "1") {
             self::$alertas['error'][] = 'Password incorrecto o la cuenta no ha sido verificada';
-        } else {
-            return true;
+            return false;
         }
-        return false;
+        return true;
     }
 
-    /**
-     * Valida el email del usuario
-     * @return array Alertas de error
-     */
     public function validarEmail()
     {
         if (!$this->email) {
@@ -174,20 +250,14 @@ class Usuario extends ActiveRecord
         return self::$alertas;
     }
 
-    /**
-     * Valida la contraseña del usuario
-     * @return array Alertas de error
-     */
     public function validarPassword()
     {
         if (!$this->password) {
             self::$alertas['error'][] = 'El password es obligatorio';
         }
-
         if (strlen($this->password) < 6) {
             self::$alertas['error'][] = 'El password debe tener al menos 6 caracteres';
         }
-
         return self::$alertas;
     }
 }

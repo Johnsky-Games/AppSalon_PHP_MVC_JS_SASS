@@ -2,6 +2,7 @@
 <p class="descripcion-pagina">Introduce tu email para recuperar tu password</p>
 <?php include_once __DIR__ . '/../templates/alertas.php'; ?>
 <form action="/olvide" method="POST" class="formulario">
+    <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
     <div class="campo">
         <label for="email">Email</label>
         <input type="email" name="email" id="name" placeholder="Tu Email">

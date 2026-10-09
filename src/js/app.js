@@ -322,22 +322,27 @@ async function reservarCita() {
 
     const idServicios = servicios.map(servicio => servicio.id);
 
+    const csrfInput = document.querySelector('#csrf_token');
+    const csrfToken = csrfInput ? csrfInput.value : '';
+
     const datos = new FormData();
     datos.append('usuarioId', id);
     datos.append('fecha', fecha);
     datos.append('hora', hora);
     datos.append('servicios', idServicios);
-    // console.log([...datos]); // Convierte el objeto FormData en un array para poder verlo en la consola del navegador
+    datos.append('csrf_token', csrfToken);
 
     try {
         //Petición hacia la API
-
         const url = `${location.origin}/api/citas`;
         const respuesta = await fetch(url, {
             method: 'POST',
+            headers: {
+                'X-CSRF-Token': csrfToken
+            },
             body: datos
         });
-        resultado = await respuesta.json();
+        const resultado = await respuesta.json();
         if (resultado.resultado) {
             Swal.fire({
                 icon: "success",
@@ -347,14 +352,20 @@ async function reservarCita() {
             }).then(() => {
                 setTimeout(() => {
                     window.location.reload();
-                }, 0o1);
+                }, 100);
+            });
+        } else {
+            Swal.fire({
+                icon: "error",
+                title: "Error",
+                text: resultado.error || "Hubo un error al guardar la cita!"
             });
         }
     } catch (error) {
         Swal.fire({
             icon: "error",
             title: "Error",
-            text: "Hubo un error al gauardar la cita!"
+            text: "Hubo un error al guardar la cita!"
         });
     }
 

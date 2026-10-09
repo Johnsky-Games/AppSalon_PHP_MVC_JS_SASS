@@ -34,6 +34,7 @@ include_once __DIR__ . '/../templates/barra.php';
                 <input type="time" id="hora">
             </div>
             <input type="hidden" id="id" value="<?php echo $id; ?>">
+            <input type="hidden" id="csrf_token" value="<?php echo csrf_token(); ?>">
         </form>
     </div>
     <div id="paso-3" class="seccion contenido-resumen">
