@@ -1,13 +1,11 @@
 # Registro de Progreso del Proyecto AppSalon
 
-Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerdo con la metodología de entregas auditables por **ChatGPT** y aprobación del **Propietario**.
+Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerdo con la metodología de entregas auditables por **ChatGPT** (revisión estática de código) y ejecución/verificación por **Antigravity** (desarrollo y pruebas dinámicas automatizadas), sujeto a la aprobación final del **Propietario**.
 
-> **Estados posibles:**
-> - `Pendiente`: Requerimiento identificado sin comenzar.
-> - `En Desarrollo`: Trabajo en curso.
-> - `Implementado`: Código escrito y compilado.
-> - `Probado`: Pruebas automatizadas o manuales ejecutadas exitosamente con evidencia.
-> - `Auditado`: Revisado formalmente por la auditoría independiente externa (ChatGPT).
+> **Roles y Criterios:**
+> - **Desarrollo y Pruebas Automatizadas (Antigravity):** Implementación de código y ejecución de la suite completa de pruebas unitarias e integrales (49 pruebas, 322 aserciones en PHPUnit).
+> - **Revisión Estática Externa (ChatGPT):** Auditoría independiente de código, patrones de seguridad, contratos transaccionales y cobertura de casos límite.
+> - **Aprobación Final y Despliegue (Propietario):** Decisión formal sobre fusiones hacia `main` y despliegues en producción.
 
 ---
 
@@ -15,8 +13,9 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 
 - **Rama:** `feature/seguridad-y-consistencia-inicial`
 - **Commit Base:** `e816154b96985c2773e4fb418bbbf3e92530cca3`
-- **Última Revisión Auditada por ChatGPT:** `151cce2`
-- **Estado General:** **Probado** (49 pruebas automatizadas, 322 aserciones, 0 fallos, 0 errores, 0 advertencias)
+- **Revisión Estática de Código (ChatGPT):** Cerrada y aprobada para esta ronda sobre commit `da7aa87`.
+- **Pruebas Automatizadas Ejecutadas (Antigravity):** **Probado** (49 pruebas automatizadas, 322 aserciones, 0 fallos, 0 errores, 0 advertencias en entorno Docker PHP 8.2 + MySQL 8.0).
+- **Estado General de Entrega 1:** **Listo para Revisión Final del Propietario** (Pendiente de aprobación previa para merge a `main`).
 
 | Tarea / Control de Seguridad | Estado | Evidencia / Pruebas Asociadas |
 | :--- | :---: | :--- |
@@ -37,7 +36,7 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 | Rate Limiter: Umbral Exacto Intento por Intento (`intentos >= ?`) | **Probado** | `SecurityIntegrationTest::testRateLimiterUmbralExactoIntentoPorIntento` (bloqueo exacto en intento 5, intentos 1-4 permitidos) |
 | Rate Limiter: Admisión Atómica Previa a Bcrypt (`admitirIntentoLogin`) | **Probado** | `LoginController::login()` reserva intento atómicamente antes de verificar credenciales costosas; limpieza en login exitoso |
 | Rate Limiter: Presupuesto Compartido de IP y Limpieza por Cuenta | **Probado** | `SecurityIntegrationTest::testLoginExitosoNoReiniciaPresupuestoIpAtaqueMultiplesCuentas` (login exitoso en cuenta de control no reinicia contador compartido de IP ante ataques intercalados) |
-| Rate Limiter: Concurrencia Real con Señal de Sincronización, Verificación Observada y Timeout | **Probado** | `SecurityIntegrationTest::testRateLimiterProcesosSimultaneosSincronizadosFlujoRealLogin` (comprobación previa de existencia, confirmación y hash del usuario; 10 procesos sincronizados por barrera STDIN con señal READY; exactamente 5 admitidos con llamada real observada a `comprobarPasswordAndVerificado` y 5 rechazados con 429 con cero verificaciones de contraseña; tiempo límite de 10s y limpieza garantizada de subprocesos en bloque finally) |
+| Rate Limiter: Concurrencia de Procesos CLI en Controlador con Señal, Verificación Observada y Timeout | **Probado** | `SecurityIntegrationTest::testRateLimiterProcesosSimultaneosSincronizadosFlujoRealLogin` (Ejecución directa del controlador `LoginController::login()` desde 10 subprocesos CLI de PHP independientes vía `proc_open` con sesiones y conexiones MySQL separadas —no prueba HTTP de servidor web—. Verificación previa de existencia, confirmación y hash del usuario; barrera sincronizada STDIN con señal READY; exactamente 5 admitidos con llamada real observada a `comprobarPasswordAndVerificado` y 5 rechazados con 429 con cero verificaciones de contraseña; tiempo límite de 10s y limpieza garantizada de subprocesos en bloque finally) |
 | Rate Limiter: Postura Fail-Secure ante Fallos SQL | **Probado** | `SecurityIntegrationTest::testRateLimiterManejoFalloSqlFailSecure` (retorna bloqueo ante conexión cerrada o fallo) |
 | Supresión de Generación de Tokens bajo Rate Limiting en `/olvide` | **Probado** | `SecurityIntegrationTest::testOlvideConRateLimitBloqueaSinGenerarNiPersistirToken` (detiene flujo antes de token/email ante 429) |
 | Control de Fallo en Persistencia Previa al Envío de Correo | **Probado** | `SecurityIntegrationTest::testOlvideNoIntentaEnviarCorreoSiFallaPersistenciaToken`, `SecurityIntegrationTest::testReenviarConfirmacionNoEnviaCorreoSiCuentaYaEstaConfirmada` |
