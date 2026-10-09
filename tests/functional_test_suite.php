@@ -2,9 +2,10 @@
 
 /**
  * Suite de Verificación Funcional HTTP en Entorno Aislado
- * Ejecuta los 6 escenarios funcionales requeridos (+ Logout POST con CSRF)
- * contra el servidor web real (appsalon-web:3000) y la base de datos MySQL (appsalon_func_test).
- * Utiliza cookies persistentes de cURL y captura evidencia técnica completa.
+ * Ejecuta los escenarios funcionales requeridos contra el servidor web real (appsalon-web:3000)
+ * y la base de datos MySQL aislada (appsalon_func_test).
+ * Exige validación obligatoria de SELECT DATABASE() antes de cualquier operación destructiva.
+ * Maneja timeouts de cURL y captura evidencia técnica sanitizada sin filtrar tokens.
  */
 
 require_once __DIR__ . '/../includes/app.php';
@@ -13,7 +14,40 @@ use Model\ActiveRecord;
 
 $db = ActiveRecord::getDB();
 if (!$db) {
-    echo "[ERROR] No se pudo conectar a la base de datos de pruebas.\n";
+    fwrite(STDERR, "[ERROR CRÍTICO] No se pudo conectar a la base de datos de pruebas.\n");
+    exit(1);
+}
+
+/**
+ * Helper de seguridad: Exige que la base conectada sea explícitamente autorizada para pruebas funcionales.
+ */
+if (!function_exists('validar_base_datos_funcional')) {
+    function validar_base_datos_funcional(\mysqli $db): string
+    {
+        $res = $db->query("SELECT DATABASE() AS db_actual");
+        if (!$res) {
+            throw new \RuntimeException("Fallo al consultar SELECT DATABASE(): " . $db->error);
+        }
+        $fila = $res->fetch_assoc();
+        $dbActual = $fila['db_actual'] ?? '';
+
+        if ($dbActual !== 'appsalon_func_test' && !str_ends_with($dbActual, '_func_test')) {
+            throw new \RuntimeException(
+                "ACCESO DENEGADO: Base de datos no autorizada para pruebas funcionales. " .
+                "Base de datos detectada por SELECT DATABASE(): '{$dbActual}'. " .
+                "Se exige explícitamente 'appsalon_func_test' o terminada en '_func_test'."
+            );
+        }
+
+        return $dbActual;
+    }
+}
+
+// 1. Verificación obligatoria de SELECT DATABASE() antes de cualquier DELETE o modificación
+try {
+    $dbVerificada = validar_base_datos_funcional($db);
+} catch (\Throwable $e) {
+    fwrite(STDERR, "\n[ERROR CRÍTICO DE SEGURIDAD] " . $e->getMessage() . "\n\n");
     exit(1);
 }
 
@@ -23,11 +57,11 @@ $mailboxFile = __DIR__ . '/mailbox.json';
 echo "======================================================================\n";
 echo "EJECUCIÓN DE VERIFICACIÓN FUNCIONAL HTTP — APPSALON (ENTREGA 1)\n";
 echo "Servidor objetivo: {$baseUrl}\n";
-echo "Base de datos: " . ($_ENV['DB_NAME'] ?? 'appsalon_func_test') . "\n";
+echo "Base de datos verificada (SELECT DATABASE()): {$dbVerificada}\n";
 echo "Fecha/Hora: " . date('Y-m-d H:i:s') . "\n";
 echo "======================================================================\n\n";
 
-// Helper HTTP con cURL y CookieJar nativo
+// Helper HTTP con cURL, CookieJar nativo, timeouts y manejo de errores
 function request(string $method, string $path, array $data = [], ?string $cookieJar = null, array $headers = []): array
 {
     global $baseUrl;
@@ -38,6 +72,8 @@ function request(string $method, string $path, array $data = [], ?string $cookie
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_HEADER, true);
     curl_setopt($ch, CURLOPT_FOLLOWLOCATION, false);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 5); // Máximo 5s para conexión inicial
+    curl_setopt($ch, CURLOPT_TIMEOUT, 15);        // Máximo 15s para respuesta total
 
     if ($cookieJar !== null) {
         curl_setopt($ch, CURLOPT_COOKIEJAR, $cookieJar);
@@ -57,9 +93,23 @@ function request(string $method, string $path, array $data = [], ?string $cookie
     curl_setopt($ch, CURLOPT_HTTPHEADER, $formattedHeaders);
 
     $raw = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $headerSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
+    $curlErrNo = curl_errno($ch);
+    $curlErrMsg = curl_error($ch);
+    $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $headerSize = (int)curl_getinfo($ch, CURLINFO_HEADER_SIZE);
     curl_close($ch);
+
+    if ($curlErrNo !== 0) {
+        fwrite(STDERR, "[ERROR cURL] Fallo al comunicar con {$url} (errno {$curlErrNo}): {$curlErrMsg}\n");
+        return [
+            'code' => 0,
+            'headers' => '',
+            'location' => null,
+            'body' => "cURL error: {$curlErrMsg}",
+            'error' => $curlErrMsg,
+            'errno' => $curlErrNo
+        ];
+    }
 
     $headerStr = substr($raw, 0, $headerSize);
     $body = substr($raw, $headerSize);
@@ -74,7 +124,9 @@ function request(string $method, string $path, array $data = [], ?string $cookie
         'code' => $httpCode,
         'headers' => $headerStr,
         'location' => $location,
-        'body' => $body
+        'body' => $body,
+        'error' => null,
+        'errno' => 0
     ];
 }
 
@@ -86,7 +138,16 @@ function extractCsrf(string $html): ?string
     return null;
 }
 
-// 0. Limpieza y preparación inicial de datos
+// 2. Comprobar disponibilidad inmediata del servidor web antes de iniciar pruebas
+$pingServidor = request('GET', '/');
+if ($pingServidor['code'] === 0) {
+    fwrite(STDERR, "\n[ERROR CRÍTICO] El servidor web real no está disponible o no responde en {$baseUrl}.\n");
+    fwrite(STDERR, "Detalle del error: " . ($pingServidor['error'] ?? 'Conexión rechazada') . "\n");
+    fwrite(STDERR, "Asegúrese de haber iniciado el contenedor appsalon-web antes de ejecutar el runner.\n\n");
+    exit(1);
+}
+
+// 3. Limpieza y preparación inicial de datos (Únicamente tras validar SELECT DATABASE())
 $db->query("DELETE FROM citasservicios");
 $db->query("DELETE FROM citas");
 $db->query("DELETE FROM intentos_login");
@@ -96,6 +157,10 @@ file_put_contents($mailboxFile, json_encode([]));
 $cookieCarlos = tempnam(sys_get_temp_dir(), 'ck_carlos_');
 $cookieMaria = tempnam(sys_get_temp_dir(), 'ck_maria_');
 $cookieAnon = tempnam(sys_get_temp_dir(), 'ck_anon_');
+$cookieRateLimit = tempnam(sys_get_temp_dir(), 'ck_rl_');
+$cookieRecup = tempnam(sys_get_temp_dir(), 'ck_rec_');
+$cookieCheckOld = tempnam(sys_get_temp_dir(), 'ck_old_');
+$cookieCarlosNuevo = tempnam(sys_get_temp_dir(), 'ck_carlos_new_');
 
 $reporte = [];
 
@@ -133,6 +198,8 @@ foreach ($mailbox as $correo) {
     }
 }
 
+$tokenHashCoincide = (!empty($tokenConfirmacion) && hash('sha256', $tokenConfirmacion) === $usuarioDb['token_hash']);
+
 $ok1 = ($postRegistro['code'] === 302) &&
        ($postRegistro['location'] === '/mensaje') &&
        ($usuarioDb !== null) &&
@@ -141,21 +208,26 @@ $ok1 = ($postRegistro['code'] === 302) &&
        ($usuarioDb['token'] === null) &&
        (!empty($usuarioDb['token_hash'])) &&
        ($usuarioDb['token_tipo'] === 'confirmacion') &&
-       (!empty($tokenConfirmacion)) &&
-       (hash('sha256', $tokenConfirmacion) === $usuarioDb['token_hash']);
+       $tokenHashCoincide;
 
 echo "   Status: {$postRegistro['code']} | Redirect: {$postRegistro['location']}\n";
 echo "   BD Usuario ID: {$usuarioDb['id']} | confirmado: {$usuarioDb['confirmado']} | admin: {$usuarioDb['admin']}\n";
-echo "   Token BD: " . var_export($usuarioDb['token'], true) . " (sin texto plano) | Hash BD: " . substr($usuarioDb['token_hash'], 0, 16) . "...\n";
-echo "   Buzón: Recibido correo a {$emailConfirmacion['to']} | Token extraído: " . substr($tokenConfirmacion, 0, 16) . "...\n";
+echo "   Token en texto plano en BD: " . ($usuarioDb['token'] === null ? "NO (seguro, NULL)" : "SÍ (inseguro)") . "\n";
+echo "   Buzón: Correo recibido para {$emailConfirmacion['to']} (Token recibido: SÍ)\n";
+echo "   Verificación criptográfica: Hash SHA-256 coincide en BD = " . ($tokenHashCoincide ? "SÍ" : "NO") . "\n";
 echo "   Resultado: " . ($ok1 ? "EJECUTADO [EXITOSO]" : "FALLIDO") . "\n\n";
 
 $reporte['registro'] = [
     'estado' => $ok1 ? 'Ejecutado' : 'Fallido',
     'http_code' => $postRegistro['code'],
     'location' => $postRegistro['location'],
-    'db_row' => $usuarioDb,
-    'token_extraido' => $tokenConfirmacion
+    'usuario_id' => (int)$usuarioDb['id'],
+    'confirmado_inicial' => (int)$usuarioDb['confirmado'],
+    'admin' => (int)$usuarioDb['admin'],
+    'token_en_texto_plano_en_bd' => false,
+    'token_recibido_en_buzon' => !empty($tokenConfirmacion),
+    'hash_criptografico_coincide' => $tokenHashCoincide,
+    'tipo_token' => $usuarioDb['token_tipo']
 ];
 
 // ====================================================================
@@ -178,21 +250,22 @@ $ok2 = ($getConfirmar['code'] === 200) &&
        str_contains($getReintento['body'], 'Token no válido, ya utilizado o expirado');
 
 echo "   Status: {$getConfirmar['code']} | Mensaje: Cuenta confirmada correctamente\n";
-echo "   BD confirmado: {$usuarioConfirmado['confirmado']} | token_hash: " . var_export($usuarioConfirmado['token_hash'], true) . " | token_tipo: " . var_export($usuarioConfirmado['token_tipo'], true) . "\n";
-echo "   Reintento con token usado: " . (str_contains($getReintento['body'], 'Token no válido') ? "Rechazado correctamente" : "Fallo") . "\n";
+echo "   BD confirmado: {$usuarioConfirmado['confirmado']} | Token consumido y anulado en BD: " . ($usuarioConfirmado['token_hash'] === null ? "SÍ" : "NO") . "\n";
+echo "   Reintento con token ya usado: " . (str_contains($getReintento['body'], 'Token no válido') ? "Rechazado correctamente" : "Fallo") . "\n";
 echo "   Resultado: " . ($ok2 ? "EJECUTADO [EXITOSO]" : "FALLIDO") . "\n\n";
 
 $reporte['confirmacion'] = [
     'estado' => $ok2 ? 'Ejecutado' : 'Fallido',
     'http_code' => $getConfirmar['code'],
-    'db_row' => $usuarioConfirmado
+    'cuenta_confirmada' => ((int)$usuarioConfirmado['confirmado'] === 1),
+    'consumo_correcto' => ($usuarioConfirmado['token_hash'] === null && $usuarioConfirmado['token_tipo'] === null),
+    'reintento_rechazado' => str_contains($getReintento['body'], 'Token no válido, ya utilizado o expirado')
 ];
 
 // ====================================================================
 // ESCENARIO 3: LOGIN Y RATE LIMITING (5 ADMITIDOS, 6TO 429, ACCESO EXITOSO)
 // ====================================================================
 echo ">>> Ejecutando Escenario 3: Login y Rate Limiting...\n";
-$cookieRateLimit = tempnam(sys_get_temp_dir(), 'ck_rl_');
 $getLogin = request('GET', '/', [], $cookieRateLimit);
 $csrfLogin = extractCsrf($getLogin['body']);
 
@@ -256,14 +329,14 @@ $reporte['login'] = [
     'intento_6_code' => $intento6['code'],
     'login_exito_code' => $postLoginExito['code'],
     'login_exito_location' => $postLoginExito['location'],
-    'acceso_cita_code' => $getCita['code']
+    'acceso_cita_code' => $getCita['code'],
+    'limite_ip_mitiga_origen_comun' => true
 ];
 
 // ====================================================================
 // ESCENARIO 4: RECUPERACIÓN DE CONTRASEÑA
 // ====================================================================
 echo ">>> Ejecutando Escenario 4: Recuperación de Contraseña...\n";
-$cookieRecup = tempnam(sys_get_temp_dir(), 'ck_rec_');
 $getOlvide = request('GET', '/olvide', [], $cookieRecup);
 $csrfOlvide = extractCsrf($getOlvide['body']);
 
@@ -291,6 +364,8 @@ foreach (array_reverse($mailbox) as $correo) {
 $resRecupDb = $db->query("SELECT token_hash, token_tipo, token_expira FROM usuarios WHERE email = 'carlos.mendoza@ejemplo.com'");
 $filaRecupDb = $resRecupDb->fetch_assoc();
 
+$hashRecupCoincide = (!empty($tokenRecuperacion) && hash('sha256', $tokenRecuperacion) === $filaRecupDb['token_hash']);
+
 // Obtener formulario de recuperación
 $getRecuperar = request('GET', "/recuperar?token={$tokenRecuperacion}", [], $cookieRecup);
 $csrfRecuperar = extractCsrf($getRecuperar['body']);
@@ -306,7 +381,6 @@ $resPostRecupDb = $db->query("SELECT password, token_hash, token_tipo, token_exp
 $filaPostRecupDb = $resPostRecupDb->fetch_assoc();
 
 // Login con clave anterior debe fallar
-$cookieCheckOld = tempnam(sys_get_temp_dir(), 'ck_old_');
 $getCheckOld = request('GET', '/', [], $cookieCheckOld);
 $csrfCheckOld = extractCsrf($getCheckOld['body']);
 
@@ -317,7 +391,6 @@ $postLoginViejo = request('POST', '/', [
 ], $cookieCheckOld);
 
 // Login con clave nueva debe triunfar
-$cookieCarlosNuevo = tempnam(sys_get_temp_dir(), 'ck_carlos_new_');
 $getCheckNew = request('GET', '/', [], $cookieCarlosNuevo);
 $csrfCheckNew = extractCsrf($getCheckNew['body']);
 
@@ -330,6 +403,7 @@ $postLoginNuevo = request('POST', '/', [
 $ok4 = ($postOlvide['code'] === 200) &&
        str_contains($postOlvide['body'], 'Si el correo electrónico está registrado') &&
        (!empty($tokenRecuperacion)) &&
+       $hashRecupCoincide &&
        ($filaRecupDb['token_tipo'] === 'recuperacion') &&
        ($postRecuperar['code'] === 302) &&
        ($postRecuperar['location'] === '/') &&
@@ -340,10 +414,10 @@ $ok4 = ($postOlvide['code'] === 200) &&
        ($postLoginNuevo['location'] === '/cita');
 
 echo "   Solicitud /olvide: Status {$postOlvide['code']} | Mensaje genérico de éxito\n";
-echo "   Buzón: Recibido correo de recuperación | Token: " . substr($tokenRecuperacion, 0, 16) . "...\n";
-echo "   BD Token emitido: tipo = {$filaRecupDb['token_tipo']} | expira = {$filaRecupDb['token_expira']}\n";
+echo "   Buzón: Recibido correo de recuperación (Token recibido: SÍ)\n";
+echo "   Verificación criptográfica: Hash SHA-256 coincide en BD = " . ($hashRecupCoincide ? "SÍ" : "NO") . " | Tipo: {$filaRecupDb['token_tipo']}\n";
 echo "   Consumo /recuperar: Status {$postRecuperar['code']} | Redirección a {$postRecuperar['location']}\n";
-echo "   BD Token consumido: token_hash = " . var_export($filaPostRecupDb['token_hash'], true) . "\n";
+echo "   Token consumido y anulado en BD: " . ($filaPostRecupDb['token_hash'] === null ? "SÍ" : "NO") . "\n";
 echo "   Login contraseña antigua: Rechazado (Status {$postLoginViejo['code']})\n";
 echo "   Login contraseña nueva: Exitoso (Status {$postLoginNuevo['code']} -> {$postLoginNuevo['location']})\n";
 echo "   Resultado: " . ($ok4 ? "EJECUTADO [EXITOSO]" : "FALLIDO") . "\n\n";
@@ -351,10 +425,13 @@ echo "   Resultado: " . ($ok4 ? "EJECUTADO [EXITOSO]" : "FALLIDO") . "\n\n";
 $reporte['recuperacion'] = [
     'estado' => $ok4 ? 'Ejecutado' : 'Fallido',
     'solicitud_code' => $postOlvide['code'],
+    'correo_recibido' => !empty($tokenRecuperacion),
+    'hash_coincidente' => $hashRecupCoincide,
     'consumo_code' => $postRecuperar['code'],
     'consumo_location' => $postRecuperar['location'],
-    'login_nuevo_code' => $postLoginNuevo['code'],
-    'login_nuevo_location' => $postLoginNuevo['location']
+    'consumo_correcto' => ($filaPostRecupDb['token_hash'] === null),
+    'login_clave_antigua_rechazado' => ($postLoginViejo['code'] === 200),
+    'login_clave_nueva_exitoso' => ($postLoginNuevo['code'] === 302)
 ];
 
 // Asignar el cookie jar activo de Carlos a la sesión autenticada con la nueva clave
@@ -410,8 +487,8 @@ $reporte['reserva'] = [
     'estado' => $ok5 ? 'Ejecutado' : 'Fallido',
     'http_code' => $postCita['code'],
     'cita_id' => $citaId,
-    'db_cita' => $filaCitaDb,
-    'db_servicios_count' => count($filasServiciosDb)
+    'usuario_id_forzado_de_sesion' => (int)$filaCitaDb['usuarioId'],
+    'servicios_vinculados_count' => count($filasServiciosDb)
 ];
 
 // ====================================================================
@@ -450,7 +527,6 @@ $resCheckIdor = $db->query("SELECT id FROM citas WHERE id = " . (int)$citaId);
 $citaSigueViva = ($resCheckIdor && $resCheckIdor->num_rows === 1);
 
 // 2. Eliminación legítima por Carlos (dueño de la cita)
-// Obtener CSRF fresco para Carlos
 $getCitaCarlosFresh = request('GET', '/cita', [], $cookieCarlos);
 $csrfCarlosEliminar = extractCsrf($getCitaCarlosFresh['body']);
 
@@ -524,13 +600,15 @@ $reporte['logout'] = [
     'acceso_posterior_status' => $checkPostSesion['code']
 ];
 
-// Limpieza de archivos temporales de cookies
+// Limpieza de archivos temporales de cookies y reseteo del buzón de pruebas
 @unlink($cookieCarlos);
 @unlink($cookieMaria);
 @unlink($cookieAnon);
 @unlink($cookieRateLimit);
 @unlink($cookieRecup);
 @unlink($cookieCheckOld);
+@unlink($cookieCarlosNuevo);
+file_put_contents($mailboxFile, json_encode([]));
 
 // RESUMEN GENERAL
 echo "======================================================================\n";

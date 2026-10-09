@@ -33,3 +33,28 @@ function validar_base_datos_prueba(\mysqli $db): void
         );
     }
 }
+
+/**
+ * Helper global para exigir una base funcional de pruebas explícitamente autorizada
+ * (e.g. 'appsalon_func_test' o terminada en '_func_test') antes de cualquier DELETE o modificación.
+ */
+function validar_base_datos_funcional(\mysqli $db): string
+{
+    $res = $db->query("SELECT DATABASE() AS db_actual");
+    if (!$res) {
+        throw new \RuntimeException("Fallo al consultar SELECT DATABASE(): " . $db->error);
+    }
+    $fila = $res->fetch_assoc();
+    $dbActual = $fila['db_actual'] ?? '';
+
+    if ($dbActual !== 'appsalon_func_test' && !str_ends_with($dbActual, '_func_test')) {
+        throw new \RuntimeException(
+            "ACCESO DENEGADO: Base de datos no autorizada para pruebas funcionales. " .
+            "Base de datos detectada por SELECT DATABASE(): '{$dbActual}'. " .
+            "Se exige explícitamente 'appsalon_func_test' o terminada en '_func_test'."
+        );
+    }
+
+    return $dbActual;
+}
+

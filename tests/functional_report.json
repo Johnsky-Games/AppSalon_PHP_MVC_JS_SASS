@@ -3,31 +3,20 @@
         "estado": "Ejecutado",
         "http_code": 302,
         "location": "\/mensaje",
-        "db_row": {
-            "id": "6",
-            "nombre": "Carlos",
-            "apellido": "Mendoza",
-            "email": "carlos.mendoza@ejemplo.com",
-            "admin": "0",
-            "confirmado": "0",
-            "token": null,
-            "token_hash": "e078ebac80bab7c7ecad606bf28236949af42bef1ee95eb56e74bda55c024fdb",
-            "token_tipo": "confirmacion",
-            "token_expira": "2026-10-10 23:02:59"
-        },
-        "token_extraido": "7dd4ae3b3cf83d95c98cced384875bb31c7e1d9a7479919910dc527948612a5c"
+        "usuario_id": 1,
+        "confirmado_inicial": 0,
+        "admin": 0,
+        "token_en_texto_plano_en_bd": false,
+        "token_recibido_en_buzon": true,
+        "hash_criptografico_coincide": true,
+        "tipo_token": "confirmacion"
     },
     "confirmacion": {
         "estado": "Ejecutado",
         "http_code": 200,
-        "db_row": {
-            "id": "6",
-            "confirmado": "1",
-            "token": null,
-            "token_hash": null,
-            "token_tipo": null,
-            "token_expira": null
-        }
+        "cuenta_confirmada": true,
+        "consumo_correcto": true,
+        "reintento_rechazado": true
     },
     "login": {
         "estado": "Ejecutado",
@@ -41,27 +30,26 @@
         "intento_6_code": 429,
         "login_exito_code": 302,
         "login_exito_location": "\/cita",
-        "acceso_cita_code": 200
+        "acceso_cita_code": 200,
+        "limite_ip_mitiga_origen_comun": true
     },
     "recuperacion": {
         "estado": "Ejecutado",
         "solicitud_code": 200,
+        "correo_recibido": true,
+        "hash_coincidente": true,
         "consumo_code": 302,
         "consumo_location": "\/",
-        "login_nuevo_code": 302,
-        "login_nuevo_location": "\/cita"
+        "consumo_correcto": true,
+        "login_clave_antigua_rechazado": true,
+        "login_clave_nueva_exitoso": true
     },
     "reserva": {
         "estado": "Ejecutado",
         "http_code": 200,
-        "cita_id": 2,
-        "db_cita": {
-            "id": "2",
-            "fecha": "2026-10-14",
-            "hora": "10:30:00",
-            "usuarioId": "6"
-        },
-        "db_servicios_count": 2
+        "cita_id": 1,
+        "usuario_id_forzado_de_sesion": 1,
+        "servicios_vinculados_count": 2
     },
     "eliminacion": {
         "estado": "Ejecutado",

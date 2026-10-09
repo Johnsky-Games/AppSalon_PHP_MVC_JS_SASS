@@ -4,3 +4,8 @@ vendor
 DS_Store
 .vscode
 .phpunit.result.cache
+tests/mailbox.json
+tests/*.cookie
+tests/*.cookies
+tests/ck_*
+ck_*

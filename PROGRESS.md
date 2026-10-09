@@ -14,23 +14,34 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 - **Rama:** `feature/seguridad-y-consistencia-inicial`
 - **Commit Base:** `e816154b96985c2773e4fb418bbbf3e92530cca3`
 - **Revisión Estática de Código (ChatGPT):** Cerrada y aprobada para esta ronda sobre commit `da7aa87`.
-- **Pruebas Automatizadas Ejecutadas (Antigravity):** **Probado** (49 pruebas automatizadas, 322 aserciones, 0 fallos, 0 errores, 0 advertencias en entorno Docker PHP 8.2 + MySQL 8.0).
-- **Verificación Funcional HTTP (Antigravity):** **Ejecutado** (7 de 7 escenarios probados de extremo a extremo contra servidor real `http://localhost:3000`, base de datos aislada `appsalon_func_test` y buzón SMTP mock).
+- **Pruebas Automatizadas Ejecutadas (Antigravity):** **Probado** (52 pruebas automatizadas, 360 aserciones, 0 fallos, 0 errores, 0 advertencias en entorno Docker PHP 8.2 + MySQL 8.0, incluyendo `FunctionalRunnerSecurityTest` que garantiza rechazo estricto de bases no autorizadas antes de modificar datos).
+- **Verificación Funcional HTTP (Antigravity):** **Ejecutado** (7 de 7 escenarios probados de extremo a extremo contra servidor real `http://localhost:3000`, base de datos aislada `appsalon_func_test`, tokens sanitizados y receptor SMTP mock).
+- **Comprobación Funcional en Navegador con JavaScript (UI Cliente):** **Pendiente** (Interacción DOM interactiva con [src/js/app.js](file:///src/js/app.js): navegación de pestañas de cita, datepicker en navegador y alertas dinámicas en cliente, pendiente de verificación manual o suite E2E de navegador).
 - **Documentación Completa:** Disponible en [GUIA_ENTREGA_1.md](file:///GUIA_ENTREGA_1.md) y [database/README.md](file:///database/README.md).
 - **Estado General de Entrega 1:** **Listo para Revisión Final del Propietario** (Pendiente de aprobación previa para merge a `main`).
 
 ### Verificación Funcional HTTP en Servidor Real (Antigravity):
-Ejecución de extremo a extremo contra servidor PHP (`http://appsalon-web:3000`), base de datos aislada MySQL 8 (`appsalon_func_test`), cookies de sesión nativas cURL y captura de tokens desde buzón SMTP de pruebas (`tests/smtp_mock_server.php` / `tests/functional_test_suite.php`).
+Ejecución de extremo a extremo contra servidor PHP (`http://appsalon-web:3000`), base de datos aislada MySQL 8 (`appsalon_func_test`), validación previa de `SELECT DATABASE()`, timeouts de cURL y captura de tokens desde buzón SMTP de pruebas (`tests/smtp_mock_server.php` / `tests/functional_test_suite.php`). Evidencia sanitizada sin exposición de tokens.
 
 | Escenario Funcional | Estado | Petición y Respuesta HTTP | Evidencia Técnica en Base de Datos / Buzón |
 | :--- | :---: | :--- | :--- |
-| **1. Registro de Cuenta** | **Ejecutado** | `POST /crear-cuenta` $\rightarrow$ `302 /mensaje` | Fila creada en `usuarios` con `confirmado=0`, `admin=0`, `token=NULL` (sin texto plano), `token_hash` presente. Correo recibido en buzón y token uniuso extraído. |
-| **2. Confirmación de Cuenta** | **Ejecutado** | `GET /confirmar-cuenta?token={tok}` $\rightarrow$ `200 OK` | `confirmado=1`, `token_hash=NULL`, `token_tipo=NULL`. Reintento con el mismo token consumido es rechazado como inválido. |
-| **3. Login y Rate Limiting** | **Ejecutado** | Intentos 1-5: `200`<br>Intento 6: `429 Too Many Requests`<br>Login válido: `302 /cita` | `intentos_login` registra `intentos=5`, `bloqueado_hasta` futuro con alerta 429. Login con contraseña correcta regenera sesión y permite acceso a `/cita` (`200 OK`). |
-| **4. Recuperación de Contraseña** | **Ejecutado** | `POST /olvide` $\rightarrow$ `200 OK`<br>`POST /recuperar?token={tok}` $\rightarrow$ `302 /` | Correo de recuperación recibido en buzón. Token consumido atómicamente (`token_hash=NULL`). Clave vieja rechazada (`200`); clave nueva permite login exitoso (`302`). |
-| **5. Reserva de Cita (API)** | **Ejecutado** | `POST /api/citas` $\rightarrow$ `200 OK` JSON | Cita persistida en `citas` con `usuarioId` forzado de sesión, fecha futura válida y hora `10:30:00`. Dos servicios vinculados en `citasservicios`. |
+| **1. Registro de Cuenta** | **Ejecutado** | `POST /crear-cuenta` $\rightarrow$ `302 /mensaje` | Fila creada en `usuarios` con `confirmado=0`, `admin=0`, `token=NULL` (sin texto plano), `token_hash` presente. Correo recibido en buzón y hash coincidente (token no expuesto). |
+| **2. Confirmación de Cuenta** | **Ejecutado** | `GET /confirmar-cuenta?token={tok}` $\rightarrow$ `200 OK` | `confirmado=1`, `token_hash=NULL`, `token_tipo=NULL` (consumo atómico verificado). Reintento con el mismo token consumido es rechazado como inválido. |
+| **3. Login y Rate Limiting** | **Ejecutado** | Intentos 1-5: `200`<br>Intento 6: `429 Too Many Requests`<br>Login válido: `302 /cita` | Ventana fija de 15m; intento 6 bloqueado con `Retry-After` dinámico (segundos restantes). Límite por IP mitiga ataques desde el mismo origen. Login válido regenera sesión y permite acceso a `/cita` (`200 OK`). |
+| **4. Recuperación de Contraseña** | **Ejecutado** | `POST /olvide` $\rightarrow$ `200 OK`<br>`POST /recuperar?token={tok}` $\rightarrow$ `302 /` | Correo de recuperación recibido en buzón con hash coincidente. Token consumido atómicamente (`token_hash=NULL`). Clave vieja rechazada (`200`); clave nueva permite login exitoso (`302`). |
+| **5. Reserva de Cita (API)** | **Ejecutado** | `POST /api/citas` $\rightarrow$ `200 OK` JSON | Cita persistida en `citas` con `usuarioId` forzado de sesión, fecha futura válida y hora `10:30:00`. Dos servicios vinculados en `citasservicios` bajo transacción atómica. |
 | **6. Eliminación Autorizada y Anti-IDOR** | **Ejecutado** | IDOR: `403 Forbidden`<br>Dueño: `302 /cita` | Intento de eliminación por un segundo cliente rechazado con 403 (cita permanece intacta en BD). Eliminación autorizada por el dueño borra cita y servicios en transacción. |
 | **7. Logout Seguro por POST con CSRF** | **Ejecutado** | `GET /logout`: `302` (sesión activa)<br>`POST /logout`: `302 /` (sesión destruida) | Petición posterior a `/cita` es rechazada con `302 /` al quedar destruida la sesión. |
+
+---
+
+### Verificación en Navegador con JavaScript (UI Cliente):
+| Área de Interfaz | Estado | Alcance / Detalle |
+| :--- | :---: | :--- |
+| Pestañas de Reserva (Pasos 1, 2 y 3) | `Pendiente` | Cambio dinámico de pasos en DOM gestionado por `src/js/app.js` |
+| Carga de Servicios vía Fetch | `Pendiente` | Consumo asíncrono de `/api/servicios` y resaltado con clase `.seleccionado` |
+| Restricciones en Datepicker | `Pendiente` | Bloqueo interactivo en UI de fines de semana y fechas pasadas |
+| Alertas DOM Dinámicas | `Pendiente` | Inserción y remoción automática de alertas temporizadas en cliente |
 
 ---
 

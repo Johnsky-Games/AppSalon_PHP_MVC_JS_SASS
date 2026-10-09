@@ -147,40 +147,66 @@ El servidor quedará disponible en: `http://localhost:3000`
 
 ## 6. Comportamiento y Reglas de Rate Limiting en Login
 
-El sistema de limitación de tasa implementa una regla atómica por ventana fija de 15 minutos (900 segundos):
+El sistema de limitación de tasa implementa una regla atómica por **ventana temporal fija** (no móvil ni deslizante) de 15 minutos (900 segundos):
 
-1. **Estado Inicial (Contadores Vacíos):**
-   - Intentos erróneos 1 al 5: Admitidos por el rate limiter. Retornan HTTP 200 con alerta `"El Password es Incorrecto o tu cuenta no ha sido confirmada"`.
-2. **Sexto Intento Erróneo:**
-   - Rechazado inmediatamente con **HTTP 429 Too Many Requests**.
-   - Mensaje al usuario: `"Demasiados intentos fallidos. Por seguridad, intente de nuevo en 15 minutos."`
-   - Encabezado HTTP: `Retry-After: 900`.
+1. **Mecánica de la Ventana Fija:**
+   - La ventana se computa a partir de la marca temporal `primera_peticion` almacenada en la tabla `intentos_login`.
+   - Si una solicitud llega dentro de los 900 segundos posteriores a `primera_peticion`, el contador `intentos` se incrementa atómicamente.
+   - Si transcurren más de 900 segundos, la ventana expira y el contador se reinicia automáticamente a 1 en la siguiente solicitud.
+2. **Umbral y Bloqueo en Login (Estado Inicial con Contadores Vacíos):**
+   - **Intentos erróneos 1 al 5:** Admitidos por el rate limiter. Se verifica la contraseña con bcrypt y se retorna HTTP 200 con alerta `"El Password es Incorrecto o tu cuenta no ha sido confirmada"`.
+   - **Sexto intento erróneo:** Rechazado inmediatamente con **HTTP 429 Too Many Requests** antes de ejecutar la verificación costosa de bcrypt.
+   - **Mensaje al usuario:** `"Demasiados intentos fallidos. Por seguridad, intente de nuevo en X minutos."`
+   - **Encabezado `Retry-After` dinámico:** Contiene los **segundos restantes** calculados en base a `TIMESTAMPDIFF(SECOND, NOW(), bloqueado_hasta)` hasta la expiración del bloqueo. Por lo tanto, el valor decrece en cada consulta y **no siempre será exactamente 900 segundos**.
    - Se fija `bloqueado_hasta = NOW() + 15 min` en la tabla `intentos_login`.
-3. **Consideración para Pruebas Manuales:**
-   - Tras recibir el bloqueo en el sexto intento, la cuenta permanecerá bloqueada durante 15 minutos.
-   - Si se requiere probar el inicio de sesión exitoso o la recuperación con esa misma cuenta inmediatamente después, debe limpiarse el contador en la base de datos:
+3. **Alcance de la Protección por Dirección IP:**
+   - El límite por IP (`ip_login`, máximo 15 intentos) restringe el número de intentos fallidos que pueden provenir de una misma dirección de red o proxy de salida.
+   - **Alcance real:** Mitiga eficazmente ataques de fuerza bruta concentrados originados desde un **mismo origen**.
+   - **Limitación:** **No constituye ni demuestra protección general contra ataques distribuidos** (DDoS o redes de bots distribuidas entre múltiples direcciones IP distintas), los cuales requieren mecanismos perimetrales adicionales (e.g. WAF, Cloudflare, reputación de IP o captchas adaptativos).
+4. **Consideración para Pruebas Manuales:**
+   - Tras recibir el bloqueo en el sexto intento, la cuenta permanece bloqueada durante los segundos restantes de la ventana.
+   - Si se requiere probar el inicio de sesión exitoso o la recuperación con esa misma cuenta inmediatamente después, debe limpiarse el contador en la base de datos de pruebas:
      ```sql
-     DELETE FROM intentos_login WHERE identificador = 'tu_correo@ejemplo.com';
+     DELETE FROM intentos_login WHERE identificador = 'tu_correo@ejemplo.com' OR tipo IN ('email_login', 'ip_login');
      ```
 
 ---
 
-## 7. Evidencia de Comprobación Funcional HTTP (6 Escenarios)
+## 7. Comprobación y Verificación del Sistema
 
-La verificación funcional se ejecutó de extremo a extremo contra el servidor HTTP real en `http://appsalon-web:3000` y la base de datos aislada `appsalon_func_test`, utilizando cookies de sesión nativas y un buzón SMTP de pruebas para la captura segura de tokens.
+### A. Verificación Funcional HTTP (Automatizada — Estado: `Ejecutado`)
+Se ejecutó de extremo a extremo contra el servidor HTTP real en `http://appsalon-web:3000` y la base de datos aislada `appsalon_func_test`, utilizando cookies de sesión nativas de cURL y receptor SMTP mock para la captura segura de tokens. La suite exige validación obligatoria de `SELECT DATABASE()` antes de cualquier operación destructiva.
 
-| # | Escenario Funcional | Estado | Petición HTTP / Método | Código y Redirección | Evidencia en Base de Datos / Buzón |
+| # | Escenario Funcional | Estado | Petición HTTP / Método | Código y Redirección | Evidencia Técnica en Base de Datos / Buzón |
 |---|---|:---:|---|---|---|
-| **1** | **Registro de Cuenta** | **Ejecutado** | `POST /crear-cuenta` | HTTP `302` $\rightarrow$ `/mensaje` | Usuario creado con `confirmado=0`, `admin=0`, `token=NULL` (sin texto plano), `token_hash` presente. Correo recibido en buzón y token extraído. |
-| **2** | **Confirmación de Cuenta** | **Ejecutado** | `GET /confirmar-cuenta?token={tok}` | HTTP `200` (Mensaje: "Cuenta confirmada correctamente") | `confirmado=1`, `token_hash=NULL`, `token_tipo=NULL`. Reintento con el mismo token rechazado como inválido. |
-| **3** | **Login y Rate Limiting** | **Ejecutado** | `POST /` (5 erróneos + 1 bloqueo + 1 válido) | Intentos 1-5: `200`<br>Intento 6: `429`<br>Login válido: `302` $\rightarrow$ `/cita` | `intentos_login` registra `intentos=5`, `bloqueado_hasta` futuro. Login exitoso genera cookie de sesión y permite acceso a `/cita` (`200 OK`). |
-| **4** | **Recuperación de Contraseña** | **Ejecutado** | `POST /olvide`<br>`POST /recuperar?token={tok}` | Solicitud: `200`<br>Consumo: `302` $\rightarrow$ `/` | Buzón recibe correo de recuperación. Token consumido de forma atómica (`token_hash=NULL`). Login con clave anterior rechazado (`200`); login con clave nueva exitoso (`302`). |
-| **5** | **Reserva de Cita (API)** | **Ejecutado** | `POST /api/citas` (con sesión de cliente y CSRF) | HTTP `200` JSON (`resultado.resultado: true`) | Cita registrada en tabla `citas` con `usuarioId` forzado de sesión, fecha futura válida y hora `10:30:00`. Tabla `citasservicios` registra los 2 servicios seleccionados. |
-| **6** | **Eliminación Autorizada y Anti-IDOR** | **Ejecutado** | `POST /api/eliminar` (IDOR vs Propietario) | Intento IDOR: `403 Forbidden`<br>Eliminación dueño: `302` $\rightarrow$ `/cita` | Intento de eliminación por un segundo cliente rechazado con 403 (la cita se mantiene intacta). Eliminación por su dueño borra la cita y servicios asociados en una transacción atómica. |
-| **7** | **Logout Seguro por POST con CSRF** | **Ejecutado** | `GET /logout` vs `POST /logout` | `GET`: `302` (sesión preservada)<br>`POST`: `302` $\rightarrow$ `/` (sesión destruida) | Petición posterior a `/cita` rechazada con `302` hacia `/` al no existir sesión activa. |
+| **1** | **Registro de Cuenta** | **Ejecutado** | `POST /crear-cuenta` | HTTP `302` $\rightarrow$ `/mensaje` | Usuario creado con `confirmado=0`, `admin=0`, `token=NULL` (sin texto plano), hash criptográfico presente en BD. Correo recibido en buzón; hash SHA-256 del token recibido coincide con BD. |
+| **2** | **Confirmación de Cuenta** | **Ejecutado** | `GET /confirmar-cuenta?token={tok}` | HTTP `200` (Mensaje: "Cuenta confirmada correctamente") | `confirmado=1`, `token_hash=NULL`, `token_tipo=NULL` (consumo atómico verificado). Reintento con el mismo token consumido rechazado como inválido. |
+| **3** | **Login y Rate Limiting** | **Ejecutado** | `POST /` (5 erróneos + 1 bloqueo + 1 válido) | Intentos 1-5: `200`<br>Intento 6: `429`<br>Login válido: `302` $\rightarrow$ `/cita` | `intentos_login` registra `intentos=5`, `bloqueado_hasta` futuro con alerta 429. Login exitoso genera cookie de sesión regenerada y permite acceso a `/cita` (`200 OK`, "Carlos Mendoza"). |
+| **4** | **Recuperación de Contraseña** | **Ejecutado** | `POST /olvide`<br>`POST /recuperar?token={tok}` | Solicitud: `200`<br>Consumo: `302` $\rightarrow$ `/` | Buzón recibe correo de recuperación con hash coincidente en BD. Token consumido de forma atómica (`token_hash=NULL`). Login con clave anterior rechazado (`200`); login con clave nueva exitoso (`302`). |
+| **5** | **Reserva de Cita (API)** | **Ejecutado** | `POST /api/citas` (con sesión de cliente y CSRF) | HTTP `200` JSON (`resultado.resultado: true`) | Cita registrada en tabla `citas` con `usuarioId` forzado de sesión, fecha futura válida y hora `10:30:00`. Tabla `citasservicios` vincula los 2 servicios seleccionados en transacción. |
+| **6** | **Eliminación y Anti-IDOR** | **Ejecutado** | `POST /api/eliminar` (IDOR vs Propietario) | Intento IDOR: `403 Forbidden`<br>Eliminación dueño: `302` $\rightarrow$ `/cita` | Intento de eliminación por un segundo cliente rechazado con 403 (la cita se mantiene intacta). Eliminación por su dueño borra la cita y servicios asociados en una transacción atómica. |
+| **7** | **Logout Seguro por POST con CSRF** | **Ejecutado** | `GET /logout` vs `POST /logout` | `GET`: `302` (sesión preservada)<br>`POST`: `302` $\rightarrow$ `/` (sesión destruida) | Petición posterior a `/cita` rechazada con `302` hacia `/` al destruirse la sesión. |
 
-> **Script de Reproducción Automatizada:**
-> Los 7 escenarios pueden reproducirse en cualquier momento ejecutando:
-> ```bash
-> docker run --rm --network appsalon-net -v "${PWD}:/app" -w /app appsalon-php-test php tests/functional_test_suite.php
-> ```
+### B. Comprobación Funcional en Navegador con JavaScript (UI Cliente — Estado: `Pendiente`)
+La interacción visual en navegador web que involucra la ejecución de scripts cliente en JavaScript ([src/js/app.js](file:///src/js/app.js)) queda explícitamente marcada como **`Pendiente`** de ejecución manual por el revisor o mediante harness automatizado de navegador (e.g. Playwright / Puppeteer):
+- Navegación interactiva por pasos/pestañas de reserva (Paso 1: Servicios, Paso 2: Información de Cita, Paso 3: Resumen).
+- Invocación de `fetch` en el cliente para obtener `/api/servicios` y renderizar tarjetas de servicios en el DOM con selector de clase `.seleccionado`.
+- Datepicker interactivo con deshabilitación de sábados/domingos y fechas pasadas en el cliente.
+- Despliegue dinámico de alertas flotantes en el DOM sin recargar la página.
+
+---
+
+## 8. Scripts de Reproducción Automatizada desde Cero
+
+Para reproducir la instalación, migraciones, pruebas unitarias e integrales en PHPUnit, y la suite funcional HTTP desde un entorno Docker completamente limpio, ejecute:
+
+- **En entornos Linux / macOS / Bash:**
+  ```bash
+  chmod +x scripts/reproducir_entrega1.sh
+  ./scripts/reproducir_entrega1.sh
+  ```
+- **En entornos Windows (PowerShell):**
+  ```powershell
+  .\scripts\reproducir_entrega1.ps1
+  ```
+
