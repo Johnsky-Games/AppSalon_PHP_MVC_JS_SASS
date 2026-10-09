@@ -15,6 +15,7 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 
 - **Rama:** `feature/seguridad-y-consistencia-inicial`
 - **Commit Base:** `e816154b96985c2773e4fb418bbbf3e92530cca3`
+- **Commit de Entrega (Revisión 2):** `52578187a3055c6f17199d9e0b175be579925daf`
 - **Estado General:** **Probado** (29 pruebas automatizadas, 86 aserciones, 0 fallos, 0 errores)
 
 | Tarea / Control de Seguridad | Estado | Evidencia / Pruebas Asociadas |
