@@ -27,6 +27,13 @@ ActiveRecord::setDB($db);
 // Evitar envíos SMTP durante la prueba
 Email::setTransport(function(): bool { return true; });
 
+// Instrumentar observación verificable de la llamada real a comprobarPasswordAndVerificado
+// Sin alterar ni sustituir el cálculo de password_verify
+$verificacionPasswordEjecutada = false;
+Usuario::$observadorVerificacionPassword = function(string $email, $confirmado) use (&$verificacionPasswordEjecutada) {
+    $verificacionPasswordEjecutada = true;
+};
+
 // Preparar sesión y credenciales independientes
 if (session_status() === PHP_SESSION_NONE) {
     session_id(bin2hex(random_bytes(16)));
@@ -72,14 +79,10 @@ try {
 
 $alertas = Usuario::getAlertas();
 $bloqueado = false;
-$alcanzoCredenciales = false;
 
 foreach ($alertas['error'] ?? [] as $err) {
     if (str_contains($err, 'Demasiados intentos')) {
         $bloqueado = true;
-    }
-    if (str_contains($err, 'Credenciales incorrectas')) {
-        $alcanzoCredenciales = true;
     }
 }
 
@@ -88,6 +91,6 @@ $db->close();
 echo json_encode([
     'status' => $codigo,
     'bloqueado' => $bloqueado,
-    'alcanzo_credenciales' => $alcanzoCredenciales,
+    'verificacion_password_ejecutada' => $verificacionPasswordEjecutada,
     'error_msg' => $errorMsg
 ]);

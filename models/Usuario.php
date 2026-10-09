@@ -356,8 +356,19 @@ class Usuario extends ActiveRecord
         return self::$alertas;
     }
 
+    /**
+     * Observador para instrumentación y auditoría de llamadas reales al verificador de contraseña.
+     * Permite verificar invocaciones reales sin alterar, sustituir ni omitir la lógica de password_verify.
+     * @var callable|null
+     */
+    public static $observadorVerificacionPassword = null;
+
     public function comprobarPasswordAndVerificado($password)
     {
+        if (is_callable(self::$observadorVerificacionPassword)) {
+            call_user_func(self::$observadorVerificacionPassword, $this->email, $this->confirmado);
+        }
+
         if (!is_string($password) || $password === '' || !is_string($this->password) || $this->password === '') {
             self::$alertas['error'][] = 'Password incorrecto o la cuenta no ha sido verificada';
             return false;

@@ -16,7 +16,7 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 - **Rama:** `feature/seguridad-y-consistencia-inicial`
 - **Commit Base:** `e816154b96985c2773e4fb418bbbf3e92530cca3`
 - **Última Revisión Auditada por ChatGPT:** `151cce2`
-- **Estado General:** **Probado** (49 pruebas automatizadas, 324 aserciones, 0 fallos, 0 errores, 0 advertencias)
+- **Estado General:** **Probado** (49 pruebas automatizadas, 322 aserciones, 0 fallos, 0 errores, 0 advertencias)
 
 | Tarea / Control de Seguridad | Estado | Evidencia / Pruebas Asociadas |
 | :--- | :---: | :--- |
@@ -37,7 +37,7 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 | Rate Limiter: Umbral Exacto Intento por Intento (`intentos >= ?`) | **Probado** | `SecurityIntegrationTest::testRateLimiterUmbralExactoIntentoPorIntento` (bloqueo exacto en intento 5, intentos 1-4 permitidos) |
 | Rate Limiter: Admisión Atómica Previa a Bcrypt (`admitirIntentoLogin`) | **Probado** | `LoginController::login()` reserva intento atómicamente antes de verificar credenciales costosas; limpieza en login exitoso |
 | Rate Limiter: Presupuesto Compartido de IP y Limpieza por Cuenta | **Probado** | `SecurityIntegrationTest::testLoginExitosoNoReiniciaPresupuestoIpAtaqueMultiplesCuentas` (login exitoso en cuenta de control no reinicia contador compartido de IP ante ataques intercalados) |
-| Rate Limiter: Concurrencia Real con Señal de Sincronización y Validación Estricta | **Probado** | `SecurityIntegrationTest::testRateLimiterProcesosSimultaneosSincronizadosFlujoRealLogin` (10 procesos concurrentes sincronizados por barrera STDIN con señal READY; exactamente 5 admitidos alcanzando verificación de credenciales y 5 rechazados con 429; fallos ante códigos 500 o anómalos) |
+| Rate Limiter: Concurrencia Real con Señal de Sincronización, Verificación Observada y Timeout | **Probado** | `SecurityIntegrationTest::testRateLimiterProcesosSimultaneosSincronizadosFlujoRealLogin` (comprobación previa de existencia, confirmación y hash del usuario; 10 procesos sincronizados por barrera STDIN con señal READY; exactamente 5 admitidos con llamada real observada a `comprobarPasswordAndVerificado` y 5 rechazados con 429 con cero verificaciones de contraseña; tiempo límite de 10s y limpieza garantizada de subprocesos en bloque finally) |
 | Rate Limiter: Postura Fail-Secure ante Fallos SQL | **Probado** | `SecurityIntegrationTest::testRateLimiterManejoFalloSqlFailSecure` (retorna bloqueo ante conexión cerrada o fallo) |
 | Supresión de Generación de Tokens bajo Rate Limiting en `/olvide` | **Probado** | `SecurityIntegrationTest::testOlvideConRateLimitBloqueaSinGenerarNiPersistirToken` (detiene flujo antes de token/email ante 429) |
 | Control de Fallo en Persistencia Previa al Envío de Correo | **Probado** | `SecurityIntegrationTest::testOlvideNoIntentaEnviarCorreoSiFallaPersistenciaToken`, `SecurityIntegrationTest::testReenviarConfirmacionNoEnviaCorreoSiCuentaYaEstaConfirmada` |

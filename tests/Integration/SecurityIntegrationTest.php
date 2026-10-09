@@ -497,7 +497,7 @@ class SecurityIntegrationTest extends TestCase
         $emailTarget = 'concurrente_login@correo.com';
         $ipTarget = '198.51.100.77';
 
-        // 1. Crear usuario en la base de datos
+        // 1. Crear usuario en la base de datos y verificar explícitamente su existencia, confirmación y hash válido antes de iniciar
         $usuario = new Usuario([
             'nombre' => 'UserConcurrente',
             'apellido' => 'Test',
@@ -507,97 +507,187 @@ class SecurityIntegrationTest extends TestCase
             'confirmado' => '1'
         ]);
         $usuario->hashPassword();
-        $usuario->guardar();
+        $guardado = $usuario->guardar();
+        $this->assertTrue((bool)(is_array($guardado) ? ($guardado['resultado'] ?? false) : $guardado), 'El usuario de prueba debe guardarse correctamente');
+        $this->assertNotEmpty($usuario->id, 'El usuario de prueba debe tener ID asignado');
+
+        // Verificación previa explícita requerida por auditoría antes de iniciar subprocesos
+        $usuarioEnDb = Usuario::where('email', $emailTarget);
+        $this->assertNotNull($usuarioEnDb, 'El usuario de prueba debe existir en base de datos antes de iniciar los trabajadores');
+        $this->assertSame('1', (string)$usuarioEnDb->confirmado, 'El usuario de prueba debe estar confirmado antes de iniciar los trabajadores');
+        $this->assertTrue(password_verify('clave123', $usuarioEnDb->password), 'El hash del usuario de prueba debe verificar la clave esperada antes de iniciar los trabajadores');
 
         // 2. Limpiar registros previos en rate limit
         RateLimiter::limpiarIntentos(self::$db, RateLimiter::TIPO_EMAIL_LOGIN, $emailTarget);
         RateLimiter::limpiarIntentos(self::$db, RateLimiter::TIPO_IP_LOGIN, $ipTarget);
 
         $numProcesos = 10;
+        $timeoutSegundos = 10.0;
         $procesos = [];
         $pipes = [];
 
         $workerScript = __DIR__ . '/concurrent_login_worker.php';
         $this->assertFileExists($workerScript);
 
-        // 3. Levantar 10 subprocesos simultáneos con sesiones independientes
-        for ($i = 0; $i < $numProcesos; $i++) {
-            $cmd = "php " . escapeshellarg($workerScript) . " " . escapeshellarg($emailTarget) . " " . escapeshellarg($ipTarget);
-            $spec = [
-                0 => ["pipe", "r"], // STDIN: barrera sincronizadora
-                1 => ["pipe", "w"], // STDOUT
-                2 => ["pipe", "w"]  // STDERR
-            ];
-            $env = array_merge($_ENV, [
-                'DB_HOST' => $host,
-                'DB_USER' => $user,
-                'DB_PASS' => $pass,
-                'DB_NAME' => $name,
-                'DB_PORT' => (string)$port
-            ]);
-            $proc = proc_open($cmd, $spec, $procPipes, __DIR__, $env);
-            $this->assertIsResource($proc, "No se pudo iniciar el proceso concurrente #{$i}");
-            $procesos[$i] = $proc;
-            $pipes[$i] = $procPipes;
-        }
+        try {
+            // 3. Levantar 10 subprocesos simultáneos con sesiones independientes y streams no bloqueantes
+            for ($i = 0; $i < $numProcesos; $i++) {
+                $cmd = "php " . escapeshellarg($workerScript) . " " . escapeshellarg($emailTarget) . " " . escapeshellarg($ipTarget);
+                $spec = [
+                    0 => ["pipe", "r"], // STDIN: barrera sincronizadora
+                    1 => ["pipe", "w"], // STDOUT
+                    2 => ["pipe", "w"]  // STDERR
+                ];
+                $env = array_merge($_ENV, [
+                    'DB_HOST' => $host,
+                    'DB_USER' => $user,
+                    'DB_PASS' => $pass,
+                    'DB_NAME' => $name,
+                    'DB_PORT' => (string)$port
+                ]);
+                $proc = proc_open($cmd, $spec, $procPipes, __DIR__, $env);
+                $this->assertIsResource($proc, "No se pudo iniciar el proceso concurrente #{$i}");
+                stream_set_blocking($procPipes[1], false);
+                stream_set_blocking($procPipes[2], false);
+                $procesos[$i] = $proc;
+                $pipes[$i] = $procPipes;
+            }
 
-        // 4. Esperar señal explícita de READY de cada uno de los 10 trabajadores
-        for ($i = 0; $i < $numProcesos; $i++) {
-            $readyLine = trim(fgets($pipes[$i][1]));
-            $this->assertSame('READY', $readyLine, "El trabajador #{$i} no emitió la señal READY esperada");
-        }
+            // 4. Esperar señal explícita de READY de cada uno de los 10 trabajadores con tiempo límite
+            $listos = array_fill(0, $numProcesos, false);
+            $inicioEsperaReady = microtime(true);
+            $todosListos = false;
 
-        // 5. Liberar la barrera para todos los procesos concurrentemente
-        for ($i = 0; $i < $numProcesos; $i++) {
-            fwrite($pipes[$i][0], "GO\n");
-            fflush($pipes[$i][0]);
-            fclose($pipes[$i][0]);
-        }
+            while ((microtime(true) - $inicioEsperaReady) < $timeoutSegundos) {
+                for ($i = 0; $i < $numProcesos; $i++) {
+                    if (!$listos[$i]) {
+                        $line = fgets($pipes[$i][1]);
+                        if ($line !== false && trim($line) === 'READY') {
+                            $listos[$i] = true;
+                        }
+                    }
+                }
+                if (!in_array(false, $listos, true)) {
+                    $todosListos = true;
+                    break;
+                }
+                usleep(10000); // 10 ms
+            }
 
-        // 6. Recolectar resultados de los 10 procesos con validación estricta de respuestas
-        $admitidos = 0;
-        $rechazados429 = 0;
-        $credencialesVerificadas = 0;
+            $this->assertTrue($todosListos, "Timeout ({$timeoutSegundos}s): no todos los trabajadores concurrentes emitieron la señal READY");
 
-        for ($i = 0; $i < $numProcesos; $i++) {
-            $stdout = stream_get_contents($pipes[$i][1]);
-            fclose($pipes[$i][1]);
-            $stderr = stream_get_contents($pipes[$i][2]);
-            fclose($pipes[$i][2]);
-            $exitCode = proc_close($procesos[$i]);
+            // 5. Liberar la barrera para todos los procesos concurrentemente
+            for ($i = 0; $i < $numProcesos; $i++) {
+                fwrite($pipes[$i][0], "GO\n");
+                fflush($pipes[$i][0]);
+                fclose($pipes[$i][0]);
+            }
 
-            $this->assertSame(0, $exitCode, "El proceso hijo #{$i} terminó con código {$exitCode}. STDERR: {$stderr}");
-            $data = json_decode(trim($stdout), true);
-            $this->assertIsArray($data, "El subproceso #{$i} no retornó JSON válido. Salida: '{$stdout}' | STDERR: '{$stderr}'");
+            // 6. Recolectar resultados de los 10 procesos con tiempo límite y validación estricta
+            $salidas = array_fill(0, $numProcesos, '');
+            $errores = array_fill(0, $numProcesos, '');
+            $terminados = array_fill(0, $numProcesos, false);
+            $codigosSalida = array_fill(0, $numProcesos, -1);
+            $inicioEjecucion = microtime(true);
+            $todosTerminados = false;
 
-            // No clasificar cualquier respuesta distinta de 429 como válida; fallar ante 500, excepciones o anomalías
-            $this->assertContains($data['status'], [200, 429], "Respuesta inesperada en proceso #{$i}: status={$data['status']}. Error: " . ($data['error_msg'] ?? 'ninguno'));
+            while ((microtime(true) - $inicioEjecucion) < $timeoutSegundos) {
+                for ($i = 0; $i < $numProcesos; $i++) {
+                    if (!$terminados[$i]) {
+                        $chunkOut = stream_get_contents($pipes[$i][1]);
+                        if ($chunkOut !== false && $chunkOut !== '') {
+                            $salidas[$i] .= $chunkOut;
+                        }
+                        $chunkErr = stream_get_contents($pipes[$i][2]);
+                        if ($chunkErr !== false && $chunkErr !== '') {
+                            $errores[$i] .= $chunkErr;
+                        }
 
-            if ($data['status'] === 429) {
-                $this->assertTrue($data['bloqueado'], "El proceso #{$i} rechazado con 429 debe reportar bloqueado=true");
-                $this->assertFalse($data['alcanzo_credenciales'], "El proceso #{$i} con 429 no debe alcanzar verificación de credenciales");
-                $rechazados429++;
-            } elseif ($data['status'] === 200) {
-                $this->assertFalse($data['bloqueado'], "El proceso #{$i} admitido no debe reportar bloqueo");
-                $this->assertTrue($data['alcanzo_credenciales'], "El proceso #{$i} admitido debe evidenciar alcance de verificación de credenciales");
-                $admitidos++;
-                $credencialesVerificadas++;
+                        $procStatus = proc_get_status($procesos[$i]);
+                        if (!$procStatus['running']) {
+                            $salidas[$i] .= stream_get_contents($pipes[$i][1]);
+                            $errores[$i] .= stream_get_contents($pipes[$i][2]);
+                            $codigosSalida[$i] = (int)$procStatus['exitcode'];
+                            $terminados[$i] = true;
+                        }
+                    }
+                }
+                if (!in_array(false, $terminados, true)) {
+                    $todosTerminados = true;
+                    break;
+                }
+                usleep(10000); // 10 ms
+            }
+
+            $this->assertTrue($todosTerminados, "Timeout ({$timeoutSegundos}s): no todos los trabajadores completaron su ejecución");
+
+            $admitidos = 0;
+            $rechazados429 = 0;
+            $totalVerificacionesPassword = 0;
+            $totalRechazadosSinVerificacion = 0;
+
+            for ($i = 0; $i < $numProcesos; $i++) {
+                fclose($pipes[$i][1]);
+                fclose($pipes[$i][2]);
+                $closeCode = proc_close($procesos[$i]);
+                $procesos[$i] = null;
+                $exitCode = ($codigosSalida[$i] !== -1) ? $codigosSalida[$i] : $closeCode;
+
+                $this->assertSame(0, $exitCode, "El proceso hijo #{$i} terminó con código {$exitCode}. STDERR: {$errores[$i]}");
+                $data = json_decode(trim($salidas[$i]), true);
+                $this->assertIsArray($data, "El subproceso #{$i} no retornó JSON válido. Salida: '{$salidas[$i]}' | STDERR: '{$errores[$i]}'");
+
+                // Rechazar errores 500, excepciones o respuestas inesperadas
+                $this->assertContains($data['status'], [200, 429], "Respuesta inesperada en proceso #{$i}: status={$data['status']}. Error: " . ($data['error_msg'] ?? 'ninguno'));
+
+                if ($data['status'] === 429) {
+                    $this->assertTrue($data['bloqueado'], "El proceso #{$i} rechazado con 429 debe reportar bloqueado=true");
+                    // Comprobación explícita de observación: cero verificaciones en las solicitudes rechazadas con 429
+                    $this->assertFalse($data['verificacion_password_ejecutada'], "El proceso #{$i} rechazado con 429 NO debe ejecutar la verificación de contraseña");
+                    $rechazados429++;
+                    $totalRechazadosSinVerificacion++;
+                } elseif ($data['status'] === 200) {
+                    $this->assertFalse($data['bloqueado'], "El proceso #{$i} admitido no debe reportar bloqueo");
+                    // Comprobación explícita de observación: llamada real al verificador de contraseña
+                    $this->assertTrue($data['verificacion_password_ejecutada'], "El proceso #{$i} admitido DEBE haber ejecutado la llamada real a comprobarPasswordAndVerificado");
+                    $admitidos++;
+                    $totalVerificacionesPassword++;
+                }
+            }
+
+            // 7. Verificar conteo exacto: exactamente 5 admisiones y 5 verificaciones reales de contraseña
+            // frente a exactamente 5 rechazos con 429 y cero verificaciones de contraseña
+            $this->assertSame(5, $admitidos, 'Exactamente 5 peticiones deben ser admitidas por el rate limiter');
+            $this->assertSame(5, $rechazados429, 'Exactamente 5 peticiones deben ser rechazadas con 429 bajo concurrencia');
+            $this->assertSame(5, $totalVerificacionesPassword, 'Exactamente 5 solicitudes deben haber ejecutado la llamada real a comprobarPasswordAndVerificado');
+            $this->assertSame(5, $totalRechazadosSinVerificacion, 'Exactamente 5 solicitudes rechazadas con 429 deben tener cero verificaciones de contraseña');
+            $this->assertSame(10, $admitidos + $rechazados429, 'El total de procesos debe ser exactamente 10');
+
+            // 8. Verificar estado final en MySQL
+            $estado = RateLimiter::consultarEstado(self::$db, RateLimiter::TIPO_EMAIL_LOGIN, $emailTarget);
+            $this->assertTrue($estado['bloqueado'], 'La cuenta debe permanecer en estado bloqueado tras alcanzar el umbral');
+            $this->assertSame(5, $estado['intentos'], 'El número de intentos registrados en BD debe ser exactamente 5');
+        } finally {
+            // Limpieza estricta de procesos y descriptores para evitar que fallos dejen la suite esperando indefinidamente
+            foreach ($pipes as $procPipes) {
+                if (is_array($procPipes)) {
+                    foreach ($procPipes as $p) {
+                        if (is_resource($p)) {
+                            @fclose($p);
+                        }
+                    }
+                }
+            }
+            foreach ($procesos as $proc) {
+                if (is_resource($proc)) {
+                    $st = @proc_get_status($proc);
+                    if ($st && $st['running']) {
+                        @proc_terminate($proc, 9);
+                    }
+                    @proc_close($proc);
+                }
             }
         }
-
-        // 7. Verificar conteo exacto de peticiones admitidas vs rechazadas bajo concurrencia
-        // Con MAX_INTENTOS_EMAIL = 5, exactamente 5 peticiones deben ser admitidas antes del bloqueo,
-        // exactamente 5 deben alcanzar verificación de credenciales,
-        // y exactamente 5 deben ser rechazadas con HTTP 429 sin llegar a verificación costosa redundante.
-        $this->assertSame(5, $admitidos, 'Exactamente 5 peticiones deben ser admitidas por el rate limiter');
-        $this->assertSame(5, $rechazados429, 'Exactamente 5 peticiones deben ser rechazadas con 429 bajo concurrencia');
-        $this->assertSame(5, $credencialesVerificadas, 'Exactamente 5 peticiones deben alcanzar verificación de credenciales');
-        $this->assertSame(10, $admitidos + $rechazados429, 'El total de procesos admitidos + rechazados debe ser 10');
-
-        // 8. Verificar estado final en MySQL
-        $estado = RateLimiter::consultarEstado(self::$db, RateLimiter::TIPO_EMAIL_LOGIN, $emailTarget);
-        $this->assertTrue($estado['bloqueado'], 'La cuenta debe permanecer en estado bloqueado tras alcanzar el umbral');
-        $this->assertSame(5, $estado['intentos'], 'El número de intentos registrados en BD debe ser exactamente 5');
     }
 
     public function testRateLimiterManejoFalloSqlFailSecure(): void
