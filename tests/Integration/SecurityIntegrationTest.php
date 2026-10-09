@@ -46,6 +46,11 @@ class SecurityIntegrationTest extends TestCase
         self::$db->query("DELETE FROM servicios");
         self::$db->query("DELETE FROM intentos_login");
 
+        \Classes\Email::setTransport(function(): bool {
+            return true;
+        });
+        \Classes\Email::limpiarEmailsEnviados();
+
         if (session_status() === PHP_SESSION_NONE) {
             session_start();
         }
@@ -61,6 +66,8 @@ class SecurityIntegrationTest extends TestCase
     protected function tearDown(): void
     {
         self::$db->query("DROP TRIGGER IF EXISTS test_fail_citasservicios");
+        \Classes\Email::setTransport(null);
+        \Classes\Email::limpiarEmailsEnviados();
     }
 
     public function testEntradasMaliciosasSeProcesanComoDatosEnConsultasPreparadas(): void
@@ -475,6 +482,105 @@ class SecurityIntegrationTest extends TestCase
 
         $conn1->close();
         $conn2->close();
+    }
+
+    public function testRateLimiterProcesosSimultaneosSincronizadosFlujoRealLogin(): void
+    {
+        $host = getenv('DB_HOST') ?: 'appsalon-test-db';
+        $user = getenv('DB_USER') ?: 'root';
+        $pass = getenv('DB_PASS') ?: 'root';
+        $name = getenv('DB_NAME') ?: 'appsalon_test';
+        $port = (int)(getenv('DB_PORT') ?: 3306);
+
+        $emailTarget = 'concurrente_login@correo.com';
+        $ipTarget = '198.51.100.77';
+
+        // 1. Crear usuario en la base de datos
+        $usuario = new Usuario([
+            'nombre' => 'UserConcurrente',
+            'apellido' => 'Test',
+            'email' => $emailTarget,
+            'password' => 'clave123',
+            'telefono' => '1122334455',
+            'confirmado' => '1'
+        ]);
+        $usuario->hashPassword();
+        $usuario->guardar();
+
+        // 2. Limpiar registros previos en rate limit
+        RateLimiter::limpiarIntentos(self::$db, RateLimiter::TIPO_EMAIL_LOGIN, $emailTarget);
+        RateLimiter::limpiarIntentos(self::$db, RateLimiter::TIPO_IP_LOGIN, $ipTarget);
+
+        $numProcesos = 10;
+        $procesos = [];
+        $pipes = [];
+
+        $workerScript = __DIR__ . '/concurrent_login_worker.php';
+        $this->assertFileExists($workerScript);
+
+        // 3. Levantar 10 subprocesos simultáneos con sesiones independientes
+        for ($i = 0; $i < $numProcesos; $i++) {
+            $cmd = "php " . escapeshellarg($workerScript) . " " . escapeshellarg($emailTarget) . " " . escapeshellarg($ipTarget);
+            $spec = [
+                0 => ["pipe", "r"], // STDIN: barrera sincronizadora
+                1 => ["pipe", "w"], // STDOUT
+                2 => ["pipe", "w"]  // STDERR
+            ];
+            $env = array_merge($_ENV, [
+                'DB_HOST' => $host,
+                'DB_USER' => $user,
+                'DB_PASS' => $pass,
+                'DB_NAME' => $name,
+                'DB_PORT' => (string)$port
+            ]);
+            $proc = proc_open($cmd, $spec, $procPipes, __DIR__, $env);
+            $this->assertIsResource($proc, "No se pudo iniciar el proceso concurrente #{$i}");
+            $procesos[$i] = $proc;
+            $pipes[$i] = $procPipes;
+        }
+
+        // Breve pausa para asegurar que los 10 procesos alcancen la barrera de sincronización en fgets(STDIN)
+        usleep(300000); // 300 ms
+
+        // 4. Liberar la barrera para todos los procesos concurrentemente
+        for ($i = 0; $i < $numProcesos; $i++) {
+            fwrite($pipes[$i][0], "GO\n");
+            fflush($pipes[$i][0]);
+            fclose($pipes[$i][0]);
+        }
+
+        // 5. Recolectar resultados de los 10 procesos
+        $admitidos = 0;
+        $rechazados429 = 0;
+
+        for ($i = 0; $i < $numProcesos; $i++) {
+            $stdout = stream_get_contents($pipes[$i][1]);
+            fclose($pipes[$i][1]);
+            fclose($pipes[$i][2]);
+            $exitCode = proc_close($procesos[$i]);
+
+            $this->assertSame(0, $exitCode, "El proceso hijo #{$i} terminó con error inesperado");
+            $data = json_decode($stdout, true);
+            $this->assertIsArray($data, "El subproceso #{$i} no retornó JSON válido. Salida: {$stdout}");
+
+            if ($data['status'] === 429 || $data['bloqueado'] === true) {
+                $rechazados429++;
+            } else {
+                $admitidos++;
+            }
+        }
+
+        // 6. Verificar conteo exacto de peticiones admitidas vs rechazadas bajo concurrencia
+        // Con MAX_INTENTOS_EMAIL = 5, exactamente 5 peticiones deben ser admitidas antes del bloqueo,
+        // y exactamente 5 deben ser rechazadas con HTTP 429 / bloqueado sin llegar a verificación redundante.
+        $this->assertSame(5, $admitidos, 'Exactamente 5 peticiones deben ser admitidas por el rate limiter');
+        $this->assertSame(5, $rechazados429, 'Exactamente 5 peticiones deben ser rechazadas con 429 bajo concurrencia');
+        $this->assertSame(10, $admitidos + $rechazados429, 'El total de procesos admitidos + rechazados debe ser 10');
+
+        // 7. Verificar estado final en MySQL
+        $estado = RateLimiter::consultarEstado(self::$db, RateLimiter::TIPO_EMAIL_LOGIN, $emailTarget);
+        $this->assertTrue($estado['bloqueado'], 'La cuenta debe permanecer en estado bloqueado tras alcanzar el umbral');
+        $this->assertSame(5, $estado['intentos'], 'El número de intentos registrados en BD debe ser exactamente 5');
     }
 
     public function testRateLimiterManejoFalloSqlFailSecure(): void

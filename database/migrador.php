@@ -18,11 +18,16 @@ if (!$db) {
 }
 
 // 1. Asegurar tabla de migraciones versionadas
-$db->query("CREATE TABLE IF NOT EXISTS migraciones (
+$creacion = $db->query("CREATE TABLE IF NOT EXISTS migraciones (
     id INT AUTO_INCREMENT PRIMARY KEY,
     migracion VARCHAR(255) NOT NULL UNIQUE,
     aplicada_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+if (!$creacion) {
+    echo "[ERROR] Fallo crítico al crear o verificar la tabla de control 'migraciones': " . $db->error . "\n";
+    exit(1);
+}
 
 // Obtener archivos de migración ordenados (excluyendo archivos de rollback)
 $todosSql = glob(__DIR__ . '/migrations/*.sql');
@@ -34,11 +39,13 @@ sort($archivosMigracion);
 if ($comando === 'status') {
     echo "=== Estado de Migraciones ===\n";
     $result = $db->query("SELECT migracion, aplicada_en FROM migraciones ORDER BY id ASC");
+    if (!$result) {
+        echo "[ERROR] Fallo al consultar el estado en la tabla 'migraciones': " . $db->error . "\n";
+        exit(1);
+    }
     $aplicadas = [];
-    if ($result) {
-        while ($row = $result->fetch_assoc()) {
-            $aplicadas[$row['migracion']] = $row['aplicada_en'];
-        }
+    while ($row = $result->fetch_assoc()) {
+        $aplicadas[$row['migracion']] = $row['aplicada_en'];
     }
 
     foreach ($archivosMigracion as $archivo) {
@@ -52,7 +59,20 @@ if ($comando === 'status') {
 } elseif ($comando === 'up') {
     foreach ($archivosMigracion as $archivo) {
         $nombre = basename($archivo, '.sql');
-        $check = $db->query("SELECT id FROM migraciones WHERE migracion = '{$db->escape_string($nombre)}'");
+        $stmtCheck = $db->prepare("SELECT id FROM migraciones WHERE migracion = ?");
+        if (!$stmtCheck) {
+            echo "[ERROR] Error al preparar consulta de verificación para {$nombre}: " . $db->error . "\n";
+            exit(1);
+        }
+        $stmtCheck->bind_param('s', $nombre);
+        if (!$stmtCheck->execute()) {
+            echo "[ERROR] Error al verificar estado de la migración {$nombre}: " . $stmtCheck->error . "\n";
+            $stmtCheck->close();
+            exit(1);
+        }
+        $check = $stmtCheck->get_result();
+        $stmtCheck->close();
+
         if ($check && $check->num_rows > 0) {
             echo "[-] Migración ya aplicada: {$nombre}\n";
             continue;
@@ -96,10 +116,21 @@ if ($comando === 'status') {
 
         // Registrar en migraciones únicamente tras completar todas las sentencias sin error
         $stmt = $db->prepare("INSERT INTO migraciones (migracion, aplicada_en) VALUES (?, NOW()) ON DUPLICATE KEY UPDATE aplicada_en = NOW()");
-        if ($stmt) {
-            $stmt->bind_param('s', $nombre);
-            $stmt->execute();
-            $stmt->close();
+        if (!$stmt) {
+            echo "[ERROR] Fallo crítico al preparar el registro de la migración {$nombre} en la tabla 'migraciones': " . $db->error . "\n";
+            echo "[ESTADO PARCIAL] Las sentencias DDL/DML de {$nombre} fueron aplicadas, pero el registro de control no pudo prepararse. Inserte manualmente el registro en 'migraciones' antes de continuar.\n";
+            exit(1);
+        }
+
+        $stmt->bind_param('s', $nombre);
+        $ejecutado = $stmt->execute();
+        $errorInsert = $stmt->error;
+        $stmt->close();
+
+        if (!$ejecutado) {
+            echo "[ERROR] Fallo crítico al registrar la migración {$nombre} en la tabla 'migraciones': {$errorInsert}\n";
+            echo "[ESTADO PARCIAL] Las sentencias DDL/DML de la migración {$nombre} fueron aplicadas, pero el registro en 'migraciones' falló. La base de datos se encuentra en un estado parcial. Debe registrar manualmente la migración en la tabla 'migraciones' para resolver la discrepancia.\n";
+            exit(1);
         }
 
         echo "[OK] Migración {$nombre} aplicada exitosamente.\n";
@@ -110,7 +141,20 @@ if ($comando === 'status') {
 
     foreach ($rollbackFiles as $archivo) {
         $nombre = basename($archivo, '_rollback.sql');
-        $check = $db->query("SELECT id FROM migraciones WHERE migracion = '{$db->escape_string($nombre)}'");
+        $stmtCheck = $db->prepare("SELECT id FROM migraciones WHERE migracion = ?");
+        if (!$stmtCheck) {
+            echo "[ERROR] Error al preparar verificación de rollback para {$nombre}: " . $db->error . "\n";
+            exit(1);
+        }
+        $stmtCheck->bind_param('s', $nombre);
+        if (!$stmtCheck->execute()) {
+            echo "[ERROR] Error al verificar migración {$nombre} para rollback: " . $stmtCheck->error . "\n";
+            $stmtCheck->close();
+            exit(1);
+        }
+        $check = $stmtCheck->get_result();
+        $stmtCheck->close();
+
         if (!$check || $check->num_rows === 0) {
             echo "[-] Migración no registrada, omitiendo rollback: {$nombre}\n";
             continue;
@@ -153,10 +197,18 @@ if ($comando === 'status') {
 
         // Eliminar registro de tabla de migraciones
         $stmt = $db->prepare("DELETE FROM migraciones WHERE migracion = ?");
-        if ($stmt) {
-            $stmt->bind_param('s', $nombre);
-            $stmt->execute();
-            $stmt->close();
+        if (!$stmt) {
+            echo "[ERROR] Fallo crítico al preparar eliminación de {$nombre} en 'migraciones': " . $db->error . "\n";
+            exit(1);
+        }
+        $stmt->bind_param('s', $nombre);
+        $ejecutado = $stmt->execute();
+        $errorDelete = $stmt->error;
+        $stmt->close();
+
+        if (!$ejecutado) {
+            echo "[ERROR] Fallo crítico al eliminar el registro de {$nombre} en 'migraciones': {$errorDelete}\n";
+            exit(1);
         }
 
         echo "[OK] Reversión de {$nombre} completada exitosamente.\n";

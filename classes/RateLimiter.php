@@ -172,6 +172,150 @@ class RateLimiter
     }
 
     /**
+     * Evalúa y reserva atómicamente un intento en un vector de rate limiting.
+     * Ejecuta una sola sentencia atómica MySQL con autocommit para eliminar deadlocks
+     * garantizando serialización atómica en el motor InnoDB.
+     *
+     * @return array ['admitido' => bool, 'intentos' => int, 'segundos_restantes' => int]
+     */
+    protected static function admitirVector(mysqli $db, string $tipo, string $identificador, int $maxIntentos): array
+    {
+        $ventana = self::VENTANA_SEGUNDOS;
+        $bloqueo = self::DURACION_BLOQUEO;
+
+        try {
+            $db->query("SET @admitido = 1");
+
+            $sql = "INSERT INTO intentos_login (identificador, tipo, intentos, bloqueado_hasta, primera_peticion, ultimo_intento)
+                    VALUES (?, ?, 1, NULL, NOW(), NOW())
+                    ON DUPLICATE KEY UPDATE
+                        id = IF(bloqueado_hasta > NOW() OR (intentos >= ? AND primera_peticion >= DATE_SUB(NOW(), INTERVAL ? SECOND)),
+                                IF((@admitido := 0) = 0, id, id),
+                                IF((@admitido := 1) = 1, id, id)),
+                        intentos = IF(bloqueado_hasta > NOW(),
+                                      intentos,
+                                      IF(primera_peticion < DATE_SUB(NOW(), INTERVAL ? SECOND),
+                                         1,
+                                         IF(intentos < ?, intentos + 1, intentos))),
+                        bloqueado_hasta = IF(bloqueado_hasta > NOW(),
+                                             bloqueado_hasta,
+                                             IF(primera_peticion >= DATE_SUB(NOW(), INTERVAL ? SECOND) AND intentos >= ?,
+                                                DATE_ADD(NOW(), INTERVAL ? SECOND),
+                                                NULL)),
+                        primera_peticion = IF(bloqueado_hasta > NOW(),
+                                              primera_peticion,
+                                              IF(primera_peticion < DATE_SUB(NOW(), INTERVAL ? SECOND), NOW(), primera_peticion)),
+                        ultimo_intento = IF(bloqueado_hasta > NOW() OR (intentos >= ? AND primera_peticion >= DATE_SUB(NOW(), INTERVAL ? SECOND)),
+                                            ultimo_intento,
+                                            NOW())";
+
+            $stmt = @$db->prepare($sql);
+            if (!$stmt) {
+                return ['admitido' => false, 'intentos' => $maxIntentos, 'segundos_restantes' => $bloqueo];
+            }
+
+            $stmt->bind_param('ssiiiiiiiiii',
+                $identificador, $tipo,
+                $maxIntentos, $ventana,
+                $ventana, $maxIntentos,
+                $ventana, $maxIntentos, $bloqueo,
+                $ventana,
+                $maxIntentos, $ventana
+            );
+
+            if (!$stmt->execute()) {
+                $stmt->close();
+                return ['admitido' => false, 'intentos' => $maxIntentos, 'segundos_restantes' => $bloqueo];
+            }
+            $stmt->close();
+
+            $stmtRes = @$db->prepare("SELECT @admitido AS admitido, intentos, TIMESTAMPDIFF(SECOND, NOW(), bloqueado_hasta) AS seg_bloqueado
+                                      FROM intentos_login
+                                      WHERE tipo = ? AND identificador = ?
+                                      LIMIT 1");
+            if (!$stmtRes) {
+                return ['admitido' => false, 'intentos' => $maxIntentos, 'segundos_restantes' => $bloqueo];
+            }
+            $stmtRes->bind_param('ss', $tipo, $identificador);
+            if (!$stmtRes->execute()) {
+                $stmtRes->close();
+                return ['admitido' => false, 'intentos' => $maxIntentos, 'segundos_restantes' => $bloqueo];
+            }
+            $res = $stmtRes->get_result();
+            $fila = $res ? $res->fetch_assoc() : null;
+            $stmtRes->close();
+
+            if (!$fila) {
+                return ['admitido' => false, 'intentos' => $maxIntentos, 'segundos_restantes' => $bloqueo];
+            }
+
+            $admitido = ((int)$fila['admitido'] === 1);
+            $segRestantes = (int)($fila['seg_bloqueado'] ?? 0);
+
+            return [
+                'admitido' => $admitido,
+                'intentos' => (int)$fila['intentos'],
+                'segundos_restantes' => max(0, $segRestantes)
+            ];
+        } catch (\Throwable $e) {
+            return ['admitido' => false, 'intentos' => $maxIntentos, 'segundos_restantes' => $bloqueo];
+        }
+    }
+
+    /**
+     * Admisión y reserva atómica de intento evaluando dos vectores coordinados (ej. IP y Email).
+     */
+    public static function admitirDosVectores(mysqli $db, string $tipoIP, string $ip, string $tipoEmail, string $email, int $maxIP, int $maxEmail): array
+    {
+        $resIP = self::admitirVector($db, $tipoIP, $ip, $maxIP);
+        if (!$resIP['admitido']) {
+            return [
+                'admitido' => false,
+                'segundos_restantes' => $resIP['segundos_restantes'],
+                'tipo' => $tipoIP
+            ];
+        }
+
+        if ($email !== '') {
+            $resEmail = self::admitirVector($db, $tipoEmail, $email, $maxEmail);
+            if (!$resEmail['admitido']) {
+                return [
+                    'admitido' => false,
+                    'segundos_restantes' => $resEmail['segundos_restantes'],
+                    'tipo' => $tipoEmail
+                ];
+            }
+        }
+
+        return [
+            'admitido' => true,
+            'segundos_restantes' => 0,
+            'tipo' => null
+        ];
+    }
+
+    /**
+     * Admisión atómica previa para intentos de inicio de sesión.
+     * Reserva el intento ANTES de la verificación costosa (bcrypt).
+     * Si las credenciales resultan válidas, el controlador debe llamar a limpiarIntentos().
+     * Si son inválidas, el intento ya fue contabilizado de manera serializada.
+     */
+    public static function admitirIntentoLogin(mysqli $db, string $ip, string $email): array
+    {
+        return self::admitirDosVectores($db, self::TIPO_IP_LOGIN, $ip, self::TIPO_EMAIL_LOGIN, $email, self::MAX_INTENTOS_IP, self::MAX_INTENTOS_EMAIL);
+    }
+
+    public static function admitirIntentoRecovery(mysqli $db, string $ip, string $email): array
+    {
+        return self::admitirDosVectores($db, self::TIPO_IP_RECOVERY, $ip, self::TIPO_EMAIL_RECOVERY, $email, self::MAX_INTENTOS_IP, self::MAX_INTENTOS_EMAIL);
+    }
+
+    public static function admitirIntentoReconfirm(mysqli $db, string $ip, string $email): array
+    {
+        return self::admitirDosVectores($db, self::TIPO_IP_RECONFIRM, $ip, self::TIPO_EMAIL_RECONFIRM, $email, self::MAX_INTENTOS_IP, self::MAX_INTENTOS_EMAIL);
+    }
+
+    /**
      * Limpia los intentos fallidos tras una operación exitosa (ej. login correcto).
      */
     public static function limpiarIntentos(mysqli $db, string $tipo, string $identificador): void
@@ -184,3 +328,4 @@ class RateLimiter
         }
     }
 }
+

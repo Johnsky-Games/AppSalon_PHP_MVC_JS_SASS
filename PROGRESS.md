@@ -15,8 +15,8 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 
 - **Rama:** `feature/seguridad-y-consistencia-inicial`
 - **Commit Base:** `e816154b96985c2773e4fb418bbbf3e92530cca3`
-- **Commit de Entrega (Revisión 3):** `d67adf4e86d8e617715b565b71bf2b624e274a0e`
-- **Estado General:** **Probado** (39 pruebas automatizadas, 155 aserciones, 0 fallos, 0 errores, 0 advertencias)
+- **Commit de Entrega (Revisión 4):** `7fb463e`
+- **Estado General:** **Probado** (44 pruebas automatizadas, 233 aserciones, 0 fallos, 0 errores, 0 advertencias)
 
 | Tarea / Control de Seguridad | Estado | Evidencia / Pruebas Asociadas |
 | :--- | :---: | :--- |
@@ -34,14 +34,17 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 | Validación y Protección CSRF Global (Formularios y Fetch JS) | **Probado** | `CsrfTest` (8 casos de prueba cubriendo nulos, vacíos, arrays, cabeceras, POST y excepción 403) |
 | Rate Limiting Atómico en MySQL con Ventana Temporal y Código 429 | **Probado** | `classes/RateLimiter.php` con `INSERT ... ON DUPLICATE KEY UPDATE` serializado en InnoDB, `SecurityIntegrationTest::testRateLimiterVentanaYBloqueo429` |
 | Rate Limiter: Umbral Exacto Intento por Intento (`intentos >= ?`) | **Probado** | `SecurityIntegrationTest::testRateLimiterUmbralExactoIntentoPorIntento` (bloqueo exacto en intento 5, intentos 1-4 permitidos) |
-| Rate Limiter: Concurrencia Real con Dos Conexiones `mysqli` Independientes | **Probado** | `SecurityIntegrationTest::testRateLimiterConexionesIndependientesConcurrencia` (serialización y bloqueo cruzado verificado) |
+| Rate Limiter: Admisión Atómica Previa a Bcrypt (`admitirIntentoLogin`) | **Probado** | `LoginController::login()` reserva intento atómicamente antes de verificar credenciales costosas; limpieza en login exitoso |
+| Rate Limiter: Concurrencia Real Simultánea con Subprocesos Sincronizados | **Probado** | `SecurityIntegrationTest::testRateLimiterProcesosSimultaneosSincronizadosFlujoRealLogin` (10 procesos concurrentes sincronizados por STDIN vía `proc_open`, exactamente 5 admitidos y 5 rechazados con 429) |
 | Rate Limiter: Postura Fail-Secure ante Fallos SQL | **Probado** | `SecurityIntegrationTest::testRateLimiterManejoFalloSqlFailSecure` (retorna bloqueo ante conexión cerrada o fallo) |
 | Supresión de Generación de Tokens bajo Rate Limiting en `/olvide` | **Probado** | `SecurityIntegrationTest::testOlvideConRateLimitBloqueaSinGenerarNiPersistirToken` (detiene flujo antes de token/email ante 429) |
 | Reenvío de Confirmación para Cuentas No Confirmadas (`/reenviar-confirmacion`) | **Probado** | `SecurityIntegrationTest::testReenviarConfirmacionGeneraTokenNuevoSoloParaCuentasNoConfirmadas`, vista `views/auth/reenviar-confirmacion.php` |
+| Correo Transaccional Desacoplado y Destinatario Legítimo | **Probado** | `classes/Email.php` despacha a `$this->email`, remitente configurable por `EMAIL_FROM`, comprobación de persistencia previa y captura en transporte simulado (`EmailTest::testEnviarConfirmacionUsaDestinatarioPropositoYEnlaceCorrectos`, `EmailTest::testEnviarInstruccionesUsaDestinatarioPropositoYEnlaceCorrectos`) |
 | Transacciones ACID Reales en Citas con Rollback Integral | **Probado** | `SecurityIntegrationTest::testFallaAlGuardarServiciosRevierteCitaCompletaEnFlujoRealApi` (falla provocada con trigger MySQL tras inserción de cita, revirtiendo cita completa) |
 | Validación Estricta de Tipos Escalares (Anti-Array Injection) | **Probado** | `ApiSeguridadTest::testLoginRechazaCargaNoEscalarTipoInvalido`, constructores y validaciones en `models/Usuario.php` |
 | Validación Servidor: Fechas (futuras sin fin de semana), Horas estrictas `HH:MM` y Desduplicación | **Probado** | `ApiSeguridadTest::testGuardarRechazaReservaMismoDiaOFechaPasada`, `testGuardarRechazaHorarioInvalidoPasadoLimite`, `testGuardarRechazaFormatoHoraConSegundos`, `testGuardarDesduplicaServiciosRepetidosPoliticaExplicita` |
-| Migraciones Versionadas Reproducibles (001 + 002) y Rollback Simétrico | **Probado** | `MigrationTest::testInstalacionDesdeCeroYActualizacionIncrementalGeneranMismoEsquema` (compara esquemas y motores fresh vs upgrade) |
+| Migraciones Versionadas: Actualización Preservando Datos Existentes | **Probado** | `MigrationTest::testActualizacionDesdeInstalacionPreviaPreservaDatosYGeneraMismoEsquemaQueFresh` (ejecutado por `migrador.php up`, omitiendo 001, aplicando 002, preservando datos de clientes, citas y servicios, e igualando 100% esquema fresh) |
+| Integridad del Historial de Migraciones y Manejo de Estado Parcial | **Probado** | `MigrationTest::testMigradorFallaConEstadoParcialCuandoInsercionEnHistorialFalla` (falla forzada por trigger en inserción de historial, salida con código 1, mensaje explicativo de estado parcial sin imprimir [OK]) |
 | Detección de Errores Intermedios y Salida no Cero en Migrador | **Probado** | `MigrationTest::testMigradorFallaConCodigoDistintoDeCeroAnteErrorSqlIntermedio`, `database/migrador.php` y `database/README.md` |
 
 ---

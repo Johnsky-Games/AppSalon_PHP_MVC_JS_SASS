@@ -44,17 +44,24 @@ class LoginController
             $ip = RateLimiter::obtenerIP();
             $email = trim($emailRaw);
 
-            $segBloqueoIP = $db ? RateLimiter::obtenerSegundosBloqueo($db, RateLimiter::TIPO_IP_LOGIN, $ip) : 0;
-            $segBloqueoEmail = ($db && $email !== '') ? RateLimiter::obtenerSegundosBloqueo($db, RateLimiter::TIPO_EMAIL_LOGIN, $email) : 0;
-            $maxEspera = max($segBloqueoIP, $segBloqueoEmail);
+            if (!empty($alertas)) {
+                $router->render('auth/login', [
+                    'alertas' => $alertas,
+                    'auth' => $auth,
+                ]);
+                return;
+            }
 
-            if ($maxEspera > 0) {
+            // Admisión y reserva atómica de intento previa a la verificación costosa (bcrypt)
+            $admision = $db ? RateLimiter::admitirIntentoLogin($db, $ip, $email) : ['admitido' => true, 'segundos_restantes' => 0];
+
+            if (!$admision['admitido']) {
                 http_response_code(429);
-                header("Retry-After: {$maxEspera}");
-                $minutos = ceil($maxEspera / 60);
+                $espera = max(1, (int)$admision['segundos_restantes']);
+                header("Retry-After: {$espera}");
+                $minutos = ceil($espera / 60);
                 Usuario::setAlerta('error', "Demasiados intentos fallidos. Por seguridad, intente de nuevo en {$minutos} minutos.");
-                $alertas = Usuario::getAlertas();
-            } elseif (empty($alertas)) {
+            } else {
                 $usuario = Usuario::where('email', $email);
 
                 if ($usuario && $usuario->comprobarPasswordAndVerificado($auth->password)) {
@@ -83,21 +90,7 @@ class LoginController
                     detener_ejecucion(302);
                     return;
                 } else {
-                    if ($db) {
-                        $resIP = RateLimiter::registrarIntentoFallido($db, RateLimiter::TIPO_IP_LOGIN, $ip, RateLimiter::MAX_INTENTOS_IP);
-                        $resEmail = RateLimiter::registrarIntentoFallido($db, RateLimiter::TIPO_EMAIL_LOGIN, $email, RateLimiter::MAX_INTENTOS_EMAIL);
-                        if ($resIP['bloqueado'] || $resEmail['bloqueado']) {
-                            http_response_code(429);
-                            $espera = max($resIP['segundos_restantes'], $resEmail['segundos_restantes']);
-                            header("Retry-After: {$espera}");
-                            $minutos = ceil($espera / 60);
-                            Usuario::setAlerta('error', "Demasiados intentos fallidos. Por seguridad, intente de nuevo en {$minutos} minutos.");
-                        } else {
-                            Usuario::setAlerta('error', 'Credenciales incorrectas o la cuenta no ha sido verificada');
-                        }
-                    } else {
-                        Usuario::setAlerta('error', 'Credenciales incorrectas o la cuenta no ha sido verificada');
-                    }
+                    Usuario::setAlerta('error', 'Credenciales incorrectas o la cuenta no ha sido verificada');
                 }
             }
         }
@@ -169,43 +162,41 @@ class LoginController
 
             $ip = RateLimiter::obtenerIP();
 
-            $segBloqueoIP = $db ? RateLimiter::obtenerSegundosBloqueo($db, RateLimiter::TIPO_IP_RECOVERY, $ip) : 0;
-            $segBloqueoEmail = ($db && $email !== '') ? RateLimiter::obtenerSegundosBloqueo($db, RateLimiter::TIPO_EMAIL_RECOVERY, $email) : 0;
-            $maxEspera = max($segBloqueoIP, $segBloqueoEmail);
+            if (!empty($alertas)) {
+                $router->render('auth/olvide-password', [
+                    'alertas' => $alertas
+                ]);
+                return;
+            }
 
-            if ($maxEspera > 0) {
+            $admision = $db ? RateLimiter::admitirIntentoRecovery($db, $ip, $email) : ['admitido' => true, 'segundos_restantes' => 0];
+
+            if (!$admision['admitido']) {
                 http_response_code(429);
-                header("Retry-After: {$maxEspera}");
-                $minutos = ceil($maxEspera / 60);
+                $espera = max(1, (int)$admision['segundos_restantes']);
+                header("Retry-After: {$espera}");
+                $minutos = ceil($espera / 60);
                 Usuario::setAlerta('error', "Demasiadas solicitudes de recuperación. Intente en {$minutos} minutos.");
-            } elseif (empty($alertas)) {
-                $bloqueado = false;
-                if ($db) {
-                    $resIP = RateLimiter::registrarIntentoFallido($db, RateLimiter::TIPO_IP_RECOVERY, $ip, RateLimiter::MAX_INTENTOS_IP);
-                    $resEmail = RateLimiter::registrarIntentoFallido($db, RateLimiter::TIPO_EMAIL_RECOVERY, $email, RateLimiter::MAX_INTENTOS_EMAIL);
-                    if ($resIP['bloqueado'] || $resEmail['bloqueado']) {
-                        $bloqueado = true;
-                        http_response_code(429);
-                        $espera = max($resIP['segundos_restantes'], $resEmail['segundos_restantes']);
-                        header("Retry-After: {$espera}");
-                        $minutos = ceil($espera / 60);
-                        Usuario::setAlerta('error', "Demasiadas solicitudes de recuperación. Intente en {$minutos} minutos.");
-                    }
-                }
+            } else {
+                $usuario = Usuario::where('email', $email);
+                if ($usuario && (string)$usuario->confirmado === '1') {
+                    $tokenRaw = $usuario->generarTokenSeguro('recuperacion', 2);
+                    $guardado = $usuario->guardar();
+                    $exitoGuardado = is_array($guardado) ? !empty($guardado['resultado']) : (bool)$guardado;
 
-                if (!$bloqueado) {
-                    $usuario = Usuario::where('email', $email);
-                    if ($usuario && (string)$usuario->confirmado === '1') {
-                        $tokenRaw = $usuario->generarTokenSeguro('recuperacion', 2);
-                        $usuario->guardar();
-
+                    if ($exitoGuardado) {
                         $emailObj = new Email($usuario->nombre, $usuario->email, $tokenRaw);
-                        $emailObj->enviarInstrucciones();
+                        $enviado = $emailObj->enviarInstrucciones();
+                        if (!$enviado) {
+                            error_log("LoginController::olvide fallo al despachar correo de recuperacion para usuario ID {$usuario->id}");
+                        }
+                    } else {
+                        error_log("LoginController::olvide fallo al persistir token de recuperacion para usuario ID {$usuario->id}");
                     }
-
-                    // Mensaje genérico para prevenir enumeración de usuarios
-                    Usuario::setAlerta('exito', 'Si el correo electrónico está registrado, recibirás las instrucciones para restablecer tu contraseña en breve.');
                 }
+
+                // Mensaje genérico para prevenir enumeración de usuarios
+                Usuario::setAlerta('exito', 'Si el correo electrónico está registrado, recibirás las instrucciones para restablecer tu contraseña en breve.');
             }
         }
 
@@ -245,43 +236,41 @@ class LoginController
 
             $ip = RateLimiter::obtenerIP();
 
-            $segBloqueoIP = $db ? RateLimiter::obtenerSegundosBloqueo($db, RateLimiter::TIPO_IP_RECONFIRM, $ip) : 0;
-            $segBloqueoEmail = ($db && $email !== '') ? RateLimiter::obtenerSegundosBloqueo($db, RateLimiter::TIPO_EMAIL_RECONFIRM, $email) : 0;
-            $maxEspera = max($segBloqueoIP, $segBloqueoEmail);
+            if (!empty($alertas)) {
+                $router->render('auth/reenviar-confirmacion', [
+                    'alertas' => $alertas
+                ]);
+                return;
+            }
 
-            if ($maxEspera > 0) {
+            $admision = $db ? RateLimiter::admitirIntentoReconfirm($db, $ip, $email) : ['admitido' => true, 'segundos_restantes' => 0];
+
+            if (!$admision['admitido']) {
                 http_response_code(429);
-                header("Retry-After: {$maxEspera}");
-                $minutos = ceil($maxEspera / 60);
+                $espera = max(1, (int)$admision['segundos_restantes']);
+                header("Retry-After: {$espera}");
+                $minutos = ceil($espera / 60);
                 Usuario::setAlerta('error', "Demasiadas solicitudes de confirmación. Intente de nuevo en {$minutos} minutos.");
-            } elseif (empty($alertas)) {
-                $bloqueado = false;
-                if ($db) {
-                    $resIP = RateLimiter::registrarIntentoFallido($db, RateLimiter::TIPO_IP_RECONFIRM, $ip, RateLimiter::MAX_INTENTOS_IP);
-                    $resEmail = RateLimiter::registrarIntentoFallido($db, RateLimiter::TIPO_EMAIL_RECONFIRM, $email, RateLimiter::MAX_INTENTOS_EMAIL);
-                    if ($resIP['bloqueado'] || $resEmail['bloqueado']) {
-                        $bloqueado = true;
-                        http_response_code(429);
-                        $espera = max($resIP['segundos_restantes'], $resEmail['segundos_restantes']);
-                        header("Retry-After: {$espera}");
-                        $minutos = ceil($espera / 60);
-                        Usuario::setAlerta('error', "Demasiadas solicitudes de confirmación. Intente de nuevo en {$minutos} minutos.");
-                    }
-                }
+            } else {
+                $usuario = Usuario::where('email', $email);
+                if ($usuario && (string)$usuario->confirmado !== '1') {
+                    $tokenRaw = $usuario->generarTokenSeguro('confirmacion', 24);
+                    $guardado = $usuario->guardar();
+                    $exitoGuardado = is_array($guardado) ? !empty($guardado['resultado']) : (bool)$guardado;
 
-                if (!$bloqueado) {
-                    $usuario = Usuario::where('email', $email);
-                    if ($usuario && (string)$usuario->confirmado !== '1') {
-                        $tokenRaw = $usuario->generarTokenSeguro('confirmacion', 24);
-                        $usuario->guardar();
-
+                    if ($exitoGuardado) {
                         $emailObj = new Email($usuario->nombre, $usuario->email, $tokenRaw);
-                        $emailObj->enviarConfirmacion();
+                        $enviado = $emailObj->enviarConfirmacion();
+                        if (!$enviado) {
+                            error_log("LoginController::reenviarConfirmacion fallo al despachar correo para usuario ID {$usuario->id}");
+                        }
+                    } else {
+                        error_log("LoginController::reenviarConfirmacion fallo al persistir token para usuario ID {$usuario->id}");
                     }
-
-                    // Respuesta genérica para prevenir enumeración de cuentas
-                    Usuario::setAlerta('exito', 'Si la cuenta existe y está pendiente de confirmación, hemos enviado un nuevo enlace a tu correo electrónico.');
                 }
+
+                // Respuesta genérica para prevenir enumeración de cuentas
+                Usuario::setAlerta('exito', 'Si la cuenta existe y está pendiente de confirmación, hemos enviado un nuevo enlace a tu correo electrónico.');
             }
         }
 
@@ -373,11 +362,17 @@ class LoginController
 
                     if ($resultado && !empty($resultado['resultado'])) {
                         $email = new Email($usuario->nombre, $usuario->email, $tokenRaw);
-                        $email->enviarConfirmacion();
+                        $enviado = $email->enviarConfirmacion();
+                        if (!$enviado) {
+                            error_log("LoginController::crear fallo al despachar correo de confirmacion para usuario ID {$usuario->id}");
+                        }
 
                         header('Location: /mensaje');
                         detener_ejecucion(302);
                         return;
+                    } else {
+                        error_log("LoginController::crear fallo al persistir usuario y token en base de datos");
+                        Usuario::setAlerta('error', 'Hubo un error al procesar el registro. Intente nuevamente.');
                     }
                 }
             }
