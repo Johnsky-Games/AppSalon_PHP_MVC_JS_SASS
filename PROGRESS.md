@@ -15,9 +15,26 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 - **Commit Base:** `e816154b96985c2773e4fb418bbbf3e92530cca3`
 - **Revisión Estática de Código (ChatGPT):** Cerrada y aprobada para esta ronda sobre commit `da7aa87`.
 - **Pruebas Automatizadas Ejecutadas (Antigravity):** **Probado** (49 pruebas automatizadas, 322 aserciones, 0 fallos, 0 errores, 0 advertencias en entorno Docker PHP 8.2 + MySQL 8.0).
+- **Verificación Funcional HTTP (Antigravity):** **Ejecutado** (7 de 7 escenarios probados de extremo a extremo contra servidor real `http://localhost:3000`, base de datos aislada `appsalon_func_test` y buzón SMTP mock).
+- **Documentación Completa:** Disponible en [GUIA_ENTREGA_1.md](file:///GUIA_ENTREGA_1.md) y [database/README.md](file:///database/README.md).
 - **Estado General de Entrega 1:** **Listo para Revisión Final del Propietario** (Pendiente de aprobación previa para merge a `main`).
 
-| Tarea / Control de Seguridad | Estado | Evidencia / Pruebas Asociadas |
+### Verificación Funcional HTTP en Servidor Real (Antigravity):
+Ejecución de extremo a extremo contra servidor PHP (`http://appsalon-web:3000`), base de datos aislada MySQL 8 (`appsalon_func_test`), cookies de sesión nativas cURL y captura de tokens desde buzón SMTP de pruebas (`tests/smtp_mock_server.php` / `tests/functional_test_suite.php`).
+
+| Escenario Funcional | Estado | Petición y Respuesta HTTP | Evidencia Técnica en Base de Datos / Buzón |
+| :--- | :---: | :--- | :--- |
+| **1. Registro de Cuenta** | **Ejecutado** | `POST /crear-cuenta` $\rightarrow$ `302 /mensaje` | Fila creada en `usuarios` con `confirmado=0`, `admin=0`, `token=NULL` (sin texto plano), `token_hash` presente. Correo recibido en buzón y token uniuso extraído. |
+| **2. Confirmación de Cuenta** | **Ejecutado** | `GET /confirmar-cuenta?token={tok}` $\rightarrow$ `200 OK` | `confirmado=1`, `token_hash=NULL`, `token_tipo=NULL`. Reintento con el mismo token consumido es rechazado como inválido. |
+| **3. Login y Rate Limiting** | **Ejecutado** | Intentos 1-5: `200`<br>Intento 6: `429 Too Many Requests`<br>Login válido: `302 /cita` | `intentos_login` registra `intentos=5`, `bloqueado_hasta` futuro con alerta 429. Login con contraseña correcta regenera sesión y permite acceso a `/cita` (`200 OK`). |
+| **4. Recuperación de Contraseña** | **Ejecutado** | `POST /olvide` $\rightarrow$ `200 OK`<br>`POST /recuperar?token={tok}` $\rightarrow$ `302 /` | Correo de recuperación recibido en buzón. Token consumido atómicamente (`token_hash=NULL`). Clave vieja rechazada (`200`); clave nueva permite login exitoso (`302`). |
+| **5. Reserva de Cita (API)** | **Ejecutado** | `POST /api/citas` $\rightarrow$ `200 OK` JSON | Cita persistida en `citas` con `usuarioId` forzado de sesión, fecha futura válida y hora `10:30:00`. Dos servicios vinculados en `citasservicios`. |
+| **6. Eliminación Autorizada y Anti-IDOR** | **Ejecutado** | IDOR: `403 Forbidden`<br>Dueño: `302 /cita` | Intento de eliminación por un segundo cliente rechazado con 403 (cita permanece intacta en BD). Eliminación autorizada por el dueño borra cita y servicios en transacción. |
+| **7. Logout Seguro por POST con CSRF** | **Ejecutado** | `GET /logout`: `302` (sesión activa)<br>`POST /logout`: `302 /` (sesión destruida) | Petición posterior a `/cita` es rechazada con `302 /` al quedar destruida la sesión. |
+
+---
+
+### Controles de Seguridad y Pruebas Automatizadas (PHPUnit):
 | :--- | :---: | :--- |
 | Whitelist en Registro (`sincronizarRegistro`) | **Probado** | `UsuarioSeguridadTest::testRegistroBloqueaAsignacionMasivaDePrivilegios`, `SecurityIntegrationTest::testRegistroEnBaseDeDatosForzaPrivilegiosEnCero` |
 | Reconstrucción de Sesión y Aislamiento de Roles (Admin -> Cliente) | **Probado** | `SecurityIntegrationTest::testTransicionDeRolAdminAClienteEnMismaSesionRevocaAccesoAdmin` |

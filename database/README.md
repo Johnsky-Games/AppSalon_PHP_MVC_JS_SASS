@@ -25,9 +25,11 @@ php database/migrador.php status
 # Aplicar migraciones pendientes
 php database/migrador.php up
 
-# Revertir última migración
+# Revertir migraciones registradas (alcance: procesa todas las migraciones con rollback en orden inverso)
 php database/migrador.php down
 ```
+
+> **Alcance del comando `down`:** Actualmente `php database/migrador.php down` procesa en orden cronológico inverso (`rsort`) **todas** las migraciones registradas en la tabla `migraciones` que cuenten con su respectivo archivo `*_rollback.sql`, revirtiendo el esquema completo hacia el estado base, no únicamente la última migración aplicada. Si en producción o desarrollo se requiere revertir de forma granular una sola migración intermedia, ejecute manualmente el archivo SQL de rollback específico (`database/migrations/<archivo>_rollback.sql`) y actualice la tabla de control `migraciones`.
 
 ---
 
