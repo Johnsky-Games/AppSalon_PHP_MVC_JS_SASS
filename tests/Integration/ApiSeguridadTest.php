@@ -9,6 +9,7 @@ use Model\Servicio;
 use Model\Cita;
 use Model\CitaServicio;
 use Controllers\APIController;
+use AppTerminationException;
 use mysqli;
 
 class ApiSeguridadTest extends TestCase
@@ -30,6 +31,8 @@ class ApiSeguridadTest extends TestCase
 
     protected function setUp(): void
     {
+        validar_base_datos_prueba(self::$db);
+
         self::$db->query("DELETE FROM citasservicios");
         self::$db->query("DELETE FROM citas");
         self::$db->query("DELETE FROM usuarios");
@@ -55,9 +58,15 @@ class ApiSeguridadTest extends TestCase
         $_SESSION['csrf_token'] = $token;
         $_POST['csrf_token'] = $token;
 
-        ob_start();
-        APIController::guardar();
-        $output = ob_get_clean();
+        $output = '';
+        try {
+            ob_start();
+            APIController::guardar();
+        } catch (AppTerminationException $e) {
+            $this->assertSame(401, $e->getStatusCode());
+        } finally {
+            $output = ob_get_clean();
+        }
 
         $this->assertSame(401, http_response_code(), 'Visitante sin sesión debe recibir 401');
         $json = json_decode($output, true);
@@ -72,9 +81,15 @@ class ApiSeguridadTest extends TestCase
         $_SESSION['csrf_token'] = 'token_sesion_valido';
         $_POST['csrf_token'] = 'token_falso_alterado';
 
-        ob_start();
-        APIController::guardar();
-        $output = ob_get_clean();
+        $output = '';
+        try {
+            ob_start();
+            APIController::guardar();
+        } catch (AppTerminationException $e) {
+            $this->assertSame(403, $e->getStatusCode());
+        } finally {
+            $output = ob_get_clean();
+        }
 
         $this->assertSame(403, http_response_code(), 'Petición con CSRF inválido debe recibir 403');
         $json = json_decode($output, true);
@@ -117,9 +132,14 @@ class ApiSeguridadTest extends TestCase
         $_POST['csrf_token'] = $token;
         $_POST['id'] = $idCita;
 
-        ob_start();
-        APIController::eliminar();
-        $output = ob_get_clean();
+        try {
+            ob_start();
+            APIController::eliminar();
+        } catch (AppTerminationException $e) {
+            $this->assertSame(403, $e->getStatusCode());
+        } finally {
+            ob_end_clean();
+        }
 
         $this->assertSame(403, http_response_code(), 'Eliminar cita ajena debe retornar 403 Forbidden');
 
@@ -154,9 +174,14 @@ class ApiSeguridadTest extends TestCase
         $_POST['csrf_token'] = $token;
         $_POST['id'] = $idCita;
 
-        ob_start();
-        APIController::eliminar();
-        ob_end_clean();
+        try {
+            ob_start();
+            APIController::eliminar();
+        } catch (AppTerminationException $e) {
+            $this->assertSame(302, $e->getStatusCode());
+        } finally {
+            ob_end_clean();
+        }
 
         // Verificar que la cita fue eliminada
         $citaEliminada = Cita::find($idCita);
@@ -214,5 +239,92 @@ class ApiSeguridadTest extends TestCase
         // Verificar que se guardó la relación en citasservicios
         $rel = self::$db->query("SELECT * FROM citasservicios WHERE citaId = {$idCitaCreada}");
         $this->assertSame(1, $rel->num_rows);
+    }
+
+    public function testGuardarRechazaReservaMismoDiaOFechaPasada(): void
+    {
+        $_SESSION['login'] = true;
+        $_SESSION['id'] = 1;
+        $token = bin2hex(random_bytes(32));
+        $_SESSION['csrf_token'] = $token;
+        $_POST['csrf_token'] = $token;
+
+        // Intento de reservar para hoy
+        $_POST['fecha'] = date('Y-m-d');
+        $_POST['hora'] = '11:00';
+        $_POST['servicios'] = '1';
+
+        $output = '';
+        try {
+            ob_start();
+            APIController::guardar();
+        } catch (AppTerminationException $e) {
+            $this->assertSame(422, $e->getStatusCode());
+        } finally {
+            $output = ob_get_clean();
+        }
+
+        $this->assertSame(422, http_response_code());
+        $json = json_decode($output, true);
+        $this->assertFalse($json['resultado']);
+        $this->assertStringContainsString('mismo día', $json['error']);
+    }
+
+    public function testGuardarRechazaHorarioInvalidoPasadoLimite(): void
+    {
+        $_SESSION['login'] = true;
+        $_SESSION['id'] = 1;
+        $token = bin2hex(random_bytes(32));
+        $_SESSION['csrf_token'] = $token;
+        $_POST['csrf_token'] = $token;
+
+        $_POST['fecha'] = date('Y-m-d', strtotime('next Wednesday'));
+        $_POST['hora'] = '18:30'; // Pasado las 18:00
+        $_POST['servicios'] = '1';
+
+        $output = '';
+        try {
+            ob_start();
+            APIController::guardar();
+        } catch (AppTerminationException $e) {
+            $this->assertSame(422, $e->getStatusCode());
+        } finally {
+            $output = ob_get_clean();
+        }
+
+        $this->assertSame(422, http_response_code());
+        $json = json_decode($output, true);
+        $this->assertFalse($json['resultado']);
+        $this->assertStringContainsString('10:00 a 18:00', $json['error']);
+    }
+
+    public function testGuardarDesduplicaServiciosRepetidosPoliticaExplicita(): void
+    {
+        $servicio = new Servicio(['nombre' => 'Manicure', 'precio' => '30.00']);
+        $resS = $servicio->guardar();
+        $idS = (int)$resS['id'];
+
+        $_SESSION['login'] = true;
+        $_SESSION['id'] = 1;
+        $token = bin2hex(random_bytes(32));
+        $_SESSION['csrf_token'] = $token;
+        $_POST['csrf_token'] = $token;
+
+        $_POST['fecha'] = date('Y-m-d', strtotime('next Tuesday'));
+        $_POST['hora'] = '12:00';
+        // Servicios repetidos en el payload
+        $_POST['servicios'] = "{$idS},{$idS},{$idS}";
+
+        ob_start();
+        APIController::guardar();
+        $output = ob_get_clean();
+
+        $this->assertSame(200, http_response_code());
+        $json = json_decode($output, true);
+        $idCita = (int)$json['resultado']['id'];
+
+        // Comprobar que en BD solo existe 1 registro asociado, no 3
+        $res = self::$db->query("SELECT * FROM citasservicios WHERE citaId = {$idCita}");
+        $this->assertSame(1, $res->num_rows, 'La política de desduplicación debe persistir exactamente un registro por servicio único');
     }
 }

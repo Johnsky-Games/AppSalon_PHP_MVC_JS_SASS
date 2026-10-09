@@ -200,10 +200,12 @@ function sleccionarHora() {
 
     inputHora.addEventListener('input', function (e) {
         const horaCita = e.target.value;
-        const hora = horaCita.split(':')[0]; //Extrae la hora de la cadena de texto que se obtiene del input de hora (Ejemplo: 09:00) y la convierte en un número entero para poder compararla con los valores de la condición if de abajo 
-        if (hora < 10 || hora > 18) {
+        const partes = horaCita.split(':');
+        const hora = parseInt(partes[0], 10);
+        const minutos = partes[1] ? parseInt(partes[1], 10) : 0;
+        if (isNaN(hora) || hora < 10 || hora > 18 || (hora === 18 && minutos > 0)) {
             e.target.value = '';
-            mostrarAlerta('Hora no válida', 'error', '.formulario');
+            mostrarAlerta('Horario no válido (atención de 10:00 a 18:00 horas)', 'error', '.formulario');
         } else {
             cita.hora = e.target.value;
         }

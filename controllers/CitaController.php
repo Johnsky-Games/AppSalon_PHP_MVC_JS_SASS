@@ -10,8 +10,7 @@ class CitaController extends ActiveRecord
 
     public static function index(Router $router)
     {
-        session_start();
-        // Agregado luego eliminar hasta llegar a la parte de proteger la ruta
+        iniciar_sesion_segura();
         isAuth();
 
         $router->render('cita/index', [

@@ -217,6 +217,13 @@ class ActiveRecord
     // Crea un nuevo registro usando consultas preparadas
     public function crear()
     {
+        if (!self::$db) {
+            return [
+                'resultado' => false,
+                'id' => null
+            ];
+        }
+
         $atributos = $this->atributos();
         $columnas = array_keys($atributos);
         $placeholders = array_fill(0, count($columnas), '?');
@@ -233,12 +240,22 @@ class ActiveRecord
         $tipos = str_repeat('s', count($atributos));
         $valores = array_values($atributos);
         $stmt->bind_param($tipos, ...$valores);
-        $resultado = $stmt->execute();
+        $ejecutado = $stmt->execute();
+        $afectadas = $stmt->affected_rows;
         $insertId = self::$db->insert_id;
         $stmt->close();
 
+        if (!$ejecutado || $afectadas <= 0) {
+            return [
+                'resultado' => false,
+                'id' => null
+            ];
+        }
+
+        $this->id = $insertId;
+
         return [
-            'resultado' => $resultado,
+            'resultado' => true,
             'id' => $insertId
         ];
     }
@@ -246,6 +263,10 @@ class ActiveRecord
     // Actualizar el registro usando consultas preparadas
     public function actualizar()
     {
+        if (!self::$db || is_null($this->id)) {
+            return false;
+        }
+
         $atributos = $this->atributos();
         $valores = [];
         foreach (array_keys($atributos) as $key) {
@@ -263,16 +284,16 @@ class ActiveRecord
         $params[] = (int)$this->id;
 
         $stmt->bind_param($tipos, ...$params);
-        $resultado = $stmt->execute();
+        $ejecutado = $stmt->execute();
         $stmt->close();
 
-        return $resultado;
+        return $ejecutado;
     }
 
     // Eliminar un Registro por su ID usando consulta preparada
     public function eliminar()
     {
-        if (is_null($this->id) || !is_numeric($this->id)) {
+        if (!self::$db || is_null($this->id) || !is_numeric($this->id)) {
             return false;
         }
 
@@ -284,9 +305,10 @@ class ActiveRecord
 
         $id = (int)$this->id;
         $stmt->bind_param('i', $id);
-        $resultado = $stmt->execute();
+        $ejecutado = $stmt->execute();
+        $afectadas = $stmt->affected_rows;
         $stmt->close();
 
-        return $resultado;
+        return $ejecutado && $afectadas > 0;
     }
 }

@@ -15,22 +15,25 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 
 - **Rama:** `feature/seguridad-y-consistencia-inicial`
 - **Commit Base:** `e816154b96985c2773e4fb418bbbf3e92530cca3`
-- **Commit de Entrega:** `b5c73bce30e5150f479f84370b127048adec9fec`
-- **Estado General:** **Probado** (Empujado a origin, listo para auditoría independiente de ChatGPT)
+- **Estado General:** **Probado** (29 pruebas automatizadas, 86 aserciones, 0 fallos, 0 errores)
 
 | Tarea / Control de Seguridad | Estado | Evidencia / Pruebas Asociadas |
 | :--- | :---: | :--- |
 | Whitelist en Registro (`sincronizarRegistro`) | **Probado** | `UsuarioSeguridadTest::testRegistroBloqueaAsignacionMasivaDePrivilegios`, `SecurityIntegrationTest::testRegistroEnBaseDeDatosForzaPrivilegiosEnCero` |
-| Autenticación e IDOR en Citas (`/api/citas`, `/api/eliminar`) | **Probado** | `ApiSeguridadTest::testVisitanteNoPuedeCrearCitasSinAutenticacion`, `ApiSeguridadTest::testClienteNoPuedeEliminarCitaDeOtroClienteIdor`, `ApiSeguridadTest::testClientePuedeEliminarSuPropiaCita` |
-| Detención estricta en `isAuth()` e `isAdmin()` | **Probado** | Implementado con `detener_ejecucion()` y redirección/código HTTP correspondiente |
-| Consultas Preparadas en Capa de Datos (`ActiveRecord`, `Usuario`, `AdminController`) | **Probado** | `SecurityIntegrationTest::testEntradasMaliciosasSeProcesanComoDatosEnConsultasPreparadas` |
-| Validación y Protección CSRF Global (Formularios y Fetch JS) | **Probado** | `CsrfTest` (7 casos de prueba cubriendo nulos, vacíos, arrays, cabeceras y POST) y `ApiSeguridadTest::testOperacionGuardarRechazaPeticionSinCsrfValido` |
-| Endurecimiento de Sesiones (Cookies seguras, `session_regenerate_id`, logout limpio) | **Probado** | Implementado en `includes/funciones.php` y `LoginController` |
-| Tokens Criptográficos con Hash, Expiración y Consumo Atómico | **Probado** | `UsuarioSeguridadTest::testGeneracionDeTokenCriptograficoConHashYExpiracion`, `SecurityIntegrationTest::testTokenExpiradoOReutilizadoSeRechaza` |
-| Rate Limiting Atómico en Autenticación y Recuperación (`intentos_login`) | **Probado** | `SecurityIntegrationTest::testRateLimiterRegistraYBloqueaTrasMaximosIntentos` |
-| Atomicidad Transaccional en Citas (`begin_transaction`, `commit`, `rollback`) | **Probado** | `SecurityIntegrationTest::testFallaAlGuardarServiciosRevierteCitaCompletaEnTransaccion` |
-| Validación de Reglas en Servidor (Fechas pasadas, fines de semana, rangos de hora y servicios existentes) | **Probado** | Implementado en `APIController::guardar()`, verificado en `ApiSeguridadTest` |
-| Migraciones Versionadas y Mecanismo de Rollback | **Probado** | `database/migrations/001_security_hardening.sql`, `001_security_hardening_rollback.sql`, `database/migrador.php` |
+| Reconstrucción de Sesión y Aislamiento de Roles (Admin -> Cliente) | **Probado** | `SecurityIntegrationTest::testTransicionDeRolAdminAClienteEnMismaSesionRevocaAccesoAdmin` |
+| Centralización de Sesiones Seguras (`iniciar_sesion_segura`) | **Probado** | Centralizado en todos los controladores (`CitaController`, `LoginController`, `AdminController`, `ServicioController`, `APIController`) |
+| Logout Seguro por Método POST con Token CSRF | **Probado** | `SecurityIntegrationTest::testLogoutExigePostConCsrfYDestruyeSesion`, formulario en `views/templates/barra.php` y ruta en `public/index.php` |
+| Autenticación e IDOR en Citas (`/api/citas`, `/api/eliminar`) | **Probado** | `ApiSeguridadTest::testVisitanteNoPuedeCrearCitasSinAutenticacion`, `ApiSeguridadTest::testClienteNoPuedeEliminarCitaDeOtroClienteIdor`, `ApiSeguridadTest::testClientePuedeEliminarSuPropiaCita`, `ApiSeguridadTest::testReservaValidaGuardaCitaConUsuarioDeSesion` |
+| Terminación Unificada con `AppTerminationException` (Sin bypass de pruebas) | **Probado** | `includes/funciones.php`, manejado en `public/index.php` y verificado en suite completa sin `PHPUNIT_RUNNING` |
+| Protección contra Limpieza Destructiva en BD no autorizada | **Probado** | `tests/bootstrap.php` y `validar_base_datos_prueba()`, bloqueando bases que no terminen en `_test` |
+| Consultas Preparadas y Verificación Estricta de Errores SQL | **Probado** | `models/ActiveRecord.php` verifica `execute()` y `affected_rows` en `crear()`, `actualizar()`, `eliminar()`; `SecurityIntegrationTest::testEntradasMaliciosasSeProcesanComoDatosEnConsultasPreparadas` |
+| Eliminación de Texto Plano en Tokens y Supresión de Fallback Legacy | **Probado** | `Usuario::generarTokenSeguro()` almacena `null` en `token` y hash en `token_hash`; eliminado fallback en `buscarPorTokenSeguro()` |
+| Consumo Atómico de Tokens por Hash, Propósito y Expiración | **Probado** | `Usuario::confirmarCuentaPorToken()`, `Usuario::restablecerPasswordPorToken()`, `testTokenConfirmacionUsoUnicoYRechazoConcurrente`, `testTokenPropositoIncorrectoEsRechazado`, `testTokenSustituidoPorUnoNuevoInvalidaElAnterior`, `testExpiracionEntreLecturaYActualizacionRechazaConsumo` |
+| Validación y Protección CSRF Global (Formularios y Fetch JS) | **Probado** | `CsrfTest` (8 casos de prueba cubriendo nulos, vacíos, arrays, cabeceras, POST y excepción 403) |
+| Rate Limiting Atómico en MySQL con Ventana Temporal y Código 429 | **Probado** | `classes/RateLimiter.php` con `INSERT ... ON DUPLICATE KEY UPDATE` serializado en InnoDB, `SecurityIntegrationTest::testRateLimiterVentanaYBloqueo429` |
+| Transacciones ACID Reales en Citas con Rollback Integral | **Probado** | `SecurityIntegrationTest::testFallaAlGuardarServiciosRevierteCitaCompletaEnFlujoRealApi` (falla provocada con trigger MySQL tras inserción de cita, revirtiendo cita completa) |
+| Validación Servidor: Fechas (mínimo mañana), Horas (10:00-18:00) y Desduplicación | **Probado** | `ApiSeguridadTest::testGuardarRechazaReservaMismoDiaOFechaPasada`, `testGuardarRechazaHorarioInvalidoPasadoLimite`, `testGuardarDesduplicaServiciosRepetidosPoliticaExplicita` |
+| Migraciones Versionadas con Conversión a InnoDB y Rollback | **Probado** | `database/migrations/001_security_hardening.sql` (convierte tablas a InnoDB), `001_security_hardening_rollback.sql`, `database/migrador.php` |
 
 ---
 

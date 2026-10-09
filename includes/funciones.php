@@ -18,14 +18,29 @@ function s($html): string
     return htmlspecialchars((string)$html, ENT_QUOTES, 'UTF-8');
 }
 
-/**
- * Detiene la ejecución en entornos web/CLI productivos, pero permite pruebas unitarias.
- */
-function detener_ejecucion(): void
+class AppTerminationException extends \RuntimeException
 {
-    if (!defined('PHPUNIT_RUNNING')) {
-        exit;
+    private int $statusCode;
+
+    public function __construct(string $message = "Ejecución detenida.", int $statusCode = 200, ?\Throwable $previous = null)
+    {
+        parent::__construct($message, $statusCode, $previous);
+        $this->statusCode = $statusCode;
     }
+
+    public function getStatusCode(): int
+    {
+        return $this->statusCode;
+    }
+}
+
+/**
+ * Detiene la ejecución enviando el control al manejador principal o prueba.
+ * Conserva el mismo comportamiento estricto en producción y en pruebas sin atajos condicionales.
+ */
+function detener_ejecucion(int $codigo = 200): void
+{
+    throw new AppTerminationException("Ejecución detenida por control de seguridad o redirección.", $codigo);
 }
 
 /**
@@ -69,10 +84,11 @@ function isAuth(): void
             http_response_code(401);
             header('Content-Type: application/json; charset=utf-8');
             echo json_encode(['resultado' => false, 'error' => 'No autenticado']);
+            detener_ejecucion(401);
         } else {
             header('Location: /');
+            detener_ejecucion(302);
         }
-        detener_ejecucion();
     }
 }
 
@@ -92,10 +108,11 @@ function isAdmin(): void
             http_response_code(403);
             header('Content-Type: application/json; charset=utf-8');
             echo json_encode(['resultado' => false, 'error' => 'Acceso denegado']);
+            detener_ejecucion(403);
         } else {
             header('Location: /');
+            detener_ejecucion(302);
         }
-        detener_ejecucion();
     }
 }
 
@@ -144,6 +161,6 @@ function exigir_csrf(): void
         } else {
             echo "Error 403: Solicitud no autorizada (CSRF inválido o ausente).";
         }
-        detener_ejecucion();
+        detener_ejecucion(403);
     }
 }

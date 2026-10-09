@@ -9,6 +9,10 @@ use Model\Servicio;
 use Model\Cita;
 use Model\CitaServicio;
 use Classes\RateLimiter;
+use Controllers\APIController;
+use Controllers\LoginController;
+use MVC\Router;
+use AppTerminationException;
 use mysqli;
 
 class SecurityIntegrationTest extends TestCase
@@ -30,6 +34,11 @@ class SecurityIntegrationTest extends TestCase
 
     protected function setUp(): void
     {
+        validar_base_datos_prueba(self::$db);
+
+        // Limpiar cualquier trigger de prueba previo
+        self::$db->query("DROP TRIGGER IF EXISTS test_fail_citasservicios");
+
         // Limpiar datos entre pruebas
         self::$db->query("DELETE FROM citasservicios");
         self::$db->query("DELETE FROM citas");
@@ -37,14 +46,24 @@ class SecurityIntegrationTest extends TestCase
         self::$db->query("DELETE FROM servicios");
         self::$db->query("DELETE FROM intentos_login");
 
+        if (session_status() === PHP_SESSION_NONE) {
+            session_start();
+        }
         $_SESSION = [];
         $_POST = [];
+        $_GET = [];
         $_SERVER['HTTP_X_CSRF_TOKEN'] = null;
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        http_response_code(200);
+    }
+
+    protected function tearDown(): void
+    {
+        self::$db->query("DROP TRIGGER IF EXISTS test_fail_citasservicios");
     }
 
     public function testEntradasMaliciosasSeProcesanComoDatosEnConsultasPreparadas(): void
     {
-        // Insertar un usuario legítimo
         $usuario = new Usuario();
         $usuario->sincronizarRegistro([
             'nombre' => 'Ana',
@@ -56,7 +75,6 @@ class SecurityIntegrationTest extends TestCase
         $usuario->hashPassword();
         $usuario->guardar();
 
-        // Intento de inyección SQL en búsqueda por email
         $payloadSQLi = "ana@correo.com' OR '1'='1";
         $encontrado = Usuario::where('email', $payloadSQLi);
 
@@ -85,13 +103,12 @@ class SecurityIntegrationTest extends TestCase
 
         $this->assertTrue((bool)$resultado['resultado']);
 
-        // Consultar directamente la base de datos
         $guardado = Usuario::find($resultado['id']);
         $this->assertSame('0', (string)$guardado->admin, 'Admin en BD debe ser 0');
         $this->assertSame('0', (string)$guardado->confirmado, 'Confirmado en BD debe ser 0');
     }
 
-    public function testTokenExpiradoOReutilizadoSeRechaza(): void
+    public function testTokenConfirmacionUsoUnicoYRechazoConcurrente(): void
     {
         $usuario = new Usuario();
         $usuario->sincronizarRegistro([
@@ -104,99 +121,285 @@ class SecurityIntegrationTest extends TestCase
         $tokenRaw = $usuario->generarTokenSeguro('confirmacion', 24);
         $usuario->guardar();
 
-        // 1. Token válido se encuentra
-        $encontrado = Usuario::buscarPorTokenSeguro($tokenRaw, 'confirmacion');
-        $this->assertNotNull($encontrado);
+        // 1. Primer intento de consumo atómico (Solicitud 1) -> Debe ser exitoso
+        $exito1 = Usuario::confirmarCuentaPorToken($tokenRaw);
+        $this->assertTrue($exito1, 'El primer consumo del token de confirmación debe ser exitoso');
 
-        // 2. Consumo atómico del token
-        $consumido = $encontrado->consumirToken();
-        $this->assertTrue($consumido);
-        $this->assertSame('1', (string)$encontrado->confirmado);
+        $usuarioActualizado = Usuario::find($usuario->id);
+        $this->assertSame('1', (string)$usuarioActualizado->confirmado);
+        $this->assertNull($usuarioActualizado->token_hash, 'El token_hash debe ser null tras consumirse');
 
-        // 3. Intento de reutilización debe fallar (token ya consumido)
-        $reintento = Usuario::buscarPorTokenSeguro($tokenRaw, 'confirmacion');
-        $this->assertNull($reintento, 'Un token ya consumido no debe ser encontrado');
-
-        // 4. Token expirado en el pasado
-        $usuarioExpirado = new Usuario();
-        $usuarioExpirado->sincronizarRegistro([
-            'nombre' => 'Expirado',
-            'apellido' => 'Test',
-            'email' => 'expirado@correo.com',
-            'password' => 'clave123',
-            'telefono' => '5544332212'
-        ]);
-        $tokenExp = $usuarioExpirado->generarTokenSeguro('confirmacion', -1); // Expiró hace 1 hora
-        $usuarioExpirado->guardar();
-
-        $busquedaExpirado = Usuario::buscarPorTokenSeguro($tokenExp, 'confirmacion');
-        $this->assertNull($busquedaExpirado, 'Un token con fecha de expiración pasada debe ser rechazado');
+        // 2. Intento concurrente o secundario con el mismo token (Solicitud 2) -> Debe fallar
+        $exito2 = Usuario::confirmarCuentaPorToken($tokenRaw);
+        $this->assertFalse($exito2, 'El segundo intento de consumo debe fallar (0 filas afectadas)');
     }
 
-    public function testFallaAlGuardarServiciosRevierteCitaCompletaEnTransaccion(): void
+    public function testTokenPropositoIncorrectoEsRechazado(): void
     {
-        // 1. Crear usuario cliente
-        $cliente = new Usuario();
-        $cliente->sincronizarRegistro([
-            'nombre' => 'Cliente',
-            'apellido' => 'Test',
-            'email' => 'cliente@correo.com',
-            'password' => 'password',
-            'telefono' => '1234567890'
+        $usuario = new Usuario();
+        $usuario->sincronizarRegistro([
+            'nombre' => 'Elena',
+            'apellido' => 'Rios',
+            'email' => 'elena@correo.com',
+            'password' => 'clave123',
+            'telefono' => '5544332213'
+        ]);
+        // Token generado para confirmación
+        $tokenConfirmacion = $usuario->generarTokenSeguro('confirmacion', 24);
+        $usuario->guardar();
+
+        // Intento indebido de usar token de confirmación en el endpoint de recuperación
+        $nuevoHash = password_hash('nuevo_password_123', PASSWORD_BCRYPT);
+        $resRecuperar = Usuario::restablecerPasswordPorToken($tokenConfirmacion, $nuevoHash);
+        $this->assertFalse($resRecuperar, 'Un token de confirmación no debe permitirse para restablecer contraseña');
+
+        $busquedaRecuperacion = Usuario::buscarPorTokenSeguro($tokenConfirmacion, 'recuperacion');
+        $this->assertNull($busquedaRecuperacion, 'La búsqueda con propósito incorrecto debe retornar null');
+    }
+
+    public function testTokenSustituidoPorUnoNuevoInvalidaElAnterior(): void
+    {
+        $usuario = new Usuario();
+        $usuario->sincronizarRegistro([
+            'nombre' => 'Marcos',
+            'apellido' => 'Diaz',
+            'email' => 'marcos@correo.com',
+            'password' => 'clave123',
+            'telefono' => '5544332214'
+        ]);
+        // Solicitud 1 de recuperación
+        $token1 = $usuario->generarTokenSeguro('recuperacion', 2);
+        $usuario->guardar();
+
+        // Solicitud 2 de recuperación (el usuario solicita nuevo enlace)
+        $token2 = $usuario->generarTokenSeguro('recuperacion', 2);
+        $usuario->guardar();
+
+        $hashNuevo = password_hash('password_marcos_final', PASSWORD_BCRYPT);
+
+        // Intento de consumir el enlace viejo (token1)
+        $resTokenViejo = Usuario::restablecerPasswordPorToken($token1, $hashNuevo);
+        $this->assertFalse($resTokenViejo, 'El enlace anterior sustituido debe ser rechazado');
+
+        // Consumo del enlace vigente (token2)
+        $resTokenNuevo = Usuario::restablecerPasswordPorToken($token2, $hashNuevo);
+        $this->assertTrue($resTokenNuevo, 'El nuevo token vigente debe consumirse exitosamente');
+    }
+
+    public function testExpiracionEntreLecturaYActualizacionRechazaConsumo(): void
+    {
+        $usuario = new Usuario();
+        $usuario->sincronizarRegistro([
+            'nombre' => 'Lucia',
+            'apellido' => 'Vega',
+            'email' => 'lucia@correo.com',
+            'password' => 'clave123',
+            'telefono' => '5544332215'
+        ]);
+        $tokenRaw = $usuario->generarTokenSeguro('recuperacion', 1);
+        $usuario->guardar();
+
+        // 1. Paso 1 (GET): El usuario carga el formulario y el token es válido
+        $usuarioLeido = Usuario::buscarPorTokenSeguro($tokenRaw, 'recuperacion');
+        $this->assertNotNull($usuarioLeido);
+
+        // 2. Simular que el token expira antes del envío del POST
+        self::$db->query("UPDATE usuarios SET token_expira = DATE_SUB(NOW(), INTERVAL 5 SECOND) WHERE id = {$usuario->id}");
+
+        // 3. Paso 2 (POST): Se intenta la actualización atómica
+        $hashNuevo = password_hash('password_lucia_nuevo', PASSWORD_BCRYPT);
+        $resultado = Usuario::restablecerPasswordPorToken($tokenRaw, $hashNuevo);
+
+        $this->assertFalse($resultado, 'La sentencia atómica condicional debe rechazar tokens expirados (0 filas afectadas)');
+    }
+
+    public function testFallaAlGuardarServiciosRevierteCitaCompletaEnFlujoRealApi(): void
+    {
+        // 1. Crear usuario cliente y servicio válido
+        $cliente = new Usuario([
+            'nombre' => 'Cliente', 'apellido' => 'Rollback', 'email' => 'rollback@correo.com',
+            'password' => 'password', 'telefono' => '1234567890', 'confirmado' => '1'
         ]);
         $resCliente = $cliente->guardar();
-        $clienteId = $resCliente['id'];
+        $clienteId = (int)$resCliente['id'];
 
-        // 2. Iniciar transacción
-        self::$db->begin_transaction();
+        $servicio = new Servicio(['nombre' => 'Tintura', 'precio' => '120.00']);
+        $resServicio = $servicio->guardar();
+        $servicioId = (int)$resServicio['id'];
 
-        $citaId = null;
-        try {
-            // A. Insertar cita base exitosamente
-            $cita = new Cita([
-                'fecha' => '2026-10-15',
-                'hora' => '11:00',
-                'usuarioId' => $clienteId
-            ]);
-            $resCita = $cita->guardar();
-            $citaId = $resCita['id'];
-            $this->assertNotNull($citaId);
+        // 2. Iniciar sesión como el cliente
+        $_SESSION['login'] = true;
+        $_SESSION['id'] = $clienteId;
+        $tokenCsrf = bin2hex(random_bytes(32));
+        $_SESSION['csrf_token'] = $tokenCsrf;
 
-            // B. Provocar fallo forzado en la inserción de servicios (después de insertar la cita)
-            throw new \Exception("Fallo simulado en persistencia de citasservicios");
+        $_SERVER['REQUEST_METHOD'] = 'POST';
+        $_POST['csrf_token'] = $tokenCsrf;
+        $_POST['fecha'] = date('Y-m-d', strtotime('next Friday'));
+        $_POST['hora'] = '14:00';
+        $_POST['servicios'] = (string)$servicioId;
 
-            // Si llegara aquí, se haría commit
-            self::$db->commit();
-        } catch (\Throwable $e) {
-            // C. Ejecutar rollback tras la falla
-            self::$db->rollback();
-        }
+        // 3. Crear un trigger MySQL que fuerce un error durante la inserción en citasservicios
+        // Esto permite que el insert de citas se complete, pero falle inmediatamente al persistir servicios
+        self::$db->query(
+            "CREATE TRIGGER test_fail_citasservicios BEFORE INSERT ON citasservicios
+             FOR EACH ROW BEGIN
+                 SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Forced rollback test error';
+             END"
+        );
 
-        // D. Demostrar reversión: verificar que la cita NO existe en la base de datos
-        $citaEnBD = Cita::find($citaId);
-        $this->assertNull($citaEnBD, 'La transacción debió revertir la cita base por completo tras el fallo');
+        // 4. Invocar el flujo REAL de APIController::guardar()
+        ob_start();
+        APIController::guardar();
+        $output = ob_get_clean();
 
-        $serviciosEnBD = self::$db->query("SELECT * FROM citasservicios WHERE citaId = {$citaId}");
-        $this->assertSame(0, $serviciosEnBD->num_rows, 'No deben quedar registros huérfanos en citasservicios');
+        // 5. Comprobar que la respuesta fue HTTP 500 controlada sin fuga de internals
+        $this->assertSame(500, http_response_code());
+        $json = json_decode($output, true);
+        $this->assertFalse($json['resultado']);
+        $this->assertSame('No se pudo procesar la reserva. Operación cancelada.', $json['error']);
+
+        // 6. Verificar que la transacción ejecutó ROLLBACK: No existe ninguna cita en la base de datos
+        $resCitas = self::$db->query("SELECT COUNT(*) AS total FROM citas WHERE usuarioId = {$clienteId}");
+        $filaCitas = $resCitas->fetch_assoc();
+        $this->assertSame(0, (int)$filaCitas['total'], 'La transacción debió revertir la cita tras la falla en servicios');
+
+        $resCS = self::$db->query("SELECT COUNT(*) AS total FROM citasservicios");
+        $filaCS = $resCS->fetch_assoc();
+        $this->assertSame(0, (int)$filaCS['total'], 'No deben existir registros en citasservicios');
+
+        // Limpieza de trigger
+        self::$db->query("DROP TRIGGER IF EXISTS test_fail_citasservicios");
     }
 
-    public function testRateLimiterRegistraYBloqueaTrasMaximosIntentos(): void
+    public function testTransicionDeRolAdminAClienteEnMismaSesionRevocaAccesoAdmin(): void
     {
-        $ip = '192.168.1.100';
-        $email = 'victima@correo.com';
+        // 1. Crear Administrador y Cliente
+        $admin = new Usuario([
+            'nombre' => 'Admin', 'apellido' => 'Boss', 'email' => 'admin@appsalon.com',
+            'password' => 'admin123', 'telefono' => '1111111111', 'admin' => '1', 'confirmado' => '1'
+        ]);
+        $admin->hashPassword();
+        $admin->guardar();
 
-        $this->assertFalse(RateLimiter::estaBloqueado(self::$db, RateLimiter::TIPO_EMAIL_LOGIN, $email));
+        $cliente = new Usuario([
+            'nombre' => 'Cliente', 'apellido' => 'Normal', 'email' => 'cliente@appsalon.com',
+            'password' => 'cliente123', 'telefono' => '2222222222', 'admin' => '0', 'confirmado' => '1'
+        ]);
+        $cliente->hashPassword();
+        $cliente->guardar();
 
-        // Registrar 5 intentos fallidos
-        for ($i = 1; $i <= 5; $i++) {
-            RateLimiter::registrarIntentoFallido(self::$db, RateLimiter::TIPO_EMAIL_LOGIN, $email, 5);
+        $router = new Router();
+
+        // 2. Simular login inicial del Administrador en la sesión
+        $_SERVER['REQUEST_METHOD'] = 'POST';
+        $tokenCsrf = bin2hex(random_bytes(32));
+        $_SESSION['csrf_token'] = $tokenCsrf;
+        $_POST['csrf_token'] = $tokenCsrf;
+        $_POST['email'] = 'admin@appsalon.com';
+        $_POST['password'] = 'admin123';
+
+        try {
+            ob_start();
+            LoginController::login($router);
+        } catch (AppTerminationException $e) {
+            $this->assertSame(302, $e->getStatusCode());
+        } finally {
+            ob_end_clean();
         }
 
-        // Debe estar bloqueado
-        $this->assertTrue(RateLimiter::estaBloqueado(self::$db, RateLimiter::TIPO_EMAIL_LOGIN, $email));
+        $this->assertSame('1', (string)($_SESSION['admin'] ?? '0'));
+        $this->assertSame($admin->id, $_SESSION['id']);
 
-        // Limpiar intentos (ej. tras login correcto)
-        RateLimiter::limpiarIntentos(self::$db, RateLimiter::TIPO_EMAIL_LOGIN, $email);
-        $this->assertFalse(RateLimiter::estaBloqueado(self::$db, RateLimiter::TIPO_EMAIL_LOGIN, $email));
+        // 3. En la MISMA sesión, se autentica el Cliente
+        $tokenCsrf2 = bin2hex(random_bytes(32));
+        $_SESSION['csrf_token'] = $tokenCsrf2;
+        $_POST['csrf_token'] = $tokenCsrf2;
+        $_POST['email'] = 'cliente@appsalon.com';
+        $_POST['password'] = 'cliente123';
+
+        try {
+            ob_start();
+            LoginController::login($router);
+        } catch (AppTerminationException $e) {
+            $this->assertSame(302, $e->getStatusCode());
+        } finally {
+            ob_end_clean();
+        }
+
+        // 4. Verificar que el rol de Administrador fue completamente revocado y la sesión reconstruida
+        $this->assertSame($cliente->id, $_SESSION['id']);
+        $this->assertArrayNotHasKey('admin', $_SESSION, 'El rol de administrador debe ser eliminado de la sesión');
+
+        // 5. Comprobar que isAdmin() rechaza inmediatamente al cliente
+        $this->expectException(AppTerminationException::class);
+        isAdmin();
+    }
+
+    public function testLogoutExigePostConCsrfYDestruyeSesion(): void
+    {
+        $token = bin2hex(random_bytes(32));
+        $_SESSION['login'] = true;
+        $_SESSION['id'] = 1;
+        $_SESSION['csrf_token'] = $token;
+
+        // Petición GET a /logout debe ser rechazada y redirigida
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        try {
+            LoginController::logout();
+            $this->fail('Logout por GET debe terminar con redirección');
+        } catch (AppTerminationException $e) {
+            $this->assertSame(302, $e->getStatusCode());
+        }
+
+        // Petición POST con CSRF inválido debe ser rechazada con 403
+        $_SERVER['REQUEST_METHOD'] = 'POST';
+        $_POST['csrf_token'] = 'token_invalido';
+        try {
+            ob_start();
+            LoginController::logout();
+            $this->fail('Logout con CSRF inválido debe lanzar excepción');
+        } catch (AppTerminationException $e) {
+            $this->assertSame(403, $e->getStatusCode());
+        } finally {
+            ob_end_clean();
+        }
+
+        // Petición POST con CSRF válido ejecuta cierre efectivo
+        $_POST['csrf_token'] = $token;
+        try {
+            LoginController::logout();
+        } catch (AppTerminationException $e) {
+            $this->assertSame(302, $e->getStatusCode());
+        }
+
+        $this->assertEmpty($_SESSION, 'La sesión debe quedar completamente limpia tras logout');
+    }
+
+    public function testRateLimiterVentanaYBloqueo429(): void
+    {
+        $ip = '203.0.113.195';
+        $email = 'ataque@correo.com';
+
+        // 1. Ejecutar 5 intentos fallidos
+        for ($i = 1; $i <= 5; $i++) {
+            $estado = RateLimiter::registrarIntentoFallido(self::$db, RateLimiter::TIPO_EMAIL_LOGIN, $email, 5);
+        }
+
+        $this->assertTrue($estado['bloqueado']);
+        $this->assertGreaterThan(0, $estado['segundos_restantes']);
+
+        // 2. Simular que la ventana de tiempo de 15 minutos (900 s) ha expirado
+        self::$db->query(
+            "UPDATE intentos_login 
+             SET primera_peticion = DATE_SUB(NOW(), INTERVAL 950 SECOND),
+                 bloqueado_hasta = NULL
+             WHERE tipo = '" . RateLimiter::TIPO_EMAIL_LOGIN . "' AND identificador = '{$email}'"
+        );
+
+        // 3. El siguiente intento debe reiniciar el contador a 1 en una nueva ventana
+        $nuevoEstado = RateLimiter::registrarIntentoFallido(self::$db, RateLimiter::TIPO_EMAIL_LOGIN, $email, 5);
+        $this->assertSame(1, $nuevoEstado['intentos'], 'La ventana expirada debe reiniciar el contador a 1');
+        $this->assertFalse($nuevoEstado['bloqueado']);
     }
 }

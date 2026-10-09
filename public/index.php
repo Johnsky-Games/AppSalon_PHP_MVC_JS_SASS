@@ -15,6 +15,7 @@ $router = new Router();
 $router->get('/', [LoginController::class, 'login']);
 $router->post('/', [LoginController::class, 'login']);
 $router->get('/logout', [LoginController::class, 'logout']);
+$router->post('/logout', [LoginController::class, 'logout']);
 
 //Recuperar contraseña
 $router->get('/olvide', [LoginController::class, 'olvide']);
@@ -49,4 +50,9 @@ $router->post('/servicios/actualizar', [ServicioController::class, 'actualizar']
 $router->post('/servicios/eliminar', [ServicioController::class, 'eliminar']);
 
 // Comprueba y valida las rutas, que existan y les asigna las funciones del Controlador
-$router->comprobarRutas(); // Comprueba las rutas y las valida
+try {
+    $router->comprobarRutas();
+} catch (\AppTerminationException $e) {
+    // Terminación controlada tras emisión de encabezados o respuesta
+    exit;
+}

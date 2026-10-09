@@ -1,6 +1,9 @@
 <div class="barra">
     <p>Hola: <?php echo s($nombre . " " . $apellido) ?? ''; ?></p>
-    <a href="/logout" class='boton'>Cerrar Sesión</a>
+    <form action="/logout" method="POST" style="margin: 0;">
+        <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
+        <input type="submit" class="boton" value="Cerrar Sesión">
+    </form>
 </div>
 
 <?php if(isset($_SESSION['admin'])){?>

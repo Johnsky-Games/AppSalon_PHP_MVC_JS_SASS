@@ -121,12 +121,13 @@ class Usuario extends ActiveRecord
 
     /**
      * Genera un token criptográfico seguro con hash SHA-256, tipo y fecha de expiración.
-     * Retorna el token raw para ser enviado por correo/enlace.
+     * Retorna el token raw exclusivamente para el envío seguro de correo/enlace.
+     * El token original en texto plano NUNCA se persiste en la base de datos.
      */
     public function generarTokenSeguro(string $tipo = 'confirmacion', int $horasExpiracion = 24): string
     {
         $tokenRaw = bin2hex(random_bytes(32));
-        $this->token = $tokenRaw; // Compatibilidad temporal
+        $this->token = null; // No almacenar token en texto plano
         $this->token_hash = hash('sha256', $tokenRaw);
         $this->token_tipo = $tipo;
         $this->token_expira = date('Y-m-d H:i:s', time() + ($horasExpiracion * 3600));
@@ -143,7 +144,8 @@ class Usuario extends ActiveRecord
     }
 
     /**
-     * Busca un usuario por token raw validando su hash, tipo y vigencia temporal.
+     * Busca un usuario por token raw validando exclusivamente su hash SHA-256, tipo y vigencia.
+     * Se elimina la aceptación indefinida de tokens antiguos en texto plano sin expiración ni propósito.
      */
     public static function buscarPorTokenSeguro(string $tokenRaw, string $tipo): ?self
     {
@@ -153,71 +155,96 @@ class Usuario extends ActiveRecord
 
         $hash = hash('sha256', $tokenRaw);
 
-        // 1. Buscar por token_hash y verificar expiración
         $query = "SELECT * FROM " . static::$tabla . " 
                   WHERE token_hash = ? AND token_tipo = ? AND token_expira >= NOW() 
                   LIMIT 1";
         $stmt = self::$db->prepare($query);
-        if ($stmt) {
-            $stmt->bind_param('ss', $hash, $tipo);
-            $stmt->execute();
-            $res = $stmt->get_result();
-            if ($res && $registro = $res->fetch_assoc()) {
-                $stmt->close();
-                return static::crearObjeto($registro);
-            }
-            $stmt->close();
+        if (!$stmt) {
+            return null;
         }
 
-        // 2. Fallback de compatibilidad únicamente para registros antiguos donde token_hash es NULL
-        $queryLegacy = "SELECT * FROM " . static::$tabla . " WHERE token = ? AND token_hash IS NULL LIMIT 1";
-        $stmtLegacy = self::$db->prepare($queryLegacy);
-        if ($stmtLegacy) {
-            $stmtLegacy->bind_param('s', $tokenRaw);
-            $stmtLegacy->execute();
-            $res = $stmtLegacy->get_result();
-            if ($res && $registro = $res->fetch_assoc()) {
-                $stmtLegacy->close();
-                return static::crearObjeto($registro);
-            }
-            $stmtLegacy->close();
+        $stmt->bind_param('ss', $hash, $tipo);
+        if (!$stmt->execute()) {
+            $stmt->close();
+            return null;
         }
+
+        $res = $stmt->get_result();
+        if ($res && $registro = $res->fetch_assoc()) {
+            $stmt->close();
+            return static::crearObjeto($registro);
+        }
+        $stmt->close();
 
         return null;
     }
 
     /**
-     * Consume un token de forma atómica para evitar reutilización por solicitudes concurrentes.
+     * Confirmación atómica de cuenta condicionada por hash, tipo y vigencia temporal.
+     * Garantiza uso único y previene condiciones de carrera en solicitudes concurrentes.
+     * Retorna true únicamente si exactamente una fila fue actualizada.
      */
-    public function consumirToken(): bool
+    public static function confirmarCuentaPorToken(string $tokenRaw): bool
     {
-        if (!$this->id || !self::$db) {
+        if (trim($tokenRaw) === '' || !self::$db) {
             return false;
         }
 
+        $hash = hash('sha256', $tokenRaw);
+
         $query = "UPDATE " . static::$tabla . " 
-                  SET token = NULL, token_hash = NULL, token_tipo = NULL, token_expira = NULL, confirmado = '1' 
-                  WHERE id = ? LIMIT 1";
+                  SET confirmado = '1', token = NULL, token_hash = NULL, token_tipo = NULL, token_expira = NULL 
+                  WHERE token_hash = ? AND token_tipo = 'confirmacion' AND token_expira >= NOW() 
+                  LIMIT 1";
         $stmt = self::$db->prepare($query);
         if (!$stmt) {
             return false;
         }
 
-        $id = (int)$this->id;
-        $stmt->bind_param('i', $id);
-        $stmt->execute();
-        $actualizado = $stmt->affected_rows > 0;
-        $stmt->close();
-
-        if ($actualizado) {
-            $this->token = null;
-            $this->token_hash = null;
-            $this->token_tipo = null;
-            $this->token_expira = null;
-            $this->confirmado = '1';
+        $stmt->bind_param('s', $hash);
+        if (!$stmt->execute()) {
+            $stmt->close();
+            return false;
         }
 
-        return $actualizado;
+        $filas = $stmt->affected_rows;
+        $stmt->close();
+
+        return $filas === 1;
+    }
+
+    /**
+     * Restablecimiento atómico de contraseña condicionado por hash, tipo y vigencia temporal.
+     * Invalida el token en la misma sentencia UPDATE del nuevo password.
+     * Retorna true únicamente si exactamente una fila fue actualizada.
+     */
+    public static function restablecerPasswordPorToken(string $tokenRaw, string $nuevoPasswordHash): bool
+    {
+        if (trim($tokenRaw) === '' || !self::$db) {
+            return false;
+        }
+
+        $hash = hash('sha256', $tokenRaw);
+
+        $query = "UPDATE " . static::$tabla . " 
+                  SET password = ?, token = NULL, token_hash = NULL, token_tipo = NULL, token_expira = NULL 
+                  WHERE token_hash = ? AND token_tipo = 'recuperacion' AND token_expira >= NOW() 
+                  LIMIT 1";
+        $stmt = self::$db->prepare($query);
+        if (!$stmt) {
+            return false;
+        }
+
+        $stmt->bind_param('ss', $nuevoPasswordHash, $hash);
+        if (!$stmt->execute()) {
+            $stmt->close();
+            return false;
+        }
+
+        $filas = $stmt->affected_rows;
+        $stmt->close();
+
+        return $filas === 1;
     }
 
     public function validarLogin()

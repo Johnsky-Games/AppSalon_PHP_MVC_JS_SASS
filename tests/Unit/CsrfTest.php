@@ -77,4 +77,18 @@ class CsrfTest extends TestCase
 
         $this->assertTrue(validar_csrf(), 'Tokens coincidentes en header HTTP_X_CSRF_TOKEN deben ser aceptados');
     }
+
+    public function testExigirCsrfLanzaExcepcionTerminacion403SiEsInvalido(): void
+    {
+        $_SESSION['csrf_token'] = 'token_sesion';
+        $_POST['csrf_token'] = 'token_invalido';
+
+        $this->expectException(\AppTerminationException::class);
+        try {
+            ob_start();
+            exigir_csrf();
+        } finally {
+            ob_end_clean();
+        }
+    }
 }
