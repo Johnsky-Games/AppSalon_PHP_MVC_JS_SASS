@@ -15,7 +15,8 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 
 - **Rama:** `feature/seguridad-y-consistencia-inicial`
 - **Commit Base:** `e816154b96985c2773e4fb418bbbf3e92530cca3`
-- **Estado General:** **Probado** (Listo para auditoría de ChatGPT)
+- **Commit de Entrega:** `b5c73bce30e5150f479f84370b127048adec9fec`
+- **Estado General:** **Probado** (Empujado a origin, listo para auditoría independiente de ChatGPT)
 
 | Tarea / Control de Seguridad | Estado | Evidencia / Pruebas Asociadas |
 | :--- | :---: | :--- |
