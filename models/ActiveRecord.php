@@ -28,10 +28,14 @@ class ActiveRecord
         static::$alertas[$tipo][] = $mensaje;
     }
 
-    // Validación
     public static function getAlertas()
     {
         return static::$alertas;
+    }
+
+    public static function limpiarAlertas(): void
+    {
+        static::$alertas = [];
     }
 
     public function validar()

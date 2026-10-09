@@ -9,13 +9,13 @@ DROP TABLE IF EXISTS intentos_login;
 
 -- 2. Eliminar índices y columnas de tokens en `usuarios`
 ALTER TABLE usuarios
-    DROP INDEX IF EXISTS idx_token_hash,
-    DROP INDEX IF EXISTS idx_token_expira;
+    DROP INDEX idx_token_hash,
+    DROP INDEX idx_token_expira;
 
 ALTER TABLE usuarios
-    DROP COLUMN IF EXISTS token_expira,
-    DROP COLUMN IF EXISTS token_tipo,
-    DROP COLUMN IF EXISTS token_hash;
+    DROP COLUMN token_expira,
+    DROP COLUMN token_tipo,
+    DROP COLUMN token_hash;
 
 -- 3. Eliminar registro en tabla de migraciones
 DELETE FROM migraciones WHERE migracion = '001_security_hardening';

@@ -1,6 +1,4 @@
--- Esquema base inicial de AppSalon (Motores InnoDB para soporte de transacciones)
-CREATE DATABASE IF NOT EXISTS appsalon_test DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-USE appsalon_test;
+-- Esquema base inicial de AppSalon
 
 CREATE TABLE IF NOT EXISTS usuarios (
     id INT AUTO_INCREMENT PRIMARY KEY,

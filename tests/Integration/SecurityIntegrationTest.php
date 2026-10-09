@@ -54,6 +54,7 @@ class SecurityIntegrationTest extends TestCase
         $_GET = [];
         $_SERVER['HTTP_X_CSRF_TOKEN'] = null;
         $_SERVER['REQUEST_METHOD'] = 'GET';
+        Usuario::limpiarAlertas();
         http_response_code(200);
     }
 
@@ -402,4 +403,189 @@ class SecurityIntegrationTest extends TestCase
         $this->assertSame(1, $nuevoEstado['intentos'], 'La ventana expirada debe reiniciar el contador a 1');
         $this->assertFalse($nuevoEstado['bloqueado']);
     }
+
+    public function testRateLimiterUmbralExactoIntentoPorIntento(): void
+    {
+        $identificador = 'umbral_exacto@correo.com';
+        $maxIntentos = 5;
+
+        // Intentos 1 al 4 deben ser estrictamente permitidos (no bloqueados)
+        for ($i = 1; $i <= 4; $i++) {
+            $estado = RateLimiter::registrarIntentoFallido(self::$db, RateLimiter::TIPO_EMAIL_LOGIN, $identificador, $maxIntentos);
+            $this->assertFalse($estado['bloqueado'], "El intento {$i} no debe estar bloqueado");
+            $this->assertSame($i, $estado['intentos'], "El contador de intentos debe ser exactamente {$i}");
+            $this->assertSame(0, $estado['segundos_restantes']);
+        }
+
+        // Intento 5 es el umbral exacto: debe bloquearse inmediatamente
+        $estado5 = RateLimiter::registrarIntentoFallido(self::$db, RateLimiter::TIPO_EMAIL_LOGIN, $identificador, $maxIntentos);
+        $this->assertTrue($estado5['bloqueado'], "El intento 5 debe alcanzar el umbral y bloquearse");
+        $this->assertSame(5, $estado5['intentos']);
+        $this->assertGreaterThan(0, $estado5['segundos_restantes']);
+
+        // Intento 6 (subsiguiente) debe mantenerse bloqueado sin inflar contador
+        $estado6 = RateLimiter::registrarIntentoFallido(self::$db, RateLimiter::TIPO_EMAIL_LOGIN, $identificador, $maxIntentos);
+        $this->assertTrue($estado6['bloqueado'], "Cualquier intento subsiguiente debe permanecer bloqueado");
+        $this->assertSame(5, $estado6['intentos']);
+    }
+
+    public function testRateLimiterConexionesIndependientesConcurrencia(): void
+    {
+        $host = getenv('DB_HOST') ?: 'appsalon-test-db';
+        $user = getenv('DB_USER') ?: 'root';
+        $pass = getenv('DB_PASS') ?: 'root';
+        $name = getenv('DB_NAME') ?: 'appsalon_test';
+        $port = (int)(getenv('DB_PORT') ?: 3306);
+
+        // Dos conexiones mysqli completamente independientes
+        $conn1 = new mysqli($host, $user, $pass, $name, $port);
+        $conn2 = new mysqli($host, $user, $pass, $name, $port);
+
+        $identificador = 'concurrente@correo.com';
+        $maxIntentos = 5;
+
+        // Conn 1 registra intento 1
+        $e1 = RateLimiter::registrarIntentoFallido($conn1, RateLimiter::TIPO_EMAIL_LOGIN, $identificador, $maxIntentos);
+        $this->assertSame(1, $e1['intentos']);
+        $this->assertFalse($e1['bloqueado']);
+
+        // Conn 2 registra intento 2
+        $e2 = RateLimiter::registrarIntentoFallido($conn2, RateLimiter::TIPO_EMAIL_LOGIN, $identificador, $maxIntentos);
+        $this->assertSame(2, $e2['intentos']);
+        $this->assertFalse($e2['bloqueado']);
+
+        // Conn 1 registra intento 3
+        $e3 = RateLimiter::registrarIntentoFallido($conn1, RateLimiter::TIPO_EMAIL_LOGIN, $identificador, $maxIntentos);
+        $this->assertSame(3, $e3['intentos']);
+
+        // Conn 2 registra intento 4
+        $e4 = RateLimiter::registrarIntentoFallido($conn2, RateLimiter::TIPO_EMAIL_LOGIN, $identificador, $maxIntentos);
+        $this->assertSame(4, $e4['intentos']);
+
+        // Conn 1 registra intento 5 -> Umbral alcanzado desde Conn 1
+        $e5 = RateLimiter::registrarIntentoFallido($conn1, RateLimiter::TIPO_EMAIL_LOGIN, $identificador, $maxIntentos);
+        $this->assertTrue($e5['bloqueado']);
+
+        // Conn 2 consulta e intenta operar: debe estar inmediatamente bloqueada sin saltarse el límite
+        $bloqueoConn2 = RateLimiter::obtenerSegundosBloqueo($conn2, RateLimiter::TIPO_EMAIL_LOGIN, $identificador);
+        $this->assertGreaterThan(0, $bloqueoConn2, "Conn2 debe percibir el bloqueo establecido por Conn1");
+
+        $e6 = RateLimiter::registrarIntentoFallido($conn2, RateLimiter::TIPO_EMAIL_LOGIN, $identificador, $maxIntentos);
+        $this->assertTrue($e6['bloqueado'], "Conn2 debe ser rechazada bajo el mismo bloqueo atómico");
+
+        $conn1->close();
+        $conn2->close();
+    }
+
+    public function testRateLimiterManejoFalloSqlFailSecure(): void
+    {
+        $host = getenv('DB_HOST') ?: 'appsalon-test-db';
+        $user = getenv('DB_USER') ?: 'root';
+        $pass = getenv('DB_PASS') ?: 'root';
+        $name = getenv('DB_NAME') ?: 'appsalon_test';
+        $port = (int)(getenv('DB_PORT') ?: 3306);
+
+        // Conexión cerrada para simular indisponibilidad o fallo de red/SQL
+        $brokenDb = new mysqli($host, $user, $pass, $name, $port);
+        $brokenDb->close();
+
+        // En postura fail-secure, nunca se asume permitido
+        $segundos = RateLimiter::obtenerSegundosBloqueo($brokenDb, RateLimiter::TIPO_EMAIL_LOGIN, 'cualquiera@correo.com');
+        $this->assertSame(RateLimiter::DURACION_BLOQUEO, $segundos, 'Ante error SQL, obtenerSegundosBloqueo debe asumir bloqueo completo (fail-secure)');
+
+        $resultado = RateLimiter::registrarIntentoFallido($brokenDb, RateLimiter::TIPO_EMAIL_LOGIN, 'cualquiera@correo.com', 5);
+        $this->assertTrue($resultado['bloqueado'], 'Ante error SQL, registrarIntentoFallido debe devolver bloqueado (fail-secure)');
+        $this->assertSame(RateLimiter::DURACION_BLOQUEO, $resultado['segundos_restantes']);
+    }
+
+    public function testOlvideConRateLimitBloqueaSinGenerarNiPersistirToken(): void
+    {
+        $usuario = new Usuario([
+            'nombre' => 'Victima', 'apellido' => 'Test', 'email' => 'victima_olvide@correo.com',
+            'password' => 'password123', 'telefono' => '1234567890', 'confirmado' => '1'
+        ]);
+        $usuario->guardar();
+
+        $router = new Router();
+        $ip = RateLimiter::obtenerIP();
+        $email = 'victima_olvide@correo.com';
+
+        // Simular que el rate limit ya está en su umbral de 5 intentos
+        for ($i = 1; $i <= 5; $i++) {
+            RateLimiter::registrarIntentoFallido(self::$db, RateLimiter::TIPO_EMAIL_RECOVERY, $email, 5);
+        }
+
+        // Petición POST a /olvide con CSRF válido
+        $tokenCsrf = bin2hex(random_bytes(32));
+        $_SESSION['csrf_token'] = $tokenCsrf;
+        $_POST['csrf_token'] = $tokenCsrf;
+        $_POST['email'] = $email;
+        $_SERVER['REQUEST_METHOD'] = 'POST';
+
+        ob_start();
+        LoginController::olvide($router);
+        $output = ob_get_clean();
+
+        // Debe responder con HTTP 429
+        $this->assertSame(429, http_response_code(), 'Debe responder con 429 por bloqueo de rate limiting');
+
+        // Verificar en BD que NUNCA se generó ni persistió un token
+        $usuarioDb = Usuario::where('email', $email);
+        $this->assertNull($usuarioDb->token_hash, 'El usuario no debe tener ningún token_hash generado');
+        $this->assertNull($usuarioDb->token_expira, 'No debe registrarse expiración');
+    }
+
+    public function testReenviarConfirmacionGeneraTokenNuevoSoloParaCuentasNoConfirmadas(): void
+    {
+        // 1. Usuario NO confirmado
+        $unconfirmed = new Usuario([
+            'nombre' => 'NoConfirmado', 'apellido' => 'Perez', 'email' => 'noconfirmado@correo.com',
+            'password' => 'password123', 'telefono' => '1234567890', 'confirmado' => '0'
+        ]);
+        $unconfirmed->guardar();
+
+        // 2. Usuario SÍ confirmado
+        $confirmed = new Usuario([
+            'nombre' => 'YaConfirmado', 'apellido' => 'Gomez', 'email' => 'yaconfirmado@correo.com',
+            'password' => 'password123', 'telefono' => '0987654321', 'confirmado' => '1'
+        ]);
+        $confirmed->guardar();
+
+        $router = new Router();
+        $tokenCsrf = bin2hex(random_bytes(32));
+        $_SESSION['csrf_token'] = $tokenCsrf;
+        $_POST['csrf_token'] = $tokenCsrf;
+        $_SERVER['REQUEST_METHOD'] = 'POST';
+
+        // Caso A: Reenvío a usuario no confirmado
+        $_POST['email'] = 'noconfirmado@correo.com';
+        ob_start();
+        LoginController::reenviarConfirmacion($router);
+        $outA = ob_get_clean();
+
+        $uA = Usuario::where('email', 'noconfirmado@correo.com');
+        $this->assertNotNull($uA->token_hash, 'La cuenta no confirmada debe recibir un nuevo token_hash');
+        $this->assertSame('confirmacion', $uA->token_tipo);
+        $this->assertNotNull($uA->token_expira);
+        $this->assertStringContainsString('Si la cuenta existe y está pendiente de confirmación', $outA);
+
+        // Caso B: Reenvío a cuenta ya confirmada (No debe generar token pero muestra mensaje genérico anti-enumeración)
+        $_POST['email'] = 'yaconfirmado@correo.com';
+        ob_start();
+        LoginController::reenviarConfirmacion($router);
+        $outB = ob_get_clean();
+
+        $uB = Usuario::where('email', 'yaconfirmado@correo.com');
+        $this->assertNull($uB->token_hash, 'La cuenta confirmada NO debe recibir ningún token');
+        $this->assertStringContainsString('Si la cuenta existe y está pendiente de confirmación', $outB);
+
+        // Caso C: Email inexistente (Muestra exactamente el mismo mensaje genérico)
+        $_POST['email'] = 'fantasma_inexistente@correo.com';
+        ob_start();
+        LoginController::reenviarConfirmacion($router);
+        $outC = ob_get_clean();
+
+        $this->assertStringContainsString('Si la cuenta existe y está pendiente de confirmación', $outC);
+    }
 }
+

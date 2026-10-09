@@ -24,11 +24,25 @@ class LoginController
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exigir_csrf();
 
+            $emailRaw = $_POST['email'] ?? null;
+            $passwordRaw = $_POST['password'] ?? null;
+
+            if (!is_string($emailRaw) || !is_string($passwordRaw)) {
+                http_response_code(422);
+                Usuario::setAlerta('error', 'Los campos email y password deben ser cadenas de texto válidas');
+                $alertas = Usuario::getAlertas();
+                $router->render('auth/login', [
+                    'alertas' => $alertas,
+                    'auth' => $auth,
+                ]);
+                return;
+            }
+
             $auth = new Usuario($_POST);
             $alertas = $auth->validarLogin();
 
             $ip = RateLimiter::obtenerIP();
-            $email = is_string($auth->email) ? trim($auth->email) : '';
+            $email = trim($emailRaw);
 
             $segBloqueoIP = $db ? RateLimiter::obtenerSegundosBloqueo($db, RateLimiter::TIPO_IP_LOGIN, $ip) : 0;
             $segBloqueoEmail = ($db && $email !== '') ? RateLimiter::obtenerSegundosBloqueo($db, RateLimiter::TIPO_EMAIL_LOGIN, $email) : 0;
@@ -76,9 +90,14 @@ class LoginController
                             http_response_code(429);
                             $espera = max($resIP['segundos_restantes'], $resEmail['segundos_restantes']);
                             header("Retry-After: {$espera}");
+                            $minutos = ceil($espera / 60);
+                            Usuario::setAlerta('error', "Demasiados intentos fallidos. Por seguridad, intente de nuevo en {$minutos} minutos.");
+                        } else {
+                            Usuario::setAlerta('error', 'Credenciales incorrectas o la cuenta no ha sido verificada');
                         }
+                    } else {
+                        Usuario::setAlerta('error', 'Credenciales incorrectas o la cuenta no ha sido verificada');
                     }
-                    Usuario::setAlerta('error', 'Credenciales incorrectas o la cuenta no ha sido verificada');
                 }
             }
         }
@@ -133,11 +152,22 @@ class LoginController
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exigir_csrf();
 
-            $auth = new Usuario($_POST);
+            $emailRaw = $_POST['email'] ?? null;
+            if (!is_string($emailRaw)) {
+                http_response_code(422);
+                Usuario::setAlerta('error', 'El email debe ser una cadena de texto válida');
+                $alertas = Usuario::getAlertas();
+                $router->render('auth/olvide-password', [
+                    'alertas' => $alertas
+                ]);
+                return;
+            }
+
+            $email = trim($emailRaw);
+            $auth = new Usuario(['email' => $email]);
             $alertas = $auth->validarEmail();
 
             $ip = RateLimiter::obtenerIP();
-            $email = is_string($auth->email) ? trim($auth->email) : '';
 
             $segBloqueoIP = $db ? RateLimiter::obtenerSegundosBloqueo($db, RateLimiter::TIPO_IP_RECOVERY, $ip) : 0;
             $segBloqueoEmail = ($db && $email !== '') ? RateLimiter::obtenerSegundosBloqueo($db, RateLimiter::TIPO_EMAIL_RECOVERY, $email) : 0;
@@ -148,35 +178,115 @@ class LoginController
                 header("Retry-After: {$maxEspera}");
                 $minutos = ceil($maxEspera / 60);
                 Usuario::setAlerta('error', "Demasiadas solicitudes de recuperación. Intente en {$minutos} minutos.");
-                $alertas = Usuario::getAlertas();
             } elseif (empty($alertas)) {
+                $bloqueado = false;
                 if ($db) {
                     $resIP = RateLimiter::registrarIntentoFallido($db, RateLimiter::TIPO_IP_RECOVERY, $ip, RateLimiter::MAX_INTENTOS_IP);
                     $resEmail = RateLimiter::registrarIntentoFallido($db, RateLimiter::TIPO_EMAIL_RECOVERY, $email, RateLimiter::MAX_INTENTOS_EMAIL);
                     if ($resIP['bloqueado'] || $resEmail['bloqueado']) {
+                        $bloqueado = true;
                         http_response_code(429);
                         $espera = max($resIP['segundos_restantes'], $resEmail['segundos_restantes']);
                         header("Retry-After: {$espera}");
+                        $minutos = ceil($espera / 60);
+                        Usuario::setAlerta('error', "Demasiadas solicitudes de recuperación. Intente en {$minutos} minutos.");
                     }
                 }
 
-                $usuario = Usuario::where('email', $email);
-                if ($usuario && (string)$usuario->confirmado === '1') {
-                    $tokenRaw = $usuario->generarTokenSeguro('recuperacion', 2);
-                    $usuario->guardar();
+                if (!$bloqueado) {
+                    $usuario = Usuario::where('email', $email);
+                    if ($usuario && (string)$usuario->confirmado === '1') {
+                        $tokenRaw = $usuario->generarTokenSeguro('recuperacion', 2);
+                        $usuario->guardar();
 
-                    $emailObj = new Email($usuario->nombre, $usuario->email, $tokenRaw);
-                    $emailObj->enviarInstrucciones();
+                        $emailObj = new Email($usuario->nombre, $usuario->email, $tokenRaw);
+                        $emailObj->enviarInstrucciones();
+                    }
+
+                    // Mensaje genérico para prevenir enumeración de usuarios
+                    Usuario::setAlerta('exito', 'Si el correo electrónico está registrado, recibirás las instrucciones para restablecer tu contraseña en breve.');
                 }
-
-                // Mensaje genérico para prevenir enumeración de usuarios
-                Usuario::setAlerta('exito', 'Si el correo electrónico está registrado, recibirás las instrucciones para restablecer tu contraseña en breve.');
             }
         }
 
         $alertas = Usuario::getAlertas();
 
         $router->render('auth/olvide-password', [
+            'alertas' => $alertas
+        ]);
+    }
+
+    /**
+     * Reenvío seguro de confirmación para cuentas no confirmadas con rate limiting y respuesta genérica.
+     */
+    public static function reenviarConfirmacion(Router $router)
+    {
+        iniciar_sesion_segura();
+        $alertas = [];
+        $db = ActiveRecord::getDB();
+
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            exigir_csrf();
+
+            $emailRaw = $_POST['email'] ?? null;
+            if (!is_string($emailRaw)) {
+                http_response_code(422);
+                Usuario::setAlerta('error', 'El email debe ser una cadena de texto válida');
+                $alertas = Usuario::getAlertas();
+                $router->render('auth/reenviar-confirmacion', [
+                    'alertas' => $alertas
+                ]);
+                return;
+            }
+
+            $email = trim($emailRaw);
+            $auth = new Usuario(['email' => $email]);
+            $alertas = $auth->validarEmail();
+
+            $ip = RateLimiter::obtenerIP();
+
+            $segBloqueoIP = $db ? RateLimiter::obtenerSegundosBloqueo($db, RateLimiter::TIPO_IP_RECONFIRM, $ip) : 0;
+            $segBloqueoEmail = ($db && $email !== '') ? RateLimiter::obtenerSegundosBloqueo($db, RateLimiter::TIPO_EMAIL_RECONFIRM, $email) : 0;
+            $maxEspera = max($segBloqueoIP, $segBloqueoEmail);
+
+            if ($maxEspera > 0) {
+                http_response_code(429);
+                header("Retry-After: {$maxEspera}");
+                $minutos = ceil($maxEspera / 60);
+                Usuario::setAlerta('error', "Demasiadas solicitudes de confirmación. Intente de nuevo en {$minutos} minutos.");
+            } elseif (empty($alertas)) {
+                $bloqueado = false;
+                if ($db) {
+                    $resIP = RateLimiter::registrarIntentoFallido($db, RateLimiter::TIPO_IP_RECONFIRM, $ip, RateLimiter::MAX_INTENTOS_IP);
+                    $resEmail = RateLimiter::registrarIntentoFallido($db, RateLimiter::TIPO_EMAIL_RECONFIRM, $email, RateLimiter::MAX_INTENTOS_EMAIL);
+                    if ($resIP['bloqueado'] || $resEmail['bloqueado']) {
+                        $bloqueado = true;
+                        http_response_code(429);
+                        $espera = max($resIP['segundos_restantes'], $resEmail['segundos_restantes']);
+                        header("Retry-After: {$espera}");
+                        $minutos = ceil($espera / 60);
+                        Usuario::setAlerta('error', "Demasiadas solicitudes de confirmación. Intente de nuevo en {$minutos} minutos.");
+                    }
+                }
+
+                if (!$bloqueado) {
+                    $usuario = Usuario::where('email', $email);
+                    if ($usuario && (string)$usuario->confirmado !== '1') {
+                        $tokenRaw = $usuario->generarTokenSeguro('confirmacion', 24);
+                        $usuario->guardar();
+
+                        $emailObj = new Email($usuario->nombre, $usuario->email, $tokenRaw);
+                        $emailObj->enviarConfirmacion();
+                    }
+
+                    // Respuesta genérica para prevenir enumeración de cuentas
+                    Usuario::setAlerta('exito', 'Si la cuenta existe y está pendiente de confirmación, hemos enviado un nuevo enlace a tu correo electrónico.');
+                }
+            }
+        }
+
+        $alertas = Usuario::getAlertas();
+        $router->render('auth/reenviar-confirmacion', [
             'alertas' => $alertas
         ]);
     }
@@ -200,7 +310,18 @@ class LoginController
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exigir_csrf();
 
-            $passwordInput = is_string($_POST['password'] ?? null) ? $_POST['password'] : '';
+            $passwordInput = $_POST['password'] ?? null;
+            if (!is_string($passwordInput)) {
+                http_response_code(422);
+                Usuario::setAlerta('error', 'El password debe ser una cadena de texto válida');
+                $alertas = Usuario::getAlertas();
+                $router->render('auth/recuperar-password', [
+                    'alertas' => $alertas,
+                    'error' => $error
+                ]);
+                return;
+            }
+
             $password = new Usuario(['password' => $passwordInput]);
             $alertas = $password->validarPassword();
 

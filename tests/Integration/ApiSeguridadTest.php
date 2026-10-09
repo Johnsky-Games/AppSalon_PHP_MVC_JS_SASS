@@ -327,4 +327,104 @@ class ApiSeguridadTest extends TestCase
         $res = self::$db->query("SELECT * FROM citasservicios WHERE citaId = {$idCita}");
         $this->assertSame(1, $res->num_rows, 'La política de desduplicación debe persistir exactamente un registro por servicio único');
     }
+
+    public function testGuardarRechazaFormatoHoraConSegundos(): void
+    {
+        $servicio = new Servicio(['nombre' => 'Corte Varón', 'precio' => '50.00']);
+        $resS = $servicio->guardar();
+        $idS = (int)$resS['id'];
+
+        $_SESSION['login'] = true;
+        $_SESSION['id'] = 1;
+        $token = bin2hex(random_bytes(32));
+        $_SESSION['csrf_token'] = $token;
+        $_POST['csrf_token'] = $token;
+
+        $_POST['fecha'] = date('Y-m-d', strtotime('next Wednesday'));
+        $_POST['hora'] = '18:00:01'; // Rechazado por incluir segundos
+        $_POST['servicios'] = (string)$idS;
+
+        $output = '';
+        try {
+            ob_start();
+            APIController::guardar();
+        } catch (AppTerminationException $e) {
+            $this->assertSame(422, $e->getStatusCode());
+        } finally {
+            $output = ob_get_clean();
+        }
+
+        $this->assertSame(422, http_response_code());
+        $json = json_decode($output, true);
+        $this->assertFalse($json['resultado']);
+        $this->assertSame('Formato de hora inválido. Se requiere HH:MM.', $json['error']);
+    }
+
+    public function testLoginRechazaCargaNoEscalarTipoInvalido(): void
+    {
+        $_SERVER['REQUEST_METHOD'] = 'POST';
+        $router = new \MVC\Router();
+        $token = bin2hex(random_bytes(32));
+        $_SESSION['csrf_token'] = $token;
+        $_POST['csrf_token'] = $token;
+        $_POST['email'] = ['ataque_array@correo.com'];
+        $_POST['password'] = '123456';
+
+        ob_start();
+        \Controllers\LoginController::login($router);
+        $output = ob_get_clean();
+
+        $this->assertSame(422, http_response_code());
+        $this->assertStringContainsString('Los campos email y password deben ser cadenas de texto válidas', $output);
+    }
+
+    public function testEliminarCitaExitosaNoEjecutaRollbackFalso(): void
+    {
+        $cliente = new Usuario([
+            'nombre' => 'Cliente', 'apellido' => 'Test', 'email' => 'cliente_elim@correo.com',
+            'password' => 'password', 'telefono' => '1234567890', 'confirmado' => '1'
+        ]);
+        $resC = $cliente->guardar();
+        $clienteId = (int)$resC['id'];
+
+        $servicio = new Servicio(['nombre' => 'Barba', 'precio' => '40.00']);
+        $resS = $servicio->guardar();
+        $servicioId = (int)$resS['id'];
+
+        $cita = new Cita([
+            'fecha' => date('Y-m-d', strtotime('next Thursday')),
+            'hora' => '15:00',
+            'usuarioId' => $clienteId
+        ]);
+        $resCita = $cita->guardar();
+        $citaId = (int)$resCita['id'];
+
+        $cs = new CitaServicio([
+            'citaId' => $citaId,
+            'servicioId' => $servicioId
+        ]);
+        $cs->guardar();
+
+        // Autenticar al cliente propietario
+        $_SESSION['login'] = true;
+        $_SESSION['id'] = $clienteId;
+        $token = bin2hex(random_bytes(32));
+        $_SESSION['csrf_token'] = $token;
+        $_POST['csrf_token'] = $token;
+        $_POST['id'] = (string)$citaId;
+
+        try {
+            APIController::eliminar();
+            $this->fail('Debe terminar con redirección 302');
+        } catch (AppTerminationException $e) {
+            $this->assertSame(302, $e->getStatusCode(), 'La eliminación exitosa debe redirigir con 302');
+        }
+
+        // Verificar que el commit persistió y la cita y sus servicios fueron eliminados
+        $checkCita = self::$db->query("SELECT * FROM citas WHERE id = {$citaId}");
+        $this->assertSame(0, $checkCita->num_rows, 'La cita debe haber sido eliminada tras el commit exitoso');
+
+        $checkCS = self::$db->query("SELECT * FROM citasservicios WHERE citaId = {$citaId}");
+        $this->assertSame(0, $checkCS->num_rows, 'Los servicios asociados deben haber sido eliminados');
+    }
 }

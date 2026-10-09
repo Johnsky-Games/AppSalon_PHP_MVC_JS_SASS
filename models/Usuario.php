@@ -26,14 +26,14 @@ class Usuario extends ActiveRecord
     public function __construct($args = [])
     {
         $this->id = $args['id'] ?? null;
-        $this->nombre = $args['nombre'] ?? '';
-        $this->apellido = $args['apellido'] ?? '';
-        $this->email = $args['email'] ?? '';
-        $this->password = $args['password'] ?? '';
-        $this->telefono = $args['telefono'] ?? '';
-        $this->admin = $args['admin'] ?? "0";
-        $this->confirmado = $args['confirmado'] ?? "0";
-        $this->token = $args['token'] ?? '';
+        $this->nombre = is_string($args['nombre'] ?? null) ? trim($args['nombre']) : '';
+        $this->apellido = is_string($args['apellido'] ?? null) ? trim($args['apellido']) : '';
+        $this->email = is_string($args['email'] ?? null) ? trim($args['email']) : '';
+        $this->password = is_string($args['password'] ?? null) ? $args['password'] : '';
+        $this->telefono = is_string($args['telefono'] ?? null) ? trim($args['telefono']) : '';
+        $this->admin = isset($args['admin']) && is_string($args['admin']) ? $args['admin'] : "0";
+        $this->confirmado = isset($args['confirmado']) && is_string($args['confirmado']) ? $args['confirmado'] : "0";
+        $this->token = is_string($args['token'] ?? null) ? $args['token'] : '';
         $this->token_hash = $args['token_hash'] ?? null;
         $this->token_tipo = $args['token_tipo'] ?? null;
         $this->token_expira = $args['token_expira'] ?? null;
@@ -64,6 +64,7 @@ class Usuario extends ActiveRecord
 
     public function validarNuevaCuenta()
     {
+        self::$alertas = [];
         if (!$this->nombre) {
             self::$alertas['error'][] = 'Debes añadir un nombre';
         }
@@ -249,6 +250,7 @@ class Usuario extends ActiveRecord
 
     public function validarLogin()
     {
+        self::$alertas = [];
         if (!$this->email) {
             self::$alertas['error'][] = 'El email es obligatorio';
         }
@@ -260,6 +262,11 @@ class Usuario extends ActiveRecord
 
     public function comprobarPasswordAndVerificado($password)
     {
+        if (!is_string($password) || $password === '' || !is_string($this->password) || $this->password === '') {
+            self::$alertas['error'][] = 'Password incorrecto o la cuenta no ha sido verificada';
+            return false;
+        }
+
         $resultado = password_verify($password, $this->password);
 
         if (!$resultado || (string)$this->confirmado !== "1") {
@@ -271,7 +278,8 @@ class Usuario extends ActiveRecord
 
     public function validarEmail()
     {
-        if (!$this->email) {
+        self::$alertas = [];
+        if (!$this->email || !is_string($this->email)) {
             self::$alertas['error'][] = 'El email es obligatorio';
         }
         return self::$alertas;
@@ -279,10 +287,10 @@ class Usuario extends ActiveRecord
 
     public function validarPassword()
     {
-        if (!$this->password) {
+        self::$alertas = [];
+        if (!$this->password || !is_string($this->password)) {
             self::$alertas['error'][] = 'El password es obligatorio';
-        }
-        if (strlen($this->password) < 6) {
+        } elseif (strlen($this->password) < 6) {
             self::$alertas['error'][] = 'El password debe tener al menos 6 caracteres';
         }
         return self::$alertas;

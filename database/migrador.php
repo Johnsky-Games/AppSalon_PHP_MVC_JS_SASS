@@ -1,8 +1,8 @@
 <?php
 
 /**
- * Script de ejecución de migraciones de base de datos
- * Uso: php database/migrador.php [up|down]
+ * Script de ejecución y control de migraciones de base de datos
+ * Uso: php database/migrador.php [status|up|down]
  */
 
 require_once __DIR__ . '/../includes/app.php';
@@ -17,14 +17,14 @@ if (!$db) {
     exit(1);
 }
 
-// 1. Asegurar tabla de migraciones
+// 1. Asegurar tabla de migraciones versionadas
 $db->query("CREATE TABLE IF NOT EXISTS migraciones (
     id INT AUTO_INCREMENT PRIMARY KEY,
     migracion VARCHAR(255) NOT NULL UNIQUE,
     aplicada_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
-// Obtener archivos de migración (excluyendo rollbacks)
+// Obtener archivos de migración ordenados (excluyendo archivos de rollback)
 $todosSql = glob(__DIR__ . '/migrations/*.sql');
 $archivosMigracion = array_filter($todosSql, function($f) {
     return !str_ends_with($f, '_rollback.sql');
@@ -60,17 +60,49 @@ if ($comando === 'status') {
 
         echo "[+] Aplicando migración: {$nombre}...\n";
         $sql = file_get_contents($archivo);
-        if ($db->multi_query($sql)) {
-            do {
-                if ($res = $db->store_result()) {
-                    $res->free();
-                }
-            } while ($db->more_results() && $db->next_result());
-            echo "[OK] Migración {$nombre} aplicada exitosamente.\n";
-        } else {
-            echo "[ERROR] Error al aplicar {$nombre}: " . $db->error . "\n";
+        if (!$db->multi_query($sql)) {
+            echo "[ERROR] Error al iniciar la ejecución de {$nombre}: " . $db->error . "\n";
             exit(1);
         }
+
+        $fallo = false;
+        $mensajeError = '';
+        do {
+            if ($db->errno) {
+                $fallo = true;
+                $mensajeError = $db->error;
+                break;
+            }
+            if ($res = $db->store_result()) {
+                $res->free();
+            }
+            if (!$db->more_results()) {
+                break;
+            }
+            if (!$db->next_result()) {
+                if ($db->errno) {
+                    $fallo = true;
+                    $mensajeError = $db->error;
+                }
+                break;
+            }
+        } while (true);
+
+        if ($fallo) {
+            echo "[ERROR] Fallo intermedio en la migración {$nombre}: {$mensajeError}\n";
+            echo "[AVISO] La migración NO se registró como completada. Revise los errores y aplique corrección manual antes de reintentar.\n";
+            exit(1);
+        }
+
+        // Registrar en migraciones únicamente tras completar todas las sentencias sin error
+        $stmt = $db->prepare("INSERT INTO migraciones (migracion, aplicada_en) VALUES (?, NOW()) ON DUPLICATE KEY UPDATE aplicada_en = NOW()");
+        if ($stmt) {
+            $stmt->bind_param('s', $nombre);
+            $stmt->execute();
+            $stmt->close();
+        }
+
+        echo "[OK] Migración {$nombre} aplicada exitosamente.\n";
     }
 } elseif ($comando === 'down') {
     $rollbackFiles = glob(__DIR__ . '/migrations/*_rollback.sql');
@@ -86,18 +118,50 @@ if ($comando === 'status') {
 
         echo "[-] Revirtiendo migración: {$nombre}...\n";
         $sql = file_get_contents($archivo);
-        if ($db->multi_query($sql)) {
-            do {
-                if ($res = $db->store_result()) {
-                    $res->free();
-                }
-            } while ($db->more_results() && $db->next_result());
-            echo "[OK] Reversión de {$nombre} completada exitosamente.\n";
-        } else {
-            echo "[ERROR] Error al revertir {$nombre}: " . $db->error . "\n";
+        if (!$db->multi_query($sql)) {
+            echo "[ERROR] Error al iniciar la reversión de {$nombre}: " . $db->error . "\n";
             exit(1);
         }
+
+        $fallo = false;
+        $mensajeError = '';
+        do {
+            if ($db->errno) {
+                $fallo = true;
+                $mensajeError = $db->error;
+                break;
+            }
+            if ($res = $db->store_result()) {
+                $res->free();
+            }
+            if (!$db->more_results()) {
+                break;
+            }
+            if (!$db->next_result()) {
+                if ($db->errno) {
+                    $fallo = true;
+                    $mensajeError = $db->error;
+                }
+                break;
+            }
+        } while (true);
+
+        if ($fallo) {
+            echo "[ERROR] Fallo intermedio en la reversión de {$nombre}: {$mensajeError}\n";
+            exit(1);
+        }
+
+        // Eliminar registro de tabla de migraciones
+        $stmt = $db->prepare("DELETE FROM migraciones WHERE migracion = ?");
+        if ($stmt) {
+            $stmt->bind_param('s', $nombre);
+            $stmt->execute();
+            $stmt->close();
+        }
+
+        echo "[OK] Reversión de {$nombre} completada exitosamente.\n";
     }
 } else {
     echo "Comando no reconocido. Uso: php database/migrador.php [status|up|down]\n";
+    exit(1);
 }

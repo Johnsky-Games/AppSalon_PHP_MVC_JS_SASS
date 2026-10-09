@@ -1,7 +1,7 @@
 <h1 class="nombre-pagina">Recuperar Password</h1>
 <p class="descripcion-pagina">Ingresa tu nuevo password a continuación</p>
 
-<?php include_once __DIR__ . '/../templates/alertas.php'; ?>
+<?php include __DIR__ . '/../templates/alertas.php'; ?>
 
 <?php if ($error) {
     return;

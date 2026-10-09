@@ -81,8 +81,8 @@ class APIController
             return;
         }
 
-        // Validar formato estricto de hora (HH:MM o HH:MM:SS)
-        if (!preg_match('/^(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/', $hora)) {
+        // Validar formato estricto de hora (HH:MM únicamente)
+        if (!preg_match('/^(?:[01]\d|2[0-3]):[0-5]\d$/', $hora)) {
             http_response_code(422);
             echo json_encode(['resultado' => false, 'error' => 'Formato de hora inválido. Se requiere HH:MM.']);
             detener_ejecucion(422);
@@ -93,7 +93,7 @@ class APIController
         $horaInt = (int)$partesHora[0];
         $minutosInt = (int)$partesHora[1];
 
-        // Horario de atención: 10:00 a 18:00 horas inclusive (límite superior 18:00:00)
+        // Horario de atención: 10:00 a 18:00 horas inclusive (límite superior 18:00)
         if ($horaInt < 10 || $horaInt > 18 || ($horaInt === 18 && $minutosInt > 0)) {
             http_response_code(422);
             echo json_encode(['resultado' => false, 'error' => 'El horario de atención es de 10:00 a 18:00 horas.']);
@@ -151,7 +151,12 @@ class APIController
             return;
         }
 
-        $db->begin_transaction();
+        if (!$db->begin_transaction()) {
+            http_response_code(500);
+            echo json_encode(['resultado' => false, 'error' => 'No se pudo iniciar la transacción']);
+            detener_ejecucion(500);
+            return;
+        }
 
         try {
             $resultado = $cita->guardar();
@@ -234,8 +239,13 @@ class APIController
                 return;
             }
 
-            $db->begin_transaction();
+            if (!$db->begin_transaction()) {
+                header('Location: ' . ($_SERVER['HTTP_REFERER'] ?? '/admin'));
+                detener_ejecucion(302);
+                return;
+            }
 
+            $eliminadoExitoso = false;
             try {
                 // Eliminar servicios asociados en citasservicios
                 $stmt = $db->prepare("DELETE FROM citasservicios WHERE citaId = ?");
@@ -258,16 +268,15 @@ class APIController
                     throw new \RuntimeException("Fallo al confirmar la transacción");
                 }
 
-                $destino = $_SERVER['HTTP_REFERER'] ?? ($esAdmin ? '/admin' : '/cita');
-                header('Location: ' . $destino);
-                detener_ejecucion(302);
-                return;
+                $eliminadoExitoso = true;
             } catch (\Throwable $e) {
                 $db->rollback();
-                header('Location: ' . ($_SERVER['HTTP_REFERER'] ?? '/admin'));
-                detener_ejecucion(302);
-                return;
             }
+
+            $destino = $_SERVER['HTTP_REFERER'] ?? ($esAdmin ? '/admin' : '/cita');
+            header('Location: ' . $destino);
+            detener_ejecucion(302);
+            return;
         }
     }
 }

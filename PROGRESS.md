@@ -15,8 +15,8 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 
 - **Rama:** `feature/seguridad-y-consistencia-inicial`
 - **Commit Base:** `e816154b96985c2773e4fb418bbbf3e92530cca3`
-- **Commit de Entrega (Revisión 2):** `52578187a3055c6f17199d9e0b175be579925daf`
-- **Estado General:** **Probado** (29 pruebas automatizadas, 86 aserciones, 0 fallos, 0 errores)
+- **Commit de Entrega (Revisión 3):** Pendiente de commit
+- **Estado General:** **Probado** (39 pruebas automatizadas, 155 aserciones, 0 fallos, 0 errores, 0 advertencias)
 
 | Tarea / Control de Seguridad | Estado | Evidencia / Pruebas Asociadas |
 | :--- | :---: | :--- |
@@ -25,6 +25,7 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 | Centralización de Sesiones Seguras (`iniciar_sesion_segura`) | **Probado** | Centralizado en todos los controladores (`CitaController`, `LoginController`, `AdminController`, `ServicioController`, `APIController`) |
 | Logout Seguro por Método POST con Token CSRF | **Probado** | `SecurityIntegrationTest::testLogoutExigePostConCsrfYDestruyeSesion`, formulario en `views/templates/barra.php` y ruta en `public/index.php` |
 | Autenticación e IDOR en Citas (`/api/citas`, `/api/eliminar`) | **Probado** | `ApiSeguridadTest::testVisitanteNoPuedeCrearCitasSinAutenticacion`, `ApiSeguridadTest::testClienteNoPuedeEliminarCitaDeOtroClienteIdor`, `ApiSeguridadTest::testClientePuedeEliminarSuPropiaCita`, `ApiSeguridadTest::testReservaValidaGuardaCitaConUsuarioDeSesion` |
+| Aislamiento Transaccional en Eliminación (`APIController::eliminar`) | **Probado** | `ApiSeguridadTest::testEliminarCitaExitosaNoEjecutaRollbackFalso` (aislamiento de redirección/terminación fuera del bloque try-catch transaccional) |
 | Terminación Unificada con `AppTerminationException` (Sin bypass de pruebas) | **Probado** | `includes/funciones.php`, manejado en `public/index.php` y verificado en suite completa sin `PHPUNIT_RUNNING` |
 | Protección contra Limpieza Destructiva en BD no autorizada | **Probado** | `tests/bootstrap.php` y `validar_base_datos_prueba()`, bloqueando bases que no terminen en `_test` |
 | Consultas Preparadas y Verificación Estricta de Errores SQL | **Probado** | `models/ActiveRecord.php` verifica `execute()` y `affected_rows` en `crear()`, `actualizar()`, `eliminar()`; `SecurityIntegrationTest::testEntradasMaliciosasSeProcesanComoDatosEnConsultasPreparadas` |
@@ -32,9 +33,16 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 | Consumo Atómico de Tokens por Hash, Propósito y Expiración | **Probado** | `Usuario::confirmarCuentaPorToken()`, `Usuario::restablecerPasswordPorToken()`, `testTokenConfirmacionUsoUnicoYRechazoConcurrente`, `testTokenPropositoIncorrectoEsRechazado`, `testTokenSustituidoPorUnoNuevoInvalidaElAnterior`, `testExpiracionEntreLecturaYActualizacionRechazaConsumo` |
 | Validación y Protección CSRF Global (Formularios y Fetch JS) | **Probado** | `CsrfTest` (8 casos de prueba cubriendo nulos, vacíos, arrays, cabeceras, POST y excepción 403) |
 | Rate Limiting Atómico en MySQL con Ventana Temporal y Código 429 | **Probado** | `classes/RateLimiter.php` con `INSERT ... ON DUPLICATE KEY UPDATE` serializado en InnoDB, `SecurityIntegrationTest::testRateLimiterVentanaYBloqueo429` |
+| Rate Limiter: Umbral Exacto Intento por Intento (`intentos >= ?`) | **Probado** | `SecurityIntegrationTest::testRateLimiterUmbralExactoIntentoPorIntento` (bloqueo exacto en intento 5, intentos 1-4 permitidos) |
+| Rate Limiter: Concurrencia Real con Dos Conexiones `mysqli` Independientes | **Probado** | `SecurityIntegrationTest::testRateLimiterConexionesIndependientesConcurrencia` (serialización y bloqueo cruzado verificado) |
+| Rate Limiter: Postura Fail-Secure ante Fallos SQL | **Probado** | `SecurityIntegrationTest::testRateLimiterManejoFalloSqlFailSecure` (retorna bloqueo ante conexión cerrada o fallo) |
+| Supresión de Generación de Tokens bajo Rate Limiting en `/olvide` | **Probado** | `SecurityIntegrationTest::testOlvideConRateLimitBloqueaSinGenerarNiPersistirToken` (detiene flujo antes de token/email ante 429) |
+| Reenvío de Confirmación para Cuentas No Confirmadas (`/reenviar-confirmacion`) | **Probado** | `SecurityIntegrationTest::testReenviarConfirmacionGeneraTokenNuevoSoloParaCuentasNoConfirmadas`, vista `views/auth/reenviar-confirmacion.php` |
 | Transacciones ACID Reales en Citas con Rollback Integral | **Probado** | `SecurityIntegrationTest::testFallaAlGuardarServiciosRevierteCitaCompletaEnFlujoRealApi` (falla provocada con trigger MySQL tras inserción de cita, revirtiendo cita completa) |
-| Validación Servidor: Fechas (mínimo mañana), Horas (10:00-18:00) y Desduplicación | **Probado** | `ApiSeguridadTest::testGuardarRechazaReservaMismoDiaOFechaPasada`, `testGuardarRechazaHorarioInvalidoPasadoLimite`, `testGuardarDesduplicaServiciosRepetidosPoliticaExplicita` |
-| Migraciones Versionadas con Conversión a InnoDB y Rollback | **Probado** | `database/migrations/001_security_hardening.sql` (convierte tablas a InnoDB), `001_security_hardening_rollback.sql`, `database/migrador.php` |
+| Validación Estricta de Tipos Escalares (Anti-Array Injection) | **Probado** | `ApiSeguridadTest::testLoginRechazaCargaNoEscalarTipoInvalido`, constructores y validaciones en `models/Usuario.php` |
+| Validación Servidor: Fechas (futuras sin fin de semana), Horas estrictas `HH:MM` y Desduplicación | **Probado** | `ApiSeguridadTest::testGuardarRechazaReservaMismoDiaOFechaPasada`, `testGuardarRechazaHorarioInvalidoPasadoLimite`, `testGuardarRechazaFormatoHoraConSegundos`, `testGuardarDesduplicaServiciosRepetidosPoliticaExplicita` |
+| Migraciones Versionadas Reproducibles (001 + 002) y Rollback Simétrico | **Probado** | `MigrationTest::testInstalacionDesdeCeroYActualizacionIncrementalGeneranMismoEsquema` (compara esquemas y motores fresh vs upgrade) |
+| Detección de Errores Intermedios y Salida no Cero en Migrador | **Probado** | `MigrationTest::testMigradorFallaConCodigoDistintoDeCeroAnteErrorSqlIntermedio`, `database/migrador.php` y `database/README.md` |
 
 ---
 
