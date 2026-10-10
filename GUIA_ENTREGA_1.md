@@ -118,7 +118,7 @@ docker run -d --name appsalon-test-db --network appsalon-net -p 3307:3306 \
 # 3. Construir la imagen de prueba de PHP 8.2
 docker build -t appsalon-php-test -f Dockerfile.test .
 
-# 4. Ejecutar la suite completa de PHPUnit (49 pruebas, 322 aserciones)
+# 4. Ejecutar la suite completa de PHPUnit (52 pruebas, 360 aserciones)
 docker run --rm --network appsalon-net -v "${PWD}:/app" -w /app \
   appsalon-php-test ./vendor/bin/phpunit --testdox
 ```
@@ -198,24 +198,40 @@ La interacción visual en navegador web que involucra la ejecución de scripts c
 
 ## 8. Scripts de Reproducción Automatizada desde Cero
 
-Para reproducir la instalación, migraciones, pruebas unitarias e integrales en PHPUnit, y la suite funcional HTTP desde un entorno Docker completamente limpio, ejecute:
+Para reproducir la instalación, compilación de assets, migraciones, pruebas unitarias e integrales en PHPUnit (52 pruebas, 360 aserciones) y la suite funcional HTTP de 7 escenarios desde un entorno Docker completamente limpio, se disponen scripts dedicados por plataforma:
 
-- **En entornos Linux / macOS / Bash:**
+- **En entornos Windows (PowerShell) — Ejecutado y Validado Dinámicamente:**
+  ```powershell
+  .\scripts\reproducir_entrega1.ps1
+  ```
+  *Nota de auditoría:* Este script fue ejecutado, verificado dinámicamente y validado en el entorno de desarrollo Windows con Docker Desktop.
+
+- **En entornos Linux / macOS (Bash) — Revisado Estáticamente:**
   ```bash
   chmod +x scripts/reproducir_entrega1.sh
   ./scripts/reproducir_entrega1.sh
   ```
-- **En entornos Windows (PowerShell):**
-  ```powershell
-  .\scripts\reproducir_entrega1.ps1
-  ```
+  *Nota de auditoría:* Este script fue sometido a revisión estática de código para verificar paridad lógica y de comandos con la versión de PowerShell, quedando sujeto a validación dinámica en sistemas Unix/Linux.
 
-### Verificación de Resiliencia, Aislamiento y Preservación de Recursos
-Para verificar que los scripts manejan interrupciones y preservan recursos ajenos:
+---
+
+### Verificación de Resiliencia, Aislamiento y Manejo de Errores de Archivo
+
+El script [tests/verificar_resiliencia_scripts.ps1](file:///tests/verificar_resiliencia_scripts.ps1) ejecuta una batería integral de pruebas sobre los mecanismos de respaldo, restauración y aislamiento de recursos:
+
 ```powershell
 .\tests\verificar_resiliencia_scripts.ps1
 ```
-Este harness comprueba:
-1. **Fallo deliberado en preparación:** Finalización con código de salida no cero, limpieza de recursos temporales creados, restauración de `includes/.env` y preservación de contenedores y redes externas.
-2. **Preservación ante recursos ajenos:** Ejecución exitosa de la suite completa preservando contenedores y redes ajenas en ejecución, restaurando la configuración original en `includes/.env` al finalizar.
+
+#### Escenarios Cubiertos por el Verificador:
+1. **Fallo al crear respaldo inicial:** Comprueba que ante un error de copia de `includes/.env`, la ejecución se detiene de inmediato con salida no cero (`exit 1`), cancelando la preparación antes de alterar cualquier archivo y preservando el `.env` original intacto.
+2. **Fallo controlado en preparación con script real:** Ejecuta `scripts/reproducir_entrega1.ps1 -SimularFalloPreparacion`, verificando que ante un fallo en la fase de bases de datos, el script aborta con código no cero, limpia sus recursos propios, restaura `includes/.env` byte a byte con SHA-256 idéntico y preserva contenedores y redes ajenas en ejecución.
+3. **Configuración previa con credenciales distintas y recursos ajenos:** Demuestra que con un `includes/.env` previo apuntando a servidores ficticios/producción, la reproducción real se ejecuta en aislamiento absoluto sobre contenedores y bases propias (`_test`, `_func_test`), finaliza con código 0, restaura el `.env` previo byte a byte y preserva los recursos ajenos activos.
+4. **Fallo en restauración y preservación estricta de respaldos:** Ejecuta `scripts/reproducir_entrega1.ps1 -SimularFalloPreparacion -SimularFalloRestauracion`, validando que si la restauración de `.env` falla, el script devuelve salida no cero, **preserva intacto el nuevo archivo de respaldo `.env.bak.<RUN_ID>` en disco** para recuperación manual, respeta sin alterar ni eliminar ningún respaldo preexistente (`.env.bak.*`) y mantiene vivos los recursos ajenos.
+
+#### Garantía de Restauración ante Errores Terminantes en Limpieza Docker:
+El bloque `finally` de `tests/verificar_resiliencia_scripts.ps1` implementa una arquitectura de seguridad con `try/finally` interno:
+- La función `Cleanup-HarnessResources` trata y aísla cada contenedor y red en bloques `try/catch` per-recurso (un fallo en un recurso no impide intentar limpiar los demás).
+- Si la limpieza Docker arroja un error terminante (simulable mediante `-SimularFalloLimpiezaHarness` o `APPSALON_HARNESS_SIMULAR_FALLO=limpieza`), el bloque `finally` interno garantiza la restauración y comprobación SHA-256 de `includes/.env` de forma incondicional.
+- Ante fallo en la limpieza, el recurso fallido se registra explícitamente (`[ERROR EN LIMPIEZA DOCKER]`), el código de salida devuelto es no cero (1) y los respaldos preexistentes `.env.bak.*` permanecen intactos en disco.
 

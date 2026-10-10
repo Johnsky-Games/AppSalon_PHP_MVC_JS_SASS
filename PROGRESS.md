@@ -3,8 +3,8 @@
 Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerdo con la metodología de entregas auditables por **ChatGPT** (revisión estática de código) y ejecución/verificación por **Antigravity** (desarrollo y pruebas dinámicas automatizadas), sujeto a la aprobación final del **Propietario**.
 
 > **Roles y Criterios:**
-> - **Desarrollo y Pruebas Automatizadas (Antigravity):** Implementación de código y ejecución de la suite completa de pruebas unitarias e integrales (49 pruebas, 322 aserciones en PHPUnit).
-> - **Revisión Estática Externa (ChatGPT):** Auditoría independiente de código, patrones de seguridad, contratos transaccionales y cobertura de casos límite.
+> - **Desarrollo y Pruebas Automatizadas (Antigravity):** Implementación de código y ejecución de la suite completa de pruebas unitarias e integrales (52 pruebas, 360 aserciones en PHPUnit), 7 escenarios funcionales HTTP de extremo a extremo, y ejecución dinámica en Windows/PowerShell de scripts de reproducción y resiliencia (`scripts/reproducir_entrega1.ps1` y `tests/verificar_resiliencia_scripts.ps1`).
+> - **Revisión Estática Externa (ChatGPT):** Auditoría independiente de código de aplicación, contratos transaccionales, y revisión estática del script Bash (`scripts/reproducir_entrega1.sh`).
 > - **Aprobación Final y Despliegue (Propietario):** Decisión formal sobre fusiones hacia `main` y despliegues en producción.
 
 ---
@@ -13,10 +13,12 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 
 - **Rama:** `feature/seguridad-y-consistencia-inicial`
 - **Commit Base:** `e816154b96985c2773e4fb418bbbf3e92530cca3`
-- **Revisión Estática de Código (ChatGPT):** Cerrada y aprobada para esta ronda sobre commit `da7aa87`.
-- **Pruebas Automatizadas Ejecutadas (Antigravity):** **Probado** (52 pruebas automatizadas, 360 aserciones, 0 fallos, 0 errores, 0 advertencias en entorno Docker PHP 8.2 + MySQL 8.0, incluyendo `FunctionalRunnerSecurityTest` que garantiza rechazo estricto de bases no autorizadas antes de modificar datos).
-- **Verificación Funcional HTTP (Antigravity):** **Ejecutado** (7 de 7 escenarios probados de extremo a extremo contra servidor real `http://localhost:3000`, base de datos aislada `appsalon_func_test`, tokens sanitizados y receptor SMTP mock).
-- **Comprobación Funcional en Navegador con JavaScript (UI Cliente):** **Pendiente** (Interacción DOM interactiva con [src/js/app.js](file:///src/js/app.js): navegación de pestañas de cita, datepicker en navegador y alertas dinámicas en cliente, pendiente de verificación manual o suite E2E de navegador).
+- **Commit Final de Entrega 1:** `2e31ac2b489c411983ccb255888509f15e4e1c00`
+- **Revisión Estática de Código (ChatGPT):** Cerrada y aprobada (código de aplicación aprobado en `da7aa87`; corrección final de resiliencia aceptada en `2e31ac2`).
+- **Pruebas Automatizadas Ejecutadas Dinámicamente (Antigravity):** **Probado** (52 pruebas automatizadas, 360 aserciones, 0 fallos, 0 errores, 0 advertencias en entorno Docker PHP 8.2 + MySQL 8.0, incluyendo `FunctionalRunnerSecurityTest` que garantiza rechazo estricto de bases no autorizadas antes de modificar datos).
+- **Verificación Funcional HTTP (Antigravity):** **Ejecutado Dinámicamente** (7 de 7 escenarios probados de extremo a extremo contra servidor real `http://localhost:3000`, base de datos aislada `appsalon_func_test`, tokens sanitizados y receptor SMTP mock).
+- **Scripts de Reproducción:** PowerShell ejecutado y verificado dinámicamente; Bash revisado estáticamente.
+- **Comprobación Funcional en Navegador con JavaScript (UI Cliente):** **Pendiente Real del Plan Original** (Interacción DOM interactiva con [src/js/app.js](file:///src/js/app.js): navegación de pestañas de cita, datepicker en navegador y alertas dinámicas en cliente, pendiente de verificación manual o suite E2E de navegador).
 - **Documentación Completa:** Disponible en [GUIA_ENTREGA_1.md](file:///GUIA_ENTREGA_1.md) y [database/README.md](file:///database/README.md).
 - **Estado General de Entrega 1:** **Listo para Revisión Final del Propietario** (Pendiente de aprobación previa para merge a `main`).
 
