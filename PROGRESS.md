@@ -12,8 +12,9 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 ## Fase 6A: Notificaciones de Citas
 
 - **Rama:** `feature/fase-6a-notificaciones`
+- **Commit de Código Auditado (Ronda 2):** `4fe475c02cc3dcd38a79ad7ec4ce5ef48f9e58ec` (Ronda 1: `0aa1e11d9328aa5558d43d50b5483a492850ce7f`)
 - **Commit Base (Fase 5 aprobada):** `1f63cd88f3fd6cab1dd958a6b8c82371b5f1d7b0` (`1fb3475fe2eec5ed4dc2f6afd22bc6b1bcaabb27` + registro de auditoría Fase 5)
-- **Estado General de Fase 6A:** **Implementada y Verificada — Lista para Auditoría**
+- **Estado General de Fase 6A:** **Completada y Auditada (`APROBADO` en `docs/AUDITORIA.md`)**
 
 ### 1. Diseño Arquitectónico, Migración Incremental e Idempotencia Transaccional
 
@@ -77,7 +78,7 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
      schtasks /Create /SC MINUTE /MO 15 /TN "AppSalon_ProcesarNotificaciones" /TR "docker exec appsalon-web php /var/www/html/scripts/procesar_notificaciones.php --json" /F
      ```
 
-### 2. Validación Ejecutada en Fase 6A (Desarrollador — Ronda 2 tras Correcciones de Auditoría Ronda 1)
+### 2. Validación Ejecutada en Fase 6A (Desarrollador + Auditor Independiente — Ronda 2)
 
 - **Correcciones aplicadas en Ronda 2 (sobre `0aa1e11d9328aa5558d43d50b5483a492850ce7f`):**
   1. **Orden determinista en `CitaRepository::findAdminCitasByFecha(string $fecha)` (`repositories/CitaRepository.php`):** Se añadió `ORDER BY citas.id ASC, citasservicios.id ASC` al final de la consulta SQL para garantizar que el orden de las citas y de sus servicios asociados (`citasservicios`) sea siempre determinista incluso cuando un servicio haya sido eliminado del catálogo (`citasservicios.servicioId = NULL` por `ON DELETE SET NULL`), preservando tanto la aserción de `ReservaConcurrenciaIntegrationTest::testInmutabilidadHistoricaAnteCambioOEliminacionPosteriorDelServicioEnCatalogo` como la agrupación secuencial por `$idCita !== $cita->id` en `views/admin/index.php`.
@@ -86,9 +87,12 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 
 #### A. Suite Completa PHPUnit (Ejecutada en Docker PHP 8.2.34 + MySQL 8.0 Aislado)
 - **Versión efectiva:** `PHPUnit 10.5.66 by Sebastian Bergmann and contributors.` (`Runtime: PHP 8.2.34`, `Configuration: /app/phpunit.xml`).
-- **Comando ejecutado:**
-  `docker run --rm --name appsalon-web-phpunit-f6a-r2 --network appsalon-net-phpunit-f6a-r2 -v "${PWD}:/app" -w /app -e APP_ENV=testing -e DB_HOST=appsalon-db-phpunit-f6a-r2 -e DB_PORT=3306 -e DB_USER=root -e DB_PASS=root -e DB_NAME=appsalon_f6a_test appsalon-php-test php -d variables_order=EGPCS vendor/bin/phpunit --colors=never`
-- **Resultado:** `OK (152 tests, 1714 assertions)` (`Time: 00:26.485, Memory: 16.00 MB`) — Código de salida `0`.
+- **Ejecución del Desarrollador (`comprehensive_project_audit_roadmap`):**
+  - Comando: `docker run --rm --name appsalon-web-phpunit-f6a-r2 --network appsalon-net-phpunit-f6a-r2 -v "${PWD}:/app" -w /app -e APP_ENV=testing -e DB_HOST=appsalon-db-phpunit-f6a-r2 -e DB_PORT=3306 -e DB_USER=root -e DB_PASS=root -e DB_NAME=appsalon_f6a_test appsalon-php-test php -d variables_order=EGPCS vendor/bin/phpunit --colors=never`
+  - Resultado: `OK (152 tests, 1714 assertions)` (`Time: 00:26.485, Memory: 16.00 MB`) — Código de salida `0`.
+- **Ejecución Independiente del Auditor (`eaf68f52-b7bb-4e2f-80cf-485ff299e602` en `auditing_fase_4b_reservas`):**
+  - Comando: `docker run --rm --network appsalon-audit6a-r2-net -v "${PWD}:/app" -w /app -e DB_HOST=appsalon-audit6a-r2-db -e DB_PORT=3306 -e DB_USER=root -e DB_PASS=root -e DB_NAME=appsalon_audit_test appsalon-php-test php -d variables_order=EGPCS vendor/bin/phpunit --colors=never`
+  - Resultado: `OK (152 tests, 1714 assertions)` (`Time: 00:26.652, Memory: 14.00 MB`) — Código de salida `0`.
 - **Cobertura añadida en Fase 6A:**
   - `Tests\Integration\MigrationTest`: actualización a 5 migraciones e incorporación de `testMigracion005NotificacionesCitasUpIdempotenciaSetNullYRollback()`, comprobando la creación de `notificaciones_citas`, su índice único `uq_notificaciones_clave_idempotencia`, el comportamiento `ON DELETE SET NULL` al borrar una cita conservando `cita_referencia_id` y el rollback limpio.
   - `Tests\Unit\NotificacionCitaServiceTest`: validación de `Email::resolverAppUrl()` (bloqueo de `javascript:`, `data:`, CRLF, credenciales y comillas con fallback seguro), `Email::resolverRemitente()` y prevención de *header injection*, entidad `NotificacionCita`, escapado HTML (`XSS`) e inclusión de detalles completos en `construirContenidoHtml()`, idempotencia unitaria, cálculo de ventana de recordatorios en `America/Guayaquil` y *backoff* exponencial.
@@ -101,6 +105,7 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 #### B. Verificación E2E en Navegador con JavaScript Habilitado (`tests/verificar_navegador.ps1` + `tests/browser_e2e_test.js` + `tests/browser_test_report.json`)
 - **Comando ejecutado:** `powershell -ExecutionPolicy Bypass -File tests/verificar_navegador.ps1`
 - **Resultado Desarrollador (`RUN_ID: 2ecae295c89d4fc789f2491b65cd3ee5`):** 17 comprobaciones E2E superadas (`ADMIN-01` a `ADMIN-04`, `PROF-01`, `PROF-02`, `PRE-01`, `DISP-01`, `REC-01` a `REC-04`, `RES-01`, `ADMIN-05`, `AUTH-01`, `NOTIF-01`, `REC-05`) con `0` errores de consola, `0` peticiones fallidas, verificación en buzón SMTP mock (`tests/mailbox.json`) de los correos de confirmación y cancelación de citas (`NOTIF-01`) y verificación en MySQL de `notificaciones_citas` (`3` confirmaciones enviadas y `2` cancelaciones enviadas con historial preservado) — Código de salida `0`.
+- **Resultado Auditor Independiente (`RUN_ID: 853769e6acbd48fcbb266d5713b9b725` en `auditing_fase_4b_reservas`):** 17 comprobaciones E2E superadas (`[OK]`), `0` errores de consola, `0` peticiones fallidas y verificación en MySQL (`3` confirmaciones y `2` cancelaciones) — Código de salida `0`.
 
 ---
 

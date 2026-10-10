@@ -229,3 +229,114 @@ Tras proporcionar al auditor el contexto Docker del proyecto, el subagente audit
 - **Pendientes bloqueantes en Fase 5:** Ninguno. Los 11 criterios de alcance de la Fase 5 (interfaz reactiva de reservas por profesional, disponibilidad dinámica, resumen completo, manejo de conflictos `409`, prevención de envíos duplicados, consulta y cancelación autorizada en `#mis-citas`, panel administrativo con soporte de citas históricas `NULL`, accesibilidad móvil/teclado, zona horaria `America/Guayaquil` y política anti-bypass del endpoint clásico) están implementados y verificados.
 - **Veredicto Final Fase 5 (`1fb3475fe2eec5ed4dc2f6afd22bc6b1bcaabb27`):** **`APROBADO`**.
 - **Siguiente paso autorizado:** Creación de la rama `feature/fase-6a-notificaciones` desde el commit aprobado de Fase 5 para implementar la Fase 6A (Notificaciones de Confirmación, Cancelación y Recordatorios Idempotentes).
+
+---
+
+## Auditoría de Fase 6A: Notificaciones de Citas
+
+### 1. Metadatos de la Revisión
+
+| Campo | Detalle |
+| :--- | :--- |
+| **Fase Auditada** | Fase 6A — Notificaciones de Citas (`confirmacion`, `cancelacion`, `recordatorio`) |
+| **Rama Evaluada** | `feature/fase-6a-notificaciones` |
+| **SHA Auditado (Ronda 1)** | `0aa1e11d9328aa5558d43d50b5483a492850ce7f` (`CORRECCIONES NECESARIAS`) |
+| **SHA Auditado y Aprobado (Ronda 2)** | `4fe475c02cc3dcd38a79ad7ec4ce5ef48f9e58ec` (`APROBADO`) |
+| **SHA Base (Fase 5 aprobada)** | `1f63cd88f3fd6cab1dd958a6b8c82371b5f1d7b0` (sobre código `1fb3475fe2eec5ed4dc2f6afd22bc6b1bcaabb27`) |
+| **Worktree del Auditor** | `C:\Users\jonat\.gemini\antigravity\worktrees\AppSalon_PHP_MVC_JS_SASS\auditing_fase_4b_reservas` |
+| **Subagente Auditor** | `eaf68f52-b7bb-4e2f-80cf-485ff299e602` |
+| **Fecha de Auditoría** | `2026-10-10` |
+| **Stash preservado intacto** | `stash@{0}: On auditing_fase_4b_reservas: temp stash for checkout` |
+| **Veredicto Final (Ronda 2)** | **`APROBADO`** |
+
+---
+
+### 2. Trazabilidad de Rondas de Auditoría (Ronda 1 $\rightarrow$ Ronda 2)
+
+1. **Ronda 1 (`0aa1e11d9328aa5558d43d50b5483a492850ce7f`) — Veredicto: `CORRECCIONES NECESARIAS`:**
+   - En la ejecución independiente de PHPUnit en el contenedor aislado `appsalon-audit6a-db` / `appsalon-audit6a-net`, se detectó `1` fallo en `Tests\Integration\ReservaConcurrenciaIntegrationTest::testInmutabilidadHistoricaAnteCambioOEliminacionPosteriorDelServicioEnCatalogo` (`ReservaConcurrenciaIntegrationTest.php:421`, esperado `'Manicura Tradicional'`, recibido `'Pedicura Spa'`).
+   - **Causa raíz identificada por el Auditor:**
+     1. `CitaRepository::findAdminCitasByFecha(string $fecha)` (`repositories/CitaRepository.php`, líneas 1238–1252) carecía de cláusula `ORDER BY`. Al eliminar el segundo servicio del catálogo (`citasservicios.servicioId = NULL` por `ON DELETE SET NULL`), el optimizador de MySQL 8.0 recorría el índice `servicioId` (`NULL` primero) tras las consultas adicionales de `NotificacionCitaRepository`, devolviendo los servicios en orden inverso y exponiendo además a `views/admin/index.php` al riesgo de filas no contiguas por `citas.id`.
+     2. Las suites de integración previas que limpiaban `citas` en `setUp()` no limpiaban `notificaciones_citas`, dejando registros huérfanos con `cita_id = NULL` y `clave_idempotencia` ocupada entre pruebas.
+     3. `PROGRESS.md` (líneas 27 y 57) citaba `cita:42:recordatorio:24h` / `cita:{id}:recordatorio:{horas}h` en lugar del formato real `cita:{id}:recordatorio:{fecha}_{hora}` generado por `NotificacionCitaService::generarClaveRecordatorio()`.
+2. **Ronda 2 (`4fe475c02cc3dcd38a79ad7ec4ce5ef48f9e58ec`) — Verificación de Correcciones y Veredicto: `APROBADO`:**
+   - Se inspeccionó `git diff 0aa1e11d9328aa5558d43d50b5483a492850ce7f..4fe475c02cc3dcd38a79ad7ec4ce5ef48f9e58ec` comprobando que los 3 hallazgos fueron corregidos de forma limpia:
+     1. `repositories/CitaRepository.php` (línea 1252): incorpora `$consulta .= " ORDER BY citas.id ASC, citasservicios.id ASC ";` en `findAdminCitasByFecha()`.
+     2. Limpieza de `notificaciones_citas` añadida en `setUp()` de `ApiSeguridadTest`, `CitaModuloIntegrationTest`, `DisponibilidadIntegrationTest`, `Fase5InterfazReservasIntegrationTest`, `ProfesionalAgendaIntegrationTest`, `ReservaConcurrenciaIntegrationTest`, `SecurityIntegrationTest`, `ServicioModuloIntegrationTest` y `UsuarioAuthIntegrationTest`.
+     3. `PROGRESS.md` (líneas 27 y 57): alineado con `cita:42:recordatorio:2026-11-16_11:30` y `cita:{id}:recordatorio:{fecha}_{hora}`.
+
+---
+
+### 3. Revisión Estática Exhaustiva del Alcance de Fase 6A (`4fe475c02cc3dcd38a79ad7ec4ce5ef48f9e58ec`)
+
+| # | Criterio del Alcance (Fase 6A) | Estado | Evidencia Técnica en el Código Auditado (`4fe475c02cc3dcd38a79ad7ec4ce5ef48f9e58ec`) |
+| :---: | :--- | :---: | :--- |
+| **1** | **Migración incremental `005_notificaciones_citas.sql` y su rollback `005_notificaciones_citas_rollback.sql`** | **CUMPLE** | `database/migrations/005_notificaciones_citas.sql` (líneas 10–39) crea `notificaciones_citas` (`ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`) con `clave_idempotencia VARCHAR(120) NOT NULL` (`UNIQUE KEY uq_notificaciones_clave_idempotencia`), `cita_id INT NULL DEFAULT NULL` con `FOREIGN KEY (cita_id) REFERENCES citas (id) ON DELETE SET NULL ON UPDATE CASCADE`, `cita_referencia_id INT NOT NULL` para conservar el ID original de la cita aunque sea eliminada de `citas`, `usuario_id INT NULL DEFAULT NULL` (`ON DELETE SET NULL`), e índices `idx_notificaciones_cita`, `idx_notificaciones_cita_ref`, `idx_notificaciones_usuario` e `idx_notificaciones_estado_reintento (estado, proximo_intento_at)`. `005_notificaciones_citas_rollback.sql` revierte limpiamente la tabla y el registro en `migraciones`. |
+| **2** | **Correos de confirmación y cancelación de citas con información completa del servicio, profesional, fecha, hora y duración** | **CUMPLE** | `NotificacionCitaRepository::obtenerSnapshotCompletoCita()` (líneas 85–221) carga mediante `LEFT OUTER JOIN` el cliente, profesional, intervalo `[hora_inicio, hora_fin)`, `duracion_total_minutos` y los servicios con snapshot histórico (`COALESCE(cs.nombre_servicio, s.nombre)`, `COALESCE(cs.precio_servicio, s.precio)`, `COALESCE(cs.duracion_minutos, s.duracion_minutos)`). `NotificacionCitaService::construirContenidoHtml()` (líneas 564–707) incluye cita `#id`, cliente, fecha, horario, profesional (o indicación de cita sin profesional asignado), lista de servicios con duración y precio, y total formateado. En `CitaService::eliminar()` (líneas 743–765), se captura `$snapshotCancelacion` antes de `eliminarCitaAtomica($idCita)` y tras el borrado exitoso se envía la notificación de cancelación con `cita_id = NULL` y `cita_referencia_id = $idCita`. |
+| **3** | **Aislamiento de fallos de correo (post-commit): si el envío SMTP falla, la reserva o cancelación confirmada en base de datos nunca debe revertirse** | **CUMPLE** | En `CitaService::reservar()` (líneas 460–464), `CitaService::reservarConProfesional()` (líneas 632–636) y `CitaService::eliminar()` (líneas 759–765), el despacho se ejecuta exclusivamente después del `COMMIT` de la transacción de base de datos, envuelto en `try / catch (\Throwable $e)` (`despacharNotificacionConfirmacionSegura` / `despacharNotificacionCancelacionSegura`, líneas 775–793). Dentro de `NotificacionCitaService::registrarYDespachar()` (líneas 505–547) y `Email::despacharNotificacionCita()` (líneas 353–445), cualquier excepción o retorno `false` del transporte SMTP registra la notificación en `estado = 'fallido'`, guarda `ultimo_error` truncado a 255 caracteres y calcula `proximo_intento_at` sin propagar error HTTP ni revertir la reserva o cancelación. |
+| **4** | **Envíos idempotentes y reintentos seguros sin duplicar correos al cliente** | **CUMPLE** | `NotificacionCitaRepository::registrarOAdquirirParaEnvio()` (líneas 344–545) ejecuta una transacción corta con `SELECT ... WHERE clave_idempotencia = ? LIMIT 1 FOR UPDATE`. Si `estado === 'enviado'`, devuelve `debe_enviar = false, motivo = 'ya_enviado'`; si `estado === 'enviando'`, omite por envío en curso; si agotó `intentos >= max_intentos` o su `proximo_intento_at > $ahoraUtc` (salvo `$forzarReintento = true`), omite el envío. En caso elegible, pasa a `estado = 'enviando'` e incrementa `intentos` antes de despachar por SMTP. `adquirirCandidataParaReintento()` (líneas 556–670) revalida la fila con `FOR UPDATE`, reconstruye el mensaje desde `payload_json` y, si es un `recordatorio` cuyo `cita_id` quedó `NULL` (cita cancelada antes del reintento), la descarta marcándola `fallido` con `intentos = max_intentos` (`motivo = 'cita_cancelada'`). |
+| **5** | **Recordatorios configurables en zona horaria `America/Guayaquil` mediante una tarea programada documentada** | **CUMPLE** | `NotificacionCitaService::TIMEZONE = 'America/Guayaquil'` (línea 19). `resolverHorasAnticipacionRecordatorio()` (líneas 110–132) resuelve el horizonte por argumento explícito, configuración de instancia, `NOTIFICACIONES_RECORDATORIO_HORAS` o valor por defecto `24` (`1..720`). `NotificacionCitaRepository::findCitaIdsEnVentanaRecordatorio()` (líneas 235–325) filtra citas futuras en `(ahora, ahora + N horas]` en `America/Guayaquil`. `scripts/procesar_notificaciones.php` (líneas 1–160) exige `PHP_SAPI === 'cli'`, soporta `--recordatorios`, `--reintentos`, `--horas`, `--limite`, `--ahora`, `--json` y documenta su programación en Cron / Task Scheduler. |
+| **6** | **Configuración segura de enlaces (`APP_URL`), encabezados (`EMAIL_FROM`, `EMAIL_FROM_NAME`) y escapado HTML (`htmlspecialchars`)** | **CUMPLE** | `Email::resolverAppUrl()` (líneas 60–102) valida `FILTER_VALIDATE_URL`, exige esquema `http`/`https`, rechaza credenciales embebidas, caracteres de control y comillas/ángulos (`'`, `"`, `<`, `>`), cayendo a `http://localhost:3000` ante valores inseguros (`javascript:`, `data:`, CRLF). `Email::resolverRemitente()` (líneas 109–127) y `Email::sanearTextoCabecera()` (líneas 133–144) validan `EMAIL_FROM` y eliminan `\r`, `\n` y caracteres de control. `NotificacionCitaService::construirContenidoHtml()` (líneas 564–707) escapa todos los campos dinámicos mediante `self::escapar()` (`htmlspecialchars($valor, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')`, líneas 758–761). |
+| **7** | **Pruebas automatizadas con servidor de correo simulado o transporte sustituible y sin regresiones en suites previas** | **CUMPLE** | `Tests\Unit\NotificacionCitaServiceTest` (5 pruebas), `Tests\Integration\Fase6ANotificacionesIntegrationTest` (3 pruebas integrales de ciclo completo, aislamiento SMTP + reintentos e idempotencia, y recordatorios + CLI), `Tests\Integration\MigrationTest::testMigracion005NotificacionesCitasUpIdempotenciaSetNullYRollback` y `NOTIF-01` en `tests/browser_e2e_test.js` con `tests/smtp_mock_server.php`. Suite completa: `152 tests, 1714 assertions`, `0` fallos. |
+| **8** | **Respeto de la arquitectura por capas y uso exclusivo de sentencias preparadas** | **CUMPLE** | `Model\NotificacionCita` es una entidad pura que no extiende `ActiveRecord`. `NotificacionCitaRepository` utiliza exclusivamente sentencias preparadas (`prepare` + `bind_param` + `execute`) y lanza `PersistenceException`. `NotificacionCitaService` no accede a `$_SESSION`, `$_POST`, `$_GET` ni cabeceras HTTP. |
+
+---
+
+### 4. Ejecución Independiente de Suites de Pruebas en Entorno Aislado del Auditor (Ronda 2 — `4fe475c02cc3dcd38a79ad7ec4ce5ef48f9e58ec`)
+
+#### A. Suite Completa PHPUnit (Contenedor Aislado del Auditor `appsalon-audit6a-r2-db` / `appsalon-audit6a-r2-net`)
+
+- **Entorno creado por el auditor:**
+  - Red Docker: `appsalon-audit6a-r2-net`
+  - Contenedor MySQL 8.0: `appsalon-audit6a-r2-db` (base de datos `appsalon_audit_test`, inicializada con `database/schema_base.sql` + `php database/migrador.php up`, aplicando `001` a `005`).
+- **Comando ejecutado:**
+  ```powershell
+  docker run --rm --network appsalon-audit6a-r2-net -v "${PWD}:/app" -w /app -e DB_HOST=appsalon-audit6a-r2-db -e DB_PORT=3306 -e DB_USER=root -e DB_PASS=root -e DB_NAME=appsalon_audit_test appsalon-php-test php -d variables_order=EGPCS vendor/bin/phpunit --colors=never
+  ```
+- **Resultado obtenido:**
+  - `PHPUnit 10.5.66 by Sebastian Bergmann and contributors.` (`Runtime: PHP 8.2.34`)
+  - **`OK (152 tests, 1714 assertions)`** (`Time: 00:26.652, Memory: 14.00 MB`)
+  - **Código de salida:** `0`
+- **Limpieza posterior verificada:** `docker rm -f appsalon-audit6a-r2-db` y `docker network rm appsalon-audit6a-r2-net` ejecutados al finalizar.
+
+#### B. Suite E2E en Navegador Real Headless Chrome (`tests/verificar_navegador.ps1`)
+
+- **Comando ejecutado en worktree del auditor:**
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File tests/verificar_navegador.ps1
+  ```
+- **Resultado obtenido:**
+  - **Identificador de ejecución independiente (`RUN_ID`):** `853769e6acbd48fcbb266d5713b9b725`
+  - **17 comprobaciones E2E superadas (`[OK]`):**
+    - `ADMIN-01` a `ADMIN-04`: CRUD administrativo de servicios con duración.
+    - `PROF-01` y `PROF-02`: Gestión de profesionales (`Sofía Andrade` y `Valeria Castro`), múltiples franjas horarias, descansos, bloqueos y activación/desactivación.
+    - `PRE-01`: Login interactivo de cliente y redirección a `/cita`.
+    - `DISP-01`: Consulta autenticada en `GET /api/disponibilidad` (`200 ok`, `422 servicios_incompatibles`, `200 empty`).
+    - `REC-01` a `REC-04`: Selección de servicios, filtrado de profesionales compatibles, carga dinámica de intervalos, invalidación reactiva, resumen completo y reserva `POST /api/citas` con confirmación SweetAlert2 (`Cita Creada`).
+    - `RES-01`: Reserva con profesional, descuento de ocupación, rechazo `409` por solapamiento y cancelación interactiva desde `#mis-citas`.
+    - `ADMIN-05`: Consulta administrativa en `/admin?fecha=2026-10-12`, eliminación en `/api/eliminar` y liberación de horario.
+    - `AUTH-01`: Ciclo de registro, rechazo de login no confirmado, `/reenviar-confirmacion` y `/olvide`.
+    - `NOTIF-01`: `8 correos capturados en buzón SMTP mock; confirmación de cita #3 (Valeria Castro, 11:30 - 13:00) y cancelaciones verificadas.`
+    - `REC-05`: `Errores consola: 0, Solicitudes fallidas: 0`.
+  - **Persistencia verificada en MySQL (`appsalon_browser_test`):** Cita ID `3`, fecha `2026-10-12`, `profesionalId = 2`, `hora_inicio = 11:30:00`, `hora_fin = 13:00:00`, `duracion_total_minutos = 90`, `2` servicios asociados; y en `notificaciones_citas`: `3` confirmaciones enviadas y `2` cancelaciones enviadas con historial preservado (`cita_id IS NULL` y `cita_referencia_id > 0`).
+  - **Código de salida:** `0`.
+  - **Limpieza posterior:** Contenedores efímeros y `includes/.env` temporal eliminados automáticamente; `git checkout -- tests/browser_test_report.json` ejecutado para mantener intacto el árbol del SHA auditado.
+
+#### C. Comparativa entre Reporte del Desarrollador y Verificación del Auditor (Ronda 2)
+
+| Aspecto | Reportado por Desarrollador (`comprehensive_project_audit_roadmap`) | Verificado Independientemente por Auditor (`auditing_fase_4b_reservas`) | Coincidencia |
+| :--- | :--- | :--- | :---: |
+| **SHA evaluado (Ronda 2)** | `4fe475c02cc3dcd38a79ad7ec4ce5ef48f9e58ec` | `4fe475c02cc3dcd38a79ad7ec4ce5ef48f9e58ec` | Sí |
+| **Versión PHPUnit / PHP** | PHPUnit `10.5.66` / PHP `8.2.34` | PHPUnit `10.5.66` / PHP `8.2.34` | Sí |
+| **Resultado PHPUnit** | `OK (152 tests, 1714 assertions)` (Exit `0`) | `OK (152 tests, 1714 assertions)` (Exit `0`) | Exacta |
+| **Resultado Suite Navegador E2E** | 17 checks `[OK]` (`RUN_ID: 2ecae295c89d4fc789f2491b65cd3ee5`), `0` errores consola, `0` fallos red (Exit `0`) | 17 checks `[OK]` (`RUN_ID: 853769e6acbd48fcbb266d5713b9b725`), `0` errores consola, `0` fallos red (Exit `0`) | Exacta |
+| **Aislamiento respecto a app local** | `appsalon-web`, `appsalon-db` y `appsalon_mvc` intactos | `appsalon-web`, `appsalon-db`, `appsalon_mvc` y `stash@{0}` intactos | Sí |
+
+---
+
+### 5. Conclusión y Veredicto de Cierre de Fase 6A
+
+- **Pendientes bloqueantes en Fase 6A:** Ninguno. Los 3 hallazgos detectados en la Ronda 1 (`0aa1e11d9328aa5558d43d50b5483a492850ce7f`) fueron resueltos en `4fe475c02cc3dcd38a79ad7ec4ce5ef48f9e58ec`, y los 8 criterios de alcance de la Fase 6A (migración `005_notificaciones_citas` + rollback con `ON DELETE SET NULL` y `cita_referencia_id`, correos de confirmación y cancelación completos, aislamiento de fallos SMTP post-commit, idempotencia con `FOR UPDATE` y cola de reintentos con descarte de recordatorios cancelados, recordatorios configurables en `America/Guayaquil` con script CLI documentado, endurecimiento de `APP_URL`/cabeceras/HTML, pruebas automatizadas sin regresiones y arquitectura por capas con sentencias preparadas) están implementados y verificados.
+- **Veredicto Final Fase 6A (`4fe475c02cc3dcd38a79ad7ec4ce5ef48f9e58ec`):** **`APROBADO`**.
+- **Siguiente paso autorizado:** Inicio de la Fase 6B (`feature/fase-6b-reportes` — Reportes Administrativos) a partir del commit aprobado de la Fase 6A.
+
