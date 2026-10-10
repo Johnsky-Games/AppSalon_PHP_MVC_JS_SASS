@@ -90,8 +90,13 @@ function Cleanup-Resources {
             Write-Host " -> Eliminando includes/.env temporal generado..." -ForegroundColor Yellow
             try {
                 Remove-Item -Path $EnvFile -Force -ErrorAction Stop
+                if (Test-Path $EnvFile) {
+                    throw "El archivo temporal $($EnvFile) permanece en disco tras la eliminacion."
+                }
             } catch {
-                Write-Host "[AVISO] No se pudo eliminar el archivo temporal $($EnvFile): $($_.Exception.Message)" -ForegroundColor Yellow
+                Write-Host "[ERROR CRITICO] No se pudo eliminar el archivo temporal $($EnvFile): $($_.Exception.Message)" -ForegroundColor Red
+                $script:scriptSuccess = $false
+                if ($script:scriptExitCode -eq 0) { $script:scriptExitCode = 1 }
             }
         }
     }

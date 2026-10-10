@@ -95,7 +95,10 @@ cleanup() {
     else
         if [ -f "${ENV_FILE}" ]; then
             echo " -> Eliminando includes/.env temporal generado..."
-            rm -f "${ENV_FILE}"
+            rm -f "${ENV_FILE}" || {
+                echo "[ERROR CRÍTICO] No se pudo eliminar el archivo temporal ${ENV_FILE}." >&2
+                exit 1
+            }
         fi
     fi
 }
