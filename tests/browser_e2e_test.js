@@ -1192,6 +1192,41 @@ async function runBrowserTests() {
             `Registro redirigió a /mensaje; login sin confirmar rechazado con mensaje unificado; /reenviar-confirmacion y /olvide respondieron sin enumeración.`);
 
         // ------------------------------------------------------------------
+        // BLOQUE FASE 6A (NOTIF-01): Verificación de correos de confirmación y cancelación en buzón SMTP mock
+        // ------------------------------------------------------------------
+        console.log('\n>>> [FASE 6A - NOTIFICACIONES] Verificación de correos de confirmación y cancelación de citas en buzón SMTP mock...');
+
+        const mailboxPath = path.resolve(__dirname, 'mailbox.json');
+        if (!fs.existsSync(mailboxPath)) {
+            throw new Error(`No se encontró el archivo de buzón SMTP mock en ${mailboxPath}`);
+        }
+        const correosCapturados = JSON.parse(fs.readFileSync(mailboxPath, 'utf-8'));
+        if (!Array.isArray(correosCapturados) || correosCapturados.length < 5) {
+            throw new Error(`Se esperaban al menos 5 correos en el buzón SMTP mock (confirmaciones, cancelaciones y auth), encontrados: ${Array.isArray(correosCapturados) ? correosCapturados.length : 0}`);
+        }
+
+        const correosCarlos = correosCapturados.filter(m => String(m.to || '').includes('carlos@correo.com'));
+        const cuerposDecodificados = correosCarlos.map(m => {
+            const raw = String(m.body || '');
+            // Soportar quoted-printable básico (=XX y saltos suaves =\r\n)
+            return raw.replace(/=\r?\n/g, '').replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+        });
+
+        const tieneConfirmacionPrincipal = cuerposDecodificados.some(b =>
+            b.includes(`#${citaIdCreada}`) && b.includes('Valeria Castro') && b.includes('11:30 - 13:00')
+        );
+        const tieneCancelacion = cuerposDecodificados.some(b =>
+            b.includes('Cancelada') && (b.includes(`#${citaTemporalId}`) || b.includes('14:00 - 15:00') || b.includes('10:00 - 11:00'))
+        );
+
+        if (!tieneConfirmacionPrincipal || !tieneCancelacion) {
+            throw new Error(`Faltan correos transaccionales de confirmación o cancelación en mailbox.json (confirmacionPrincipal=${tieneConfirmacionPrincipal}, cancelacion=${tieneCancelacion})`);
+        }
+
+        recordTest('NOTIF-01', 'Despacho SMTP de correos transaccionales de confirmación y cancelación de citas en buzón de pruebas', true,
+            `${correosCapturados.length} correos capturados en buzón SMTP mock; confirmación de cita #${citaIdCreada} (Valeria Castro, 11:30 - 13:00) y cancelaciones verificadas.`);
+
+        // ------------------------------------------------------------------
         // RECORRIDO 5: Ausencia de Errores de Consola y Fallos de Red
         // ------------------------------------------------------------------
         console.log('\n>>> [RECORRIDO 5] Verificación de errores de consola y peticiones fallidas...');

@@ -3,9 +3,99 @@
 Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerdo con la metodología de entregas auditables por **ChatGPT** (revisión estática de código) y ejecución/verificación por **Antigravity** (desarrollo y pruebas dinámicas automatizadas), sujeto a la aprobación final del **Propietario**.
 
 > **Roles y Criterios:**
-> - **Desarrollo y Pruebas Automatizadas (Antigravity):** Implementación de código y ejecución de la suite completa de pruebas unitarias e integrales (143 pruebas, 1512 aserciones en PHPUnit 10.5.66), escenarios funcionales HTTP y suite E2E en navegador real Headless Chrome (`tests/verificar_navegador.ps1` y `tests/browser_e2e_test.js`).
+> - **Desarrollo y Pruebas Automatizadas (Antigravity):** Implementación de código y ejecución de la suite completa de pruebas unitarias e integrales (152 pruebas, 1714 aserciones en PHPUnit 10.5.66), escenarios funcionales HTTP y suite E2E en navegador real Headless Chrome (`tests/verificar_navegador.ps1` y `tests/browser_e2e_test.js`).
 > - **Revisión Estática Externa (ChatGPT):** Auditoría independiente de código de aplicación, arquitectura por capas, contratos transaccionales y revisión estática de scripts Bash.
 > - **Aprobación Final y Despliegue (Propietario):** Decisión formal sobre fusiones hacia `main` y despliegues en producción.
+
+---
+
+## Fase 6A: Notificaciones de Citas
+
+- **Rama:** `feature/fase-6a-notificaciones`
+- **Commit Base (Fase 5 aprobada):** `1f63cd88f3fd6cab1dd958a6b8c82371b5f1d7b0` (`1fb3475fe2eec5ed4dc2f6afd22bc6b1bcaabb27` + registro de auditoría Fase 5)
+- **Estado General de Fase 6A:** **Implementada y Verificada — Lista para Auditoría**
+
+### 1. Diseño Arquitectónico, Migración Incremental e Idempotencia Transaccional
+
+1. **Migración Incremental (`database/migrations/005_notificaciones_citas.sql` + `005_notificaciones_citas_rollback.sql`):**
+   - Crea la tabla `notificaciones_citas` (`ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`) con las columnas:
+     - `id INT NOT NULL AUTO_INCREMENT PRIMARY KEY`
+     - `cita_id INT NULL DEFAULT NULL` (FK `fk_notificaciones_cita` hacia `citas(id)` con `ON DELETE SET NULL ON UPDATE CASCADE`)
+     - `cita_referencia_id INT NOT NULL` (conserva permanentemente el ID original de la cita aunque la fila en `citas` sea eliminada al cancelar)
+     - `usuario_id INT NULL DEFAULT NULL` (FK `fk_notificaciones_usuario` hacia `usuarios(id)` con `ON DELETE SET NULL ON UPDATE CASCADE`)
+     - `tipo VARCHAR(30) NOT NULL` (`'confirmacion'`, `'cancelacion'`, `'recordatorio'`)
+     - `clave_idempotencia VARCHAR(120) NOT NULL` con restricción única `UNIQUE KEY uq_notificaciones_clave_idempotencia (clave_idempotencia)` (p. ej. `cita:42:confirmacion`, `cita:42:cancelacion`, `cita:42:recordatorio:24h`)
+     - `destinatario_email VARCHAR(60) NOT NULL`, `destinatario_nombre VARCHAR(120) NOT NULL`, `asunto VARCHAR(180) NOT NULL`, `payload_json JSON NULL DEFAULT NULL`
+     - `estado VARCHAR(20) NOT NULL DEFAULT 'pendiente'` (`'pendiente'`, `'enviando'`, `'enviado'`, `'fallido'`)
+     - `intentos INT NOT NULL DEFAULT 0`, `max_intentos INT NOT NULL DEFAULT 3`, `ultimo_error VARCHAR(255) NULL DEFAULT NULL`, `enviado_at DATETIME NULL DEFAULT NULL`, `proximo_intento_at DATETIME NULL DEFAULT NULL`, `created_at` y `updated_at`.
+   - **Preservación de historial tras cancelación:** Gracias a `cita_id INT NULL` con `ON DELETE SET NULL` y `cita_referencia_id INT NOT NULL`, al eliminar una cita en `citas` (durante `POST /api/eliminar`), el registro previo de `confirmacion` pasa a tener `cita_id = NULL` sin violar integridad referencial y el nuevo registro de `cancelacion` se inserta con `cita_id = NULL` y `cita_referencia_id = <id>`, preservando ambos en la bitácora.
+
+2. **Endurecimiento de Enlaces, Remitentes y Transporte Sustituible (`Classes\Email`):**
+   - **`Email::resolverAppUrl(?string $appUrlOverride = null)`:** Valida estrictamente `APP_URL` aceptando únicamente esquemas `http` o `https` con `host` válido y sin credenciales embebidas, saltos de línea (`\r`, `\n`), bytes nulos ni comillas/ángulos (`'`, `"`, `<`, `>`). Rechaza vectores como `javascript:...` o `data:...` aplicando fallback seguro a `http://localhost:3000`.
+   - **`Email::resolverRemitente()` y `Email::sanearTextoCabecera()`:** Validan `EMAIL_FROM` (`filter_var(..., FILTER_VALIDATE_EMAIL)`, con fallback a `cuentas@appsalon.com`) y sanean `EMAIL_FROM_NAME`, nombres de destinatarios y asuntos eliminando cualquier carácter de control o CRLF para impedir *SMTP Header Injection*.
+   - **`Email::prepararMailerNotificacionCita()` y `Email::despacharNotificacionCita()`:** Construyen el mensaje `PHPMailer` completo (`HTML` + `AltBody` en texto plano) y delegan en:
+     1. Transporte sustituible (`Email::setTransport(...)` o callable por instancia en `NotificacionCitaService`) para pruebas unitarias e integrales deterministas.
+     2. Captura segura en memoria (`Email::$emailsEnviados`) cuando se ejecuta bajo PHPUnit sin transporte personalizado ni `EMAIL_FORCE_SMTP=1`, evitando conexiones TCP externas accidentales.
+     3. Servidor SMTP configurado (`EMAIL_HOST` / `EMAIL_PORT`, incluyendo el servidor local de pruebas `tests/smtp_mock_server.php` durante la suite E2E en navegador).
+
+3. **Repositorio con Bloqueo Transaccional e Idempotencia (`Repositories\NotificacionCitaRepository` y `Model\NotificacionCita`):**
+   - Entidad pura `Model\NotificacionCita` desacoplada de `ActiveRecord`.
+   - Todas las consultas en `NotificacionCitaRepository` usan exclusivamente sentencias preparadas (`prepare` + `bind_param` + `execute`) y encapsulan fallos SQL en `PersistenceException`.
+   - **`registrarOAdquirirParaEnvio()`:** Ejecuta una transacción con `SELECT ... WHERE clave_idempotencia = ? LIMIT 1 FOR UPDATE`:
+     - Si la notificación ya tiene `estado = 'enviado'`, devuelve `debe_enviar = false` y `motivo = 'ya_enviado'` sin incrementar intentos ni reenviar correo.
+     - Si está en `estado = 'enviando'` o agotó `intentos >= max_intentos` (salvo `$forzarReintento = true`), omite el envío de forma segura.
+     - En caso contrario, inserta o actualiza el registro en `estado = 'enviando'` antes de liberar la transacción y despachar por SMTP, evitando envíos duplicados concurrentes.
+   - **`adquirirCandidataParaReintento()`:** Revalida con `FOR UPDATE` cada notificación pendiente/fallida elegible (`intentos < max_intentos` y `proximo_intento_at <= ahora`). Si es de tipo `recordatorio` y `cita_id IS NULL` (porque la cita fue cancelada antes del reintento), la marca como descartada sin enviar un recordatorio obsoleto.
+
+4. **Servicio de Notificaciones y Aislamiento de Fallos SMTP (`Services\NotificacionCitaService` y `Services\CitaService`):**
+   - **Aislamiento total post-commit en `CitaService`:**
+     - En `CitaService::reservar()` y `CitaService::reservarConProfesional()`, una vez confirmada la transacción de la cita en MySQL (`COMMIT`), se invoca `$this->despacharNotificacionConfirmacionSegura($citaId)` dentro de un bloque `try / catch (\Throwable)`. Si el servidor SMTP falla o lanza excepción, la cita permanece creada en base de datos, el endpoint responde `200` con el contrato JSON intacto y la notificación queda registrada en `notificaciones_citas` con `estado = 'fallido'`, `intentos = 1`, `ultimo_error` saneado y `proximo_intento_at` programado para reintento.
+     - En `CitaService::eliminar()`, tras validar permisos (`esPropietarioOAdmin`), se captura previamente el snapshot completo de la cita (`capturarSnapshotCitaParaCancelacion`), se ejecuta la eliminación atómica en `citas` y, únicamente si `filas > 0`, se invoca `notificarCancelacionCitaDesdeSnapshot()` en un bloque `try / catch (\Throwable)` aislado.
+   - **Escapado HTML completo:** `NotificacionCitaService::construirContenidoHtml()` escapa todos los campos dinámicos (nombre del cliente, profesional, fecha, horario, nombres de servicios, precios y enlace `/cita`) con `htmlspecialchars(..., ENT_QUOTES, 'UTF-8')`.
+   - **Recordatorios configurables en `America/Guayaquil` (`procesarRecordatorios`):**
+     - Ventana configurable mediante argumento `$horasAnticipacion` o variable de entorno `NOTIFICACIONES_RECORDATORIO_HORAS` (`1..720`, por defecto `24` horas).
+     - Evalúa el rango `[ahora, ahora + N horas]` en zona horaria explícita `America/Guayaquil`, filtra citas futuras cuya fecha/hora de inicio cae dentro de la ventana y despacha como máximo un recordatorio por cita y ventana (`cita:{id}:recordatorio:{horas}h`).
+   - **Cola de reintentos con *backoff* exponencial (`procesarPendientesYReintentos`):**
+     - Reconstruye el correo a partir del `payload_json` persistido (lo que permite reintentar tanto confirmaciones/recordatorios de citas activas como cancelaciones cuya fila en `citas` ya no existe) y aplica backoff progresivo (`5 min`, `15 min`, `45 min`, hasta `120 min`).
+
+5. **Tarea Programada Documentada (`scripts/procesar_notificaciones.php`):**
+   - Script CLI ejecutable exclusivamente desde consola (`PHP_SAPI === 'cli'`).
+   - Opciones soportadas:
+     - `--recordatorios`: Procesa únicamente recordatorios de citas próximas.
+     - `--reintentos`: Procesa únicamente la cola de notificaciones pendientes o fallidas.
+     - *(Sin flags de modo)*: Ejecuta ambos procesos en secuencia (`recordatorios` + `reintentos`).
+     - `--horas=<1..720>`: Sobrescribe la ventana de anticipación en horas para recordatorios (por defecto `NOTIFICACIONES_RECORDATORIO_HORAS` o `24`).
+     - `--limite=<1..500>`: Límite máximo de notificaciones a procesar en la corrida (por defecto `50`).
+     - `--ahora="YYYY-MM-DD HH:MM:SS"`: Reloj de referencia en `America/Guayaquil` para pruebas deterministas.
+     - `--json`: Emite resumen estructurado en JSON (`status`, `timezone`, `ahora`, `recordatorios`, `reintentos`).
+   - **Ejemplo de programación en Cron (Linux / contenedor Docker cada 15 minutos):**
+     ```cron
+     */15 * * * * cd /var/www/html && /usr/local/bin/php scripts/procesar_notificaciones.php --json >> /var/log/appsalon_notificaciones.log 2>&1
+     ```
+   - **Ejemplo en Programador de Tareas de Windows (`schtasks` cada 15 minutos):**
+     ```powershell
+     schtasks /Create /SC MINUTE /MO 15 /TN "AppSalon_ProcesarNotificaciones" /TR "docker exec appsalon-web php /var/www/html/scripts/procesar_notificaciones.php --json" /F
+     ```
+
+### 2. Validación Ejecutada en Fase 6A (Desarrollador)
+
+#### A. Suite Completa PHPUnit (Ejecutada en Docker PHP 8.2.34 + MySQL 8.0 Aislado)
+- **Versión efectiva:** `PHPUnit 10.5.66 by Sebastian Bergmann and contributors.` (`Runtime: PHP 8.2.34`, `Configuration: /app/phpunit.xml`).
+- **Comando ejecutado:**
+  `docker run --rm --name appsalon-web-phpunit-f6a --network appsalon-net-phpunit-f6a -v "${PWD}:/app" -w /app -e APP_ENV=testing -e DB_HOST=appsalon-db-phpunit-f6a -e DB_PORT=3306 -e DB_USER=root -e DB_PASS=root -e DB_NAME=appsalon_f6a_test appsalon-php-test php -d variables_order=EGPCS vendor/bin/phpunit --colors=never`
+- **Resultado:** `OK (152 tests, 1714 assertions)` (`Time: 00:27.858, Memory: 16.00 MB`) — Código de salida `0`.
+- **Cobertura añadida en Fase 6A:**
+  - `Tests\Integration\MigrationTest`: actualización a 5 migraciones e incorporación de `testMigracion005NotificacionesCitasUpIdempotenciaSetNullYRollback()`, comprobando la creación de `notificaciones_citas`, su índice único `uq_notificaciones_clave_idempotencia`, el comportamiento `ON DELETE SET NULL` al borrar una cita conservando `cita_referencia_id` y el rollback limpio.
+  - `Tests\Unit\NotificacionCitaServiceTest`: validación de `Email::resolverAppUrl()` (bloqueo de `javascript:`, `data:`, CRLF, credenciales y comillas con fallback seguro), `Email::resolverRemitente()` y prevención de *header injection*, entidad `NotificacionCita`, escapado HTML (`XSS`) e inclusión de detalles completos en `construirContenidoHtml()`, idempotencia unitaria, cálculo de ventana de recordatorios en `America/Guayaquil` y *backoff* exponencial.
+  - `Tests\Integration\Fase6ANotificacionesIntegrationTest`:
+    - Envío de correo de confirmación al reservar en `POST /api/citas` y de cancelación al eliminar en `POST /api/eliminar`, verificando que ambos registros (`confirmacion` y `cancelacion`) persisten en `notificaciones_citas` con `estado = 'enviado'`, `cita_id = NULL` tras el borrado y `cita_referencia_id` intacto.
+    - Aislamiento de fallos SMTP (transporte que lanza excepción o devuelve `false`) tanto en `POST /api/citas` como en `POST /api/eliminar`: la cita se crea/elimina con HTTP `200`, mientras la notificación queda en `estado = 'fallido'`, `intentos = 1` y `proximo_intento_at` programado.
+    - Idempotencia frente a invocaciones repetidas (`ya_enviado`, `1` solo correo despachado) y recuperación mediante `procesarPendientesYReintentos()` reconstruyendo el mensaje desde `payload_json`.
+    - Recordatorios configurables en `America/Guayaquil` (`procesarRecordatorios` y script CLI `scripts/procesar_notificaciones.php --json`), incluyendo descarte automático de recordatorios pendientes si la cita fue cancelada antes del reintento.
+
+#### B. Verificación E2E en Navegador con JavaScript Habilitado (`tests/verificar_navegador.ps1` + `tests/browser_e2e_test.js` + `tests/browser_test_report.json`)
+- **Comando ejecutado:** `powershell -ExecutionPolicy Bypass -File tests/verificar_navegador.ps1`
+- **Resultado Desarrollador (`RUN_ID: 5ab1f43eeac3445996985fe29d36978d`):** 17 comprobaciones E2E superadas (`ADMIN-01` a `ADMIN-04`, `PROF-01`, `PROF-02`, `PRE-01`, `DISP-01`, `REC-01` a `REC-04`, `RES-01`, `ADMIN-05`, `AUTH-01`, `NOTIF-01`, `REC-05`) con `0` errores de consola, `0` peticiones fallidas, verificación en buzón SMTP mock (`tests/mailbox.json`) de los correos de confirmación y cancelación de citas (`NOTIF-01`) y verificación en MySQL de `notificaciones_citas` (`3` confirmaciones enviadas y `2` cancelaciones enviadas con historial preservado) — Código de salida `0`.
 
 ---
 

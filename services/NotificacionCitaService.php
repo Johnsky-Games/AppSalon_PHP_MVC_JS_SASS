@@ -1,0 +1,794 @@
+<?php
+
+namespace Services;
+
+use Classes\Email;
+use Model\NotificacionCita;
+use Repositories\CitaRepository;
+use Repositories\NotificacionCitaRepository;
+use Repositories\PersistenceException;
+
+/**
+ * Servicio de dominio para las notificaciones transaccionales de citas (Fase 6A):
+ * - Confirmación de cita (`confirmacion`)
+ * - Cancelación de cita (`cancelacion`)
+ * - Recordatorios configurables de citas próximas (`recordatorio`)
+ * - Procesamiento idempotente y cola de reintentos seguros con backoff sin duplicados.
+ * - Aislamiento total de fallos SMTP para que ningún error de correo revierta operaciones confirmadas.
+ */
+class NotificacionCitaService
+{
+    public const STATUS_OK = 'ok';
+    public const STATUS_YA_ENVIADO = 'ya_enviado';
+    public const STATUS_FALLIDO = 'fallido';
+    public const STATUS_OMITIDO = 'omitido';
+    public const STATUS_ERROR = 'error';
+
+    public const TIMEZONE = 'America/Guayaquil';
+    public const DEFAULT_RECORDATORIO_HORAS = 24;
+
+    private NotificacionCitaRepository $notificacionRepository;
+    private CitaRepository $citaRepository;
+    private ?\DateTimeImmutable $ahoraReferencia;
+    /** @var callable|null */
+    private $transport;
+    private ?int $recordatorioHorasConfig = null;
+
+    public function __construct(
+        ?NotificacionCitaRepository $notificacionRepository = null,
+        ?CitaRepository $citaRepository = null,
+        ?\DateTimeImmutable $ahoraReferencia = null,
+        ?callable $transport = null
+    ) {
+        $this->notificacionRepository = $notificacionRepository ?? new NotificacionCitaRepository();
+        $this->citaRepository = $citaRepository ?? new CitaRepository($this->notificacionRepository->getDb());
+        $this->ahoraReferencia = $ahoraReferencia;
+        $this->transport = $transport;
+    }
+
+    /**
+     * Permite configurar un reloj de referencia sustituible para pruebas deterministas.
+     */
+    public function setAhoraReferencia(?\DateTimeImmutable $ahoraReferencia): void
+    {
+        $this->ahoraReferencia = $ahoraReferencia;
+    }
+
+    /**
+     * Permite inyectar un transporte de correo sustituible en esta instancia.
+     */
+    public function setTransport(?callable $transport): void
+    {
+        $this->transport = $transport;
+    }
+
+    /**
+     * Permite configurar la ventana de anticipación de recordatorios en horas.
+     */
+    public function setRecordatorioHoras(?int $horas): void
+    {
+        $this->recordatorioHorasConfig = $horas;
+    }
+
+    /**
+     * Retorna la zona horaria oficial de la agenda (`America/Guayaquil`).
+     */
+    public function obtenerZonaHoraria(): \DateTimeZone
+    {
+        return new \DateTimeZone(self::TIMEZONE);
+    }
+
+    /**
+     * Retorna el instante actual en `America/Guayaquil`.
+     */
+    public function obtenerAhora(): \DateTimeImmutable
+    {
+        $tz = $this->obtenerZonaHoraria();
+        if ($this->ahoraReferencia !== null) {
+            return $this->ahoraReferencia->setTimezone($tz);
+        }
+        return new \DateTimeImmutable('now', $tz);
+    }
+
+    /**
+     * Retorna el instante actual en UTC (`Y-m-d H:i:s`) para marcas de tiempo de base de datos.
+     */
+    public function obtenerAhoraUtc(): \DateTimeImmutable
+    {
+        $utc = new \DateTimeZone('UTC');
+        if ($this->ahoraReferencia !== null) {
+            return $this->ahoraReferencia->setTimezone($utc);
+        }
+        return new \DateTimeImmutable('now', $utc);
+    }
+
+    /**
+     * Resuelve la ventana de anticipación en horas para recordatorios (`1..720`),
+     * priorizando argumento explícito, configuración de instancia, variable de entorno
+     * `NOTIFICACIONES_RECORDATORIO_HORAS` y el valor por defecto `24`.
+     */
+    public function resolverHorasAnticipacionRecordatorio(?int $horasOverride = null): int
+    {
+        $candidato = $horasOverride ?? $this->recordatorioHorasConfig;
+
+        if ($candidato === null) {
+            $envVal = $_ENV['NOTIFICACIONES_RECORDATORIO_HORAS'] ?? getenv('NOTIFICACIONES_RECORDATORIO_HORAS');
+            if ($envVal !== false && $envVal !== null && trim((string)$envVal) !== '') {
+                $valInt = filter_var(trim((string)$envVal), FILTER_VALIDATE_INT, [
+                    'options' => ['min_range' => 1, 'max_range' => 720]
+                ]);
+                if ($valInt !== false) {
+                    return (int)$valInt;
+                }
+            }
+            return self::DEFAULT_RECORDATORIO_HORAS;
+        }
+
+        if ($candidato < 1 || $candidato > 720) {
+            return self::DEFAULT_RECORDATORIO_HORAS;
+        }
+
+        return $candidato;
+    }
+
+    /**
+     * Genera la clave única de idempotencia para confirmación de cita.
+     */
+    public static function generarClaveConfirmacion(int $citaId): string
+    {
+        return "cita:{$citaId}:confirmacion";
+    }
+
+    /**
+     * Genera la clave única de idempotencia para cancelación de cita.
+     */
+    public static function generarClaveCancelacion(int $citaId): string
+    {
+        return "cita:{$citaId}:cancelacion";
+    }
+
+    /**
+     * Genera la clave única de idempotencia para recordatorio de cita.
+     */
+    public static function generarClaveRecordatorio(int $citaId, string $fecha, string $horaInicio): string
+    {
+        $horaLimpia = substr(trim($horaInicio), 0, 5);
+        return "cita:{$citaId}:recordatorio:{$fecha}_{$horaLimpia}";
+    }
+
+    /**
+     * Calcula el próximo instante de reintento en UTC aplicando backoff progresivo:
+     * - Intento 1 fallido -> +5 minutos
+     * - Intento 2 fallido -> +15 minutos
+     * - Intento >= max_intentos -> null (agotado)
+     */
+    public function calcularProximoIntentoUtc(int $intentosRealizados, int $maxIntentos): ?string
+    {
+        if ($intentosRealizados >= $maxIntentos) {
+            return null;
+        }
+
+        $minutosEspera = match ($intentosRealizados) {
+            1 => 5,
+            2 => 15,
+            default => 30,
+        };
+
+        return $this->obtenerAhoraUtc()
+            ->modify("+{$minutosEspera} minutes")
+            ->format('Y-m-d H:i:s');
+    }
+
+    /**
+     * Registra y envía de forma aislada la notificación de confirmación para una cita ya confirmada en BD.
+     * Nunca lanza excepciones hacia el flujo llamador para garantizar que un fallo SMTP jamás revierta la reserva.
+     *
+     * @return array<string, mixed>
+     */
+    public function notificarConfirmacionCita(int $citaId): array
+    {
+        try {
+            $snapshot = $this->notificacionRepository->obtenerSnapshotCompletoCita($citaId);
+            if ($snapshot === null) {
+                return [
+                    'status' => self::STATUS_OMITIDO,
+                    'enviado' => false,
+                    'motivo' => 'cita_no_encontrada'
+                ];
+            }
+
+            $emailDestino = trim((string)($snapshot['cliente_email'] ?? ''));
+            if ($emailDestino === '' || filter_var($emailDestino, FILTER_VALIDATE_EMAIL) === false) {
+                return [
+                    'status' => self::STATUS_OMITIDO,
+                    'enviado' => false,
+                    'motivo' => 'destinatario_invalido'
+                ];
+            }
+
+            $snapshot['tipo_notificacion'] = NotificacionCita::TIPO_CONFIRMACION;
+            $clave = self::generarClaveConfirmacion($citaId);
+
+            return $this->registrarYDespachar(
+                NotificacionCita::TIPO_CONFIRMACION,
+                $clave,
+                $snapshot,
+                true
+            );
+        } catch (\Throwable $e) {
+            error_log("[NotificacionCitaService::notificarConfirmacionCita] Error aislado para cita {$citaId}: " . $e->getMessage());
+            return [
+                'status' => self::STATUS_ERROR,
+                'enviado' => false,
+                'error' => Email::sanearMensajeError($e->getMessage())
+            ];
+        }
+    }
+
+    /**
+     * Captura el snapshot completo de una cita antes de que sea eliminada de `citas`.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function capturarSnapshotCitaParaCancelacion(int $citaId, string $canceladoPor = 'cliente'): ?array
+    {
+        try {
+            $snapshot = $this->notificacionRepository->obtenerSnapshotCompletoCita($citaId);
+            if ($snapshot === null) {
+                return null;
+            }
+            $snapshot['tipo_notificacion'] = NotificacionCita::TIPO_CANCELACION;
+            $snapshot['cancelado_por'] = ($canceladoPor === 'admin') ? 'admin' : 'cliente';
+            return $snapshot;
+        } catch (\Throwable $e) {
+            error_log("[NotificacionCitaService::capturarSnapshotCitaParaCancelacion] Error al capturar snapshot de cita {$citaId}: " . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Registra y envía de forma aislada la notificación de cancelación a partir de un snapshot previamente capturado.
+     * Como la cita ya fue eliminada de `citas`, persiste `cita_id = NULL` y conserva `cita_referencia_id = $citaId`.
+     *
+     * @param array<string, mixed> $snapshot
+     * @return array<string, mixed>
+     */
+    public function notificarCancelacionCitaDesdeSnapshot(array $snapshot, bool $citaAunExisteEnBd = false): array
+    {
+        try {
+            $citaId = (int)($snapshot['cita_id'] ?? 0);
+            if ($citaId <= 0) {
+                return [
+                    'status' => self::STATUS_OMITIDO,
+                    'enviado' => false,
+                    'motivo' => 'cita_id_invalido'
+                ];
+            }
+
+            $emailDestino = trim((string)($snapshot['cliente_email'] ?? ''));
+            if ($emailDestino === '' || filter_var($emailDestino, FILTER_VALIDATE_EMAIL) === false) {
+                return [
+                    'status' => self::STATUS_OMITIDO,
+                    'enviado' => false,
+                    'motivo' => 'destinatario_invalido'
+                ];
+            }
+
+            $snapshot['tipo_notificacion'] = NotificacionCita::TIPO_CANCELACION;
+            if (!isset($snapshot['cancelado_por'])) {
+                $snapshot['cancelado_por'] = 'cliente';
+            }
+
+            $clave = self::generarClaveCancelacion($citaId);
+
+            return $this->registrarYDespachar(
+                NotificacionCita::TIPO_CANCELACION,
+                $clave,
+                $snapshot,
+                $citaAunExisteEnBd
+            );
+        } catch (\Throwable $e) {
+            error_log("[NotificacionCitaService::notificarCancelacionCitaDesdeSnapshot] Error aislado: " . $e->getMessage());
+            return [
+                'status' => self::STATUS_ERROR,
+                'enviado' => false,
+                'error' => Email::sanearMensajeError($e->getMessage())
+            ];
+        }
+    }
+
+    /**
+     * Método de conveniencia para notificar cancelación consultando la cita si aún existe en BD.
+     *
+     * @return array<string, mixed>
+     */
+    public function notificarCancelacionCita(int $citaId, string $canceladoPor = 'cliente'): array
+    {
+        $snapshot = $this->capturarSnapshotCitaParaCancelacion($citaId, $canceladoPor);
+        if ($snapshot === null) {
+            return [
+                'status' => self::STATUS_OMITIDO,
+                'enviado' => false,
+                'motivo' => 'cita_no_encontrada'
+            ];
+        }
+
+        return $this->notificarCancelacionCitaDesdeSnapshot($snapshot, true);
+    }
+
+    /**
+     * Evalúa todas las citas futuras activas cuya hora de inicio en `America/Guayaquil` se encuentre
+     * dentro de la ventana `(ahora, ahora + $horasAnticipacion]` y envía sus recordatorios de forma idempotente.
+     *
+     * @return array<string, mixed>
+     */
+    public function procesarRecordatorios(?int $horasAnticipacion = null): array
+    {
+        $horas = $this->resolverHorasAnticipacionRecordatorio($horasAnticipacion);
+        $tz = $this->obtenerZonaHoraria();
+        $ahora = $this->obtenerAhora();
+        $limiteVentana = $ahora->modify("+{$horas} hours");
+
+        $fechaDesde = $ahora->format('Y-m-d');
+        $fechaHasta = $limiteVentana->format('Y-m-d');
+
+        try {
+            $citasEnRango = $this->notificacionRepository->buscarCitasEnRangoFechasParaRecordatorio($fechaDesde, $fechaHasta);
+        } catch (PersistenceException $e) {
+            return [
+                'status' => self::STATUS_ERROR,
+                'ventana_horas' => $horas,
+                'evaluadas' => 0,
+                'en_ventana' => 0,
+                'enviados' => 0,
+                'ya_enviados' => 0,
+                'fallidos' => 0,
+                'error' => 'No fue posible consultar las citas para recordatorios.'
+            ];
+        }
+
+        $evaluadas = count($citasEnRango);
+        $enVentana = 0;
+        $enviados = 0;
+        $yaEnviados = 0;
+        $fallidos = 0;
+        $detalles = [];
+
+        foreach ($citasEnRango as $snapshot) {
+            $citaId = (int)($snapshot['cita_id'] ?? 0);
+            $fecha = trim((string)($snapshot['fecha'] ?? ''));
+            $horaInicio = trim((string)($snapshot['hora_inicio'] ?? ($snapshot['hora'] ?? '')));
+            $horaInicioHm = substr($horaInicio, 0, 5);
+
+            if ($citaId <= 0 || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $fecha) || !preg_match('/^\d{2}:\d{2}$/', $horaInicioHm)) {
+                continue;
+            }
+
+            $instanteCita = \DateTimeImmutable::createFromFormat('!Y-m-d H:i', "{$fecha} {$horaInicioHm}", $tz);
+            if (!$instanteCita) {
+                continue;
+            }
+
+            // Solo citas estrictamente futuras dentro de la ventana [ahora, limiteVentana]
+            if ($instanteCita <= $ahora || $instanteCita > $limiteVentana) {
+                continue;
+            }
+
+            $emailDestino = trim((string)($snapshot['cliente_email'] ?? ''));
+            if ($emailDestino === '' || filter_var($emailDestino, FILTER_VALIDATE_EMAIL) === false) {
+                continue;
+            }
+
+            $enVentana++;
+            $snapshot['tipo_notificacion'] = NotificacionCita::TIPO_RECORDATORIO;
+            $clave = self::generarClaveRecordatorio($citaId, $fecha, $horaInicioHm);
+
+            $res = $this->registrarYDespachar(
+                NotificacionCita::TIPO_RECORDATORIO,
+                $clave,
+                $snapshot,
+                true
+            );
+
+            if (($res['status'] ?? '') === self::STATUS_OK) {
+                $enviados++;
+            } elseif (($res['status'] ?? '') === self::STATUS_YA_ENVIADO) {
+                $yaEnviados++;
+            } else {
+                $fallidos++;
+            }
+
+            $detalles[] = [
+                'cita_id' => $citaId,
+                'clave_idempotencia' => $clave,
+                'status' => $res['status'] ?? self::STATUS_ERROR,
+            ];
+        }
+
+        return [
+            'status' => self::STATUS_OK,
+            'ventana_horas' => $horas,
+            'zona_horaria' => self::TIMEZONE,
+            'ahora' => $ahora->format('Y-m-d H:i:s'),
+            'limite_ventana' => $limiteVentana->format('Y-m-d H:i:s'),
+            'evaluadas' => $evaluadas,
+            'en_ventana' => $enVentana,
+            'enviados' => $enviados,
+            'ya_enviados' => $yaEnviados,
+            'fallidos' => $fallidos,
+            'detalles' => $detalles,
+        ];
+    }
+
+    /**
+     * Procesa la cola de notificaciones en estado `'pendiente'` o `'fallido'` cuyo `proximo_intento_at`
+     * haya vencido y cuyos `intentos < max_intentos`.
+     * Garantiza reintentos seguros e idempotentes sin duplicados mediante bloqueo `FOR UPDATE`.
+     *
+     * @return array<string, mixed>
+     */
+    public function procesarPendientesYReintentos(int $limite = 50): array
+    {
+        $ahoraUtc = $this->obtenerAhoraUtc()->format('Y-m-d H:i:s');
+
+        try {
+            $candidatas = $this->notificacionRepository->buscarCandidatasParaReintento($ahoraUtc, $limite);
+        } catch (PersistenceException $e) {
+            return [
+                'status' => self::STATUS_ERROR,
+                'procesadas' => 0,
+                'enviados' => 0,
+                'fallidos' => 0,
+                'omitidos' => 0,
+                'error' => 'No fue posible consultar la cola de reintentos.'
+            ];
+        }
+
+        $procesadas = 0;
+        $enviados = 0;
+        $fallidos = 0;
+        $omitidos = 0;
+        $detalles = [];
+
+        foreach ($candidatas as $candidata) {
+            $idNotif = (int)$candidata->id;
+            if ($idNotif <= 0) {
+                continue;
+            }
+
+            try {
+                $adquisicion = $this->notificacionRepository->adquirirCandidataParaReintento($idNotif, $ahoraUtc);
+            } catch (PersistenceException $e) {
+                $fallidos++;
+                continue;
+            }
+
+            $accion = $adquisicion['accion'] ?? 'omitir';
+            /** @var NotificacionCita|null $notifAdquirida */
+            $notifAdquirida = $adquisicion['notificacion'] ?? null;
+
+            if ($accion !== 'enviar' || $notifAdquirida === null) {
+                $omitidos++;
+                $detalles[] = [
+                    'id' => $idNotif,
+                    'clave_idempotencia' => $candidata->clave_idempotencia,
+                    'resultado' => $accion,
+                ];
+                continue;
+            }
+
+            $procesadas++;
+            $payload = $notifAdquirida->obtenerPayload();
+            $mensaje = $this->construirContenidoHtml($notifAdquirida->tipo, $payload, $notifAdquirida->asunto);
+
+            $despacho = Email::despacharNotificacionCita(
+                $notifAdquirida->tipo,
+                $notifAdquirida->destinatario_email,
+                $notifAdquirida->destinatario_nombre,
+                $mensaje['asunto'],
+                $mensaje['html'],
+                [
+                    'cita_id' => $notifAdquirida->cita_referencia_id,
+                    'clave_idempotencia' => $notifAdquirida->clave_idempotencia,
+                    'enlace' => $mensaje['enlace'],
+                    'reintento' => true,
+                    'intento_numero' => $notifAdquirida->intentos,
+                ],
+                $this->transport
+            );
+
+            $instanteFinUtc = $this->obtenerAhoraUtc()->format('Y-m-d H:i:s');
+
+            if ($despacho['exito']) {
+                $this->notificacionRepository->marcarEnviado($idNotif, $instanteFinUtc);
+                $enviados++;
+                $detalles[] = [
+                    'id' => $idNotif,
+                    'clave_idempotencia' => $notifAdquirida->clave_idempotencia,
+                    'resultado' => 'enviado',
+                    'intentos' => $notifAdquirida->intentos,
+                ];
+            } else {
+                $proximoUtc = $this->calcularProximoIntentoUtc(
+                    $notifAdquirida->intentos,
+                    $notifAdquirida->max_intentos
+                );
+                $this->notificacionRepository->marcarFallido(
+                    $idNotif,
+                    (string)($despacho['error'] ?? 'Fallo en reintento SMTP.'),
+                    $proximoUtc,
+                    $instanteFinUtc
+                );
+                $fallidos++;
+                $detalles[] = [
+                    'id' => $idNotif,
+                    'clave_idempotencia' => $notifAdquirida->clave_idempotencia,
+                    'resultado' => 'fallido',
+                    'intentos' => $notifAdquirida->intentos,
+                    'error' => $despacho['error'],
+                ];
+            }
+        }
+
+        return [
+            'status' => self::STATUS_OK,
+            'procesadas' => $procesadas,
+            'enviados' => $enviados,
+            'fallidos' => $fallidos,
+            'omitidos' => $omitidos,
+            'detalles' => $detalles,
+        ];
+    }
+
+    /**
+     * Construye el asunto, enlace seguro y cuerpo HTML escapado para una notificación de cita.
+     *
+     * @param string $tipo `'confirmacion'`, `'cancelacion'` o `'recordatorio'`
+     * @param array<string, mixed> $payload
+     * @param string|null $asuntoPredefinido
+     * @return array{asunto: string, html: string, enlace: string}
+     */
+    public function construirContenidoHtml(string $tipo, array $payload, ?string $asuntoPredefinido = null): array
+    {
+        $appUrl = Email::resolverAppUrl();
+        $enlaceCitas = "{$appUrl}/cita";
+
+        $citaId = (int)($payload['cita_id'] ?? 0);
+        $clienteNombre = htmlspecialchars((string)($payload['cliente_nombre'] ?? 'Cliente'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        $fecha = htmlspecialchars((string)($payload['fecha'] ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+
+        $horaInicioRaw = trim((string)($payload['hora_inicio'] ?? ($payload['hora'] ?? '')));
+        $horaFinRaw = trim((string)($payload['hora_fin'] ?? ''));
+        $duracionTotal = isset($payload['duracion_total_minutos']) && (int)$payload['duracion_total_minutos'] > 0
+            ? (int)$payload['duracion_total_minutos']
+            : null;
+
+        if ($horaInicioRaw !== '' && $horaFinRaw !== '') {
+            $horarioTexto = $horaInicioRaw . ' - ' . $horaFinRaw;
+            if ($duracionTotal !== null) {
+                $horarioTexto .= " ({$duracionTotal} min)";
+            }
+        } else {
+            $horarioTexto = $horaInicioRaw !== '' ? $horaInicioRaw : 'Horario registrado';
+        }
+        $horarioEscapado = htmlspecialchars($horarioTexto, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+
+        $profNombreRaw = isset($payload['profesional_nombre']) && trim((string)$payload['profesional_nombre']) !== ''
+            ? trim((string)$payload['profesional_nombre'])
+            : 'Asignación general del salón';
+        $profEscapado = htmlspecialchars($profNombreRaw, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+
+        $totalFormateado = htmlspecialchars(
+            (string)($payload['total_formateado'] ?? number_format((float)($payload['total'] ?? 0), 2, '.', '')),
+            ENT_QUOTES | ENT_SUBSTITUTE,
+            'UTF-8'
+        );
+
+        $servicios = is_array($payload['servicios'] ?? null) ? $payload['servicios'] : [];
+        $itemsHtml = '';
+        foreach ($servicios as $srv) {
+            $srvNombre = htmlspecialchars((string)($srv['nombre'] ?? 'Servicio'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+            $srvPrecio = htmlspecialchars((string)($srv['precio'] ?? '0.00'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+            $srvDur = isset($srv['duracion_minutos']) && (int)$srv['duracion_minutos'] > 0
+                ? ' (' . (int)$srv['duracion_minutos'] . ' min)'
+                : '';
+            $itemsHtml .= "<li>{$srvNombre}{$srvDur} — \${$srvPrecio}</li>";
+        }
+        if ($itemsHtml === '') {
+            $itemsHtml = '<li>Servicios registrados en la reserva</li>';
+        }
+
+        $enlaceEscapado = htmlspecialchars($enlaceCitas, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+
+        if ($tipo === NotificacionCita::TIPO_CANCELACION) {
+            $asunto = $asuntoPredefinido !== null && trim($asuntoPredefinido) !== ''
+                ? $asuntoPredefinido
+                : "Cancelación de tu cita #{$citaId} en AppSalon";
+            $canceladoPor = ($payload['cancelado_por'] ?? 'cliente') === 'admin'
+                ? 'por la administración del salón'
+                : 'a solicitud tuya';
+
+            $html = "<html><body>"
+                . "<h2>Cita #{$citaId} Cancelada — AppSalon</h2>"
+                . "<p>Hola <strong>{$clienteNombre}</strong>,</p>"
+                . "<p>Te informamos que tu cita <strong>#{$citaId}</strong> ha sido cancelada {$canceladoPor}.</p>"
+                . "<ul>"
+                . "<li><strong>Fecha:</strong> {$fecha}</li>"
+                . "<li><strong>Horario:</strong> {$horarioEscapado}</li>"
+                . "<li><strong>Profesional:</strong> {$profEscapado}</li>"
+                . "</ul>"
+                . "<p><strong>Servicios de la cita cancelada:</strong></p>"
+                . "<ul>{$itemsHtml}</ul>"
+                . "<p><strong>Total de referencia:</strong> \${$totalFormateado}</p>"
+                . "<p>Si deseas programar una nueva cita, puedes hacerlo en: <a href='{$enlaceEscapado}'>Agendar en AppSalon</a></p>"
+                . "</body></html>";
+        } elseif ($tipo === NotificacionCita::TIPO_RECORDATORIO) {
+            $horaCorta = substr($horaInicioRaw, 0, 5);
+            $asunto = $asuntoPredefinido !== null && trim($asuntoPredefinido) !== ''
+                ? $asuntoPredefinido
+                : "Recordatorio de tu cita #{$citaId} en AppSalon ({$payload['fecha']} {$horaCorta})";
+
+            $html = "<html><body>"
+                . "<h2>Recordatorio de tu próxima cita #{$citaId} — AppSalon</h2>"
+                . "<p>Hola <strong>{$clienteNombre}</strong>,</p>"
+                . "<p>Te recordamos que tienes una cita próxima programada en AppSalon:</p>"
+                . "<ul>"
+                . "<li><strong>Reserva:</strong> #{$citaId}</li>"
+                . "<li><strong>Fecha:</strong> {$fecha}</li>"
+                . "<li><strong>Horario:</strong> {$horarioEscapado}</li>"
+                . "<li><strong>Profesional:</strong> {$profEscapado}</li>"
+                . "</ul>"
+                . "<p><strong>Servicios reservados:</strong></p>"
+                . "<ul>{$itemsHtml}</ul>"
+                . "<p><strong>Total:</strong> \${$totalFormateado}</p>"
+                . "<p>Puedes consultar o gestionar tus citas en: <a href='{$enlaceEscapado}'>Ver mis citas</a></p>"
+                . "</body></html>";
+        } else {
+            $asunto = $asuntoPredefinido !== null && trim($asuntoPredefinido) !== ''
+                ? $asuntoPredefinido
+                : "Confirmación de tu cita #{$citaId} en AppSalon";
+
+            $html = "<html><body>"
+                . "<h2>Confirmación de Reserva #{$citaId} — AppSalon</h2>"
+                . "<p>Hola <strong>{$clienteNombre}</strong>,</p>"
+                . "<p>Tu cita ha sido registrada exitosamente con el siguiente detalle:</p>"
+                . "<ul>"
+                . "<li><strong>Reserva:</strong> #{$citaId}</li>"
+                . "<li><strong>Fecha:</strong> {$fecha}</li>"
+                . "<li><strong>Horario:</strong> {$horarioEscapado}</li>"
+                . "<li><strong>Profesional:</strong> {$profEscapado}</li>"
+                . "</ul>"
+                . "<p><strong>Servicios seleccionados:</strong></p>"
+                . "<ul>{$itemsHtml}</ul>"
+                . "<p><strong>Total:</strong> \${$totalFormateado}</p>"
+                . "<p>Puedes consultar o gestionar tus citas en: <a href='{$enlaceEscapado}'>Ver mis citas</a></p>"
+                . "</body></html>";
+        }
+
+        return [
+            'asunto' => Email::sanearTextoCabecera($asunto, 180),
+            'html' => $html,
+            'enlace' => $enlaceCitas
+        ];
+    }
+
+    /**
+     * Ejecuta el flujo transaccional de idempotencia + despacho SMTP + actualización de estado final.
+     *
+     * @param string $tipo
+     * @param string $claveIdempotencia
+     * @param array<string, mixed> $snapshot
+     * @param bool $citaExisteEnBd
+     * @return array<string, mixed>
+     */
+    private function registrarYDespachar(
+        string $tipo,
+        string $claveIdempotencia,
+        array $snapshot,
+        bool $citaExisteEnBd
+    ): array {
+        $citaId = (int)($snapshot['cita_id'] ?? 0);
+        $usuarioId = isset($snapshot['usuario_id']) && (int)$snapshot['usuario_id'] > 0
+            ? (int)$snapshot['usuario_id']
+            : null;
+        $destEmail = trim((string)($snapshot['cliente_email'] ?? ''));
+        $destNombre = trim((string)($snapshot['cliente_nombre'] ?? 'Cliente AppSalon'));
+
+        $mensaje = $this->construirContenidoHtml($tipo, $snapshot);
+        $ahoraUtc = $this->obtenerAhoraUtc()->format('Y-m-d H:i:s');
+
+        $adquisicion = $this->notificacionRepository->registrarOAdquirirParaEnvio([
+            'cita_id' => $citaExisteEnBd ? $citaId : null,
+            'cita_referencia_id' => $citaId,
+            'usuario_id' => $usuarioId,
+            'tipo' => $tipo,
+            'clave_idempotencia' => $claveIdempotencia,
+            'destinatario_email' => $destEmail,
+            'destinatario_nombre' => $destNombre,
+            'asunto' => $mensaje['asunto'],
+            'payload_json' => $snapshot,
+            'max_intentos' => NotificacionCita::DEFAULT_MAX_INTENTOS,
+        ], $ahoraUtc, false);
+
+        $accion = $adquisicion['accion'];
+        /** @var NotificacionCita $notificacion */
+        $notificacion = $adquisicion['notificacion'];
+
+        if ($accion === 'ya_enviado') {
+            return [
+                'status' => self::STATUS_YA_ENVIADO,
+                'enviado' => false,
+                'ya_enviado' => true,
+                'id' => $notificacion->id,
+                'clave_idempotencia' => $claveIdempotencia,
+                'estado' => $notificacion->estado,
+                'intentos' => $notificacion->intentos,
+            ];
+        }
+
+        if ($accion !== 'enviar') {
+            return [
+                'status' => self::STATUS_OMITIDO,
+                'enviado' => false,
+                'motivo' => $accion,
+                'id' => $notificacion->id,
+                'clave_idempotencia' => $claveIdempotencia,
+                'estado' => $notificacion->estado,
+                'intentos' => $notificacion->intentos,
+            ];
+        }
+
+        $despacho = Email::despacharNotificacionCita(
+            $tipo,
+            $destEmail,
+            $destNombre,
+            $mensaje['asunto'],
+            $mensaje['html'],
+            [
+                'cita_id' => $citaId,
+                'clave_idempotencia' => $claveIdempotencia,
+                'enlace' => $mensaje['enlace'],
+                'intento_numero' => $notificacion->intentos,
+            ],
+            $this->transport
+        );
+
+        $instanteFinUtc = $this->obtenerAhoraUtc()->format('Y-m-d H:i:s');
+
+        if ($despacho['exito']) {
+            $this->notificacionRepository->marcarEnviado((int)$notificacion->id, $instanteFinUtc);
+            return [
+                'status' => self::STATUS_OK,
+                'enviado' => true,
+                'id' => $notificacion->id,
+                'clave_idempotencia' => $claveIdempotencia,
+                'estado' => NotificacionCita::ESTADO_ENVIADO,
+                'intentos' => $notificacion->intentos,
+            ];
+        }
+
+        $proximoUtc = $this->calcularProximoIntentoUtc(
+            $notificacion->intentos,
+            $notificacion->max_intentos
+        );
+        $errorTexto = (string)($despacho['error'] ?? 'Fallo en despacho SMTP.');
+
+        $this->notificacionRepository->marcarFallido(
+            (int)$notificacion->id,
+            $errorTexto,
+            $proximoUtc,
+            $instanteFinUtc
+        );
+
+        return [
+            'status' => self::STATUS_FALLIDO,
+            'enviado' => false,
+            'id' => $notificacion->id,
+            'clave_idempotencia' => $claveIdempotencia,
+            'estado' => NotificacionCita::ESTADO_FALLIDO,
+            'intentos' => $notificacion->intentos,
+            'proximo_intento_at' => $proximoUtc,
+            'error' => $errorTexto,
+        ];
+    }
+}

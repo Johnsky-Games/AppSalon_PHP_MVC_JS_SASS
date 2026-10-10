@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-10-10T22:00:26.084Z",
+  "timestamp": "2026-10-10T22:35:17.000Z",
   "navegador": "Chrome Headless (Puppeteer-Core)",
   "citaCreadaId": 3,
   "citaTemporalEliminadaId": 1,
@@ -46,7 +46,7 @@
       "id": "PRE-01",
       "name": "Login interactivo de cliente y redirección autorizada a /cita",
       "success": true,
-      "details": "URL: http://localhost:32787/cita"
+      "details": "URL: http://localhost:32789/cita"
     },
     {
       "id": "DISP-01",
@@ -95,6 +95,12 @@
       "name": "Ciclo de autenticación y ciclo de vida de cuenta (/logout, /crear-cuenta, login no confirmado, /reenviar-confirmacion, /olvide)",
       "success": true,
       "details": "Registro redirigió a /mensaje; login sin confirmar rechazado con mensaje unificado; /reenviar-confirmacion y /olvide respondieron sin enumeración."
+    },
+    {
+      "id": "NOTIF-01",
+      "name": "Despacho SMTP de correos transaccionales de confirmación y cancelación de citas en buzón de pruebas",
+      "success": true,
+      "details": "8 correos capturados en buzón SMTP mock; confirmación de cita #3 (Valeria Castro, 11:30 - 13:00) y cancelaciones verificadas."
     },
     {
       "id": "REC-05",

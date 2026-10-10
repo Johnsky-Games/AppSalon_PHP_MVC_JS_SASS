@@ -241,6 +241,17 @@ try {
 
     Write-Host " -> Cita ID $citaId verificada: fecha $citaFecha (coincide con fecha calculada compartida $diaLaborable), profesional $citaProfesionalId, intervalo [$citaHoraInicio, $citaHoraFin) ($citaDuracionTotal min), usuario $citaUsuarioId con $citaTotalServicios servicios asociados." -ForegroundColor Green
 
+    $notifSql = "SELECT SUM(CASE WHEN tipo='confirmacion' AND estado='enviado' AND intentos=1 THEN 1 ELSE 0 END) AS confirmaciones, SUM(CASE WHEN tipo='cancelacion' AND estado='enviado' AND intentos=1 AND cita_id IS NULL AND cita_referencia_id > 0 THEN 1 ELSE 0 END) AS cancelaciones FROM notificaciones_citas;"
+    $notifOutput = docker exec $DbContainer mysql -uroot -proot -N -e "$notifSql" $DbName 2>$null
+    if (-not $notifOutput) {
+        throw "No se encontraron registros en notificaciones_citas."
+    }
+    $notifCols = -split $notifOutput
+    if ([int]$notifCols[0] -lt 2 -or [int]$notifCols[1] -lt 1) {
+        throw "Inconsistencia en notificaciones_citas persistidas en BD (confirmaciones | cancelaciones): $notifOutput"
+    }
+    Write-Host " -> Notificaciones de citas verificadas en BD (confirmaciones enviadas | cancelaciones enviadas con historial preservado): $notifOutput" -ForegroundColor Green
+
     $testSuccess = $true
     $testExitCode = 0
 

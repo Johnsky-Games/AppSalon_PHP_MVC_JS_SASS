@@ -27,7 +27,7 @@ Cada fase del proyecto se ejecuta bajo la coordinación de tres roles con respon
 | **Fase 4A** | `feature/fase-4a-disponibilidad` | `939d84dbb9dcec67bc83421eaa5cbdc90389034a` | **Aprobada** |
 | **Fase 4B** | `feature/fase-4b-reservas-concurrencia` | `83e2a24b235a72c2865453ec13ea055d96419700` | **Aprobada (`APROBADO`)** |
 | **Fase 5** | `feature/fase-5-interfaz-reservas` | `1fb3475fe2eec5ed4dc2f6afd22bc6b1bcaabb27` | **Aprobada (`APROBADO`)** |
-| **Fase 6A** | `feature/fase-6a-notificaciones` | *(en desarrollo)* | **En curso** |
+| **Fase 6A** | `feature/fase-6a-notificaciones` | *(lista para auditoría)* | **Implementada y Verificada** |
 | **Fase 6B** | `feature/fase-6b-reportes` *(prevista)* | — | **Pendiente** |
 | **Fase 6C** | `feature/fase-6c-base-pagos` *(prevista)* | — | **Pendiente** |
 | **Cierre Técnico** | `feature/cierre-tecnico` *(prevista)* | — | **Pendiente** |
@@ -52,12 +52,14 @@ Cada fase del proyecto se ejecuta bajo la coordinación de tres roles con respon
 - Política explícita anti-bypass del endpoint clásico en `CitaService` (`modo_reserva = 'profesional'`, presencia de clave `profesionalId` y flag configurable `RESERVA_EXIGIR_PROFESIONAL`).
 - Verificada por Desarrollador y Auditor independiente (`eaf68f52-b7bb-4e2f-80cf-485ff299e602` en `auditing_fase_4b_reservas`) con `PHPUnit 10.5.66` (`OK (143 tests, 1512 assertions)`, exit `0`) y suite E2E en navegador (`RUN_ID: 7823d303480a43ac9f4f4326c4810d5d`, 15 comprobaciones `[OK]`, `0` errores de consola, `0` peticiones fallidas, exit `0`). Ver detalle en `docs/AUDITORIA.md`.
 
-### Fase 6A — Notificaciones
-- Correos transaccionales de confirmación y cancelación de citas.
-- Recordatorios configurables mediante tarea programada documentada.
-- Envíos idempotentes y reintentos seguros sin duplicados.
-- Aislamiento de fallos SMTP para que un error de correo nunca revierta una reserva ya confirmada en base de datos.
-- Configuración segura de enlaces y remitentes; pruebas con transporte sustituible o buzón de pruebas sin envíos reales a clientes.
+### Fase 6A — Notificaciones de Citas (`feature/fase-6a-notificaciones`)
+- Migración incremental `005_notificaciones_citas.sql` + `005_notificaciones_citas_rollback.sql` (`notificaciones_citas` con `UNIQUE KEY uq_notificaciones_clave_idempotencia`, `cita_id INT NULL` con `ON DELETE SET NULL` y `cita_referencia_id INT NOT NULL` para conservar el historial de confirmación y cancelación tras borrar la cita).
+- Correos transaccionales de confirmación y cancelación de citas con escapado HTML completo (`htmlspecialchars`) e información de profesional, fecha, horario, duración, desglose de servicios y total.
+- Recordatorios configurables en zona horaria `America/Guayaquil` (`NOTIFICACIONES_RECORDATORIO_HORAS`, por defecto `24` horas) mediante tarea programada documentada (`scripts/procesar_notificaciones.php`).
+- Envíos idempotentes con bloqueo transaccional `FOR UPDATE` (`registrarOAdquirirParaEnvio`) y cola de reintentos seguros con *backoff* exponencial (`procesarPendientesYReintentos`), descartando recordatorios pendientes si la cita fue cancelada.
+- Aislamiento estricto de fallos SMTP post-commit en `CitaService` (`reservar`, `reservarConProfesional`, `eliminar`) para que un error de correo nunca revierta una reserva o cancelación confirmada en base de datos.
+- Configuración segura de enlaces (`Email::resolverAppUrl`) y remitentes (`Email::resolverRemitente`, `Email::sanearTextoCabecera`); pruebas automatizadas con transporte sustituible y buzón SMTP mock (`tests/smtp_mock_server.php`).
+- Verificada por el Desarrollador con `PHPUnit 10.5.66` (`OK (152 tests, 1714 assertions)`, exit `0`) y suite E2E en navegador (`RUN_ID: 5ab1f43eeac3445996985fe29d36978d`, 17 comprobaciones `[OK]` incluyendo `NOTIF-01`, `0` errores de consola, `0` peticiones fallidas, exit `0`).
 
 ### Fase 6B — Reportes Administrativos
 - Reportes de reservas por rango de fechas, profesional y servicio.

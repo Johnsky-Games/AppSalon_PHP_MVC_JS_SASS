@@ -4,6 +4,7 @@ namespace Services;
 
 use Model\Cita;
 use Repositories\CitaRepository;
+use Repositories\NotificacionCitaRepository;
 use Repositories\PersistenceException;
 use Repositories\ServicioRepository;
 
@@ -34,6 +35,7 @@ class CitaService
 
     private CitaRepository $citaRepository;
     private ServicioRepository $servicioRepository;
+    private ?NotificacionCitaService $notificacionCitaService;
     private ?\DateTimeImmutable $ahoraReferencia;
     private static ?bool $exigirProfesionalGlobal = null;
     private ?bool $exigirProfesionalInstancia = null;
@@ -41,12 +43,38 @@ class CitaService
     public function __construct(
         ?CitaRepository $citaRepository = null,
         ?ServicioRepository $servicioRepository = null,
-        ?\DateTimeImmutable $ahoraReferencia = null
+        ?\DateTimeImmutable $ahoraReferencia = null,
+        ?NotificacionCitaService $notificacionCitaService = null
     ) {
         $this->citaRepository = $citaRepository ?? new CitaRepository();
         // Compartir la misma conexión del repositorio de citas cuando no se inyecta ServicioRepository aparte
         $this->servicioRepository = $servicioRepository ?? new ServicioRepository($this->citaRepository->getDb());
         $this->ahoraReferencia = $ahoraReferencia;
+        $this->notificacionCitaService = $notificacionCitaService;
+    }
+
+    /**
+     * Permite inyectar o sustituir el servicio de notificaciones de citas.
+     */
+    public function setNotificacionCitaService(?NotificacionCitaService $notificacionCitaService): void
+    {
+        $this->notificacionCitaService = $notificacionCitaService;
+    }
+
+    /**
+     * Resuelve de forma perezosa el servicio de notificaciones compartiendo conexión y reloj de referencia.
+     */
+    private function obtenerNotificacionService(): NotificacionCitaService
+    {
+        if ($this->notificacionCitaService === null) {
+            $notifRepo = new NotificacionCitaRepository($this->citaRepository->getDb());
+            $this->notificacionCitaService = new NotificacionCitaService(
+                $notifRepo,
+                $this->citaRepository,
+                $this->ahoraReferencia
+            );
+        }
+        return $this->notificacionCitaService;
     }
 
     /**
@@ -71,6 +99,9 @@ class CitaService
     public function setAhoraReferencia(?\DateTimeImmutable $ahoraReferencia): void
     {
         $this->ahoraReferencia = $ahoraReferencia;
+        if ($this->notificacionCitaService !== null) {
+            $this->notificacionCitaService->setAhoraReferencia($ahoraReferencia);
+        }
     }
 
     /**
@@ -416,17 +447,6 @@ class CitaService
         try {
             $idCita = $this->citaRepository->crearReservaAtomica($cita, $idServicios);
             $cita->id = (string)$idCita;
-
-            return [
-                'status' => self::STATUS_OK,
-                'httpCode' => 200,
-                'id' => $idCita,
-                'resultado' => [
-                    'resultado' => true,
-                    'id' => $idCita
-                ],
-                'cita' => $cita
-            ];
         } catch (PersistenceException $e) {
             return [
                 'status' => self::STATUS_ERROR,
@@ -435,6 +455,24 @@ class CitaService
                 'error' => 'No se pudo procesar la reserva. Operación cancelada.'
             ];
         }
+
+        // 10. Notificación transaccional de confirmación aislada post-commit (un fallo SMTP jamás revierte la cita)
+        try {
+            $this->obtenerNotificacionService()->notificarConfirmacionCita((int)$idCita);
+        } catch (\Throwable $e) {
+            error_log("[CitaService::reservar] Error aislado en notificación post-commit para cita {$idCita}: " . $e->getMessage());
+        }
+
+        return [
+            'status' => self::STATUS_OK,
+            'httpCode' => 200,
+            'id' => $idCita,
+            'resultado' => [
+                'resultado' => true,
+                'id' => $idCita
+            ],
+            'cita' => $cita
+        ];
     }
 
     /**
@@ -580,31 +618,6 @@ class CitaService
             }
 
             $idCita = (int)$resRepo['id'];
-
-            return [
-                'status' => self::STATUS_OK,
-                'codigo' => 'reserva_creada',
-                'httpCode' => 200,
-                'id' => $idCita,
-                'profesionalId' => $profesionalId,
-                'fecha' => $fecha,
-                'hora' => $resRepo['hora'],
-                'hora_inicio' => $resRepo['hora_inicio'],
-                'hora_fin' => $resRepo['hora_fin'],
-                'duracion_total_minutos' => $resRepo['duracion_total_minutos'],
-                'servicios' => $resRepo['servicios'],
-                'resultado' => [
-                    'resultado' => true,
-                    'id' => $idCita,
-                    'profesionalId' => $profesionalId,
-                    'fecha' => $fecha,
-                    'hora' => $resRepo['hora'],
-                    'hora_inicio' => $resRepo['hora_inicio'],
-                    'hora_fin' => $resRepo['hora_fin'],
-                    'duracion_total_minutos' => $resRepo['duracion_total_minutos'],
-                ],
-                'cita' => $resRepo['cita']
-            ];
         } catch (PersistenceException $e) {
             return [
                 'status' => self::STATUS_ERROR,
@@ -614,6 +627,38 @@ class CitaService
                 'error' => 'No se pudo procesar la reserva. Operación cancelada.'
             ];
         }
+
+        // Notificación transaccional de confirmación aislada post-commit (un fallo SMTP jamás revierte la reserva)
+        try {
+            $this->obtenerNotificacionService()->notificarConfirmacionCita($idCita);
+        } catch (\Throwable $e) {
+            error_log("[CitaService::reservarConProfesional] Error aislado en notificación post-commit para cita {$idCita}: " . $e->getMessage());
+        }
+
+        return [
+            'status' => self::STATUS_OK,
+            'codigo' => 'reserva_creada',
+            'httpCode' => 200,
+            'id' => $idCita,
+            'profesionalId' => $profesionalId,
+            'fecha' => $fecha,
+            'hora' => $resRepo['hora'],
+            'hora_inicio' => $resRepo['hora_inicio'],
+            'hora_fin' => $resRepo['hora_fin'],
+            'duracion_total_minutos' => $resRepo['duracion_total_minutos'],
+            'servicios' => $resRepo['servicios'],
+            'resultado' => [
+                'resultado' => true,
+                'id' => $idCita,
+                'profesionalId' => $profesionalId,
+                'fecha' => $fecha,
+                'hora' => $resRepo['hora'],
+                'hora_inicio' => $resRepo['hora_inicio'],
+                'hora_fin' => $resRepo['hora_fin'],
+                'duracion_total_minutos' => $resRepo['duracion_total_minutos'],
+            ],
+            'cita' => $resRepo['cita']
+        ];
     }
 
     /**
@@ -679,6 +724,18 @@ class CitaService
             ];
         }
 
+        // Capturar snapshot de la cita antes de eliminarla para la notificación de cancelación
+        $snapshotCancelacion = null;
+        try {
+            $actorCancelacion = ($esAdmin && !$esPropietario) ? 'admin' : 'cliente';
+            $snapshotCancelacion = $this->obtenerNotificacionService()->capturarSnapshotCitaParaCancelacion(
+                $idCita,
+                $actorCancelacion
+            );
+        } catch (\Throwable $e) {
+            error_log("[CitaService::eliminar] Error aislado al capturar snapshot previo para cita {$idCita}: " . $e->getMessage());
+        }
+
         try {
             $eliminado = $this->citaRepository->eliminarCitaAtomica($idCita);
             if (!$eliminado) {
@@ -689,12 +746,6 @@ class CitaService
                     'error' => 'La cita solicitada no existe.'
                 ];
             }
-
-            return [
-                'status' => self::STATUS_OK,
-                'httpCode' => 200,
-                'resultado' => true
-            ];
         } catch (PersistenceException $e) {
             return [
                 'status' => self::STATUS_ERROR,
@@ -703,6 +754,21 @@ class CitaService
                 'error' => 'No fue posible eliminar la cita debido a un error de base de datos.'
             ];
         }
+
+        // Notificación transaccional de cancelación aislada post-commit (un fallo SMTP jamás revierte la cancelación)
+        if ($snapshotCancelacion !== null) {
+            try {
+                $this->obtenerNotificacionService()->notificarCancelacionCitaDesdeSnapshot($snapshotCancelacion, false);
+            } catch (\Throwable $e) {
+                error_log("[CitaService::eliminar] Error aislado en notificación post-commit de cancelación para cita {$idCita}: " . $e->getMessage());
+            }
+        }
+
+        return [
+            'status' => self::STATUS_OK,
+            'httpCode' => 200,
+            'resultado' => true
+        ];
     }
 
     /**

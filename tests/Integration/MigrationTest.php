@@ -123,6 +123,8 @@ class MigrationTest extends TestCase
         $this->assertStringContainsString('[OK] Migración 003_profesionales_duracion_y_horarios aplicada exitosamente.', $resUpgrade['stdout']);
         $this->assertStringContainsString('[+] Aplicando migración: 004_reservas_profesional_ocupacion_historico', $resUpgrade['stdout']);
         $this->assertStringContainsString('[OK] Migración 004_reservas_profesional_ocupacion_historico aplicada exitosamente.', $resUpgrade['stdout']);
+        $this->assertStringContainsString('[+] Aplicando migración: 005_notificaciones_citas', $resUpgrade['stdout']);
+        $this->assertStringContainsString('[OK] Migración 005_notificaciones_citas aplicada exitosamente.', $resUpgrade['stdout']);
 
         // 4. Demostrar preservación íntegra de los datos existentes completos
         $resUsuario = $upgradeDb->query("SELECT * FROM usuarios WHERE id = {$clienteId}")->fetch_assoc();
@@ -189,6 +191,7 @@ class MigrationTest extends TestCase
         $this->assertStringContainsString('[+] Aplicando migración: 002_innodb_and_rate_limit_window', $resFresh['stdout']);
         $this->assertStringContainsString('[+] Aplicando migración: 003_profesionales_duracion_y_horarios', $resFresh['stdout']);
         $this->assertStringContainsString('[+] Aplicando migración: 004_reservas_profesional_ocupacion_historico', $resFresh['stdout']);
+        $this->assertStringContainsString('[+] Aplicando migración: 005_notificaciones_citas', $resFresh['stdout']);
 
         // 6. Comparar esquemas exactos entre ambas instalaciones: columnas, tipos, nulabilidad, defaults, índices y motores
         $tablas = [
@@ -202,7 +205,8 @@ class MigrationTest extends TestCase
             'profesionales_servicios',
             'horarios_profesionales',
             'descansos_profesionales',
-            'bloqueos_profesionales'
+            'bloqueos_profesionales',
+            'notificaciones_citas'
         ];
         foreach ($tablas as $tabla) {
             $colsUpgrade = [];
@@ -337,6 +341,92 @@ class MigrationTest extends TestCase
             if (file_exists($tempMigrationFile)) {
                 unlink($tempMigrationFile);
             }
+        }
+    }
+
+    public function testMigracion005NotificacionesCitasUpIdempotenciaSetNullYRollback(): void
+    {
+        self::$db->query("DROP DATABASE IF EXISTS appsalon_mig005_test");
+        self::$db->query("CREATE DATABASE appsalon_mig005_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+        $db005 = new mysqli(self::$host, self::$user, self::$pass, 'appsalon_mig005_test', self::$port);
+
+        try {
+            $schemaBase = file_get_contents(__DIR__ . '/../../database/schema_base.sql');
+            $db005->multi_query($schemaBase);
+            while ($db005->more_results() && $db005->next_result()) {
+                if ($res = $db005->store_result()) {
+                    $res->free();
+                }
+            }
+
+            // 1. Aplicar todas las migraciones incluyendo 005
+            $resUp1 = $this->ejecutarMigrador('up', 'appsalon_mig005_test');
+            $this->assertSame(0, $resUp1['exitCode']);
+            $this->assertStringContainsString('[+] Aplicando migración: 005_notificaciones_citas', $resUp1['stdout']);
+            $this->assertStringContainsString('[OK] Migración 005_notificaciones_citas aplicada exitosamente.', $resUp1['stdout']);
+
+            // 2. Segunda ejecución debe ser idempotente
+            $resUp2 = $this->ejecutarMigrador('up', 'appsalon_mig005_test');
+            $this->assertSame(0, $resUp2['exitCode']);
+            $this->assertStringContainsString('[-] Migración ya aplicada: 005_notificaciones_citas', $resUp2['stdout']);
+
+            // 3. Verificar ON DELETE SET NULL en cita_id conservando cita_referencia_id y restricción UNIQUE en clave_idempotencia
+            $hash = password_hash('clave123', PASSWORD_BCRYPT);
+            $db005->query("INSERT INTO usuarios (nombre, apellido, email, password, telefono, admin, confirmado) VALUES ('Ana', 'Paz', 'ana@test.local', '{$hash}', '0991112223', 0, 1)");
+            $uid = (int)$db005->insert_id;
+
+            $db005->query("INSERT INTO citas (fecha, hora, usuarioId) VALUES ('2026-12-10', '10:00:00', {$uid})");
+            $cid = (int)$db005->insert_id;
+
+            $db005->query(
+                "INSERT INTO notificaciones_citas
+                    (cita_id, cita_referencia_id, usuario_id, tipo, clave_idempotencia, destinatario_email, destinatario_nombre, asunto, estado, intentos, max_intentos)
+                 VALUES
+                    ({$cid}, {$cid}, {$uid}, 'confirmacion', 'cita:{$cid}:confirmacion', 'ana@test.local', 'Ana Paz', 'Confirmación', 'enviado', 1, 3)"
+            );
+            $nid = (int)$db005->insert_id;
+            $this->assertGreaterThan(0, $nid);
+
+            // Intento de duplicar clave_idempotencia debe fallar por UNIQUE KEY
+            try {
+                $okDup = @$db005->query(
+                    "INSERT INTO notificaciones_citas
+                        (cita_id, cita_referencia_id, usuario_id, tipo, clave_idempotencia, destinatario_email, destinatario_nombre, asunto, estado, intentos, max_intentos)
+                     VALUES
+                        ({$cid}, {$cid}, {$uid}, 'confirmacion', 'cita:{$cid}:confirmacion', 'ana@test.local', 'Ana Paz', 'Confirmación dup', 'pendiente', 0, 3)"
+                );
+            } catch (\mysqli_sql_exception $e) {
+                $okDup = false;
+            }
+            $this->assertFalse($okDup, 'La restricción uq_notificaciones_clave_idempotencia debe impedir duplicados');
+
+            // Eliminar la cita en `citas`: la fila en `notificaciones_citas` debe permanecer con cita_id = NULL y cita_referencia_id = $cid
+            $db005->query("DELETE FROM citas WHERE id = {$cid}");
+            $filaNotif = $db005->query("SELECT cita_id, cita_referencia_id, clave_idempotencia, estado FROM notificaciones_citas WHERE id = {$nid}")->fetch_assoc();
+            $this->assertNotNull($filaNotif, 'El registro de notificación debe sobrevivir al borrado de la cita gracias a ON DELETE SET NULL');
+            $this->assertNull($filaNotif['cita_id']);
+            $this->assertSame($cid, (int)$filaNotif['cita_referencia_id']);
+            $this->assertSame("cita:{$cid}:confirmacion", $filaNotif['clave_idempotencia']);
+
+            // 4. Rollback de 005_notificaciones_citas
+            $rollbackSql = file_get_contents(__DIR__ . '/../../database/migrations/005_notificaciones_citas_rollback.sql');
+            $db005->multi_query($rollbackSql);
+            while ($db005->more_results() && $db005->next_result()) {
+                if ($res = $db005->store_result()) {
+                    $res->free();
+                }
+            }
+
+            $checkTabla = $db005->query("SHOW TABLES LIKE 'notificaciones_citas'");
+            $this->assertSame(0, $checkTabla->num_rows, 'El rollback de 005 debe eliminar la tabla notificaciones_citas');
+
+            // 5. Reaplicar 005 tras rollback debe funcionar limpiamente
+            $resReup = $this->ejecutarMigrador('up', 'appsalon_mig005_test');
+            $this->assertSame(0, $resReup['exitCode']);
+            $this->assertStringContainsString('[+] Aplicando migración: 005_notificaciones_citas', $resReup['stdout']);
+        } finally {
+            $db005->close();
+            self::$db->query("DROP DATABASE IF EXISTS appsalon_mig005_test");
         }
     }
 }
