@@ -180,6 +180,8 @@ try {
     $env:APP_URL = $appUrl
     $env:TEST_REJECT_WEEKEND_DATE = $proximoSabado
     $env:TEST_VALID_BOOKING_DATE = $diaLaborable
+    $env:TEST_DB_CONTAINER = $DbContainer
+    $env:TEST_DB_NAME = $DbName
 
     $nodeCmd = "node tests/browser_e2e_test.js"
     Invoke-Expression $nodeCmd
@@ -209,7 +211,7 @@ try {
         throw "La profesional 'Sofia Andrade' y su agenda no se encontraron en la base de datos."
     }
     $profCols = -split $profCheck
-    if ($profCols[1] -ne "1" -or [int]$profCols[2] -ne 2 -or [int]$profCols[3] -ne 1 -or [int]$profCols[4] -ne 1 -or [int]$profCols[5] -ne 1) {
+    if ($profCols[1] -ne "1" -or [int]$profCols[2] -ne 2 -or [int]$profCols[3] -ne 2 -or [int]$profCols[4] -ne 1 -or [int]$profCols[5] -ne 1) {
         throw "Inconsistencia en agenda de profesional persistida en BD: $profCheck"
     }
     Write-Host " -> Profesional y agenda verificados en BD (id | activo | servicios | horarios | descansos | bloqueos): $profCheck" -ForegroundColor Green

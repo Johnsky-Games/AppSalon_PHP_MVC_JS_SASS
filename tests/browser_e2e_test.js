@@ -11,6 +11,19 @@
 
 const path = require('path');
 const fs = require('fs');
+const { execFileSync } = require('child_process');
+
+function consultarHorariosEnMySql(diaSemana) {
+    const dbContainer = process.env.TEST_DB_CONTAINER;
+    const dbName = process.env.TEST_DB_NAME || 'appsalon_browser_test';
+    if (!dbContainer) return null;
+    const sql = `SELECT CONCAT(hora_inicio, '-', hora_fin) FROM horarios_profesionales WHERE profesionalId = 1 AND dia_semana = ${Number(diaSemana)} ORDER BY hora_inicio ASC;`;
+    const out = execFileSync('docker', [
+        'exec', dbContainer,
+        'mysql', '-uroot', '-proot', '--default-character-set=utf8mb4', '-N', '-e', sql, dbName
+    ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    return out.trim().split(/\r?\n/).filter(Boolean);
+}
 
 // Cargar puppeteer-core (prioriza PUPPETEER_CORE_PATH o instalación local en node_modules)
 const defaultCandidates = [
@@ -398,6 +411,110 @@ async function runBrowserTests() {
 
         recordTest('PROF-01', 'Gestión de profesionales, servicios asociados, horarios, descansos, bloqueos y desactivación/reactivación', true,
             `'Sofía Andrade' creada con servicios, horario Lunes 09:00-18:00, descanso 13:00-14:00, bloqueo ${validDate} 15:00-16:30 y ciclo Inactivo/Activo verificado.`);
+
+        // ------------------------------------------------------------------
+        // PROF-02: Múltiples franjas por día, guardado sin cambios y retirada explícita
+        // ------------------------------------------------------------------
+        await page.goto(`${BASE_URL}${hrefHorarios}`, { waitUntil: 'networkidle0' });
+
+        // 1. Configurar dos franjas el mismo día en Martes (dia=2: 08:00-12:00 y 14:00-18:00)
+        await page.evaluate(() => {
+            document.querySelector('#horario_activo_2').checked = true;
+            document.querySelector('#horario_inicio_2').value = '08:00';
+            document.querySelector('#horario_fin_2').value = '12:00';
+        });
+        await page.click('.btn-agregar-franja[data-dia="2"]');
+        await page.evaluate(() => {
+            document.querySelector('#horario_activo_2_1').checked = true;
+            document.querySelector('#horario_inicio_2_1').value = '14:00';
+            document.querySelector('#horario_fin_2_1').value = '18:00';
+        });
+
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('#form-horarios-semanales input[type="submit"]')
+        ]);
+
+        // 2. Cargar vista con las dos franjas del Martes y comprobar que ambas están renderizadas
+        const franjasCargadasMartes = await page.$$eval(
+            '.horario-dia-franjas[data-dia-contenedor="2"] .horario-franja-fila',
+            filas => filas.map(f => ({
+                activo: f.querySelector('.horario-activo-check').checked,
+                inicio: f.querySelector('.horario-inicio-input').value,
+                fin: f.querySelector('.horario-fin-input').value
+            }))
+        );
+        if (
+            franjasCargadasMartes.length !== 2 ||
+            !franjasCargadasMartes[0].activo || franjasCargadasMartes[0].inicio !== '08:00' || franjasCargadasMartes[0].fin !== '12:00' ||
+            !franjasCargadasMartes[1].activo || franjasCargadasMartes[1].inicio !== '14:00' || franjasCargadasMartes[1].fin !== '18:00'
+        ) {
+            throw new Error(`La vista no conservó las 2 franjas del Martes al cargar: ${JSON.stringify(franjasCargadasMartes)}`);
+        }
+
+        // 3. Guardar SIN CAMBIOS y verificar que ambas franjas se preservan en MySQL y en el DOM
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('#form-horarios-semanales input[type="submit"]')
+        ]);
+
+        const mysqlMartesTrasGuardarSinCambios = consultarHorariosEnMySql(2);
+        if (mysqlMartesTrasGuardarSinCambios !== null) {
+            if (
+                mysqlMartesTrasGuardarSinCambios.length !== 2 ||
+                mysqlMartesTrasGuardarSinCambios[0] !== '08:00:00-12:00:00' ||
+                mysqlMartesTrasGuardarSinCambios[1] !== '14:00:00-18:00:00'
+            ) {
+                throw new Error(`En MySQL no se preservaron ambas franjas tras guardar sin cambios: ${JSON.stringify(mysqlMartesTrasGuardarSinCambios)}`);
+            }
+        }
+
+        const franjasTrasGuardarSinCambios = await page.$$eval(
+            '.horario-dia-franjas[data-dia-contenedor="2"] .horario-franja-fila',
+            filas => filas.map(f => `${f.querySelector('.horario-inicio-input').value}-${f.querySelector('.horario-fin-input').value}`)
+        );
+        if (
+            franjasTrasGuardarSinCambios.length !== 2 ||
+            franjasTrasGuardarSinCambios[0] !== '08:00-12:00' ||
+            franjasTrasGuardarSinCambios[1] !== '14:00-18:00'
+        ) {
+            throw new Error(`El DOM no preservó ambas franjas tras guardar sin cambios: ${JSON.stringify(franjasTrasGuardarSinCambios)}`);
+        }
+
+        // 4. Retirada explícita de la primera franja del Martes (08:00-12:00) y comprobar que elimina únicamente la franja elegida
+        await page.click('.horario-dia-franjas[data-dia-contenedor="2"] .horario-franja-fila[data-franja-index="0"] .btn-retirar-franja');
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('#form-horarios-semanales input[type="submit"]')
+        ]);
+
+        const mysqlMartesTrasRetirar = consultarHorariosEnMySql(2);
+        if (mysqlMartesTrasRetirar !== null) {
+            if (
+                mysqlMartesTrasRetirar.length !== 1 ||
+                mysqlMartesTrasRetirar[0] !== '14:00:00-18:00:00'
+            ) {
+                throw new Error(`En MySQL la retirada explícita no dejó únicamente la franja 14:00-18:00: ${JSON.stringify(mysqlMartesTrasRetirar)}`);
+            }
+        }
+
+        const franjasTrasRetirar = await page.$$eval(
+            '.horario-dia-franjas[data-dia-contenedor="2"] .horario-franja-fila',
+            filas => filas.map(f => ({
+                activo: f.querySelector('.horario-activo-check').checked,
+                rango: `${f.querySelector('.horario-inicio-input').value}-${f.querySelector('.horario-fin-input').value}`
+            }))
+        );
+        if (
+            franjasTrasRetirar.length !== 1 ||
+            !franjasTrasRetirar[0].activo ||
+            franjasTrasRetirar[0].rango !== '14:00-18:00'
+        ) {
+            throw new Error(`Tras retirar la primera franja del Martes, no quedó únicamente 14:00-18:00 activa: ${JSON.stringify(franjasTrasRetirar)}`);
+        }
+
+        recordTest('PROF-02', 'Carga de múltiples franjas del mismo día, guardado sin cambios verificado en MySQL y retirada explícita de franja individual', true,
+            'Martes 08:00-12:00 y 14:00-18:00 preservados en MySQL al guardar sin cambios; retirada explícita eliminó solo 08:00-12:00 conservando 14:00-18:00.');
 
         // Cerrar sesión de administrador mediante POST /logout
         await Promise.all([

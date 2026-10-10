@@ -354,4 +354,126 @@ class ProfesionalAgendaIntegrationTest extends TestCase
         $this->assertSame(CitaService::STATUS_OK, $resReserva['status']);
         $this->assertTrue($resReserva['resultado']['resultado']);
     }
+
+    public function testControladorRechazaSolicitudesInvalidasConHttp422SinModificarBaseDeDatosYConservaMultiplesFranjasPorDia(): void
+    {
+        $servRepo = new ServicioRepository(self::$db);
+        $s1 = $servRepo->create(new Servicio(['nombre' => 'Peinado', 'precio' => '65.00', 'duracion_minutos' => '45']));
+
+        $profRepo = new ProfesionalRepository(self::$db);
+        $profService = new ProfesionalService($profRepo, $servRepo);
+
+        $profId = $profService->crear(['nombre' => 'Daniela Paredes', 'servicios' => [$s1]])['id'];
+
+        // Sembrar dos franjas el mismo día (Lunes=1: 08:00-12:00 y 14:00-18:00) y una en Martes=2 (09:00-17:00)
+        $resInicial = $profService->guardarHorariosSemanales($profId, [
+            '1_0' => ['enviado' => '1', 'dia_semana' => 1, 'activo' => '1', 'hora_inicio' => '08:00', 'hora_fin' => '12:00'],
+            '1_1' => ['enviado' => '1', 'dia_semana' => 1, 'activo' => '1', 'hora_inicio' => '14:00', 'hora_fin' => '18:00'],
+            '2_0' => ['enviado' => '1', 'dia_semana' => 2, 'activo' => '1', 'hora_inicio' => '09:00', 'hora_fin' => '17:00']
+        ]);
+        $this->assertSame(ProfesionalService::STATUS_OK, $resInicial['status']);
+        $this->assertCount(3, $profRepo->findHorariosByProfesional($profId));
+
+        $csrf = $this->autenticarAdmin();
+        $router = new Router();
+        $_GET['id'] = (string)$profId;
+
+        $casosInvalidos = [
+            'accion_desconocida' => [
+                'csrf_token' => $csrf,
+                'accion' => 'accion_inexistente',
+                'profesionalId' => (string)$profId
+            ],
+            'accion_no_escalar' => [
+                'csrf_token' => $csrf,
+                'accion' => ['guardar_horarios'],
+                'profesionalId' => (string)$profId
+            ],
+            'horarios_ausente' => [
+                'csrf_token' => $csrf,
+                'accion' => 'guardar_horarios',
+                'profesionalId' => (string)$profId
+            ],
+            'horarios_escalar' => [
+                'csrf_token' => $csrf,
+                'accion' => 'guardar_horarios',
+                'profesionalId' => (string)$profId,
+                'horarios' => 'invalido'
+            ],
+            'activo_invalido' => [
+                'csrf_token' => $csrf,
+                'accion' => 'guardar_horarios',
+                'profesionalId' => (string)$profId,
+                'horarios' => [
+                    '1_0' => [
+                        'enviado' => '1',
+                        'dia_semana' => '1',
+                        'activo' => 'invalido',
+                        'hora_inicio' => '08:00',
+                        'hora_fin' => '12:00'
+                    ]
+                ]
+            ]
+        ];
+
+        foreach ($casosInvalidos as $nombreCaso => $payload) {
+            http_response_code(200);
+            $_SERVER['REQUEST_METHOD'] = 'POST';
+            $_POST = $payload;
+
+            ob_start();
+            ProfesionalController::horarios($router);
+            $html = ob_get_clean();
+
+            $this->assertSame(422, http_response_code(), "El caso '{$nombreCaso}' debe responder HTTP 422");
+            $this->assertStringContainsString('alerta error', $html, "El caso '{$nombreCaso}' debe mostrar alerta de error");
+
+            $horariosActuales = $profRepo->findHorariosByProfesional($profId);
+            $this->assertCount(3, $horariosActuales, "El caso '{$nombreCaso}' no debe modificar las 3 franjas en la base de datos");
+            $this->assertSame(1, $horariosActuales[0]->dia_semana);
+            $this->assertSame('08:00', $horariosActuales[0]->hora_inicio);
+            $this->assertSame('12:00', $horariosActuales[0]->hora_fin);
+            $this->assertSame(1, $horariosActuales[1]->dia_semana);
+            $this->assertSame('14:00', $horariosActuales[1]->hora_inicio);
+            $this->assertSame('18:00', $horariosActuales[1]->hora_fin);
+            $this->assertSame(2, $horariosActuales[2]->dia_semana);
+            $this->assertSame('09:00', $horariosActuales[2]->hora_inicio);
+            $this->assertSame('17:00', $horariosActuales[2]->hora_fin);
+        }
+
+        // Comprobar que GET /profesionales/horarios renderiza ambas franjas del lunes (08:00-12:00 y 14:00-18:00)
+        http_response_code(200);
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_POST = [];
+        ob_start();
+        ProfesionalController::horarios($router);
+        $htmlGet = ob_get_clean();
+
+        $this->assertSame(200, http_response_code());
+        $this->assertStringContainsString('value="08:00"', $htmlGet);
+        $this->assertStringContainsString('value="12:00"', $htmlGet);
+        $this->assertStringContainsString('value="14:00"', $htmlGet);
+        $this->assertStringContainsString('value="18:00"', $htmlGet);
+        $this->assertStringContainsString('name="horarios[1_0][hora_inicio]"', $htmlGet);
+        $this->assertStringContainsString('name="horarios[1_1][hora_inicio]"', $htmlGet);
+
+        // Comprobar que un envío explícito y válido del formulario permite desactivar todos los días
+        $_SERVER['REQUEST_METHOD'] = 'POST';
+        $_POST = [
+            'csrf_token' => $csrf,
+            'accion' => 'guardar_horarios',
+            'profesionalId' => (string)$profId,
+            'horarios' => [
+                '1_0' => ['enviado' => '1', 'dia_semana' => '1', 'activo' => '0', 'hora_inicio' => '08:00', 'hora_fin' => '12:00'],
+                '2_0' => ['enviado' => '1', 'dia_semana' => '2', 'activo' => '0', 'hora_inicio' => '09:00', 'hora_fin' => '17:00']
+            ]
+        ];
+        try {
+            ProfesionalController::horarios($router);
+            $this->fail('El guardado válido que desactiva todos los días debe redirigir con 302');
+        } catch (AppTerminationException $e) {
+            $this->assertSame(302, $e->getStatusCode());
+        }
+        $this->assertCount(0, $profRepo->findHorariosByProfesional($profId));
+    }
 }

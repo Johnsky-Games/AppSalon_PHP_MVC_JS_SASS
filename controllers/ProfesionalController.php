@@ -18,6 +18,14 @@ use Services\ServicioService;
  */
 class ProfesionalController
 {
+    private const ACCIONES_AGENDA_VALIDAS = [
+        'guardar_horarios',
+        'crear_descanso',
+        'eliminar_descanso',
+        'crear_bloqueo',
+        'eliminar_bloqueo'
+    ];
+
     private static ?ProfesionalService $profesionalService = null;
     private static ?ServicioService $servicioService = null;
 
@@ -56,21 +64,110 @@ class ProfesionalController
     private static function esCargaFormularioProfesionalValida(array $datos): bool
     {
         $nombreOk = !isset($datos['nombre']) || is_string($datos['nombre']);
-        $activoOk = !isset($datos['activo']) || is_scalar($datos['activo']);
-        $serviciosOk = !isset($datos['servicios']) || is_array($datos['servicios']);
+        $activoOk = !array_key_exists('activo', $datos) || in_array($datos['activo'], ['1', 1, true, '0', 0, false], true);
+        $serviciosOk = !isset($datos['servicios']) || is_array($datos['servicios']) || is_string($datos['servicios']);
         return $nombreOk && $activoOk && $serviciosOk;
     }
 
-    private static function esCargaFormularioAgendaValida(array $datos): bool
+    /**
+     * Valida la acción y la estructura de los datos de agenda ANTES de ejecutar cualquier operación.
+     * Devuelve null si la estructura es válida o un mensaje de error si la solicitud es malformada.
+     */
+    private static function validarSolicitudAgenda(array $post): ?string
     {
-        $accionOk = !isset($datos['accion']) || is_string($datos['accion']);
-        $horariosOk = !isset($datos['horarios']) || is_array($datos['horarios']);
-        $diaOk = !isset($datos['dia_semana']) || is_scalar($datos['dia_semana']);
-        $horaInicioOk = !isset($datos['hora_inicio']) || is_string($datos['hora_inicio']);
-        $horaFinOk = !isset($datos['hora_fin']) || is_string($datos['hora_fin']);
-        $fechaInicioOk = !isset($datos['fecha_inicio']) || is_string($datos['fecha_inicio']);
-        $fechaFinOk = !isset($datos['fecha_fin']) || is_string($datos['fecha_fin']);
-        return $accionOk && $horariosOk && $diaOk && $horaInicioOk && $horaFinOk && $fechaInicioOk && $fechaFinOk;
+        if (!array_key_exists('accion', $post) || !is_string($post['accion'])) {
+            return 'La acción solicitada no es válida.';
+        }
+
+        $accion = trim($post['accion']);
+        if (!in_array($accion, self::ACCIONES_AGENDA_VALIDAS, true)) {
+            return 'La acción solicitada no es válida.';
+        }
+
+        switch ($accion) {
+            case 'guardar_horarios':
+                if (!array_key_exists('horarios', $post) || !is_array($post['horarios']) || empty($post['horarios'])) {
+                    return 'Debe enviar una estructura válida de horarios semanales.';
+                }
+                foreach ($post['horarios'] as $item) {
+                    if (!is_array($item) || empty($item)) {
+                        return 'Formato de franja horaria inválido.';
+                    }
+                    $esFilaDirecta = array_key_exists('dia_semana', $item)
+                        || array_key_exists('hora_inicio', $item)
+                        || array_key_exists('hora_fin', $item)
+                        || array_key_exists('activo', $item)
+                        || array_key_exists('enviado', $item);
+
+                    $filasVerificar = $esFilaDirecta ? [$item] : $item;
+                    foreach ($filasVerificar as $fila) {
+                        if (!is_array($fila) || empty($fila)) {
+                            return 'Formato de franja horaria inválido.';
+                        }
+                        $tieneIndicadorEstado = array_key_exists('activo', $fila) || array_key_exists('enviado', $fila);
+                        $tieneHoras = array_key_exists('hora_inicio', $fila) && array_key_exists('hora_fin', $fila);
+                        if (!$tieneIndicadorEstado && !$tieneHoras) {
+                            return 'Formato de franja horaria inválido.';
+                        }
+                        if (array_key_exists('enviado', $fila) && !in_array($fila['enviado'], ['1', 1, true], true)) {
+                            return 'El indicador de envío en la franja horaria no es válido.';
+                        }
+                        if (array_key_exists('activo', $fila) && !in_array($fila['activo'], ['1', 1, true, '0', 0, false], true)) {
+                            return 'El valor del campo activo en el horario no es válido.';
+                        }
+                        if (array_key_exists('dia_semana', $fila) && !is_scalar($fila['dia_semana'])) {
+                            return 'El día de la semana tiene un formato inválido.';
+                        }
+                        if (array_key_exists('hora_inicio', $fila) && $fila['hora_inicio'] !== null && !is_string($fila['hora_inicio'])) {
+                            return 'La hora de inicio tiene un formato inválido.';
+                        }
+                        if (array_key_exists('hora_fin', $fila) && $fila['hora_fin'] !== null && !is_string($fila['hora_fin'])) {
+                            return 'La hora de fin tiene un formato inválido.';
+                        }
+                    }
+                }
+                return null;
+
+            case 'crear_descanso':
+                if (
+                    !isset($post['dia_semana']) || !is_scalar($post['dia_semana']) ||
+                    !isset($post['hora_inicio']) || !is_string($post['hora_inicio']) ||
+                    !isset($post['hora_fin']) || !is_string($post['hora_fin']) ||
+                    (array_key_exists('motivo', $post) && $post['motivo'] !== null && !is_string($post['motivo']))
+                ) {
+                    return 'Los datos del descanso tienen un formato inválido.';
+                }
+                return null;
+
+            case 'eliminar_descanso':
+                $idDesc = $post['descansoId'] ?? ($post['id'] ?? null);
+                if ($idDesc === null || !is_scalar($idDesc)) {
+                    return 'El identificador del descanso no es válido.';
+                }
+                return null;
+
+            case 'crear_bloqueo':
+                if (
+                    !isset($post['fecha_inicio']) || !is_string($post['fecha_inicio']) ||
+                    (array_key_exists('fecha_fin', $post) && $post['fecha_fin'] !== null && !is_string($post['fecha_fin'])) ||
+                    (array_key_exists('hora_inicio', $post) && $post['hora_inicio'] !== null && !is_string($post['hora_inicio'])) ||
+                    (array_key_exists('hora_fin', $post) && $post['hora_fin'] !== null && !is_string($post['hora_fin'])) ||
+                    (array_key_exists('motivo', $post) && $post['motivo'] !== null && !is_string($post['motivo']))
+                ) {
+                    return 'Los datos del bloqueo tienen un formato inválido.';
+                }
+                return null;
+
+            case 'eliminar_bloqueo':
+                $idBloq = $post['bloqueoId'] ?? ($post['id'] ?? null);
+                if ($idBloq === null || !is_scalar($idBloq)) {
+                    return 'El identificador del bloqueo no es válido.';
+                }
+                return null;
+
+            default:
+                return 'La acción solicitada no es válida.';
+        }
     }
 
     public static function index(Router $router)
@@ -235,13 +332,25 @@ class ProfesionalController
                 return;
             }
 
-            if ($resultado['status'] === ProfesionalService::STATUS_INVALID && es_peticion_json()) {
+            if ($resultado['status'] === ProfesionalService::STATUS_INVALID) {
                 http_response_code(422);
-                header('Content-Type: application/json; charset=utf-8');
-                echo json_encode([
-                    'resultado' => false,
-                    'error' => $resultado['alertas']['error'][0] ?? 'Datos inválidos'
-                ]);
+                if (es_peticion_json()) {
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode([
+                        'resultado' => false,
+                        'error' => $resultado['alertas']['error'][0] ?? 'Datos inválidos'
+                    ]);
+                } elseif ($router !== null) {
+                    $listado = $service->listar(false);
+                    $router->render('profesionales/index', [
+                        'nombre' => $_SESSION['nombre'] ?? '',
+                        'apellido' => $_SESSION['apellido'] ?? '',
+                        'profesionales' => $listado['profesionales'] ?? [],
+                        'alertas' => $resultado['alertas']
+                    ]);
+                } else {
+                    echo s($resultado['alertas']['error'][0] ?? 'Datos inválidos.');
+                }
                 detener_ejecucion(422);
                 return;
             }
@@ -274,7 +383,16 @@ class ProfesionalController
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exigir_csrf();
 
-            $accion = is_string($_POST['accion'] ?? null) ? trim($_POST['accion']) : 'guardar_horarios';
+            // Validar la acción y la estructura de los datos ANTES de ejecutar cualquier operación
+            $errorEstructura = self::validarSolicitudAgenda($_POST);
+            if ($errorEstructura !== null) {
+                http_response_code(422);
+                $alertas = ['error' => [$errorEstructura]];
+                self::renderizarVistaHorarios($router, $service, $id, $alertas);
+                return;
+            }
+
+            $accion = trim($_POST['accion']);
             $resultadoAccion = self::ejecutarAccionAgenda($service, $id, $accion, $_POST);
 
             if ($resultadoAccion['status'] === ProfesionalService::STATUS_OK) {
@@ -296,7 +414,7 @@ class ProfesionalController
             $alertas = $resultadoAccion['alertas'];
             if ($resultadoAccion['status'] === ProfesionalService::STATUS_ERROR) {
                 http_response_code(500);
-            } elseif (es_peticion_json() || !self::esCargaFormularioAgendaValida($_POST)) {
+            } elseif (es_peticion_json()) {
                 http_response_code(422);
             }
         }
@@ -306,25 +424,41 @@ class ProfesionalController
 
     public static function crearDescanso(Router $router)
     {
-        $_POST['accion'] = 'crear_descanso';
+        if (!array_key_exists('accion', $_POST)) {
+            $_POST['accion'] = 'crear_descanso';
+        } elseif ($_POST['accion'] !== 'crear_descanso') {
+            $_POST['accion'] = '__accion_invalida__';
+        }
         self::horarios($router);
     }
 
     public static function eliminarDescanso(Router $router)
     {
-        $_POST['accion'] = 'eliminar_descanso';
+        if (!array_key_exists('accion', $_POST)) {
+            $_POST['accion'] = 'eliminar_descanso';
+        } elseif ($_POST['accion'] !== 'eliminar_descanso') {
+            $_POST['accion'] = '__accion_invalida__';
+        }
         self::horarios($router);
     }
 
     public static function crearBloqueo(Router $router)
     {
-        $_POST['accion'] = 'crear_bloqueo';
+        if (!array_key_exists('accion', $_POST)) {
+            $_POST['accion'] = 'crear_bloqueo';
+        } elseif ($_POST['accion'] !== 'crear_bloqueo') {
+            $_POST['accion'] = '__accion_invalida__';
+        }
         self::horarios($router);
     }
 
     public static function eliminarBloqueo(Router $router)
     {
-        $_POST['accion'] = 'eliminar_bloqueo';
+        if (!array_key_exists('accion', $_POST)) {
+            $_POST['accion'] = 'eliminar_bloqueo';
+        } elseif ($_POST['accion'] !== 'eliminar_bloqueo') {
+            $_POST['accion'] = '__accion_invalida__';
+        }
         self::horarios($router);
     }
 
@@ -348,9 +482,16 @@ class ProfesionalController
                 return $service->eliminarBloqueo($profesionalId, $post['bloqueoId'] ?? ($post['id'] ?? null));
 
             case 'guardar_horarios':
+                return $service->guardarHorariosSemanales($profesionalId, $post['horarios']);
+
             default:
-                $horariosRaw = is_array($post['horarios'] ?? null) ? $post['horarios'] : [];
-                return $service->guardarHorariosSemanales($profesionalId, $horariosRaw);
+                return [
+                    'status' => ProfesionalService::STATUS_INVALID,
+                    'resultado' => false,
+                    'alertas' => [
+                        'error' => ['La acción solicitada no es válida.']
+                    ]
+                ];
         }
     }
 
@@ -380,12 +521,13 @@ class ProfesionalController
         $descansos = $agenda['descansos'] ?? [];
         $bloqueos = $agenda['bloqueos'] ?? [];
 
-        // Indexar horarios por día de la semana para el formulario semanal
+        // Agrupar todas las franjas horarias por día de la semana (conservando múltiples franjas por día)
         $horariosPorDia = [];
+        foreach (array_keys(HorarioProfesional::DIAS_SEMANA) as $numDia) {
+            $horariosPorDia[$numDia] = [];
+        }
         foreach ($horarios as $h) {
-            if (!isset($horariosPorDia[$h->dia_semana])) {
-                $horariosPorDia[$h->dia_semana] = $h;
-            }
+            $horariosPorDia[$h->dia_semana][] = $h;
         }
 
         $router->render('profesionales/horarios', [

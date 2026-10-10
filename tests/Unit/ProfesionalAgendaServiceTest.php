@@ -484,4 +484,45 @@ class ProfesionalAgendaServiceTest extends TestCase
         $resCrear = $service->crear(['nombre' => 'Profesional Fallido']);
         $this->assertSame(ProfesionalService::STATUS_ERROR, $resCrear['status']);
     }
+
+    public function testGuardarHorariosRechazaEntradasMalformadasYAdmiteMultiplesFranjasYDesactivacionExplicita(): void
+    {
+        $repoProf = new InMemoryProfesionalRepositoryStub();
+        $repoServ = new InMemoryServicioCatalogoStub();
+        $service = new ProfesionalService($repoProf, $repoServ);
+
+        $idProf = $service->crear(['nombre' => 'Estilista Tres'])['id'];
+
+        // 1. Configurar dos franjas el mismo día (Lunes: 08:00-12:00 y 14:00-18:00)
+        $dosFranjas = $service->guardarHorariosSemanales($idProf, [
+            '1_0' => ['enviado' => '1', 'dia_semana' => 1, 'activo' => '1', 'hora_inicio' => '08:00', 'hora_fin' => '12:00'],
+            '1_1' => ['enviado' => '1', 'dia_semana' => 1, 'activo' => '1', 'hora_inicio' => '14:00', 'hora_fin' => '18:00']
+        ]);
+        $this->assertSame(ProfesionalService::STATUS_OK, $dosFranjas['status']);
+        $this->assertCount(2, $repoProf->findHorariosByProfesional($idProf));
+
+        // 2. Rechazo de horarios escalar o vacío sin modificar horarios existentes
+        $resEscalar = $service->guardarHorariosSemanales($idProf, 'invalido');
+        $this->assertSame(ProfesionalService::STATUS_INVALID, $resEscalar['status']);
+        $this->assertCount(2, $repoProf->findHorariosByProfesional($idProf));
+
+        $resVacio = $service->guardarHorariosSemanales($idProf, []);
+        $this->assertSame(ProfesionalService::STATUS_INVALID, $resVacio['status']);
+        $this->assertCount(2, $repoProf->findHorariosByProfesional($idProf));
+
+        // 3. Rechazo de valor inválido en activo sin interpretarlo como desactivación
+        $resActivoInvalido = $service->guardarHorariosSemanales($idProf, [
+            '1_0' => ['enviado' => '1', 'dia_semana' => 1, 'activo' => 'invalido', 'hora_inicio' => '08:00', 'hora_fin' => '12:00']
+        ]);
+        $this->assertSame(ProfesionalService::STATUS_INVALID, $resActivoInvalido['status']);
+        $this->assertCount(2, $repoProf->findHorariosByProfesional($idProf));
+
+        // 4. Desactivación explícita de todos los días mediante envío válido del formulario
+        $desactivarTodos = $service->guardarHorariosSemanales($idProf, [
+            '1_0' => ['enviado' => '1', 'dia_semana' => 1, 'activo' => '0', 'hora_inicio' => '08:00', 'hora_fin' => '12:00'],
+            '2_0' => ['enviado' => '1', 'dia_semana' => 2, 'activo' => '0', 'hora_inicio' => '09:00', 'hora_fin' => '18:00']
+        ]);
+        $this->assertSame(ProfesionalService::STATUS_OK, $desactivarTodos['status']);
+        $this->assertCount(0, $repoProf->findHorariosByProfesional($idProf));
+    }
 }

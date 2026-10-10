@@ -3,7 +3,7 @@
 Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerdo con la metodología de entregas auditables por **ChatGPT** (revisión estática de código) y ejecución/verificación por **Antigravity** (desarrollo y pruebas dinámicas automatizadas), sujeto a la aprobación final del **Propietario**.
 
 > **Roles y Criterios:**
-> - **Desarrollo y Pruebas Automatizadas (Antigravity):** Implementación de código y ejecución de la suite completa de pruebas unitarias e integrales (99 pruebas, 824 aserciones en PHPUnit), escenarios funcionales HTTP y suite E2E en navegador real Headless Chrome (`tests/verificar_navegador.ps1` y `tests/browser_e2e_test.js`).
+> - **Desarrollo y Pruebas Automatizadas (Antigravity):** Implementación de código y ejecución de la suite completa de pruebas unitarias e integrales (101 pruebas, 905 aserciones en PHPUnit), escenarios funcionales HTTP y suite E2E en navegador real Headless Chrome (`tests/verificar_navegador.ps1` y `tests/browser_e2e_test.js`).
 > - **Revisión Estática Externa (ChatGPT):** Auditoría independiente de código de aplicación, arquitectura por capas, contratos transaccionales y revisión estática de scripts Bash.
 > - **Aprobación Final y Despliegue (Propietario):** Decisión formal sobre fusiones hacia `main` y despliegues en producción.
 
@@ -45,26 +45,39 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
   - `Services\ProfesionalService`:
     - Valida identidad de profesional, `nombre` (`1..120` caracteres), estado `activo` (`0`/`1`) y existencia real de todos los `servicioId` asociados.
     - Valida intervalos horarios (`HH:MM`, `hora_inicio < hora_fin`), rechaza horarios invertidos o de duración cero y previene solapamientos dentro del mismo día y profesional.
+    - En `guardarHorariosSemanales()`, exige que `$horariosRaw` sea un arreglo no vacío de filas válidas, rechaza valores malformados de `activo` o `enviado` y permite desactivar todos los días mediante el envío explícito de filas inactivas (`activo = '0'`).
     - Verifica coherencia entre horarios y descansos: todo descanso debe estar contenido dentro de una franja laboral activa del mismo día sin consumir la totalidad del turno ni solaparse con otro descanso; asimismo, impide guardar o eliminar horarios si dejarían descansos existentes fuera de turno.
     - Valida bloqueos por fecha completa o por intervalo horario (`fecha_inicio <= fecha_fin`, `hora_inicio < hora_fin`, sin solapamiento con otros bloqueos del mismo profesional).
     - **Zona horaria explícita `America/Guayaquil`:** Todas las reglas de fechas de agenda en `ProfesionalService` (`TIMEZONE = 'America/Guayaquil'`) y `CitaService` (`TIMEZONE = 'America/Guayaquil'`) operan explícitamente sobre `new \DateTimeZone('America/Guayaquil')` mediante `DateTimeImmutable`, garantizando coherencia entre el cálculo del día actual, el día de la semana y las validaciones de reservas y bloqueos sin desalinear los `DATETIME` UTC de tokens en MySQL.
 - **Controladores y Vistas:**
-  - `Controllers\ProfesionalController`: protege todas las acciones con `iniciar_sesion_segura()`, `isAdmin()` y `exigir_csrf()` en peticiones `POST`; distingue errores de validación, no encontrado (`302`) y fallos de persistencia (`500`).
+  - `Controllers\ProfesionalController`:
+    - Protege todas las acciones con `iniciar_sesion_segura()`, `isAdmin()` y `exigir_csrf()` en peticiones `POST`; distingue errores de validación (`422`), no encontrado (`302`) y fallos de persistencia (`500`).
+    - **Validación estructural previa en `/profesionales/horarios` (`validarSolicitudAgenda`):** Rechaza antes de ejecutar cualquier operación en la capa de servicio o base de datos las acciones desconocidas o no escalares (eliminando cualquier `default` hacia `guardar_horarios`), la ausencia o carácter escalar de `horarios`, y los valores inválidos de `activo` en las filas, respondiendo HTTP `422` y conservando íntegramente la agenda persistida.
+    - **Conservación y edición de múltiples franjas diarias (`renderizarVistaHorarios` + `views/profesionales/horarios.php`):** Agrupa y renderiza todas las franjas existentes por día (`$horariosPorDia[$dia][]`), permitiendo añadir nuevas franjas (`+ Añadir franja`), retirar franjas individuales (`Retirar franja`), guardar sin cambios preservando todas las franjas y sus horas exactas, o desactivar explícitamente todos los días mediante el envío válido del formulario (`activo = '0'`).
   - **Frontera de compatibilidad:** El flujo de reserva del cliente (`/cita`, `/api/servicios`, `/api/citas`) y la tabla `citas` mantienen su contrato actual sin añadir columnas obligatorias ni atribuir profesionales retrospectivamente.
 
-### 2. Validación Ejecutada en Fase 3A (Antigravity)
+### 2. Correcciones de Auditoría sobre `d54a66c3f2c9a9ed769d1ea39fb6a1bfa06d594d`
+
+1. **Rechazo de solicitudes inválidas o malformadas antes de modificar la agenda (HTTP `422`):**
+   - `ProfesionalController::validarSolicitudAgenda()` valida la acción (`guardar_horarios`, `agregar_descanso`, `eliminar_descanso`, `agregar_bloqueo`, `eliminar_bloqueo`) y la estructura de los datos antes de invocar `ProfesionalService`.
+   - `ProfesionalService::guardarHorariosSemanales()` exige un arreglo no vacío de filas y valida explícitamente `activo` (`'0'`/`'1'`) y `enviado`, rechazando entradas ausentes, escalares o con valores inválidos de `activo` sin interpretarlas silenciosamente como días desactivados, al tiempo que conserva la desactivación explícita de todos los días cuando el formulario envía filas válidas con `activo = '0'`.
+2. **Conservación de todas las franjas horarias por día en controlador y vista:**
+   - `ProfesionalController::renderizarVistaHorarios()` agrupa todas las franjas de cada día en `$horariosPorDia[$h->dia_semana][]` en lugar de conservar solo la primera.
+   - `views/profesionales/horarios.php` renderiza todas las franjas de cada día con claves únicas `horarios[{dia}_{indice}]`, controles para añadir (`+ Añadir franja`) y retirar (`Retirar franja`) franjas explícitamente, y respaldo `activo = 0` por fila para enviar desactivaciones válidas.
+
+### 3. Validación Ejecutada en Fase 3A (Antigravity)
 
 #### A. Suite Completa PHPUnit (Ejecutada en Docker PHP 8.2 + MySQL 8.0 Aislado)
-- **Resultado:** `OK (99 tests, 824 assertions)` — Código de salida `0`.
-- **Cobertura añadida en Fase 3A:**
+- **Resultado:** `OK (101 tests, 905 assertions)` — Código de salida `0`.
+- **Cobertura añadida en Fase 3A y corrección de auditoría:**
   - `Tests\Unit\ServicioServiceTest`: validación de `duracion_minutos` como entero positivo (`>= 1`), rechazo de `0`, negativos, decimales, vacíos o no escalares, y verificación del supuesto configurable `DEFAULT_DURACION_MINUTOS = 30`.
-  - `Tests\Unit\ProfesionalAgendaServiceTest`: validación de profesionales y servicios asociados, intervalos horarios, rechazo de horarios invertidos y solapados, coherencia entre horarios y descansos, bloqueos por día completo e intervalo, y coherencia de zona horaria `America/Guayaquil` entre `ProfesionalService` y `CitaService`.
+  - `Tests\Unit\ProfesionalAgendaServiceTest`: validación de profesionales y servicios asociados, intervalos horarios, múltiples franjas diarias, rechazo de entradas malformadas (`horarios` vacío/no array, `activo` inválido), desactivación explícita de todos los días (`activo = '0'`), rechazo de horarios invertidos y solapados, coherencia entre horarios y descansos, bloqueos por día completo e intervalo, y coherencia de zona horaria `America/Guayaquil` entre `ProfesionalService` y `CitaService`.
   - `Tests\Integration\MigrationTest`: verificación de migración `003_profesionales_duracion_y_horarios` en instalaciones desde cero y con datos previos (`duracion_minutos = 30` y tablas `profesionales`, `profesionales_servicios`, `horarios_profesionales`, `descansos_profesionales`, `bloqueos_profesionales`).
   - `Tests\Integration\ServicioModuloIntegrationTest`: ciclo CRUD de servicios con `duracion_minutos` en MySQL real y vistas HTTP.
-  - `Tests\Integration\ProfesionalAgendaIntegrationTest`: control de permisos `isAdmin()` y CSRF en todas las rutas de `/profesionales*`, ciclo completo con MySQL real (creación, edición de servicios asociados, horarios semanales, descansos, bloqueos, desactivación conservando agenda histórica), rollback transaccional con respuesta HTTP 500 ante fallos SQL y compatibilidad con el flujo actual de reservas.
+  - `Tests\Integration\ProfesionalAgendaIntegrationTest`: control de permisos `isAdmin()` y CSRF en todas las rutas de `/profesionales*`, rechazo con HTTP `422` y preservación íntegra de la base de datos ante acción desconocida, acción no escalar, `horarios` ausente, `horarios` escalar y `activo` inválido, conservación y renderizado de múltiples franjas por día y desactivación explícita de todos los días, ciclo completo con MySQL real, rollback transaccional con respuesta HTTP 500 ante fallos SQL y compatibilidad con el flujo actual de reservas.
 
 #### B. Verificación E2E en Navegador con JavaScript Habilitado (`tests/verificar_navegador.ps1` + `tests/browser_e2e_test.js`)
-- **Resultado:** 13 comprobaciones E2E superadas (`ADMIN-01` a `ADMIN-05`, `PROF-01`, `PRE-01`, `REC-01` a `REC-05`, `AUTH-01`) + verificación de persistencia en MySQL (`duracion_minutos=60`, profesional `Sofía Andrade` con servicios, horario, descanso y bloqueo, y cita de cliente) — Código de salida `0`.
+- **Resultado:** 14 comprobaciones E2E superadas (`ADMIN-01` a `ADMIN-05`, `PROF-01`, `PROF-02`, `PRE-01`, `REC-01` a `REC-05`, `AUTH-01`) + verificación de persistencia en MySQL (`duracion_minutos=60`, profesional `Sofía Andrade` con servicios, horario tras añadir y retirar explícitamente la segunda franja en `PROF-02`, descanso y bloqueo, y cita de cliente) — Código de salida `0`.
 
 ---
 

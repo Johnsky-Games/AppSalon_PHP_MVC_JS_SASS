@@ -597,10 +597,14 @@ class ProfesionalService
     /**
      * Valida y guarda la configuración semanal de horarios de un profesional:
      * - Rechaza horarios invertidos o de duración cero (`hora_inicio >= hora_fin`).
+     * - Exige que `$horariosRaw` sea un arreglo no vacío de filas válidas.
+     * - Rechaza valores inválidos de `activo` sin interpretarlos como días desactivados.
+     * - Conserva la posibilidad de desactivar todos los días mediante filas explícitamente inactivas (`activo=0` o `enviado=1` sin `activo`).
+     * - Rechaza horarios invertidos o de duración cero (`hora_inicio >= hora_fin`).
      * - Rechaza intervalos solapados dentro del mismo día para el mismo profesional.
      * - Rechaza configuraciones que dejen descansos existentes fuera del horario laboral.
      */
-    public function guardarHorariosSemanales($profesionalIdRaw, array $horariosRaw): array
+    public function guardarHorariosSemanales($profesionalIdRaw, $horariosRaw): array
     {
         $profesionalId = $this->validarId($profesionalIdRaw);
         if ($profesionalId === null) {
@@ -610,6 +614,17 @@ class ProfesionalService
                 'horarios' => [],
                 'alertas' => [
                     'error' => ['El identificador del profesional no es válido.']
+                ]
+            ];
+        }
+
+        if (!is_array($horariosRaw) || empty($horariosRaw)) {
+            return [
+                'status' => self::STATUS_INVALID,
+                'resultado' => false,
+                'horarios' => [],
+                'alertas' => [
+                    'error' => ['Debe enviar una estructura válida de horarios semanales.']
                 ]
             ];
         }
@@ -641,26 +656,77 @@ class ProfesionalService
         $errores = [];
         $entidadesPorDia = [];
         $entidadesPlanas = [];
+        $filasNormalizadas = [];
 
         foreach ($horariosRaw as $clave => $item) {
-            if (!is_array($item)) {
+            if (!is_array($item) || empty($item)) {
                 $errores[] = 'Formato de franja horaria inválido.';
                 continue;
             }
 
-            // Determinar si proviene del formulario indexado por día con checkbox `activo`
-            if (array_key_exists('enviado', $item) || array_key_exists('activo', $item)) {
-                $activoDia = ($item['activo'] ?? '0');
-                $esActivo = ($activoDia === 1 || $activoDia === '1' || $activoDia === true);
-                if (!$esActivo) {
+            $esFilaDirecta = array_key_exists('dia_semana', $item)
+                || array_key_exists('hora_inicio', $item)
+                || array_key_exists('hora_fin', $item)
+                || array_key_exists('activo', $item)
+                || array_key_exists('enviado', $item);
+
+            if (!$esFilaDirecta) {
+                foreach ($item as $subItem) {
+                    if (!is_array($subItem) || empty($subItem)) {
+                        $errores[] = 'Formato de franja horaria inválido.';
+                        continue;
+                    }
+                    if (!array_key_exists('dia_semana', $subItem)) {
+                        $subItem['dia_semana'] = $clave;
+                    }
+                    $filasNormalizadas[] = [$clave, $subItem];
+                }
+            } else {
+                $filasNormalizadas[] = [$clave, $item];
+            }
+        }
+
+        foreach ($filasNormalizadas as [$clave, $item]) {
+            $tieneEnviado = array_key_exists('enviado', $item);
+            $tieneActivo = array_key_exists('activo', $item);
+
+            if ($tieneEnviado && !in_array($item['enviado'], ['1', 1, true], true)) {
+                $errores[] = 'El indicador de envío en la franja horaria no es válido.';
+                continue;
+            }
+
+            if ($tieneActivo) {
+                $rawActivo = $item['activo'];
+                if (in_array($rawActivo, ['1', 1, true], true)) {
+                    $esActivo = true;
+                } elseif (in_array($rawActivo, ['0', 0, false], true)) {
+                    $esActivo = false;
+                } else {
+                    $errores[] = 'El valor del campo activo en el horario no es válido.';
                     continue;
                 }
+            } elseif ($tieneEnviado) {
+                // Fila explícita de formulario con checkbox desmarcado
+                $esActivo = false;
+            } else {
+                // Franja enviada directamente sin indicador activo/enviado
+                $esActivo = true;
             }
 
             $diaRaw = $item['dia_semana'] ?? $clave;
             $dia = $this->validarDiaSemana($diaRaw);
             if ($dia === null) {
                 $errores[] = 'El día de la semana indicado en el horario no es válido (debe ser de 1=Lunes a 7=Domingo).';
+                continue;
+            }
+
+            if (!$esActivo) {
+                if (
+                    (array_key_exists('hora_inicio', $item) && $item['hora_inicio'] !== null && !is_string($item['hora_inicio'])) ||
+                    (array_key_exists('hora_fin', $item) && $item['hora_fin'] !== null && !is_string($item['hora_fin']))
+                ) {
+                    $errores[] = 'Las horas de la franja horaria tienen un formato inválido.';
+                }
                 continue;
             }
 
