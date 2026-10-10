@@ -12,16 +12,17 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 ## Fase 4B: Reservas con Profesional, Ocupación Real y Protección contra Reservas Concurrentes
 
 - **Rama:** `feature/fase-4b-reservas-concurrencia`
+- **Commit de Código Auditado:** `83e2a24b235a72c2865453ec13ea055d96419700`
 - **Commit Base (Fase 4A aceptada):** `939d84dbb9dcec67bc83421eaa5cbdc90389034a`
-- **Estado General de Fase 4B:** **Completada (Pendiente de Revisión Externa)**
+- **Estado General de Fase 4B:** **Completada y Auditada (`APROBADO` en `docs/AUDITORIA.md`)**
 
 ### 1. Diseño Arquitectónico, Migración Incremental e Inmutabilidad Histórica
 
 1. **Migración Incremental (`database/migrations/004_reservas_profesional_ocupacion_historico.sql` + `_rollback.sql`):**
-   - **Tabla `citas`:** Incorpora las columnas anulables `profesionalId INT(11) NULL`, `hora_inicio TIME NULL`, `hora_fin TIME NULL` y `duracion_total_minutos INT(11) NULL`, el índice compuesto `idx_citas_profesional_fecha_intervalo (profesionalId, fecha, hora_inicio, hora_fin)` y la clave foránea `fk_citas_profesional` hacia `profesionales(id)` (`ON DELETE SET NULL ON UPDATE CASCADE`).
-   - **Tabla `citasservicios`:** Incorpora las columnas anulables de snapshot histórico `nombre_servicio VARCHAR(60) NULL`, `precio_servicio DECIMAL(5,2) NULL` y `duracion_minutos INT(11) NULL`, y modifica `fk_citasservicios_servicio` a `ON DELETE SET NULL ON UPDATE SET NULL` para que la eliminación posterior de un servicio en el catálogo nunca destruya las líneas históricas de citas pasadas o futuras ya reservadas.
+   - **Tabla `citas`:** Incorpora las columnas anulables `hora_inicio TIME NULL DEFAULT NULL`, `hora_fin TIME NULL DEFAULT NULL`, `duracion_total_minutos INT NULL DEFAULT NULL` y `profesionalId INT NULL DEFAULT NULL`, el índice compuesto `idx_citas_prof_fecha_intervalo (profesionalId, fecha, hora_inicio, hora_fin)` y la clave foránea `fk_citas_profesional` hacia `profesionales(id)` (`ON DELETE RESTRICT ON UPDATE CASCADE`).
+   - **Tabla `citasservicios`:** Incorpora las columnas anulables de snapshot histórico `nombre_servicio VARCHAR(60) NULL DEFAULT NULL`, `precio_servicio DECIMAL(6,2) NULL DEFAULT NULL` y `duracion_minutos INT NULL DEFAULT NULL`.
    - **Representación explícita de citas históricas:** Las citas creadas antes de la Fase 4B (o mediante el flujo clásico del frontend actual mientras la Fase 5 no envíe `profesionalId`) conservan `profesionalId = NULL`, `hora_inicio = NULL`, `hora_fin = NULL` y `duracion_total_minutos = NULL`, así como `nombre_servicio = NULL`, `precio_servicio = NULL` y `duracion_minutos = NULL` en `citasservicios`. **No se inventan ni asignan profesionales retrospectivamente a citas históricas.**
-   - **Inmutabilidad de reservas con profesional:** Al crear una reserva con profesional, `CitaRepository::crearReservaConProfesionalAtomica()` captura y persiste `nombre_servicio`, `precio_servicio` y `duracion_minutos` de cada servicio desde el catálogo oficial (`servicios`), además de `hora_inicio`, `hora_fin` y `duracion_total_minutos` en `citas`. `CitaRepository::findAdminCitasByFecha()` proyecta `COALESCE(citasservicios.nombre_servicio, servicios.nombre)`, `COALESCE(citasservicios.precio_servicio, servicios.precio)` y `COALESCE(citasservicios.duracion_minutos, servicios.duracion_minutos)`, preservando los importes y duraciones históricos si el servicio se edita o elimina posteriormente en el catálogo, y haciendo fallback transparente al catálogo en citas históricas (`NULL`).
+   - **Inmutabilidad de reservas con profesional:** Al crear una reserva con profesional, `CitaRepository::crearReservaConProfesionalAtomica()` captura y persiste `nombre_servicio`, `precio_servicio` y `duracion_minutos` de cada servicio desde el catálogo oficial (`servicios`), además de `hora_inicio`, `hora_fin` y `duracion_total_minutos` en `citas`. `CitaRepository::findAdminCitasByFecha()` proyecta `COALESCE(citasservicios.nombre_servicio, servicios.nombre)`, `COALESCE(citasservicios.precio_servicio, servicios.precio)` y `COALESCE(citasservicios.duracion_minutos, servicios.duracion_minutos)` con `LEFT JOIN servicios`, preservando los importes y duraciones históricos si el servicio se edita o elimina posteriormente en el catálogo, y haciendo fallback transparente al catálogo en citas históricas (`NULL`).
 
 2. **Descuento de Ocupación Real y Semántica Semiabierta `[inicio, fin)` (`Services\DisponibilidadService`):**
    - `DisponibilidadService::consultar()` incorpora `CitaRepository::findOcupacionByProfesionalEnFecha($profesionalId, $fecha)` y resta los intervalos `[hora_inicio, hora_fin)` de las citas existentes del profesional en esa fecha junto con los descansos y bloqueos vigentes.
@@ -33,7 +34,7 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 3. **Orden de Bloqueo Transaccional InnoDB y Garantía de Lecturas Actuales (`Repositories\CitaRepository` y `Repositories\ProfesionalRepository`):**
    - Para evitar condiciones de carrera (*race conditions*), reservas duplicadas/solapadas y *deadlocks* entre operaciones concurrentes, todas las transacciones que reservan, eliminan citas de un profesional o mutan la agenda/estado de un profesional siguen un **orden canónico estricto de adquisición de bloqueos InnoDB**:
      1. **`profesionales` (`FOR UPDATE` por `PRIMARY KEY id`):** `SELECT id, nombre, activo FROM profesionales WHERE id = ? LIMIT 1 FOR UPDATE`. Serializa en el punto de entrada todas las operaciones concurrentes sobre el **mismo** profesional (reservas simultáneas, eliminación de citas y mutaciones administrativas en `ProfesionalRepository`: `updateWithServicios`, `updateActivo`, `replaceHorarios`, `createDescanso`, `deleteDescanso`, `createBloqueo`, `deleteBloqueo`).
-     2. **`servicios` (`FOR SHARE` en orden ascendente de `PRIMARY KEY id`):** `SELECT id, nombre, precio, duracion_minutos FROM servicios WHERE id IN (...) ORDER BY id ASC FOR SHARE`. Garantiza lectura actual de precios y duraciones oficiales y orden determinista de bloqueo entre múltiples servicios.
+     2. **`servicios` (`FOR SHARE` en orden ascendente de `PRIMARY KEY id`):** `SELECT id, nombre, precio, duracion_minutos FROM servicios WHERE id = ? LIMIT 1 FOR SHARE` iterado por IDs ordenados ascendentemente. Garantiza lectura actual de precios y duraciones oficiales y orden determinista de bloqueo entre múltiples servicios.
      3. **`profesionales_servicios` (`FOR SHARE`):** `SELECT servicioId FROM profesionales_servicios WHERE profesionalId = ? ORDER BY servicioId ASC FOR SHARE`.
      4. **Agenda del profesional (`FOR SHARE`):** `horarios_profesionales`, `descansos_profesionales` y `bloqueos_profesionales` del profesional para el día/fecha solicitados.
      5. **`citas` del profesional en la fecha (`FOR UPDATE`):** `SELECT id, fecha, hora, hora_inicio, hora_fin, duracion_total_minutos, usuarioId, profesionalId FROM citas WHERE profesionalId = ? AND fecha = ? ORDER BY COALESCE(hora_inicio, hora) ASC, id ASC FOR UPDATE`.
@@ -54,13 +55,16 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
      - `422`: Parámetros/fecha/hora inválidos (`codigo: 'solicitud_invalida'`), servicio inexistente (`codigo: 'servicio_inexistente'`), servicio incompatible (`codigo: 'servicios_incompatibles'`) o intervalo fuera de horario / en descanso / en bloqueo (`codigo: 'fuera_de_horario'`).
      - `500`: Fallo SQL real o dato corrupto en catálogo con rollback completo y sin filtrar detalles internos de MySQL.
 
-### 2. Validación Ejecutada en Fase 4B (Antigravity)
+### 2. Validación Ejecutada en Fase 4B (Desarrollador + Auditor Independiente)
 
 #### A. Suite Completa PHPUnit (Ejecutada en Docker PHP 8.2.34 + MySQL 8.0 Aislado)
 - **Versión efectiva:** `PHPUnit 10.5.66 by Sebastian Bergmann and contributors.` (`Runtime: PHP 8.2.34`, `Configuration: /app/phpunit.xml`).
-- **Comando ejecutado:**
-  `docker run --rm --network appsalon-phpunit-net -v "${PWD}:/app" -w /app -e DB_HOST=appsalon-phpunit-db -e DB_PORT=3306 -e DB_USER=root -e DB_PASS=root -e DB_NAME=appsalon_test appsalon-php-test php -d variables_order=EGPCS vendor/bin/phpunit --colors=never`
-- **Resultado:** `OK (137 tests, 1399 assertions)` (`Time: 00:17.179, Memory: 14.00 MB`) — Código de salida `0`.
+- **Ejecución del Desarrollador (`comprehensive_project_audit_roadmap`):**
+  - Comando: `docker run --rm --network appsalon-phpunit-net -v "${PWD}:/app" -w /app -e DB_HOST=appsalon-phpunit-db -e DB_PORT=3306 -e DB_USER=root -e DB_PASS=root -e DB_NAME=appsalon_test appsalon-php-test php -d variables_order=EGPCS vendor/bin/phpunit --colors=never`
+  - Resultado: `OK (137 tests, 1399 assertions)` (`Time: 00:17.179, Memory: 14.00 MB`) — Código de salida `0`.
+- **Ejecución Independiente del Auditor (`1b62e9dd-6cdf-4566-bb28-b9c138feff52` en `auditing_fase_4b_reservas`):**
+  - Comando: `docker run --rm --network appsalon-audit4b-net -v "C:/Users/jonat/.gemini/antigravity/worktrees/AppSalon_PHP_MVC_JS_SASS/auditing_fase_4b_reservas:/app" -w /app -e DB_HOST=appsalon-audit4b-db -e DB_PORT=3306 -e DB_USER=root -e DB_PASS=root -e DB_NAME=appsalon_audit_test appsalon-php-test php -d variables_order=EGPCS vendor/bin/phpunit --colors=never`
+  - Resultado: `OK (137 tests, 1399 assertions)` (`Time: 00:15.455, Memory: 14.00 MB`) — Código de salida `0`.
 - **Cobertura añadida en Fase 4B:**
   - `Tests\Integration\MigrationTest`: verificación de migración `004_reservas_profesional_ocupacion_historico` en instalación limpia y actualización con datos previos, comprobando que las citas históricas conservan `profesionalId = NULL`, `hora_inicio = NULL`, `hora_fin = NULL`, `duracion_total_minutos = NULL` y que `citasservicios` conserva `nombre_servicio = NULL`, `precio_servicio = NULL`, `duracion_minutos = NULL`.
   - `Tests\Unit\DisponibilidadServiceTest`: descuento de citas existentes del profesional en la fecha, admisión de citas contiguas (`finA == inicioB`) y rechazo de solapamientos parciales o totales.
@@ -81,7 +85,9 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 
 #### B. Verificación E2E en Navegador con JavaScript Habilitado (`tests/verificar_navegador.ps1` + `tests/browser_e2e_test.js` + `tests/browser_test_report.json`)
 - **Comando ejecutado:** `powershell -ExecutionPolicy Bypass -File tests/verificar_navegador.ps1`
-- **Resultado (`RUN_ID: 94efb31fe250475cab44d2ecd181d5eb`):** 16 comprobaciones E2E superadas (`ADMIN-01` a `ADMIN-04`, `PROF-01`, `PROF-02`, `PRE-01`, `DISP-01`, `REC-01` a `REC-04`, `RES-01`, `ADMIN-05`, `AUTH-01`, `REC-05`) + verificación de persistencia en MySQL — Código de salida `0`.
+- **Resultado Desarrollador (`RUN_ID: 94efb31fe250475cab44d2ecd181d5eb`):** 16 comprobaciones E2E superadas (`ADMIN-01` a `ADMIN-04`, `PROF-01`, `PROF-02`, `PRE-01`, `DISP-01`, `REC-01` a `REC-04`, `RES-01`, `ADMIN-05`, `AUTH-01`, `REC-05`) + verificación de persistencia en MySQL — Código de salida `0`.
+- **Resultado Auditor Independiente (`RUN_ID: b9819badc55b4a2588a4db444a3f4b1c`):** 16 comprobaciones E2E superadas + verificación de persistencia en MySQL — Código de salida `0`.
+- **Veredicto del Auditor para `83e2a24b235a72c2865453ec13ea055d96419700`:** **`APROBADO`** (ver `docs/AUDITORIA.md`).
 
 ---
 
