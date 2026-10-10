@@ -14,6 +14,7 @@ use PHPMailer\PHPMailer\PHPMailer;
 use Controllers\APIController;
 use Controllers\LoginController;
 use MVC\Router;
+use Repositories\UsuarioRepository;
 use AppTerminationException;
 use mysqli;
 
@@ -61,6 +62,7 @@ class SecurityIntegrationTest extends TestCase
         $_GET = [];
         $_SERVER['HTTP_X_CSRF_TOKEN'] = null;
         $_SERVER['REQUEST_METHOD'] = 'GET';
+        LoginController::setAuthService(null);
         Usuario::limpiarAlertas();
         http_response_code(200);
     }
@@ -68,12 +70,14 @@ class SecurityIntegrationTest extends TestCase
     protected function tearDown(): void
     {
         self::$db->query("DROP TRIGGER IF EXISTS test_fail_citasservicios");
+        LoginController::setAuthService(null);
         \Classes\Email::setTransport(null);
         \Classes\Email::limpiarEmailsEnviados();
     }
 
     public function testEntradasMaliciosasSeProcesanComoDatosEnConsultasPreparadas(): void
     {
+        $repo = new UsuarioRepository(self::$db);
         $usuario = new Usuario();
         $usuario->sincronizarRegistro([
             'nombre' => 'Ana',
@@ -83,20 +87,21 @@ class SecurityIntegrationTest extends TestCase
             'telefono' => '1122334455'
         ]);
         $usuario->hashPassword();
-        $usuario->guardar();
+        $repo->create($usuario);
 
         $payloadSQLi = "ana@correo.com' OR '1'='1";
-        $encontrado = Usuario::where('email', $payloadSQLi);
+        $encontrado = $repo->findByEmail($payloadSQLi);
 
         $this->assertNull($encontrado, 'La consulta preparada debe buscar el literal y no ejecutar el OR 1=1');
 
-        $legitimo = Usuario::where('email', 'ana@correo.com');
+        $legitimo = $repo->findByEmail('ana@correo.com');
         $this->assertNotNull($legitimo);
         $this->assertSame('Ana', $legitimo->nombre);
     }
 
     public function testRegistroEnBaseDeDatosForzaPrivilegiosEnCero(): void
     {
+        $repo = new UsuarioRepository(self::$db);
         $usuario = new Usuario();
         $usuario->sincronizarRegistro([
             'nombre' => 'Hacker',
@@ -109,17 +114,19 @@ class SecurityIntegrationTest extends TestCase
             'id' => '1234'
         ]);
         $usuario->hashPassword();
-        $resultado = $usuario->guardar();
+        $idCreado = $repo->create($usuario);
 
-        $this->assertTrue((bool)$resultado['resultado']);
+        $this->assertGreaterThan(0, $idCreado);
 
-        $guardado = Usuario::find($resultado['id']);
+        $guardado = $repo->findById($idCreado);
+        $this->assertNotNull($guardado);
         $this->assertSame('0', (string)$guardado->admin, 'Admin en BD debe ser 0');
         $this->assertSame('0', (string)$guardado->confirmado, 'Confirmado en BD debe ser 0');
     }
 
     public function testTokenConfirmacionUsoUnicoYRechazoConcurrente(): void
     {
+        $repo = new UsuarioRepository(self::$db);
         $usuario = new Usuario();
         $usuario->sincronizarRegistro([
             'nombre' => 'Carlos',
@@ -129,23 +136,24 @@ class SecurityIntegrationTest extends TestCase
             'telefono' => '5544332211'
         ]);
         $tokenRaw = $usuario->generarTokenSeguro('confirmacion', 24);
-        $usuario->guardar();
+        $idUsuario = $repo->create($usuario);
 
         // 1. Primer intento de consumo atómico (Solicitud 1) -> Debe ser exitoso
-        $exito1 = Usuario::confirmarCuentaPorToken($tokenRaw);
+        $exito1 = $repo->confirmAccountByToken($tokenRaw);
         $this->assertTrue($exito1, 'El primer consumo del token de confirmación debe ser exitoso');
 
-        $usuarioActualizado = Usuario::find($usuario->id);
+        $usuarioActualizado = $repo->findById($idUsuario);
         $this->assertSame('1', (string)$usuarioActualizado->confirmado);
         $this->assertNull($usuarioActualizado->token_hash, 'El token_hash debe ser null tras consumirse');
 
         // 2. Intento concurrente o secundario con el mismo token (Solicitud 2) -> Debe fallar
-        $exito2 = Usuario::confirmarCuentaPorToken($tokenRaw);
+        $exito2 = $repo->confirmAccountByToken($tokenRaw);
         $this->assertFalse($exito2, 'El segundo intento de consumo debe fallar (0 filas afectadas)');
     }
 
     public function testTokenPropositoIncorrectoEsRechazado(): void
     {
+        $repo = new UsuarioRepository(self::$db);
         $usuario = new Usuario();
         $usuario->sincronizarRegistro([
             'nombre' => 'Elena',
@@ -156,48 +164,50 @@ class SecurityIntegrationTest extends TestCase
         ]);
         // Token generado para confirmación
         $tokenConfirmacion = $usuario->generarTokenSeguro('confirmacion', 24);
-        $usuario->guardar();
+        $repo->create($usuario);
 
         // Intento indebido de usar token de confirmación en el endpoint de recuperación
         $nuevoHash = password_hash('nuevo_password_123', PASSWORD_BCRYPT);
-        $resRecuperar = Usuario::restablecerPasswordPorToken($tokenConfirmacion, $nuevoHash);
+        $resRecuperar = $repo->resetPasswordByToken($tokenConfirmacion, $nuevoHash);
         $this->assertFalse($resRecuperar, 'Un token de confirmación no debe permitirse para restablecer contraseña');
 
-        $busquedaRecuperacion = Usuario::buscarPorTokenSeguro($tokenConfirmacion, 'recuperacion');
+        $busquedaRecuperacion = $repo->findByValidToken($tokenConfirmacion, 'recuperacion');
         $this->assertNull($busquedaRecuperacion, 'La búsqueda con propósito incorrecto debe retornar null');
     }
 
     public function testTokenSustituidoPorUnoNuevoInvalidaElAnterior(): void
     {
-        $usuario = new Usuario();
-        $usuario->sincronizarRegistro([
+        $repo = new UsuarioRepository(self::$db);
+        $usuario = new Usuario([
             'nombre' => 'Marcos',
             'apellido' => 'Diaz',
             'email' => 'marcos@correo.com',
             'password' => 'clave123',
-            'telefono' => '5544332214'
+            'telefono' => '5544332214',
+            'confirmado' => '1'
         ]);
         // Solicitud 1 de recuperación
         $token1 = $usuario->generarTokenSeguro('recuperacion', 2);
-        $usuario->guardar();
+        $repo->create($usuario);
 
         // Solicitud 2 de recuperación (el usuario solicita nuevo enlace)
-        $token2 = $usuario->generarTokenSeguro('recuperacion', 2);
-        $usuario->guardar();
+        $token2 = $repo->issueRecoveryToken($usuario, 2);
+        $this->assertNotNull($token2);
 
         $hashNuevo = password_hash('password_marcos_final', PASSWORD_BCRYPT);
 
         // Intento de consumir el enlace viejo (token1)
-        $resTokenViejo = Usuario::restablecerPasswordPorToken($token1, $hashNuevo);
+        $resTokenViejo = $repo->resetPasswordByToken($token1, $hashNuevo);
         $this->assertFalse($resTokenViejo, 'El enlace anterior sustituido debe ser rechazado');
 
         // Consumo del enlace vigente (token2)
-        $resTokenNuevo = Usuario::restablecerPasswordPorToken($token2, $hashNuevo);
+        $resTokenNuevo = $repo->resetPasswordByToken($token2, $hashNuevo);
         $this->assertTrue($resTokenNuevo, 'El nuevo token vigente debe consumirse exitosamente');
     }
 
     public function testExpiracionEntreLecturaYActualizacionRechazaConsumo(): void
     {
+        $repo = new UsuarioRepository(self::$db);
         $usuario = new Usuario();
         $usuario->sincronizarRegistro([
             'nombre' => 'Lucia',
@@ -207,10 +217,10 @@ class SecurityIntegrationTest extends TestCase
             'telefono' => '5544332215'
         ]);
         $tokenRaw = $usuario->generarTokenSeguro('recuperacion', 1);
-        $usuario->guardar();
+        $repo->create($usuario);
 
         // 1. Paso 1 (GET): El usuario carga el formulario y el token es válido
-        $usuarioLeido = Usuario::buscarPorTokenSeguro($tokenRaw, 'recuperacion');
+        $usuarioLeido = $repo->findByValidToken($tokenRaw, 'recuperacion');
         $this->assertNotNull($usuarioLeido);
 
         // 2. Simular que el token expira antes del envío del POST
@@ -218,7 +228,7 @@ class SecurityIntegrationTest extends TestCase
 
         // 3. Paso 2 (POST): Se intenta la actualización atómica
         $hashNuevo = password_hash('password_lucia_nuevo', PASSWORD_BCRYPT);
-        $resultado = Usuario::restablecerPasswordPorToken($tokenRaw, $hashNuevo);
+        $resultado = $repo->resetPasswordByToken($tokenRaw, $hashNuevo);
 
         $this->assertFalse($resultado, 'La sentencia atómica condicional debe rechazar tokens expirados (0 filas afectadas)');
     }
@@ -230,8 +240,7 @@ class SecurityIntegrationTest extends TestCase
             'nombre' => 'Cliente', 'apellido' => 'Rollback', 'email' => 'rollback@correo.com',
             'password' => 'password', 'telefono' => '1234567890', 'confirmado' => '1'
         ]);
-        $resCliente = $cliente->guardar();
-        $clienteId = (int)$resCliente['id'];
+        $clienteId = (new UsuarioRepository(self::$db))->create($cliente);
 
         $servicio = new Servicio(['nombre' => 'Tintura', 'precio' => '120.00']);
         $servicioId = (new \Repositories\ServicioRepository(self::$db))->create($servicio);
@@ -283,20 +292,22 @@ class SecurityIntegrationTest extends TestCase
 
     public function testTransicionDeRolAdminAClienteEnMismaSesionRevocaAccesoAdmin(): void
     {
+        $repo = new UsuarioRepository(self::$db);
+
         // 1. Crear Administrador y Cliente
         $admin = new Usuario([
             'nombre' => 'Admin', 'apellido' => 'Boss', 'email' => 'admin@appsalon.com',
             'password' => 'admin123', 'telefono' => '1111111111', 'admin' => '1', 'confirmado' => '1'
         ]);
         $admin->hashPassword();
-        $admin->guardar();
+        $repo->create($admin);
 
         $cliente = new Usuario([
             'nombre' => 'Cliente', 'apellido' => 'Normal', 'email' => 'cliente@appsalon.com',
             'password' => 'cliente123', 'telefono' => '2222222222', 'admin' => '0', 'confirmado' => '1'
         ]);
         $cliente->hashPassword();
-        $cliente->guardar();
+        $repo->create($cliente);
 
         $router = new Router();
 
@@ -497,6 +508,7 @@ class SecurityIntegrationTest extends TestCase
         $ipTarget = '198.51.100.77';
 
         // 1. Crear usuario en la base de datos y verificar explícitamente su existencia, confirmación y hash válido antes de iniciar
+        $repo = new UsuarioRepository(self::$db);
         $usuario = new Usuario([
             'nombre' => 'UserConcurrente',
             'apellido' => 'Test',
@@ -506,12 +518,12 @@ class SecurityIntegrationTest extends TestCase
             'confirmado' => '1'
         ]);
         $usuario->hashPassword();
-        $guardado = $usuario->guardar();
-        $this->assertTrue((bool)(is_array($guardado) ? ($guardado['resultado'] ?? false) : $guardado), 'El usuario de prueba debe guardarse correctamente');
+        $idGuardado = $repo->create($usuario);
+        $this->assertGreaterThan(0, $idGuardado, 'El usuario de prueba debe guardarse correctamente');
         $this->assertNotEmpty($usuario->id, 'El usuario de prueba debe tener ID asignado');
 
         // Verificación previa explícita requerida por auditoría antes de iniciar subprocesos
-        $usuarioEnDb = Usuario::where('email', $emailTarget);
+        $usuarioEnDb = $repo->findByEmail($emailTarget);
         $this->assertNotNull($usuarioEnDb, 'El usuario de prueba debe existir en base de datos antes de iniciar los trabajadores');
         $this->assertSame('1', (string)$usuarioEnDb->confirmado, 'El usuario de prueba debe estar confirmado antes de iniciar los trabajadores');
         $this->assertTrue(password_verify('clave123', $usuarioEnDb->password), 'El hash del usuario de prueba debe verificar la clave esperada antes de iniciar los trabajadores');
@@ -712,11 +724,12 @@ class SecurityIntegrationTest extends TestCase
 
     public function testOlvideConRateLimitBloqueaSinGenerarNiPersistirToken(): void
     {
+        $repo = new UsuarioRepository(self::$db);
         $usuario = new Usuario([
             'nombre' => 'Victima', 'apellido' => 'Test', 'email' => 'victima_olvide@correo.com',
             'password' => 'password123', 'telefono' => '1234567890', 'confirmado' => '1'
         ]);
-        $usuario->guardar();
+        $repo->create($usuario);
 
         $router = new Router();
         $ip = RateLimiter::obtenerIP();
@@ -742,26 +755,28 @@ class SecurityIntegrationTest extends TestCase
         $this->assertSame(429, http_response_code(), 'Debe responder con 429 por bloqueo de rate limiting');
 
         // Verificar en BD que NUNCA se generó ni persistió un token
-        $usuarioDb = Usuario::where('email', $email);
+        $usuarioDb = $repo->findByEmail($email);
         $this->assertNull($usuarioDb->token_hash, 'El usuario no debe tener ningún token_hash generado');
         $this->assertNull($usuarioDb->token_expira, 'No debe registrarse expiración');
     }
 
     public function testReenviarConfirmacionGeneraTokenNuevoSoloParaCuentasNoConfirmadas(): void
     {
+        $repo = new UsuarioRepository(self::$db);
+
         // 1. Usuario NO confirmado
         $unconfirmed = new Usuario([
             'nombre' => 'NoConfirmado', 'apellido' => 'Perez', 'email' => 'noconfirmado@correo.com',
             'password' => 'password123', 'telefono' => '1234567890', 'confirmado' => '0'
         ]);
-        $unconfirmed->guardar();
+        $repo->create($unconfirmed);
 
         // 2. Usuario SÍ confirmado
         $confirmed = new Usuario([
             'nombre' => 'YaConfirmado', 'apellido' => 'Gomez', 'email' => 'yaconfirmado@correo.com',
             'password' => 'password123', 'telefono' => '0987654321', 'confirmado' => '1'
         ]);
-        $confirmed->guardar();
+        $repo->create($confirmed);
 
         $router = new Router();
         $tokenCsrf = bin2hex(random_bytes(32));
@@ -775,7 +790,7 @@ class SecurityIntegrationTest extends TestCase
         LoginController::reenviarConfirmacion($router);
         $outA = ob_get_clean();
 
-        $uA = Usuario::where('email', 'noconfirmado@correo.com');
+        $uA = $repo->findByEmail('noconfirmado@correo.com');
         $this->assertNotNull($uA->token_hash, 'La cuenta no confirmada debe recibir un nuevo token_hash');
         $this->assertSame('confirmacion', $uA->token_tipo);
         $this->assertNotNull($uA->token_expira);
@@ -787,7 +802,7 @@ class SecurityIntegrationTest extends TestCase
         LoginController::reenviarConfirmacion($router);
         $outB = ob_get_clean();
 
-        $uB = Usuario::where('email', 'yaconfirmado@correo.com');
+        $uB = $repo->findByEmail('yaconfirmado@correo.com');
         $this->assertNull($uB->token_hash, 'La cuenta confirmada NO debe recibir ningún token');
         $this->assertStringContainsString('Si la cuenta existe y está pendiente de confirmación', $outB);
 
@@ -802,6 +817,7 @@ class SecurityIntegrationTest extends TestCase
 
     public function testEmisionTokenRecuperacionConcurrenteNoRevierteCambioDePassword(): void
     {
+        $repo = new UsuarioRepository(self::$db);
         $email = 'concurrente_pwd@correo.com';
         $passOriginalHash = password_hash('clave_original_123', PASSWORD_BCRYPT);
         $passNuevoHash = password_hash('clave_nueva_456', PASSWORD_BCRYPT);
@@ -815,31 +831,31 @@ class SecurityIntegrationTest extends TestCase
             'confirmado' => '1',
             'admin' => '0'
         ]);
-        $usuario->guardar();
-        $id = (int)$usuario->id;
+        $id = $repo->create($usuario);
 
         // Simulación de concurrencia:
         // Hilo 1: Lee el objeto usuario en memoria con la contraseña original
-        $hilo1Usuario = Usuario::where('email', $email);
+        $hilo1Usuario = $repo->findByEmail($email);
         $this->assertSame($passOriginalHash, $hilo1Usuario->password);
 
         // Hilo 2 (intercalado): El usuario cambia su contraseña en otra petición
         self::$db->query("UPDATE usuarios SET password = '{$passNuevoHash}' WHERE id = {$id}");
 
-        // Hilo 1: Emite token de recuperación mediante actualización preparada específica
-        $tokenRaw = $hilo1Usuario->generarYPersistirTokenRecuperacion(2);
+        // Hilo 1: Emite token de recuperación mediante actualización preparada específica en UsuarioRepository
+        $tokenRaw = $repo->issueRecoveryToken($hilo1Usuario, 2);
         $this->assertNotNull($tokenRaw, 'Debe emitir token exitosamente para cuenta confirmada');
 
         // Verificación en base de datos: La nueva contraseña de Hilo 2 NO fue revertida por Hilo 1
-        $usuarioFinal = Usuario::where('email', $email);
+        $usuarioFinal = $repo->findByEmail($email);
         $this->assertSame($passNuevoHash, $usuarioFinal->password, 'El cambio de contraseña concurrente NO debe ser revertido');
         $this->assertSame('recuperacion', $usuarioFinal->token_tipo);
         $this->assertSame(hash('sha256', $tokenRaw), $usuarioFinal->token_hash);
-        $this->assertNull($usuarioFinal->token);
+        $this->assertSame('', (string)$usuarioFinal->token);
     }
 
     public function testEmisionTokenConfirmacionConcurrenteNoRevierteConfirmacion(): void
     {
+        $repo = new UsuarioRepository(self::$db);
         $email = 'concurrente_conf@correo.com';
         $usuario = new Usuario([
             'nombre' => 'Pedro',
@@ -850,29 +866,29 @@ class SecurityIntegrationTest extends TestCase
             'confirmado' => '0',
             'admin' => '0'
         ]);
-        $usuario->guardar();
-        $id = (int)$usuario->id;
+        $id = $repo->create($usuario);
 
         // Hilo 1: Lee usuario no confirmado
-        $hilo1Usuario = Usuario::where('email', $email);
+        $hilo1Usuario = $repo->findByEmail($email);
         $this->assertSame('0', (string)$hilo1Usuario->confirmado);
 
         // Hilo 2: Se confirma la cuenta concurrentemente
         self::$db->query("UPDATE usuarios SET confirmado = '1' WHERE id = {$id}");
 
         // Hilo 1: Intenta emitir token de confirmación condicionado a confirmado = '0'
-        $tokenRaw = $hilo1Usuario->generarYPersistirTokenConfirmacion(24);
+        $tokenRaw = $repo->issueConfirmationToken($hilo1Usuario, 24);
 
         // Debe retornar null porque afectó 0 filas (ya estaba confirmada)
         $this->assertNull($tokenRaw, 'No debe emitir token si la cuenta fue confirmada concurrentemente');
 
-        $usuarioFinal = Usuario::where('email', $email);
+        $usuarioFinal = $repo->findByEmail($email);
         $this->assertSame('1', (string)$usuarioFinal->confirmado, 'La confirmación concurrente debe mantenerse intacta');
         $this->assertNull($usuarioFinal->token_hash);
     }
 
     public function testLoginExitosoNoReiniciaPresupuestoIpAtaqueMultiplesCuentas(): void
     {
+        $repo = new UsuarioRepository(self::$db);
         $ip = '198.51.100.99';
         $controlEmail = 'cuenta_control@correo.com';
         $controlPassword = 'clave_control_123';
@@ -887,7 +903,7 @@ class SecurityIntegrationTest extends TestCase
             'confirmado' => '1'
         ]);
         $usuarioControl->hashPassword();
-        $usuarioControl->guardar();
+        $repo->create($usuarioControl);
 
         // Limpiar registros previos de rate limiting
         RateLimiter::limpiarIntentos(self::$db, RateLimiter::TIPO_IP_LOGIN, $ip);
@@ -969,6 +985,7 @@ class SecurityIntegrationTest extends TestCase
 
     public function testOlvideNoIntentaEnviarCorreoSiFallaPersistenciaToken(): void
     {
+        $repo = new UsuarioRepository(self::$db);
         $email = 'falla_persistencia_olvide@correo.com';
         $usuario = new Usuario([
             'nombre' => 'TestPersist',
@@ -978,7 +995,7 @@ class SecurityIntegrationTest extends TestCase
             'telefono' => '1122334455',
             'confirmado' => '1'
         ]);
-        $usuario->guardar();
+        $repo->create($usuario);
 
         $enviosIntentados = 0;
         Email::setTransport(function(PHPMailer $mailer, string $proposito, array $meta) use (&$enviosIntentados): bool {
@@ -1019,6 +1036,7 @@ class SecurityIntegrationTest extends TestCase
 
     public function testReenviarConfirmacionNoEnviaCorreoSiCuentaYaEstaConfirmada(): void
     {
+        $repo = new UsuarioRepository(self::$db);
         $email = 'confirmada_no_envio@correo.com';
         $usuario = new Usuario([
             'nombre' => 'Usuario',
@@ -1028,7 +1046,7 @@ class SecurityIntegrationTest extends TestCase
             'telefono' => '1122334455',
             'confirmado' => '1'
         ]);
-        $usuario->guardar();
+        $repo->create($usuario);
 
         $enviosIntentados = 0;
         Email::setTransport(function(PHPMailer $mailer, string $proposito, array $meta) use (&$enviosIntentados): bool {

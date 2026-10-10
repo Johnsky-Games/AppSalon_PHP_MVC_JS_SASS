@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-10-10T15:56:11.315Z",
+  "timestamp": "2026-10-10T16:33:35.488Z",
   "navegador": "Chrome Headless (Puppeteer-Core)",
   "citaCreadaId": 1,
   "citaTemporalEliminadaId": 2,
@@ -34,7 +34,7 @@
       "id": "PRE-01",
       "name": "Login interactivo de cliente y redirección autorizada a /cita",
       "success": true,
-      "details": "URL: http://localhost:32774/cita"
+      "details": "URL: http://localhost:32776/cita"
     },
     {
       "id": "REC-01",
@@ -65,6 +65,12 @@
       "name": "Consulta administrativa por fecha en /admin y eliminación de cita con CSRF en /api/eliminar",
       "success": true,
       "details": "Citas consultadas en /admin?fecha=2026-10-12; cita temporal ID 2 eliminada; cita principal ID 1 ($195) conservada."
+    },
+    {
+      "id": "AUTH-01",
+      "name": "Ciclo de autenticación y ciclo de vida de cuenta (/logout, /crear-cuenta, login no confirmado, /reenviar-confirmacion, /olvide)",
+      "success": true,
+      "details": "Registro redirigió a /mensaje; login sin confirmar rechazado con mensaje unificado; /reenviar-confirmacion y /olvide respondieron sin enumeración."
     },
     {
       "id": "REC-05",

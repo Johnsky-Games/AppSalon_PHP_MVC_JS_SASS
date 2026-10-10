@@ -3,67 +3,69 @@
 Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerdo con la metodología de entregas auditables por **ChatGPT** (revisión estática de código) y ejecución/verificación por **Antigravity** (desarrollo y pruebas dinámicas automatizadas), sujeto a la aprobación final del **Propietario**.
 
 > **Roles y Criterios:**
-> - **Desarrollo y Pruebas Automatizadas (Antigravity):** Implementación de código y ejecución de la suite completa de pruebas unitarias e integrales (80 pruebas, 586 aserciones en PHPUnit), escenarios funcionales HTTP y suite E2E en navegador real Headless Chrome (`tests/verificar_navegador.ps1` y `tests/browser_e2e_test.js`).
+> - **Desarrollo y Pruebas Automatizadas (Antigravity):** Implementación de código y ejecución de la suite completa de pruebas unitarias e integrales (87 pruebas, 667 aserciones en PHPUnit), escenarios funcionales HTTP y suite E2E en navegador real Headless Chrome (`tests/verificar_navegador.ps1` y `tests/browser_e2e_test.js`).
 > - **Revisión Estática Externa (ChatGPT):** Auditoría independiente de código de aplicación, arquitectura por capas, contratos transaccionales y revisión estática de scripts Bash.
 > - **Aprobación Final y Despliegue (Propietario):** Decisión formal sobre fusiones hacia `main` y despliegues en producción.
 
 ---
 
-## Fase 2B: Separación de Responsabilidades en el Flujo de Citas y Reservas
+## Fase 2C: Separación de Responsabilidades en Usuarios y Autenticación
 
-- **Rama:** `feature/fase-2b-citas-repositorios`
-- **Commit Base (Fase 2A):** `4a450301304be25a4829d89303ad52edfd40028f`
-- **Estado General de Fase 2B:** **Completada y Lista para Auditoría**
+- **Rama:** `feature/fase-2c-usuarios-autenticacion`
+- **Commit Base (Fase 2B):** `b0295c1378be0d7bf816ffd32e090a8e9f114292`
+- **Estado General de Fase 2C:** **Completada y Lista para Auditoría**
 
 ### 1. Arquitectura Implementada (`Controller` $\rightarrow$ `Service` $\rightarrow$ `Repository`)
 
 | Capa / Clase | Archivo | Responsabilidad Exclusiva |
 | :--- | :--- | :--- |
-| **Controladores HTTP** (`Controllers\APIController`, `Controllers\AdminController`, `Controllers\CitaController`) | [controllers/APIController.php](file:///controllers/APIController.php)<br>[controllers/AdminController.php](file:///controllers/AdminController.php)<br>[controllers/CitaController.php](file:///controllers/CitaController.php) | Gestión exclusiva de transporte HTTP, sesión segura (`iniciar_sesion_segura`), autenticación (`isAuth`, `isAdmin`), protección CSRF (`validar_csrf`, `exigir_csrf`), serialización JSON, renderizado de vistas y redirecciones. Se eliminó la herencia indebida `extends ActiveRecord` en `CitaController`. Inyección sencilla mediante `setCitaService()`. |
-| **Servicio de Dominio** (`Services\CitaService`) | [services/CitaService.php](file:///services/CitaService.php) | Reglas de negocio para reservar (`reservar`), eliminar (`eliminar`) y consultar citas administrativas por fecha (`consultarCitasAdmin`, `resolverFechaConsultaAdmin`). Recibe la identidad (`$usuarioIdAutenticado`) y permisos (`$esAdmin`) ya verificados por el controlador; nunca consulta `$_SESSION` directamente ni confía en `usuarioId` o `id` enviados por el cliente. |
-| **Repositorio de Persistencia** (`Repositories\CitaRepository`) | [repositories/CitaRepository.php](file:///repositories/CitaRepository.php) | Consultas y escrituras sobre las tablas `citas` y `citasservicios` (incluyendo la proyección administrativa con `LEFT OUTER JOIN`) mediante sentencias preparadas (`findById`, `createCita`, `createCitaServicio`, `crearReservaAtomica`, `eliminarCitaAtomica`, `findAdminCitasByFecha`). |
-| **Entidades y Proyección de Dominio** (`Model\Cita`, `Model\CitaServicio`, `Model\AdminCita`) | [models/Cita.php](file:///models/Cita.php)<br>[models/CitaServicio.php](file:///models/CitaServicio.php)<br>[models/AdminCita.php](file:///models/AdminCita.php) | Entidades y proyecciones desacopladas de `ActiveRecord`. `Model\Cita::sincronizarEditable()` acepta únicamente `fecha` y `hora` escalares, bloqueando cualquier modificación de `id` o `usuarioId`. |
+| **Controlador HTTP** (`Controllers\LoginController`) | [controllers/LoginController.php](file:///controllers/LoginController.php) | Gestión exclusiva de transporte HTTP, inicio y destrucción de sesión (`iniciar_sesion_segura`, `session_regenerate_id(true)`, `session_destroy`), protección CSRF (`exigir_csrf`), códigos de estado HTTP (`200`, `302`, `422`, `429`, `500`), cabeceras (`Retry-After`, `Location`), renderizado de vistas y redirecciones. Inyección sencilla mediante `setAuthService()`. |
+| **Servicio de Dominio** (`Services\AuthService`) | [services/AuthService.php](file:///services/AuthService.php) | Reglas de negocio de inicio de sesión (`login`), registro público (`registrar`), confirmación de cuenta (`confirmarCuenta`), solicitud de recuperación (`solicitarRecuperacion`), reenvío de confirmación (`reenviarConfirmacion`) y validación/restablecimiento de contraseña (`validarTokenRecuperacion`, `restablecerPassword`). Recibe datos y contexto explícitos (`$datos`, `$ip`, `$tokenRaw`); jamás accede a `$_POST`, `$_GET` ni `$_SESSION`. |
+| **Repositorio de Persistencia** (`Repositories\UsuarioRepository`) | [repositories/UsuarioRepository.php](file:///repositories/UsuarioRepository.php) | Consultas y escrituras sobre la tabla `usuarios` mediante sentencias preparadas (`findById`, `findByEmail`, `existsByEmail`, `create`, `findByValidToken`, `confirmAccountByToken`, `resetPasswordByToken`, `issueRecoveryToken`, `issueConfirmationToken`) con manejo explícito de errores SQL mediante `PersistenceException`. |
+| **Entidad de Dominio** (`Model\Usuario`) | [models/Usuario.php](file:///models/Usuario.php) | Entidad desacoplada de `ActiveRecord` (`is_subclass_of(Usuario::class, ActiveRecord::class) === false`). Conserva las propiedades de dominio, protección contra asignación masiva (`sincronizarRegistro` y `sincronizar`), validaciones de campos, hashing/verificación de contraseñas (`password_hash`, `password_verify`, `$observadorVerificacionPassword`) y generación de tokens criptográficos (`generarTokenSeguro`). `Model\ActiveRecord` se conserva disponible en el proyecto. |
 
-### 2. Reglas de Negocio, Transacciones y Distinción de Estados (Fase 2B)
+### 2. Garantías de Seguridad y Reglas de Negocio Preservadas (Fase 2C)
 
-- **Identidad y permisos verificados:** `CitaService` nunca accede a `$_SESSION`. En `reservar($usuarioIdAutenticado, array $datos)`, asigna la cita estrictamente al `$usuarioIdAutenticado` recibido del controlador e ignora cualquier `usuarioId` o `id` presente en `$datos` (`$_POST`). En `eliminar($idCitaRaw, $usuarioIdAutenticado, bool $esAdmin)`, comprueba que el solicitante sea el propietario de la cita (`(int)$cita->usuarioId === $usuarioId`) o un administrador (`$esAdmin === true`).
-- **Reglas de validación de reserva preservadas:**
-  - Fecha obligatoria en formato estricto `AAAA-MM-DD`, válida en el calendario (`checkdate`), estrictamente futura (`$fecha > date('Y-m-d')`) y en día laborable de lunes a viernes (rechaza sábados `6` y domingos `0`).
-  - Hora obligatoria en formato estricto `HH:MM` (sin segundos) dentro del horario comercial `10:00` a `18:00` inclusive (`18:00` permitido; $\ge 18:01$ rechazado).
-  - Servicios seleccionados como lista de enteros positivos separados por coma, desduplicados (`array_unique`) y verificados uno a uno en base de datos mediante `ServicioRepository::findById()` sobre la misma conexión.
-- **Transacción atómica en una única conexión (`mysqli`):**
-  - `CitaRepository::crearReservaAtomica()` y `CitaRepository::eliminarCitaAtomica()` operan sobre una única instancia `mysqli`, verificando explícitamente `begin_transaction()`, cada sentencia preparada (`prepare`, `bind_param`, `execute`, `affected_rows`, `insert_id`) y `commit()`.
-  - Ante cualquier fallo intermedio o de confirmación (`commit() === false`), se ejecuta `rollback()` garantizando que no queden registros parciales en `citas` o `citasservicios` ni se devuelva éxito falso.
-- **Distinción explícita de estados:**
-  - `STATUS_UNAUTHORIZED` (`401`): usuario no autenticado o identidad inválida.
-  - `STATUS_FORBIDDEN` (`403`): intento de eliminar una cita ajena sin rol de administrador (IDOR bloqueado).
-  - `STATUS_INVALID` (`422` / redirección en formulario): formato o regla de negocio inválida en fecha, hora, identificadores o lista de servicios.
-  - `STATUS_NOT_FOUND` (`404` / `422` en servicios de reserva): cita inexistente al eliminar o servicio inexistente al reservar.
-  - `STATUS_ERROR` (`500`): fallo SQL o de transacción. En `/admin` responde HTTP `500` y muestra alerta de error en `views/admin/index.php` sin confundirse con el mensaje `"No se registra citas para la fecha seleccionada"`. En `APIController::eliminar()` devuelve HTTP `500` tanto para peticiones JSON (`{"resultado":false,"error":"..."}`) como para peticiones HTML del formulario administrativo (`Error 500: No fue posible eliminar la cita debido a un error de base de datos.`, escapado con `s()` y deteniendo la ejecución antes de cualquier redirección `302`).
-- **Pendiente separado documentado (Conservación histórica de nombres y precios en `citasservicios`):**
-  - Esta entrega corresponde exclusivamente a una extracción estructural a repositorios y servicios sin modificaciones de esquema. Actualmente la tabla `citasservicios` almacena únicamente `(id, citaId, servicioId)` y la consulta administrativa obtiene `servicios.nombre` y `servicios.precio` mediante `LEFT OUTER JOIN` sobre el catálogo vivo. La incorporación de columnas de instantánea histórica (*snapshot* de `nombre_servicio` y `precio_unitario` al momento de la reserva en `citasservicios`) queda documentada como pendiente separado para las siguientes fases de evolución del dominio, junto con profesionales, duraciones, disponibilidad real y pagos.
+- **Protección contra asignación masiva (*Mass Assignment*):** `Usuario::sincronizarRegistro()` (y su alias `sincronizar()`) acepta únicamente la lista blanca `['nombre', 'apellido', 'email', 'password', 'telefono']` de tipo `string`, forzando en el servidor `admin = '0'`, `confirmado = '0'`, `id = null`, `token = ''`, `token_hash = null`, `token_tipo = null` y `token_expira = null`. `UsuarioRepository::create()` nunca inserta un `id` proveniente del cliente.
+- **Hash y verificación de contraseñas:** Se mantienen `password_hash(..., PASSWORD_BCRYPT)` y `password_verify()` en `Model\Usuario`, junto con el hook de instrumentación `Usuario::$observadorVerificacionPassword` empleado por las pruebas de concurrencia real en el flujo de login.
+- **Tokens criptográficos seguros, almacenamiento con hash SHA-256 y consumo atómico de un solo uso:**
+  - Generación con `bin2hex(random_bytes(32))`, almacenando `token = NULL`, `token_hash = hash('sha256', $tokenRaw)`, `token_tipo` (`'confirmacion'` o `'recuperacion'`) y `token_expira`.
+  - Consumo atómico en `UsuarioRepository::confirmAccountByToken()` y `UsuarioRepository::resetPasswordByToken()` mediante una única sentencia `UPDATE ... WHERE token_hash = ? AND token_tipo = ? AND token_expira >= NOW() LIMIT 1` comprobando `$stmt->affected_rows === 1`.
+- **Emisión atómica de tokens sin sobrescribir cambios concurrentes:**
+  - `UsuarioRepository::issueRecoveryToken()` ejecuta `UPDATE usuarios SET token = NULL, token_hash = ?, token_tipo = 'recuperacion', token_expira = ? WHERE id = ? AND confirmado = '1' LIMIT 1`.
+  - `UsuarioRepository::issueConfirmationToken()` ejecuta `UPDATE usuarios SET token = NULL, token_hash = ?, token_tipo = 'confirmacion', token_expira = ? WHERE id = ? AND confirmado = '0' LIMIT 1`.
+  - Ninguna de las dos operaciones toca `password`, `admin` ni revierte `confirmado = '1'` ante solicitudes concurrentes.
+- **Envío de correo estrictamente posterior a la persistencia exitosa:** En `AuthService::registrar()`, `solicitarRecuperacion()` y `reenviarConfirmacion()`, el despacho de `Email::enviarConfirmacion()` o `Email::enviarInstrucciones()` ocurre únicamente después de que `create()`, `issueRecoveryToken()` o `issueConfirmationToken()` confirmen la escritura en MySQL. Si la persistencia falla o afecta `0` filas, no se envía ningún correo.
+- **Presupuesto compartido de Rate Limiting por IP:** Un inicio de sesión válido ejecuta exclusivamente `RateLimiter::limpiarIntentos($db, RateLimiter::TIPO_EMAIL_LOGIN, $email)` y jamás reinicia `RateLimiter::TIPO_IP_LOGIN`.
+- **Regeneración de sesión y revocación de privilegios:** En `LoginController::login()`, tras `STATUS_OK`, se limpia `$_SESSION = []`, se ejecuta `session_regenerate_id(true)` y solo se asigna `$_SESSION['admin'] = '1'` cuando `(string)$usuario->admin === '1'` (`unset($_SESSION['admin'])` para clientes).
+- **Diferenciación de estados y prevención de enumeración / fugas SQL:**
+  - `STATUS_INVALID_TYPE` (`422`): cargas no escalares (arreglos en `email` o `password`).
+  - `STATUS_INVALID` / `STATUS_CONFLICT`: errores de validación de campos o tokens inválidos/expirados.
+  - `STATUS_UNAUTHORIZED`: credenciales inválidas o cuenta no verificada con mensaje unificado (`"Credenciales incorrectas o la cuenta no ha sido verificada"`).
+  - `STATUS_RATE_LIMITED` (`429` + cabecera `Retry-After`): bloqueo por límite de intentos.
+  - `STATUS_ERROR` (`500`): fallo SQL capturado mediante `PersistenceException` y registrado en `error_log` sin exponer mensajes internos de MySQL al usuario. En `/olvide` y `/reenviar-confirmacion` se preservan los mensajes genéricos anti-enumeración ante cuentas inexistentes o en estado distinto.
 
-### 3. Validación Ejecutada en Fase 2B (Antigravity)
+### 3. Validación Ejecutada en Fase 2C (Antigravity)
 
 #### A. Suite Completa PHPUnit (Ejecutada en Docker PHP 8.2 + MySQL 8.0 Aislado)
-- **Resultado:** `OK (80 tests, 586 assertions)` — Código de salida `0`.
-- **Nuevas suites añadidas para Fase 2B:**
-  - `Tests\Unit\CitaServiceTest` ([tests/Unit/CitaServiceTest.php](file:///tests/Unit/CitaServiceTest.php)): 5 pruebas unitarias verificando desacoplamiento de `Model\Cita`, `Model\CitaServicio`, `Model\AdminCita` y `Controllers\CitaController` respecto de `ActiveRecord`, protección de `id` y `usuarioId` en `Cita::sincronizarEditable()`, validación de identificadores, resolución de fechas administrativas con fallback seguro y validación de reglas de fecha, día laborable y horario sin consultar `$_SESSION`.
-  - `Tests\Integration\CitaModuloIntegrationTest` ([tests/Integration/CitaModuloIntegrationTest.php](file:///tests/Integration/CitaModuloIntegrationTest.php)): 10 pruebas de integración contra MySQL 8.0 real verificando:
-    1. Reserva atómica ignorando `usuarioId` e `id` manipulados en el payload y desduplicando servicios repetidos.
-    2. Rechazo de servicios inexistentes sin insertar citas parciales.
-    3. Rollback atómico en una única conexión ante fallo SQL real (trigger MySQL `SIGNAL SQLSTATE '45000'` en el segundo registro de `citasservicios`), revirtiendo tanto la fila de `citas` como el primer `citasservicio`.
-    4. Respuesta HTTP `500` con rollback completo en `APIController::guardar()` ante fallo SQL intermedio.
-    5. Comprobación explícita de fallos en `begin_transaction()` y `commit()`, ejecutando `rollback()` cuando `commit()` devuelve `false`.
-    6. Verificación de permisos de propietario y administrador en `CitaService::eliminar()`, bloqueo de otros clientes (`STATUS_FORBIDDEN`) y distinción entre `STATUS_INVALID` y `STATUS_NOT_FOUND`.
-    7. Rollback transaccional en eliminación cuando falla el borrado de la cita principal en `citas`, restaurando los registros de `citasservicios` previamente eliminados en la transacción.
-    8. Consulta administrativa por fecha en `AdminController::index` distinguiendo lista vacía (HTTP `200`) de fallo SQL (HTTP `500` con alerta de error).
-    9. Exigencia de rol administrador en `AdminController::index`.
-    10. Respuesta HTTP `500` sin redirección `302` en `APIController::eliminar()` ante fallo de persistencia tanto en modalidad HTML (mensaje visible y escapado sin exponer detalles SQL internos) como en modalidad JSON, conservando la cita y sus servicios asociados tras el rollback y permitiendo su eliminación posterior cuando se restablece la persistencia.
+- **Resultado:** `OK (87 tests, 667 assertions)` — Código de salida `0`.
+- **Nuevas suites y adaptaciones en Fase 2C:**
+  - `Tests\Unit\UsuarioSeguridadTest` ([tests/Unit/UsuarioSeguridadTest.php](file:///tests/Unit/UsuarioSeguridadTest.php)): verifica que `Model\Usuario` está desacoplada de `ActiveRecord` (`is_subclass_of(Usuario::class, ActiveRecord::class) === false`), bloqueo de asignación masiva en `sincronizarRegistro()` y `sincronizar()`, y generación de tokens SHA-256 por propósito.
+  - `Tests\Unit\AuthServiceTest` ([tests/Unit/AuthServiceTest.php](file:///tests/Unit/AuthServiceTest.php)): pruebas unitarias en aislamiento (con doble en memoria `InMemoryUsuarioRepositoryStub`) comprobando que `AuthService` no lee superglobales (`$_POST`), bloquea *mass assignment*, envía correos solo tras persistir, cancela el envío de correo ante fallos de persistencia sin filtrar detalles SQL y distingue estados en confirmación y restablecimiento de contraseña.
+  - `Tests\Integration\UsuarioAuthIntegrationTest` ([tests/Integration/UsuarioAuthIntegrationTest.php](file:///tests/Integration/UsuarioAuthIntegrationTest.php)): pruebas de integración con MySQL 8.0 real cubriendo el ciclo completo (`registrar` $\rightarrow$ rechazo de login sin confirmar $\rightarrow$ `confirmarCuenta` $\rightarrow$ `login` $\rightarrow$ `solicitarRecuperacion` $\rightarrow$ `restablecerPassword` $\rightarrow$ `login` con nueva clave), triggers de fallo SQL en `INSERT`/`UPDATE` verificando HTTP `500` sin envío de correo ni exposición de mensajes SQL internos, y lanzamiento de `PersistenceException` en `UsuarioRepository` con conexión cerrada.
+  - Adaptación de `SecurityIntegrationTest`, `ApiSeguridadTest`, `ServicioModuloIntegrationTest` y `CitaModuloIntegrationTest` para operar con `UsuarioRepository`, manteniendo intactas todas las pruebas de concurrencia (10 subprocesos simultáneos en `concurrent_login_worker.php`), emisión/consumo atómico de tokens y presupuesto compartido de IP.
 
 #### B. Verificación E2E en Navegador con JavaScript Habilitado (`tests/verificar_navegador.ps1` + `tests/browser_e2e_test.js`)
-- **Resultado:** 11 comprobaciones E2E superadas (`ADMIN-01` a `ADMIN-05`, `PRE-01`, `REC-01` a `REC-05`) + verificación de persistencia en MySQL — Código de salida `0`.
-- **Nuevo recorrido añadido en Fase 2B (`ADMIN-05`):** Autenticación como administrador en `/admin`, filtrado por fecha mediante `#fecha` (`buscador.js`), verificación en DOM de la cita reservada por el cliente con sus servicios y total calculado (`$ 195`), y eliminación de una cita temporal desde `/admin` vía `POST /api/eliminar` con CSRF comprobando su desaparición y la preservación de la cita principal en pantalla y en MySQL.
+- **Resultado:** 12 comprobaciones E2E superadas (`ADMIN-01` a `ADMIN-05`, `PRE-01`, `REC-01` a `REC-05`, `AUTH-01`) + verificación de persistencia en MySQL — Código de salida `0`.
+- **Nuevo recorrido añadido en Fase 2C (`AUTH-01`):** Cierre de sesión con CSRF (`POST /logout`), registro de cuenta nueva en `/crear-cuenta` con redirección a `/mensaje`, rechazo de inicio de sesión antes de confirmar con mensaje unificado, solicitud en `/reenviar-confirmacion` y solicitud en `/olvide` verificando respuestas genéricas anti-enumeración y ausencia total de errores de consola o red.
+
+---
+
+## Fase 2B: Separación de Responsabilidades en el Flujo de Citas y Reservas
+
+- **Rama:** `feature/fase-2b-citas-repositorios` (commit revisado `b0295c1378be0d7bf816ffd32e090a8e9f114292`)
+- **Commit Base (Fase 2A):** `4a450301304be25a4829d89303ad52edfd40028f`
+- **Estado General de Fase 2B:** **Completada y Revisada**
 
 ---
 
@@ -88,7 +90,8 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 | :--- | :--- | :---: |
 | **Entrega 1** | Seguridad y consistencia inicial (Auth, CSRF, Rate Limiting, Tokens, Transacciones, Migraciones) | `Completada y en main` |
 | **Fase 2A** | Separación de responsabilidades en módulo de catálogo de servicios (`Controller -> Service -> Repository`) | `Completada` |
-| **Fase 2B** | Separación de responsabilidades en el flujo de citas y reservas (`CitaRepository`, `CitaService`) | `Completada (En Auditoría)` |
+| **Fase 2B** | Separación de responsabilidades en el flujo de citas y reservas (`CitaRepository`, `CitaService`) | `Completada` |
+| **Fase 2C** | Separación de responsabilidades en usuarios y autenticación (`UsuarioRepository`, `AuthService`, desacoplamiento de `Usuario`) | `Completada (En Auditoría)` |
 | **Fase 3** | Profesionales, servicios con duración, horarios, descansos y bloqueos | `Pendiente` |
 | **Fase 4** | Disponibilidad real y prevención de reservas simultáneas | `Pendiente` |
 | **Fase 5** | Interfaz accesible de reservas y panel administrativo | `Pendiente` |

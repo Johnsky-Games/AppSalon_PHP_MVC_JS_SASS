@@ -592,6 +592,79 @@ async function runBrowserTests() {
             `Citas consultadas en /admin?fecha=${validDate}; cita temporal ID ${citaTemporalId} eliminada; cita principal ID ${citaIdCreada} ($195) conservada.`);
 
         // ------------------------------------------------------------------
+        // BLOQUE FASE 2C (AUTH-01): Registro, Login no confirmado, Reenvío y Olvidé
+        // ------------------------------------------------------------------
+        console.log('\n>>> [FASE 2C - AUTH] Ciclo en navegador de logout, registro (/crear-cuenta), rechazo sin confirmar, /reenviar-confirmacion y /olvide...');
+
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.evaluate(() => {
+                const logoutForm = document.querySelector('.barra form[action="/logout"]');
+                if (!logoutForm) throw new Error('Formulario /logout no encontrado en /admin');
+                logoutForm.submit();
+            })
+        ]);
+
+        await page.goto(`${BASE_URL}/crear-cuenta`, { waitUntil: 'networkidle0' });
+        await page.type('#nombre', 'Elena');
+        await page.type('#apellido', 'Rojas');
+        await page.type('#telefono', '3157654321');
+        await page.type('#email', 'elena.rojas@correo.com');
+        await page.type('#password', 'ClaveSegura2026');
+
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('form.formulario input[type="submit"]')
+        ]);
+
+        if (!page.url().includes('/mensaje')) {
+            throw new Error(`El registro en /crear-cuenta debía redirigir a /mensaje, obtenido: ${page.url()}`);
+        }
+
+        // Intentar iniciar sesión antes de confirmar la cuenta -> debe mostrar alerta de error unificada
+        await page.goto(`${BASE_URL}/`, { waitUntil: 'networkidle0' });
+        await page.type('#email', 'elena.rojas@correo.com');
+        await page.type('#password', 'ClaveSegura2026');
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('form.formulario input[type="submit"]')
+        ]);
+
+        const alertaNoConfirmado = await page.$$eval('.alerta.error', els => els.map(e => e.textContent.trim()).join(' | '));
+        if (!alertaNoConfirmado.includes('Credenciales incorrectas o la cuenta no ha sido verificada')) {
+            throw new Error(`Se esperaba alerta unificada al intentar login sin confirmar, obtenido: ${alertaNoConfirmado}`);
+        }
+
+        // Solicitar reenvío de confirmación (/reenviar-confirmacion)
+        await page.goto(`${BASE_URL}/reenviar-confirmacion`, { waitUntil: 'networkidle0' });
+        await page.type('#email', 'elena.rojas@correo.com');
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('form.formulario input[type="submit"]')
+        ]);
+
+        const alertaReenvio = await page.$$eval('.alerta.exito', els => els.map(e => e.textContent.trim()).join(' | '));
+        if (!alertaReenvio.includes('Si la cuenta existe y está pendiente de confirmación')) {
+            throw new Error(`Se esperaba mensaje genérico en /reenviar-confirmacion, obtenido: ${alertaReenvio}`);
+        }
+
+        // Solicitar recuperación de contraseña (/olvide)
+        await page.goto(`${BASE_URL}/olvide`, { waitUntil: 'networkidle0' });
+        await page.type('input[name="email"]', 'carlos@correo.com');
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('form.formulario input[type="submit"]')
+        ]);
+
+        const alertaOlvide = await page.$$eval('.alerta.exito', els => els.map(e => e.textContent.trim()).join(' | '));
+        if (!alertaOlvide.includes('Si el correo electrónico está registrado')) {
+            throw new Error(`Se esperaba mensaje genérico en /olvide, obtenido: ${alertaOlvide}`);
+        }
+
+        recordTest('AUTH-01', 'Ciclo de autenticación y ciclo de vida de cuenta (/logout, /crear-cuenta, login no confirmado, /reenviar-confirmacion, /olvide)', true,
+            `Registro redirigió a /mensaje; login sin confirmar rechazado con mensaje unificado; /reenviar-confirmacion y /olvide respondieron sin enumeración.`);
+
+        // ------------------------------------------------------------------
         // RECORRIDO 5: Ausencia de Errores de Consola y Fallos de Red
         // ------------------------------------------------------------------
         console.log('\n>>> [RECORRIDO 5] Verificación de errores de consola y peticiones fallidas...');

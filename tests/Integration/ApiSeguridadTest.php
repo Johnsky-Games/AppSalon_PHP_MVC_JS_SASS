@@ -11,6 +11,7 @@ use Model\CitaServicio;
 use Controllers\APIController;
 use Repositories\CitaRepository;
 use Repositories\ServicioRepository;
+use Repositories\UsuarioRepository;
 use AppTerminationException;
 use mysqli;
 
@@ -102,20 +103,20 @@ class ApiSeguridadTest extends TestCase
 
     public function testClienteNoPuedeEliminarCitaDeOtroClienteIdor(): void
     {
+        $usuarioRepo = new UsuarioRepository(self::$db);
+
         // 1. Crear Usuario A (dueño de la cita) y Usuario B (atacante)
         $usuarioA = new Usuario([
             'nombre' => 'Dueño', 'apellido' => 'A', 'email' => 'dueno@correo.com',
             'password' => '123456', 'telefono' => '1111111111', 'confirmado' => '1'
         ]);
-        $resA = $usuarioA->guardar();
-        $idA = (int)$resA['id'];
+        $idA = $usuarioRepo->create($usuarioA);
 
         $usuarioB = new Usuario([
             'nombre' => 'Atacante', 'apellido' => 'B', 'email' => 'atacante@correo.com',
             'password' => '123456', 'telefono' => '2222222222', 'confirmado' => '1'
         ]);
-        $resB = $usuarioB->guardar();
-        $idB = (int)$resB['id'];
+        $idB = $usuarioRepo->create($usuarioB);
 
         // 2. Crear cita perteneciente al Usuario A
         $citaRepo = new CitaRepository(self::$db);
@@ -158,8 +159,7 @@ class ApiSeguridadTest extends TestCase
             'nombre' => 'Propietario', 'apellido' => 'P', 'email' => 'prop@correo.com',
             'password' => '123456', 'telefono' => '3333333333', 'confirmado' => '1'
         ]);
-        $resU = $usuario->guardar();
-        $idUsuario = (int)$resU['id'];
+        $idUsuario = (new UsuarioRepository(self::$db))->create($usuario);
 
         $citaRepo = new CitaRepository(self::$db);
         $cita = new Cita([
@@ -199,8 +199,7 @@ class ApiSeguridadTest extends TestCase
             'nombre' => 'Cliente', 'apellido' => 'Real', 'email' => 'real@correo.com',
             'password' => '123456', 'telefono' => '4444444444', 'confirmado' => '1'
         ]);
-        $resU = $usuario->guardar();
-        $idUsuarioReal = (int)$resU['id'];
+        $idUsuarioReal = (new UsuarioRepository(self::$db))->create($usuario);
 
         $servicio = new Servicio([
             'nombre' => 'Corte Cabello',
@@ -385,8 +384,7 @@ class ApiSeguridadTest extends TestCase
             'nombre' => 'Cliente', 'apellido' => 'Test', 'email' => 'cliente_elim@correo.com',
             'password' => 'password', 'telefono' => '1234567890', 'confirmado' => '1'
         ]);
-        $resC = $cliente->guardar();
-        $clienteId = (int)$resC['id'];
+        $clienteId = (new UsuarioRepository(self::$db))->create($cliente);
 
         $servicio = new Servicio(['nombre' => 'Barba', 'precio' => '40.00']);
         $servicioId = (new ServicioRepository(self::$db))->create($servicio);

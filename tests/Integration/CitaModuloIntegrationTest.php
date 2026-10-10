@@ -16,6 +16,7 @@ use PHPUnit\Framework\TestCase;
 use Repositories\CitaRepository;
 use Repositories\PersistenceException;
 use Repositories\ServicioRepository;
+use Repositories\UsuarioRepository;
 use Services\CitaService;
 use Services\ServicioService;
 
@@ -75,8 +76,7 @@ class CitaModuloIntegrationTest extends TestCase
             'admin' => $admin,
             'confirmado' => '1'
         ]);
-        $res = $usuario->guardar();
-        return (int)$res['id'];
+        return (new UsuarioRepository(self::$db))->create($usuario);
     }
 
     private function crearServicio(string $nombre, string $precio): int

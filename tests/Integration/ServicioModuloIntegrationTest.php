@@ -418,7 +418,7 @@ class ServicioModuloIntegrationTest extends TestCase
             'nombre' => 'Cliente', 'apellido' => 'Histórico', 'email' => 'hist@correo.com',
             'password' => '123456', 'telefono' => '1234567890', 'confirmado' => '1'
         ]);
-        $idUsuario = (int)$usuario->guardar()['id'];
+        $idUsuario = (new \Repositories\UsuarioRepository(self::$db))->create($usuario);
 
         $service = new ServicioService(new ServicioRepository(self::$db));
         $idServicio = $service->crear([
