@@ -1,0 +1,1170 @@
+<?php
+
+namespace Services;
+
+use Model\HorarioProfesional;
+use Repositories\PersistenceException;
+use Repositories\ReporteRepository;
+
+/**
+ * Servicio de dominio para Reportes Administrativos (Fase 6B):
+ * - Validación estricta de filtros por rango de fechas (`fecha_inicio`, `fecha_fin`),
+ *   profesional (`profesional_id`) y servicio (`servicio_id`) en zona horaria `America/Guayaquil`.
+ * - Cálculo de importes y duraciones exclusivamente a partir de los datos históricos
+ *   capturados al reservar (`citasservicios` con fallback a `servicios` en citas antiguas).
+ * - Distinción explícita entre **Importe Reservado (`importe_reservado_total`)** e
+ *   **Ingreso Efectivamente Pagado (`ingreso_pagado_total`)**, evitando presentar
+ *   reservas pendientes de cobro como ingresos pagados.
+ * - Cálculo de ocupación respecto de las horas netas disponibles de turno por profesional,
+ *   descontando descansos y bloqueos vigentes con semántica semiabierta `[inicio, fin)`.
+ * - Generación de exportación CSV segura con neutralización de *CSV Formula Injection*.
+ */
+class ReporteService
+{
+    public const STATUS_OK = 'ok';
+    public const STATUS_EMPTY = 'empty';
+    public const STATUS_INVALID = 'invalid';
+    public const STATUS_ERROR = 'error';
+
+    public const TIMEZONE = 'America/Guayaquil';
+    public const MAX_DIAS_RANGO = 366;
+
+    public const ESTADO_PAGO_PENDIENTE = 'pendiente';
+    public const ESTADO_PAGO_PAGADO = 'pagado';
+
+    private ReporteRepository $reporteRepository;
+    private ?\DateTimeImmutable $ahoraReferencia;
+    private int $maxDiasRango;
+
+    public function __construct(
+        ?ReporteRepository $reporteRepository = null,
+        ?\DateTimeImmutable $ahoraReferencia = null,
+        int $maxDiasRango = self::MAX_DIAS_RANGO
+    ) {
+        $this->reporteRepository = $reporteRepository ?? new ReporteRepository();
+        $this->ahoraReferencia = $ahoraReferencia;
+        $this->maxDiasRango = max(1, $maxDiasRango);
+    }
+
+    /**
+     * Permite inyectar un reloj de referencia para pruebas deterministas.
+     */
+    public function setAhoraReferencia(?\DateTimeImmutable $ahoraReferencia): void
+    {
+        $this->ahoraReferencia = $ahoraReferencia;
+    }
+
+    /**
+     * Obtiene el instante actual en zona horaria `America/Guayaquil`.
+     */
+    public function obtenerAhora(): \DateTimeImmutable
+    {
+        $tz = new \DateTimeZone(self::TIMEZONE);
+        if ($this->ahoraReferencia !== null) {
+            return $this->ahoraReferencia->setTimezone($tz);
+        }
+        return new \DateTimeImmutable('now', $tz);
+    }
+
+    /**
+     * Calcula el rango predeterminado (mes actual en `America/Guayaquil`).
+     *
+     * @return array{fecha_inicio: string, fecha_fin: string}
+     */
+    public function obtenerRangoPredeterminado(): array
+    {
+        $ahora = $this->obtenerAhora();
+        return [
+            'fecha_inicio' => $ahora->format('Y-m-01'),
+            'fecha_fin' => $ahora->format('Y-m-t'),
+        ];
+    }
+
+    /**
+     * Valida una cadena de fecha en formato estricto `YYYY-MM-DD`.
+     */
+    public static function esFechaValida(string $fecha): bool
+    {
+        if (!preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $fecha, $m)) {
+            return false;
+        }
+        return checkdate((int)$m[2], (int)$m[3], (int)$m[1]);
+    }
+
+    /**
+     * Convierte una hora `HH:MM` o `HH:MM:SS` a minutos desde las 00:00.
+     */
+    public static function horaAMinutos(string $hora): int
+    {
+        $normalizada = HorarioProfesional::normalizarHora($hora);
+        if ($normalizada === '') {
+            return 0;
+        }
+        $partes = explode(':', $normalizada);
+        return ((int)$partes[0] * 60) + (int)$partes[1];
+    }
+
+    /**
+     * Resta un conjunto de restricciones `[inicio, fin)` a una franja laboral `[turnoInicio, turnoFin)`
+     * empleando semántica de intervalos semiabiertos `[inicio, fin)`.
+     * Evita restar dos veces solapamientos entre descansos y bloqueos.
+     *
+     * @param int $turnoInicio
+     * @param int $turnoFin
+     * @param array<int, array{inicio: int, fin: int}> $restricciones
+     * @return array<int, array{inicio: int, fin: int}>
+     */
+    public function restarRestriccionesDeTurno(int $turnoInicio, int $turnoFin, array $restricciones): array
+    {
+        if ($turnoInicio >= $turnoFin) {
+            return [];
+        }
+
+        $ventanasLibres = [
+            ['inicio' => $turnoInicio, 'fin' => $turnoFin],
+        ];
+
+        foreach ($restricciones as $restriccion) {
+            $rInicio = (int)($restriccion['inicio'] ?? 0);
+            $rFin = (int)($restriccion['fin'] ?? 0);
+            if ($rInicio >= $rFin) {
+                continue;
+            }
+
+            $nuevasVentanas = [];
+            foreach ($ventanasLibres as $ventana) {
+                $vInicio = $ventana['inicio'];
+                $vFin = $ventana['fin'];
+
+                if ($rFin <= $vInicio || $rInicio >= $vFin) {
+                    $nuevasVentanas[] = $ventana;
+                    continue;
+                }
+
+                if ($rInicio > $vInicio) {
+                    $nuevasVentanas[] = [
+                        'inicio' => $vInicio,
+                        'fin' => $rInicio,
+                    ];
+                }
+
+                if ($rFin < $vFin) {
+                    $nuevasVentanas[] = [
+                        'inicio' => $rFin,
+                        'fin' => $vFin,
+                    ];
+                }
+            }
+
+            $ventanasLibres = $nuevasVentanas;
+            if (empty($ventanasLibres)) {
+                break;
+            }
+        }
+
+        return $ventanasLibres;
+    }
+
+    /**
+     * Valida y normaliza los filtros de entrada para el reporte administrativo.
+     *
+     * @param array<string, mixed> $parametros
+     * @return array{
+     *   valido: bool,
+     *   errores: array<int, string>,
+     *   fecha_inicio: string,
+     *   fecha_fin: string,
+     *   profesional_filtro: ?string,
+     *   profesional_id_int: ?int,
+     *   servicio_id: ?int,
+     *   dias_rango: int
+     * }
+     */
+    public function validarYNormalizarFiltros(array $parametros): array
+    {
+        $rangoDefault = $this->obtenerRangoPredeterminado();
+        $errores = [];
+
+        $tieneFechaInicio = array_key_exists('fecha_inicio', $parametros) && trim((string)$parametros['fecha_inicio']) !== '';
+        $tieneFechaFin = array_key_exists('fecha_fin', $parametros) && trim((string)$parametros['fecha_fin']) !== '';
+
+        if (!$tieneFechaInicio && !$tieneFechaFin) {
+            $fechaInicio = $rangoDefault['fecha_inicio'];
+            $fechaFin = $rangoDefault['fecha_fin'];
+        } elseif ($tieneFechaInicio && !$tieneFechaFin) {
+            $fechaInicio = trim((string)$parametros['fecha_inicio']);
+            $fechaFin = $fechaInicio;
+        } elseif (!$tieneFechaInicio && $tieneFechaFin) {
+            $fechaFin = trim((string)$parametros['fecha_fin']);
+            $fechaInicio = $fechaFin;
+        } else {
+            $fechaInicio = trim((string)$parametros['fecha_inicio']);
+            $fechaFin = trim((string)$parametros['fecha_fin']);
+        }
+
+        $inicioValido = self::esFechaValida($fechaInicio);
+        $finValido = self::esFechaValida($fechaFin);
+
+        if (!$inicioValido) {
+            $errores[] = 'La fecha de inicio no es válida. Use el formato AAAA-MM-DD.';
+        }
+        if (!$finValido) {
+            $errores[] = 'La fecha de fin no es válida. Use el formato AAAA-MM-DD.';
+        }
+
+        $diasRango = 0;
+        if ($inicioValido && $finValido) {
+            if ($fechaInicio > $fechaFin) {
+                $errores[] = 'La fecha de inicio no puede ser posterior a la fecha de fin.';
+            } else {
+                $tz = new \DateTimeZone(self::TIMEZONE);
+                $dtInicio = new \DateTimeImmutable($fechaInicio . ' 00:00:00', $tz);
+                $dtFin = new \DateTimeImmutable($fechaFin . ' 00:00:00', $tz);
+                $diasRango = (int)$dtInicio->diff($dtFin)->days + 1;
+
+                if ($diasRango > $this->maxDiasRango) {
+                    $errores[] = "El rango de fechas solicitado ({$diasRango} días) supera el máximo permitido de {$this->maxDiasRango} días.";
+                }
+            }
+        }
+
+        // Filtro de profesional: vacío / 'todos' => null, 'sin_profesional' => 'sin_profesional', o ID entero positivo
+        $profRaw = $parametros['profesional_id'] ?? $parametros['profesionalId'] ?? $parametros['profesional'] ?? null;
+        $profesionalFiltro = null;
+        $profesionalIdInt = null;
+
+        if ($profRaw !== null && trim((string)$profRaw) !== '' && strtolower(trim((string)$profRaw)) !== 'todos') {
+            $profStr = trim((string)$profRaw);
+            if ($profStr === 'sin_profesional' || $profStr === 'historicas') {
+                $profesionalFiltro = 'sin_profesional';
+            } elseif (ctype_digit($profStr) && (int)$profStr > 0) {
+                $profesionalIdInt = (int)$profStr;
+                $profesionalFiltro = (string)$profesionalIdInt;
+            } else {
+                $errores[] = 'El filtro de profesional seleccionado no es válido.';
+            }
+        }
+
+        // Filtro de servicio: vacío / 'todos' => null, o ID entero positivo
+        $servRaw = $parametros['servicio_id'] ?? $parametros['servicioId'] ?? $parametros['servicio'] ?? null;
+        $servicioId = null;
+
+        if ($servRaw !== null && trim((string)$servRaw) !== '' && strtolower(trim((string)$servRaw)) !== 'todos') {
+            $servStr = trim((string)$servRaw);
+            if (ctype_digit($servStr) && (int)$servStr > 0) {
+                $servicioId = (int)$servStr;
+            } else {
+                $errores[] = 'El filtro de servicio seleccionado no es válido.';
+            }
+        }
+
+        return [
+            'valido' => empty($errores),
+            'errores' => $errores,
+            'fecha_inicio' => $inicioValido ? $fechaInicio : $rangoDefault['fecha_inicio'],
+            'fecha_fin' => $finValido ? $fechaFin : $rangoDefault['fecha_fin'],
+            'profesional_filtro' => $profesionalFiltro,
+            'profesional_id_int' => $profesionalIdInt,
+            'servicio_id' => $servicioId,
+            'dias_rango' => $diasRango,
+        ];
+    }
+
+    /**
+     * Evalúa el estado de pago de una cita distinguiendo explícitamente entre
+     * importe reservado (comprometido) e ingreso efectivamente pagado.
+     *
+     * En Fase 6B (previo a la pasarela de pagos de Fase 6C), si la cita no registra
+     * estado `'pagado'` confirmado, el ingreso pagado es estrictamente `0.00`.
+     *
+     * @param array<string, mixed> $datosCita
+     * @param float $importeReservado
+     * @return array{estado_pago: string, etiqueta_estado_pago: string, ingreso_pagado: float}
+     */
+    public function evaluarEstadoPagoCita(array $datosCita, float $importeReservado): array
+    {
+        $estadoRaw = strtolower(trim((string)($datosCita['estado_pago'] ?? '')));
+        if ($estadoRaw === self::ESTADO_PAGO_PAGADO) {
+            $montoPagado = isset($datosCita['monto_pagado']) && is_numeric($datosCita['monto_pagado'])
+                ? round(max(0.0, (float)$datosCita['monto_pagado']), 2)
+                : round(max(0.0, $importeReservado), 2);
+
+            return [
+                'estado_pago' => self::ESTADO_PAGO_PAGADO,
+                'etiqueta_estado_pago' => 'Pagado',
+                'ingreso_pagado' => $montoPagado,
+            ];
+        }
+
+        return [
+            'estado_pago' => self::ESTADO_PAGO_PENDIENTE,
+            'etiqueta_estado_pago' => 'Pendiente de cobro (sin pago registrado)',
+            'ingreso_pagado' => 0.00,
+        ];
+    }
+
+    /**
+     * Calcula los minutos disponibles netos de turno para cada profesional en `[fechaInicio, fechaFin]`,
+     * descontando descansos semanales y bloqueos vigentes con semántica `[inicio, fin)`.
+     *
+     * @param string $fechaInicio
+     * @param string $fechaFin
+     * @param array<int, array<string, mixed>> $profesionales
+     * @param array<int, array<string, mixed>> $horarios
+     * @param array<int, array<string, mixed>> $descansos
+     * @param array<int, array<string, mixed>> $bloqueos
+     * @return array<int, int> Mapa `[profesionalId => minutos_disponibles_netos]`
+     */
+    public function calcularMinutosDisponiblesPorProfesional(
+        string $fechaInicio,
+        string $fechaFin,
+        array $profesionales,
+        array $horarios,
+        array $descansos,
+        array $bloqueos
+    ): array {
+        $horariosPorProfDia = [];
+        foreach ($horarios as $h) {
+            $pId = (int)($h['profesionalId'] ?? 0);
+            $dia = (int)($h['dia_semana'] ?? 0);
+            $horariosPorProfDia[$pId][$dia][] = [
+                'inicio' => self::horaAMinutos((string)$h['hora_inicio']),
+                'fin' => self::horaAMinutos((string)$h['hora_fin']),
+            ];
+        }
+
+        $descansosPorProfDia = [];
+        foreach ($descansos as $d) {
+            $pId = (int)($d['profesionalId'] ?? 0);
+            $dia = (int)($d['dia_semana'] ?? 0);
+            $descansosPorProfDia[$pId][$dia][] = [
+                'inicio' => self::horaAMinutos((string)$d['hora_inicio']),
+                'fin' => self::horaAMinutos((string)$d['hora_fin']),
+            ];
+        }
+
+        $bloqueosPorProf = [];
+        foreach ($bloqueos as $b) {
+            $pId = (int)($b['profesionalId'] ?? 0);
+            $bloqueosPorProf[$pId][] = $b;
+        }
+
+        $tz = new \DateTimeZone(self::TIMEZONE);
+        $cursor = new \DateTimeImmutable($fechaInicio . ' 00:00:00', $tz);
+        $limite = new \DateTimeImmutable($fechaFin . ' 00:00:00', $tz);
+
+        $fechasRango = [];
+        while ($cursor <= $limite) {
+            $fechasRango[] = [
+                'fecha' => $cursor->format('Y-m-d'),
+                'dia_semana' => (int)$cursor->format('N'),
+            ];
+            $cursor = $cursor->modify('+1 day');
+        }
+
+        $resultado = [];
+        foreach ($profesionales as $prof) {
+            $profId = (int)$prof['id'];
+            $activo = (int)($prof['activo'] ?? 1) === 1;
+
+            if (!$activo) {
+                $resultado[$profId] = 0;
+                continue;
+            }
+
+            $minutosTotalesProf = 0;
+            foreach ($fechasRango as $infoFecha) {
+                $fechaStr = $infoFecha['fecha'];
+                $diaSemana = $infoFecha['dia_semana'];
+
+                $turnosDia = $horariosPorProfDia[$profId][$diaSemana] ?? [];
+                if (empty($turnosDia)) {
+                    continue;
+                }
+
+                $restriccionesDia = $descansosPorProfDia[$profId][$diaSemana] ?? [];
+                foreach ($bloqueosPorProf[$profId] ?? [] as $blk) {
+                    $bInicioFecha = (string)($blk['fecha_inicio'] ?? '');
+                    $bFinFecha = (string)($blk['fecha_fin'] ?? '');
+                    if ($bInicioFecha <= $fechaStr && $bFinFecha >= $fechaStr) {
+                        $hIni = $blk['hora_inicio'] ?? null;
+                        $hFin = $blk['hora_fin'] ?? null;
+                        if ($hIni === null || $hFin === null || trim((string)$hIni) === '' || trim((string)$hFin) === '') {
+                            $restriccionesDia[] = ['inicio' => 0, 'fin' => 1440];
+                        } else {
+                            $restriccionesDia[] = [
+                                'inicio' => self::horaAMinutos((string)$hIni),
+                                'fin' => self::horaAMinutos((string)$hFin),
+                            ];
+                        }
+                    }
+                }
+
+                foreach ($turnosDia as $turno) {
+                    $ventanasLibres = $this->restarRestriccionesDeTurno(
+                        (int)$turno['inicio'],
+                        (int)$turno['fin'],
+                        $restriccionesDia
+                    );
+                    foreach ($ventanasLibres as $ventana) {
+                        $minutosTotalesProf += max(0, (int)$ventana['fin'] - (int)$ventana['inicio']);
+                    }
+                }
+            }
+
+            $resultado[$profId] = $minutosTotalesProf;
+        }
+
+        return $resultado;
+    }
+
+    /**
+     * Genera el reporte administrativo completo aplicando validaciones, cálculos históricos
+     * de importes, métricas de ocupación por profesional y desglose por servicio.
+     *
+     * @param array<string, mixed> $parametros
+     * @return array<string, mixed>
+     */
+    public function consultarReporte(array $parametros = []): array
+    {
+        $validacion = $this->validarYNormalizarFiltros($parametros);
+
+        try {
+            $profesionalesCatalogo = $this->reporteRepository->listarProfesionalesCatalogo();
+            $serviciosCatalogo = $this->reporteRepository->listarServiciosCatalogo();
+
+            if (!$validacion['valido']) {
+                return $this->construirRespuestaVaciaOError(
+                    self::STATUS_INVALID,
+                    422,
+                    $validacion,
+                    $profesionalesCatalogo,
+                    $serviciosCatalogo,
+                    ['error' => $validacion['errores']]
+                );
+            }
+
+            $fechaInicio = $validacion['fecha_inicio'];
+            $fechaFin = $validacion['fecha_fin'];
+            $filtroProfesional = $validacion['profesional_filtro'];
+            $profesionalIdInt = $validacion['profesional_id_int'];
+            $servicioIdFiltro = $validacion['servicio_id'];
+
+            $filas = $this->reporteRepository->obtenerFilasReservasEnRango(
+                $fechaInicio,
+                $fechaFin,
+                $filtroProfesional,
+                $servicioIdFiltro
+            );
+
+            $horarios = $this->reporteRepository->obtenerHorariosProfesionales($profesionalIdInt);
+            $descansos = $this->reporteRepository->obtenerDescansosProfesionales($profesionalIdInt);
+            $bloqueos = $this->reporteRepository->obtenerBloqueosEnRango($fechaInicio, $fechaFin, $profesionalIdInt);
+
+            return $this->ensamblarReporte(
+                $validacion,
+                $profesionalesCatalogo,
+                $serviciosCatalogo,
+                $filas,
+                $horarios,
+                $descansos,
+                $bloqueos
+            );
+        } catch (PersistenceException $e) {
+            return $this->construirRespuestaVaciaOError(
+                self::STATUS_ERROR,
+                500,
+                $validacion,
+                [],
+                [],
+                ['error' => ['No fue posible generar el reporte administrativo en este momento.']]
+            );
+        }
+    }
+
+    /**
+     * Ensambla la estructura completa del reporte a partir de las filas e información de agenda.
+     *
+     * @param array<string, mixed> $validacion
+     * @param array<int, array<string, mixed>> $profesionalesCatalogo
+     * @param array<int, array<string, mixed>> $serviciosCatalogo
+     * @param array<int, array<string, mixed>> $filas
+     * @param array<int, array<string, mixed>> $horarios
+     * @param array<int, array<string, mixed>> $descansos
+     * @param array<int, array<string, mixed>> $bloqueos
+     * @return array<string, mixed>
+     */
+    private function ensamblarReporte(
+        array $validacion,
+        array $profesionalesCatalogo,
+        array $serviciosCatalogo,
+        array $filas,
+        array $horarios,
+        array $descansos,
+        array $bloqueos
+    ): array {
+        $fechaInicio = (string)$validacion['fecha_inicio'];
+        $fechaFin = (string)$validacion['fecha_fin'];
+        $filtroProfesional = $validacion['profesional_filtro'];
+        $profesionalIdInt = $validacion['profesional_id_int'];
+        $servicioIdFiltro = $validacion['servicio_id'];
+
+        // 1. Agrupar filas por cita_id preservando el orden determinista
+        $citasAgrupadas = [];
+        foreach ($filas as $fila) {
+            $citaId = (int)($fila['cita_id'] ?? 0);
+            if ($citaId <= 0) {
+                continue;
+            }
+
+            if (!isset($citasAgrupadas[$citaId])) {
+                $profId = $fila['profesional_id'] !== null && $fila['profesional_id'] !== ''
+                    ? (int)$fila['profesional_id']
+                    : null;
+                $nombreCliente = trim(
+                    ((string)($fila['cliente_nombre'] ?? '')) . ' ' . ((string)($fila['cliente_apellido'] ?? ''))
+                );
+                if ($nombreCliente === '') {
+                    $nombreCliente = 'Cliente histórico';
+                }
+
+                $citasAgrupadas[$citaId] = [
+                    'id' => $citaId,
+                    'fecha' => (string)($fila['fecha'] ?? ''),
+                    'hora' => (string)($fila['hora'] ?? ''),
+                    'hora_inicio' => $fila['hora_inicio'] !== null ? (string)$fila['hora_inicio'] : null,
+                    'hora_fin' => $fila['hora_fin'] !== null ? (string)$fila['hora_fin'] : null,
+                    'cita_duracion_total_minutos' => $fila['cita_duracion_total_minutos'] !== null
+                        ? (int)$fila['cita_duracion_total_minutos']
+                        : null,
+                    'usuario_id' => $fila['usuario_id'] !== null ? (int)$fila['usuario_id'] : null,
+                    'cliente' => $nombreCliente,
+                    'cliente_email' => (string)($fila['cliente_email'] ?? ''),
+                    'cliente_telefono' => (string)($fila['cliente_telefono'] ?? ''),
+                    'profesional_id' => $profId,
+                    'profesional_nombre' => $profId !== null
+                        ? ((string)($fila['profesional_nombre'] ?? ('Profesional #' . $profId)))
+                        : 'Sin profesional asignado (cita histórica)',
+                    'es_historica_sin_profesional' => $profId === null,
+                    'estado_pago_raw' => $fila['estado_pago'] ?? null,
+                    'monto_pagado_raw' => $fila['monto_pagado'] ?? null,
+                    'servicios' => [],
+                ];
+            }
+
+            $csId = $fila['citasservicio_id'] ?? null;
+            if ($csId !== null) {
+                $servId = $fila['servicio_id'] !== null && $fila['servicio_id'] !== ''
+                    ? (int)$fila['servicio_id']
+                    : null;
+                $servNombre = trim((string)($fila['servicio_nombre'] ?? ''));
+                if ($servNombre === '') {
+                    $servNombre = 'Servicio histórico (eliminado del catálogo)';
+                }
+                $servPrecio = isset($fila['servicio_precio']) && is_numeric($fila['servicio_precio'])
+                    ? round(max(0.0, (float)$fila['servicio_precio']), 2)
+                    : 0.00;
+                $servDuracion = isset($fila['servicio_duracion_minutos']) && is_numeric($fila['servicio_duracion_minutos'])
+                    ? max(0, (int)$fila['servicio_duracion_minutos'])
+                    : 0;
+
+                $esEliminadoCatalogo = ($servId === null)
+                    || (array_key_exists('servicio_catalogo_id', $fila) && $fila['servicio_catalogo_id'] === null);
+
+                $citasAgrupadas[$citaId]['servicios'][] = [
+                    'citasservicio_id' => (int)$csId,
+                    'servicio_id' => $servId,
+                    'nombre' => $servNombre,
+                    'precio' => $servPrecio,
+                    'duracion_minutos' => $servDuracion,
+                    'es_eliminado_catalogo' => $esEliminadoCatalogo,
+                ];
+            }
+        }
+
+        // 2. Calcular totales por cita, desglose por servicio y acumuladores por profesional
+        $reservasDetalle = [];
+        $mapaServicios = [];
+        $ocupacionPorProf = [];
+        $acumuladorHistoricasSinProf = [
+            'total_citas' => 0,
+            'minutos_ocupados' => 0,
+            'importe_reservado' => 0.00,
+            'importe_total_citas' => 0.00,
+            'ingreso_pagado' => 0.00,
+        ];
+
+        $importeReservadoTotal = 0.00;
+        $importeBrutoCitasTotal = 0.00;
+        $ingresoPagadoTotal = 0.00;
+        $totalServiciosReservados = 0;
+
+        foreach ($citasAgrupadas as $cita) {
+            $importeTotalCita = 0.00;
+            $subtotalServicioFiltrado = 0.00;
+            $sumaDuracionServiciosCita = 0;
+            $sumaDuracionServicioFiltrado = 0;
+            $serviciosTextoPartes = [];
+
+            foreach ($cita['servicios'] as $srv) {
+                $precioSrv = (float)$srv['precio'];
+                $durSrv = (int)$srv['duracion_minutos'];
+                $importeTotalCita += $precioSrv;
+                $sumaDuracionServiciosCita += $durSrv;
+
+                $coincideFiltroServicio = ($servicioIdFiltro === null) || ($srv['servicio_id'] === $servicioIdFiltro);
+                if ($coincideFiltroServicio) {
+                    $subtotalServicioFiltrado += $precioSrv;
+                    $sumaDuracionServicioFiltrado += $durSrv;
+                    $totalServiciosReservados++;
+                }
+
+                $durTexto = $durSrv > 0 ? " ({$durSrv} min)" : '';
+                $serviciosTextoPartes[] = sprintf('%s ($%s%s)', $srv['nombre'], number_format($precioSrv, 2, '.', ''), $durTexto);
+            }
+
+            $importeTotalCita = round($importeTotalCita, 2);
+            $subtotalServicioFiltrado = round($subtotalServicioFiltrado, 2);
+            $importeAtribuible = $servicioIdFiltro !== null ? $subtotalServicioFiltrado : $importeTotalCita;
+
+            // Determinar duración de la cita: COALESCE(citas.duracion_total_minutos, diff(hora_inicio, hora_fin), suma servicios)
+            $duracionCitaMinutos = 0;
+            if ($cita['cita_duracion_total_minutos'] !== null && $cita['cita_duracion_total_minutos'] > 0) {
+                $duracionCitaMinutos = (int)$cita['cita_duracion_total_minutos'];
+            } elseif ($cita['hora_inicio'] !== null && $cita['hora_fin'] !== null) {
+                $mIni = self::horaAMinutos($cita['hora_inicio']);
+                $mFin = self::horaAMinutos($cita['hora_fin']);
+                if ($mFin > $mIni) {
+                    $duracionCitaMinutos = $mFin - $mIni;
+                }
+            }
+            if ($duracionCitaMinutos <= 0 && $sumaDuracionServiciosCita > 0) {
+                $duracionCitaMinutos = $sumaDuracionServiciosCita;
+            }
+
+            $infoPago = $this->evaluarEstadoPagoCita([
+                'estado_pago' => $cita['estado_pago_raw'],
+                'monto_pagado' => $cita['monto_pagado_raw'],
+            ], $importeAtribuible);
+
+            $ingresoPagadoCita = $infoPago['ingreso_pagado'];
+
+            // Actualizar desglose por servicio
+            foreach ($cita['servicios'] as $srv) {
+                if ($servicioIdFiltro !== null && $srv['servicio_id'] !== $servicioIdFiltro) {
+                    continue;
+                }
+                $claveSrv = $srv['servicio_id'] !== null
+                    ? 'id:' . $srv['servicio_id']
+                    : 'hist:' . mb_strtolower($srv['nombre'], 'UTF-8');
+
+                if (!isset($mapaServicios[$claveSrv])) {
+                    $mapaServicios[$claveSrv] = [
+                        'servicio_id' => $srv['servicio_id'],
+                        'servicio_nombre' => $srv['nombre'],
+                        'es_eliminado_catalogo' => $srv['es_eliminado_catalogo'],
+                        'total_reservas' => 0,
+                        'minutos_reservados' => 0,
+                        'importe_reservado' => 0.00,
+                        'ingreso_pagado' => 0.00,
+                    ];
+                }
+
+                $mapaServicios[$claveSrv]['total_reservas']++;
+                $mapaServicios[$claveSrv]['minutos_reservados'] += (int)$srv['duracion_minutos'];
+                $mapaServicios[$claveSrv]['importe_reservado'] = round(
+                    $mapaServicios[$claveSrv]['importe_reservado'] + (float)$srv['precio'],
+                    2
+                );
+                if ($infoPago['estado_pago'] === self::ESTADO_PAGO_PAGADO) {
+                    $mapaServicios[$claveSrv]['ingreso_pagado'] = round(
+                        $mapaServicios[$claveSrv]['ingreso_pagado'] + (float)$srv['precio'],
+                        2
+                    );
+                }
+            }
+
+            // Formatear horario legible
+            $hInicioCorta = $cita['hora_inicio'] !== null && trim($cita['hora_inicio']) !== ''
+                ? substr(trim($cita['hora_inicio']), 0, 5)
+                : substr(trim($cita['hora']), 0, 5);
+            $hFinCorta = $cita['hora_fin'] !== null && trim($cita['hora_fin']) !== ''
+                ? substr(trim($cita['hora_fin']), 0, 5)
+                : null;
+            $horarioTexto = $hFinCorta !== null ? "{$hInicioCorta} - {$hFinCorta}" : $hInicioCorta;
+
+            $profId = $cita['profesional_id'];
+            if ($profId !== null) {
+                if (!isset($ocupacionPorProf[$profId])) {
+                    $ocupacionPorProf[$profId] = [
+                        'profesional_nombre' => $cita['profesional_nombre'],
+                        'total_citas' => 0,
+                        'minutos_ocupados' => 0,
+                        'minutos_servicio_filtrado' => 0,
+                        'importe_reservado' => 0.00,
+                        'importe_total_citas' => 0.00,
+                        'ingreso_pagado' => 0.00,
+                    ];
+                }
+                $ocupacionPorProf[$profId]['total_citas']++;
+                $ocupacionPorProf[$profId]['minutos_ocupados'] += $duracionCitaMinutos;
+                $ocupacionPorProf[$profId]['minutos_servicio_filtrado'] += $sumaDuracionServicioFiltrado;
+                $ocupacionPorProf[$profId]['importe_reservado'] = round(
+                    $ocupacionPorProf[$profId]['importe_reservado'] + $importeAtribuible,
+                    2
+                );
+                $ocupacionPorProf[$profId]['importe_total_citas'] = round(
+                    $ocupacionPorProf[$profId]['importe_total_citas'] + $importeTotalCita,
+                    2
+                );
+                $ocupacionPorProf[$profId]['ingreso_pagado'] = round(
+                    $ocupacionPorProf[$profId]['ingreso_pagado'] + $ingresoPagadoCita,
+                    2
+                );
+            } else {
+                $acumuladorHistoricasSinProf['total_citas']++;
+                $acumuladorHistoricasSinProf['minutos_ocupados'] += $duracionCitaMinutos;
+                $acumuladorHistoricasSinProf['importe_reservado'] = round(
+                    $acumuladorHistoricasSinProf['importe_reservado'] + $importeAtribuible,
+                    2
+                );
+                $acumuladorHistoricasSinProf['importe_total_citas'] = round(
+                    $acumuladorHistoricasSinProf['importe_total_citas'] + $importeTotalCita,
+                    2
+                );
+                $acumuladorHistoricasSinProf['ingreso_pagado'] = round(
+                    $acumuladorHistoricasSinProf['ingreso_pagado'] + $ingresoPagadoCita,
+                    2
+                );
+            }
+
+            $importeReservadoTotal = round($importeReservadoTotal + $importeAtribuible, 2);
+            $importeBrutoCitasTotal = round($importeBrutoCitasTotal + $importeTotalCita, 2);
+            $ingresoPagadoTotal = round($ingresoPagadoTotal + $ingresoPagadoCita, 2);
+
+            $reservasDetalle[] = [
+                'id' => $cita['id'],
+                'fecha' => $cita['fecha'],
+                'hora' => $cita['hora'],
+                'hora_inicio' => $cita['hora_inicio'],
+                'hora_fin' => $cita['hora_fin'],
+                'horario' => $horarioTexto,
+                'cliente' => $cita['cliente'],
+                'cliente_email' => $cita['cliente_email'],
+                'cliente_telefono' => $cita['cliente_telefono'],
+                'profesional_id' => $profId,
+                'profesional_nombre' => $cita['profesional_nombre'],
+                'es_historica_sin_profesional' => $cita['es_historica_sin_profesional'],
+                'servicios' => $cita['servicios'],
+                'servicios_resumen' => implode(', ', $serviciosTextoPartes),
+                'duracion_total_minutos' => $duracionCitaMinutos,
+                'duracion_servicio_filtrado_minutos' => $sumaDuracionServicioFiltrado,
+                'importe_total_cita' => $importeTotalCita,
+                'subtotal_servicio_filtrado' => $subtotalServicioFiltrado,
+                'importe_reservado' => $importeAtribuible,
+                'ingreso_pagado' => $ingresoPagadoCita,
+                'estado_pago' => $infoPago['estado_pago'],
+                'etiqueta_estado_pago' => $infoPago['etiqueta_estado_pago'],
+            ];
+        }
+
+        // 3. Calcular minutos disponibles y porcentaje de ocupación por profesional
+        $profesionalesParaOcupacion = [];
+        if ($filtroProfesional !== 'sin_profesional') {
+            foreach ($profesionalesCatalogo as $profCat) {
+                if ($profesionalIdInt !== null && (int)$profCat['id'] !== $profesionalIdInt) {
+                    continue;
+                }
+                $profesionalesParaOcupacion[(int)$profCat['id']] = $profCat;
+            }
+            // Si alguna cita referencia un profesional no listado, asegurarlo
+            foreach ($ocupacionPorProf as $pId => $infoOcup) {
+                if (!isset($profesionalesParaOcupacion[$pId])) {
+                    $profesionalesParaOcupacion[$pId] = [
+                        'id' => $pId,
+                        'nombre' => $infoOcup['profesional_nombre'],
+                        'activo' => 0,
+                    ];
+                }
+            }
+        }
+
+        $minutosDisponiblesMapa = $this->calcularMinutosDisponiblesPorProfesional(
+            $fechaInicio,
+            $fechaFin,
+            array_values($profesionalesParaOcupacion),
+            $horarios,
+            $descansos,
+            $bloqueos
+        );
+
+        $resumenProfesionales = [];
+        $minutosOcupadosGlobalConProf = 0;
+        $minutosDisponiblesGlobalConProf = 0;
+
+        foreach ($profesionalesParaOcupacion as $profId => $profInfo) {
+            $datosOcup = $ocupacionPorProf[$profId] ?? [
+                'total_citas' => 0,
+                'minutos_ocupados' => 0,
+                'minutos_servicio_filtrado' => 0,
+                'importe_reservado' => 0.00,
+                'importe_total_citas' => 0.00,
+                'ingreso_pagado' => 0.00,
+            ];
+
+            $minOcup = (int)$datosOcup['minutos_ocupados'];
+            $minDisp = (int)($minutosDisponiblesMapa[$profId] ?? 0);
+            $sinTurno = $minDisp <= 0;
+            $porcentaje = !$sinTurno ? round(($minOcup / $minDisp) * 100, 2) : 0.00;
+            $activo = (int)($profInfo['activo'] ?? 1) === 1;
+
+            $minutosOcupadosGlobalConProf += $minOcup;
+            $minutosDisponiblesGlobalConProf += $minDisp;
+
+            $resumenProfesionales[] = [
+                'profesional_id' => $profId,
+                'profesional_nombre' => (string)$profInfo['nombre'],
+                'activo' => $activo,
+                'es_historico_sin_profesional' => false,
+                'total_citas' => (int)$datosOcup['total_citas'],
+                'minutos_ocupados' => $minOcup,
+                'minutos_servicio_filtrado' => (int)$datosOcup['minutos_servicio_filtrado'],
+                'minutos_disponibles' => $minDisp,
+                'horas_ocupadas' => round($minOcup / 60, 2),
+                'horas_disponibles' => round($minDisp / 60, 2),
+                'porcentaje_ocupacion' => $porcentaje,
+                'sin_turno_disponible' => $sinTurno,
+                'etiqueta_ocupacion' => $sinTurno
+                    ? '0.00% (Sin turno disponible)'
+                    : number_format($porcentaje, 2, '.', '') . '%',
+                'importe_reservado' => round((float)$datosOcup['importe_reservado'], 2),
+                'importe_total_citas' => round((float)$datosOcup['importe_total_citas'], 2),
+                'ingreso_pagado' => round((float)$datosOcup['ingreso_pagado'], 2),
+            ];
+        }
+
+        if ($acumuladorHistoricasSinProf['total_citas'] > 0 || $filtroProfesional === 'sin_profesional') {
+            $minHist = (int)$acumuladorHistoricasSinProf['minutos_ocupados'];
+            $resumenProfesionales[] = [
+                'profesional_id' => null,
+                'profesional_nombre' => 'Sin profesional asignado (citas históricas)',
+                'activo' => false,
+                'es_historico_sin_profesional' => true,
+                'total_citas' => (int)$acumuladorHistoricasSinProf['total_citas'],
+                'minutos_ocupados' => $minHist,
+                'minutos_servicio_filtrado' => $minHist,
+                'minutos_disponibles' => 0,
+                'horas_ocupadas' => round($minHist / 60, 2),
+                'horas_disponibles' => 0.00,
+                'porcentaje_ocupacion' => 0.00,
+                'sin_turno_disponible' => true,
+                'etiqueta_ocupacion' => 'No aplica (cita histórica)',
+                'importe_reservado' => round((float)$acumuladorHistoricasSinProf['importe_reservado'], 2),
+                'importe_total_citas' => round((float)$acumuladorHistoricasSinProf['importe_total_citas'], 2),
+                'ingreso_pagado' => round((float)$acumuladorHistoricasSinProf['ingreso_pagado'], 2),
+            ];
+        }
+
+        // Ordenar resumen de servicios por importe reservado descendente y nombre ascendente
+        $resumenServicios = array_values($mapaServicios);
+        usort($resumenServicios, static function (array $a, array $b): int {
+            $cmpImporte = $b['importe_reservado'] <=> $a['importe_reservado'];
+            if ($cmpImporte !== 0) {
+                return $cmpImporte;
+            }
+            return strcmp((string)$a['servicio_nombre'], (string)$b['servicio_nombre']);
+        });
+
+        $porcentajeOcupacionGlobal = $minutosDisponiblesGlobalConProf > 0
+            ? round(($minutosOcupadosGlobalConProf / $minutosDisponiblesGlobalConProf) * 100, 2)
+            : 0.00;
+
+        $totalCitas = count($reservasDetalle);
+        $status = $totalCitas > 0 ? self::STATUS_OK : self::STATUS_EMPTY;
+
+        return [
+            'status' => $status,
+            'http_code' => 200,
+            'alertas' => [],
+            'filtros' => [
+                'fecha_inicio' => $fechaInicio,
+                'fecha_fin' => $fechaFin,
+                'profesional_id' => $filtroProfesional ?? '',
+                'servicio_id' => $servicioIdFiltro !== null ? (string)$servicioIdFiltro : '',
+                'dias_rango' => $validacion['dias_rango'],
+                'tiene_filtro_servicio' => $servicioIdFiltro !== null,
+            ],
+            'catalogos' => [
+                'profesionales' => $profesionalesCatalogo,
+                'servicios' => $serviciosCatalogo,
+            ],
+            'resumen_global' => [
+                'total_citas' => $totalCitas,
+                'total_citas_con_profesional' => $totalCitas - (int)$acumuladorHistoricasSinProf['total_citas'],
+                'total_citas_historicas_sin_profesional' => (int)$acumuladorHistoricasSinProf['total_citas'],
+                'total_servicios_reservados' => $totalServiciosReservados,
+                'minutos_ocupados_profesionales' => $minutosOcupadosGlobalConProf,
+                'minutos_disponibles_profesionales' => $minutosDisponiblesGlobalConProf,
+                'horas_ocupadas_profesionales' => round($minutosOcupadosGlobalConProf / 60, 2),
+                'horas_disponibles_profesionales' => round($minutosDisponiblesGlobalConProf / 60, 2),
+                'porcentaje_ocupacion_global' => $porcentajeOcupacionGlobal,
+                'sin_turno_disponible_global' => $minutosDisponiblesGlobalConProf <= 0,
+                'importe_reservado_total' => $importeReservadoTotal,
+                'importe_bruto_citas_filtradas' => $importeBrutoCitasTotal,
+                'ingreso_pagado_total' => $ingresoPagadoTotal,
+                'saldo_pendiente_cobro_total' => round(max(0.0, $importeReservadoTotal - $ingresoPagadoTotal), 2),
+                'nota_pagos' => 'Importe reservado corresponde al valor histórico comprometido en citas activas; ingreso pagado refleja únicamente cobros confirmados ($0.00 mientras el pago esté pendiente).',
+            ],
+            'resumen_profesionales' => $resumenProfesionales,
+            'resumen_servicios' => $resumenServicios,
+            'reservas' => $reservasDetalle,
+        ];
+    }
+
+    /**
+     * Construye una respuesta segura con métricas en cero cuando la validación falla o hay error de persistencia.
+     *
+     * @param string $status
+     * @param int $httpCode
+     * @param array<string, mixed> $validacion
+     * @param array<int, array<string, mixed>> $profesionalesCatalogo
+     * @param array<int, array<string, mixed>> $serviciosCatalogo
+     * @param array<string, array<int, string>> $alertas
+     * @return array<string, mixed>
+     */
+    private function construirRespuestaVaciaOError(
+        string $status,
+        int $httpCode,
+        array $validacion,
+        array $profesionalesCatalogo,
+        array $serviciosCatalogo,
+        array $alertas
+    ): array {
+        return [
+            'status' => $status,
+            'http_code' => $httpCode,
+            'alertas' => $alertas,
+            'filtros' => [
+                'fecha_inicio' => (string)$validacion['fecha_inicio'],
+                'fecha_fin' => (string)$validacion['fecha_fin'],
+                'profesional_id' => (string)($validacion['profesional_filtro'] ?? ''),
+                'servicio_id' => $validacion['servicio_id'] !== null ? (string)$validacion['servicio_id'] : '',
+                'dias_rango' => (int)($validacion['dias_rango'] ?? 0),
+                'tiene_filtro_servicio' => $validacion['servicio_id'] !== null,
+            ],
+            'catalogos' => [
+                'profesionales' => $profesionalesCatalogo,
+                'servicios' => $serviciosCatalogo,
+            ],
+            'resumen_global' => [
+                'total_citas' => 0,
+                'total_citas_con_profesional' => 0,
+                'total_citas_historicas_sin_profesional' => 0,
+                'total_servicios_reservados' => 0,
+                'minutos_ocupados_profesionales' => 0,
+                'minutos_disponibles_profesionales' => 0,
+                'horas_ocupadas_profesionales' => 0.00,
+                'horas_disponibles_profesionales' => 0.00,
+                'porcentaje_ocupacion_global' => 0.00,
+                'sin_turno_disponible_global' => true,
+                'importe_reservado_total' => 0.00,
+                'importe_bruto_citas_filtradas' => 0.00,
+                'ingreso_pagado_total' => 0.00,
+                'saldo_pendiente_cobro_total' => 0.00,
+                'nota_pagos' => 'Importe reservado corresponde al valor histórico comprometido en citas activas; ingreso pagado refleja únicamente cobros confirmados ($0.00 mientras el pago esté pendiente).',
+            ],
+            'resumen_profesionales' => [],
+            'resumen_servicios' => [],
+            'reservas' => [],
+        ];
+    }
+
+    /**
+     * Neutraliza vectores de *CSV Injection / Formula Injection* (`=`, `+`, `-`, `@`, `\t`, `\r`, `\n`)
+     * anteponiendo una comilla simple `'`, preservando intactos los valores numéricos no negativos.
+     *
+     * @param mixed $valor
+     * @return string
+     */
+    public static function sanearCeldaCsv($valor): string
+    {
+        if ($valor === null) {
+            return '';
+        }
+
+        if ((is_int($valor) || is_float($valor)) && $valor >= 0) {
+            return (string)$valor;
+        }
+
+        $texto = (string)$valor;
+        if ($texto === '') {
+            return '';
+        }
+
+        if (preg_match('/^\d+(\.\d+)?$/', $texto)) {
+            return $texto;
+        }
+
+        $peligrosos = ['=', '+', '-', '@', "\t", "\r", "\n"];
+        $primerChar = $texto[0];
+        $sinEspaciosIniciales = ltrim($texto, " \t\n\r\0\x0B");
+        $primerCharVisible = $sinEspaciosIniciales !== '' ? $sinEspaciosIniciales[0] : '';
+
+        if (in_array($primerChar, $peligrosos, true) || in_array($primerCharVisible, $peligrosos, true)) {
+            return "'" . $texto;
+        }
+
+        return $texto;
+    }
+
+    /**
+     * Genera el contenido CSV seguro del reporte administrativo con codificación UTF-8 (BOM incluido),
+     * desglosando Resumen General, Ocupación por Profesional, Desglose por Servicio y Detalle de Reservas.
+     *
+     * @param array<string, mixed> $reporte Estructura devuelta por `consultarReporte()`.
+     * @return string Contenido CSV listo para descarga.
+     */
+    public function generarCsv(array $reporte): string
+    {
+        $fp = fopen('php://temp', 'r+');
+        if ($fp === false) {
+            return '';
+        }
+
+        // BOM UTF-8 para compatibilidad directa con Excel y LibreOffice
+        fwrite($fp, "\xEF\xBB\xBF");
+
+        $escribirFila = static function (array $celdas) use ($fp): void {
+            $filaSaneada = array_map([self::class, 'sanearCeldaCsv'], $celdas);
+            fputcsv($fp, $filaSaneada);
+        };
+
+        $filtros = $reporte['filtros'] ?? [];
+        $global = $reporte['resumen_global'] ?? [];
+
+        // 1. Resumen General
+        $escribirFila(['REPORTE ADMINISTRATIVO DE RESERVAS Y OCUPACION - APPSALON']);
+        $escribirFila([
+            'Fecha Inicio',
+            'Fecha Fin',
+            'Filtro Profesional',
+            'Filtro Servicio',
+            'Total Citas',
+            'Minutos Ocupados',
+            'Minutos Disponibles Turno',
+            'Ocupacion Global (%)',
+            'Importe Reservado Total (USD)',
+            'Ingreso Pagado Total (USD)',
+            'Saldo Pendiente de Cobro (USD)',
+        ]);
+        $escribirFila([
+            (string)($filtros['fecha_inicio'] ?? ''),
+            (string)($filtros['fecha_fin'] ?? ''),
+            (string)($filtros['profesional_id'] !== '' ? $filtros['profesional_id'] : 'Todos'),
+            (string)($filtros['servicio_id'] !== '' ? $filtros['servicio_id'] : 'Todos'),
+            (int)($global['total_citas'] ?? 0),
+            (int)($global['minutos_ocupados_profesionales'] ?? 0),
+            (int)($global['minutos_disponibles_profesionales'] ?? 0),
+            number_format((float)($global['porcentaje_ocupacion_global'] ?? 0), 2, '.', ''),
+            number_format((float)($global['importe_reservado_total'] ?? 0), 2, '.', ''),
+            number_format((float)($global['ingreso_pagado_total'] ?? 0), 2, '.', ''),
+            number_format((float)($global['saldo_pendiente_cobro_total'] ?? 0), 2, '.', ''),
+        ]);
+        $escribirFila([]);
+
+        // 2. Ocupación por Profesional
+        $escribirFila(['OCUPACION E IMPORTES POR PROFESIONAL']);
+        $escribirFila([
+            'Profesional ID',
+            'Profesional',
+            'Estado Agenda',
+            'Total Citas',
+            'Minutos Ocupados',
+            'Minutos Disponibles Turno',
+            'Horas Ocupadas',
+            'Horas Disponibles Turno',
+            'Ocupacion (%)',
+            'Importe Reservado (USD)',
+            'Ingreso Pagado (USD)',
+        ]);
+        foreach ($reporte['resumen_profesionales'] ?? [] as $prof) {
+            $escribirFila([
+                $prof['profesional_id'] !== null ? (string)$prof['profesional_id'] : 'SIN_PROFESIONAL',
+                (string)($prof['profesional_nombre'] ?? ''),
+                !empty($prof['es_historico_sin_profesional'])
+                    ? 'Historica sin profesional'
+                    : (!empty($prof['activo']) ? 'Activo' : 'Inactivo'),
+                (int)($prof['total_citas'] ?? 0),
+                (int)($prof['minutos_ocupados'] ?? 0),
+                (int)($prof['minutos_disponibles'] ?? 0),
+                number_format((float)($prof['horas_ocupadas'] ?? 0), 2, '.', ''),
+                number_format((float)($prof['horas_disponibles'] ?? 0), 2, '.', ''),
+                number_format((float)($prof['porcentaje_ocupacion'] ?? 0), 2, '.', ''),
+                number_format((float)($prof['importe_reservado'] ?? 0), 2, '.', ''),
+                number_format((float)($prof['ingreso_pagado'] ?? 0), 2, '.', ''),
+            ]);
+        }
+        $escribirFila([]);
+
+        // 3. Desglose por Servicio (Snapshot Histórico)
+        $escribirFila(['DESGLOSE POR SERVICIO (DATOS HISTORICOS DE RESERVA)']);
+        $escribirFila([
+            'Servicio ID',
+            'Servicio',
+            'Veces Reservado',
+            'Minutos Reservados',
+            'Importe Reservado (USD)',
+            'Ingreso Pagado (USD)',
+        ]);
+        foreach ($reporte['resumen_servicios'] ?? [] as $srv) {
+            $escribirFila([
+                $srv['servicio_id'] !== null ? (string)$srv['servicio_id'] : 'ELIMINADO_CATALOGO',
+                (string)($srv['servicio_nombre'] ?? ''),
+                (int)($srv['total_reservas'] ?? 0),
+                (int)($srv['minutos_reservados'] ?? 0),
+                number_format((float)($srv['importe_reservado'] ?? 0), 2, '.', ''),
+                number_format((float)($srv['ingreso_pagado'] ?? 0), 2, '.', ''),
+            ]);
+        }
+        $escribirFila([]);
+
+        // 4. Detalle de Reservas
+        $escribirFila(['LISTADO DETALLADO DE RESERVAS']);
+        $escribirFila([
+            'Cita ID',
+            'Fecha',
+            'Horario',
+            'Cliente',
+            'Email Cliente',
+            'Profesional',
+            'Servicios (Snapshot Historico)',
+            'Duracion Cita (min)',
+            'Importe Total Cita (USD)',
+            'Importe Reservado Filtrado (USD)',
+            'Ingreso Pagado (USD)',
+            'Estado de Pago',
+        ]);
+        foreach ($reporte['reservas'] ?? [] as $res) {
+            $escribirFila([
+                (int)($res['id'] ?? 0),
+                (string)($res['fecha'] ?? ''),
+                (string)($res['horario'] ?? ''),
+                (string)($res['cliente'] ?? ''),
+                (string)($res['cliente_email'] ?? ''),
+                (string)($res['profesional_nombre'] ?? ''),
+                (string)($res['servicios_resumen'] ?? ''),
+                (int)($res['duracion_total_minutos'] ?? 0),
+                number_format((float)($res['importe_total_cita'] ?? 0), 2, '.', ''),
+                number_format((float)($res['importe_reservado'] ?? 0), 2, '.', ''),
+                number_format((float)($res['ingreso_pagado'] ?? 0), 2, '.', ''),
+                (string)($res['etiqueta_estado_pago'] ?? ''),
+            ]);
+        }
+
+        rewind($fp);
+        $contenido = (string)stream_get_contents($fp);
+        fclose($fp);
+
+        return $contenido;
+    }
+}

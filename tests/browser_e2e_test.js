@@ -1119,6 +1119,105 @@ async function runBrowserTests() {
             `Citas consultadas en /admin?fecha=${validDate} con profesional e intervalo; cita temporal ID ${citaTemporalId} eliminada liberando 10:00-11:00; cita principal ID ${citaIdCreada} ($195, Valeria Castro, 11:30-13:00) conservada.`);
 
         // ------------------------------------------------------------------
+        // BLOQUE FASE 6B (REP-01): Reportes Administrativos (/admin/reportes y /admin/reportes/exportar)
+        // ------------------------------------------------------------------
+        console.log('\n>>> [FASE 6B - REPORTES] Consulta de reportes administrativos, ocupación, distinción de importes y exportación CSV...');
+
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('a[href="/admin/reportes"]')
+        ]);
+
+        if (!page.url().includes('/admin/reportes')) {
+            throw new Error(`Se esperaba navegación a /admin/reportes, URL actual: ${page.url()}`);
+        }
+
+        // 1. Filtrar rango exacto [validDate, validDate] sin filtro de profesional ni servicio
+        await page.evaluate((fechaRango) => {
+            document.querySelector('#fecha_inicio').value = fechaRango;
+            document.querySelector('#fecha_fin').value = fechaRango;
+            document.querySelector('#profesional_id').value = '';
+            document.querySelector('#servicio_id').value = '';
+        }, validDate);
+
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('#btn-filtrar-reportes')
+        ]);
+
+        const kpiResumen = await page.evaluate(() => ({
+            totalCitas: document.querySelector('#kpi-total-citas')?.textContent.trim(),
+            ocupacionGlobal: document.querySelector('#kpi-ocupacion-global')?.textContent.trim(),
+            importeReservado: document.querySelector('#kpi-importe-reservado')?.textContent.trim(),
+            ingresoPagado: document.querySelector('#kpi-ingreso-pagado')?.textContent.trim(),
+            textoProfValeria: document.querySelector('#tabla-ocupacion-profesionales tr[data-profesional-id="2"]')?.textContent.replace(/\s+/g, ' ').trim() || '',
+            textoProfSofia: document.querySelector('#tabla-ocupacion-profesionales tr[data-profesional-id="1"]')?.textContent.replace(/\s+/g, ' ').trim() || '',
+            textoServicios: document.querySelector('#tabla-desglose-servicios')?.textContent.replace(/\s+/g, ' ').trim() || ''
+        }));
+
+        if (
+            kpiResumen.totalCitas !== '1' ||
+            kpiResumen.importeReservado !== '$195.00' ||
+            kpiResumen.ingresoPagado !== '$0.00' ||
+            !kpiResumen.textoProfValeria.includes('90 min / 540 min') ||
+            !kpiResumen.textoProfValeria.includes('16.67%') ||
+            !kpiResumen.textoProfValeria.includes('$195.00') ||
+            !kpiResumen.textoProfSofia.includes('0 min / 390 min') ||
+            !kpiResumen.textoServicios.includes('Masaje Capilar Premium') ||
+            !kpiResumen.textoServicios.includes('$115.00')
+        ) {
+            throw new Error(`Métricas inesperadas en /admin/reportes para ${validDate}: ${JSON.stringify(kpiResumen)}`);
+        }
+
+        // 2. Filtrar por profesional Valeria Castro (id=2) y servicio Masaje Capilar Premium (id=4)
+        await page.select('#profesional_id', '2');
+        await page.select('#servicio_id', '4');
+
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('#btn-filtrar-reportes')
+        ]);
+
+        const kpiFiltradoSrv = await page.evaluate(() => ({
+            importeReservado: document.querySelector('#kpi-importe-reservado')?.textContent.trim(),
+            ingresoPagado: document.querySelector('#kpi-ingreso-pagado')?.textContent.trim(),
+            exportHref: document.querySelector('#btn-exportar-csv')?.getAttribute('href')
+        }));
+
+        if (
+            kpiFiltradoSrv.importeReservado !== '$115.00' ||
+            kpiFiltradoSrv.ingresoPagado !== '$0.00' ||
+            !kpiFiltradoSrv.exportHref
+        ) {
+            throw new Error(`El filtro por profesional=2 y servicio=4 en /admin/reportes no mostró subtotal histórico $115.00 vs $0.00 pagado: ${JSON.stringify(kpiFiltradoSrv)}`);
+        }
+
+        // 3. Verificar descarga/respuesta de /admin/reportes/exportar
+        const csvResp = await page.evaluate(async (href) => {
+            const r = await fetch(href);
+            return {
+                status: r.status,
+                contentType: r.headers.get('content-type') || '',
+                contentDisposition: r.headers.get('content-disposition') || '',
+                body: await r.text()
+            };
+        }, kpiFiltradoSrv.exportHref);
+
+        if (
+            csvResp.status !== 200 ||
+            !csvResp.contentType.toLowerCase().includes('text/csv') ||
+            !csvResp.contentDisposition.includes('reporte_reservas_') ||
+            !csvResp.body.includes('Valeria Castro') ||
+            !csvResp.body.includes('Masaje Capilar Premium') ||
+            !csvResp.body.includes('115.00')
+        ) {
+            throw new Error(`Respuesta inválida en /admin/reportes/exportar: ${JSON.stringify(csvResp)}`);
+        }
+
+        recordTest('REP-01', 'Reportes administrativos (/admin/reportes y /admin/reportes/exportar): ocupación sobre horas disponibles, importe reservado histórico vs ingreso pagado y exportación CSV', true,
+            `Valeria Castro 16.67% (90/540 min), Sofía Andrade 0.00% (0/390 min); reservado $195.00 vs pagado $0.00; filtro servicio #4 ($115.00) y exportación CSV verificados.`);
+
+        // ------------------------------------------------------------------
         // BLOQUE FASE 2C (AUTH-01): Registro, Login no confirmado, Reenvío y Olvidé
         // ------------------------------------------------------------------
         console.log('\n>>> [FASE 2C - AUTH] Ciclo en navegador de logout, registro (/crear-cuenta), rechazo sin confirmar, /reenviar-confirmacion y /olvide...');

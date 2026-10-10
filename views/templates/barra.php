@@ -12,5 +12,6 @@
         <a href="/servicios" class='boton'>Servicios</a>
         <a href="/servicios/crear" class='boton'>Nuevo Servicio</a>
         <a href="/profesionales" class='boton'>Profesionales</a>
+        <a href="/admin/reportes" class='boton'>Ver Reportes</a>
    </div>
 <?php } ?>

@@ -3,9 +3,79 @@
 Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerdo con la metodología de entregas auditables por **ChatGPT** (revisión estática de código) y ejecución/verificación por **Antigravity** (desarrollo y pruebas dinámicas automatizadas), sujeto a la aprobación final del **Propietario**.
 
 > **Roles y Criterios:**
-> - **Desarrollo y Pruebas Automatizadas (Antigravity):** Implementación de código y ejecución de la suite completa de pruebas unitarias e integrales (152 pruebas, 1714 aserciones en PHPUnit 10.5.66), escenarios funcionales HTTP y suite E2E en navegador real Headless Chrome (`tests/verificar_navegador.ps1` y `tests/browser_e2e_test.js`).
+> - **Desarrollo y Pruebas Automatizadas (Antigravity):** Implementación de código y ejecución de la suite completa de pruebas unitarias e integrales (161 pruebas, 1817 aserciones en PHPUnit 10.5.66), escenarios funcionales HTTP y suite E2E en navegador real Headless Chrome (`tests/verificar_navegador.ps1` y `tests/browser_e2e_test.js`).
 > - **Revisión Estática Externa (ChatGPT):** Auditoría independiente de código de aplicación, arquitectura por capas, contratos transaccionales y revisión estática de scripts Bash.
 > - **Aprobación Final y Despliegue (Propietario):** Decisión formal sobre fusiones hacia `main` y despliegues en producción.
+
+---
+
+## Fase 6B: Reportes Administrativos
+
+- **Rama:** `feature/fase-6b-reportes`
+- **Commit Base (Fase 6A aprobada):** `4e85266eb33a3c0b890384a1303e800d771c2340` (`4fe475c02cc3dcd38a79ad7ec4ce5ef48f9e58ec` + registro de auditoría Fase 6A)
+- **Estado General de Fase 6B:** **Completada — Lista para Auditoría Independiente**
+
+### 1. Diseño Arquitectónico, Cálculo de Ocupación, Integridad Histórica y Exportación CSV Segura
+
+1. **Arquitectura por Capas (`Controller -> Service -> Repository`):**
+   - **`Controllers\ReporteController` (`controllers/ReporteController.php`):**
+     - `GET /admin/reportes` (`ReporteController::index`): Protegido con `isAdmin()`. Lee los filtros desde `$_GET`, delega en `ReporteService::generarReporte()` y renderiza `views/reportes/index.php`. Si los filtros son inválidos (`STATUS_INVALID`), responde con código HTTP `422` mostrando las alertas de validación y conservando los selectores del formulario sin ejecutar consultas malformadas. Si ocurre una excepción de persistencia (`STATUS_ERROR`), responde con HTTP `500` y mensaje controlado.
+     - `GET /admin/reportes/exportar` (`ReporteController::exportarCsv`): Protegido con `isAdmin()`. Valida los mismos filtros mediante `ReporteService::generarReporte()` y, cuando el estado es `STATUS_OK`, emite el archivo CSV (`Content-Type: text/csv; charset=UTF-8`, `Content-Disposition: attachment; filename="reporte_reservas_YYYY-MM-DD_a_YYYY-MM-DD.csv"`, `X-Content-Type-Options: nosniff`, `Cache-Control: no-store, no-cache, must-revalidate, max-age=0`) generado por `ReporteService::generarCsv()`.
+   - **`Services\ReporteService` (`services/ReporteService.php`):**
+     - **Validación estricta de filtros (`validarYNormalizarFiltros`):**
+       - Zona horaria explícita `America/Guayaquil` (`DateTimeZone('America/Guayaquil')`); cuando no se suministran fechas, aplica por defecto el primer día del mes actual (`Y-m-01`) hasta la fecha actual (`Y-m-d`).
+       - Valida formato calendario real `YYYY-MM-DD` (`DateTimeImmutable::createFromFormat('!Y-m-d', ...)`), que `fecha_inicio <= fecha_fin` y que el rango no supere `MAX_RANGO_DIAS = 366` días inclusivos.
+       - Rechaza cualquier entrada no escalar (arrays en parámetros GET) y valida `profesional_id` (`''` = todos, `'sin_profesional'` = solo citas históricas sin profesional, o entero positivo `> 0`) y `servicio_id` (`''` = todos o entero positivo `> 0`).
+     - **Cálculo de minutos disponibles netos y porcentaje de ocupación (`calcularMinutosDisponiblesPorProfesional` y `restarRestriccionesDeTurno`):**
+       - Para cada fecha del rango `[fecha_inicio, fecha_fin]` y cada profesional seleccionado, determina el día de la semana ISO-8601 (`1` = Lunes .. `7` = Domingo) en `America/Guayaquil`.
+       - Parte de los turnos laborales configurados en `horarios_profesionales` (`[hora_inicio, hora_fin)`).
+       - Si existe un bloqueo de día completo en `bloqueos_profesionales` (`hora_inicio IS NULL AND hora_fin IS NULL`) para ese profesional y fecha, la disponibilidad neta del día es `0` minutos.
+       - En caso contrario, recorta iterativamente del intervalo semiabierto `[inicio, fin)` tanto los descansos semanales (`descansos_profesionales`) como los bloqueos parciales de esa fecha (`bloqueos_profesionales`), evitando restar dos veces solapamientos entre descanso y bloqueo.
+       - Calcula los minutos ocupados sumando la duración real de las citas reservadas del profesional (en la vista general usa la duración total de la cita `duracion_total_minutos` o el intervalo `[hora_inicio, hora_fin)` o la suma de servicios; cuando se filtra por `servicio_id`, contabiliza únicamente los minutos históricos del servicio filtrado).
+       - Calcula `porcentaje_ocupacion = round((minutos_ocupados / minutos_disponibles) * 100, 2)` y, cuando `minutos_disponibles === 0`, devuelve `0.00%` sin división por cero.
+     - **Importes históricos e inmutabilidad frente a cambios de catálogo:**
+       - Todos los cálculos de precios y duraciones por servicio y por cita utilizan los valores históricos capturados al reservar (`COALESCE(cs.nombre_servicio, s.nombre)`, `COALESCE(cs.precio_servicio, s.precio)`, `COALESCE(cs.duracion_minutos, s.duracion_minutos)`), identificando además si el servicio sigue activo en el catálogo o si fue eliminado posteriormente (`servicio_eliminado_catalogo = true` cuando `cs.servicioId IS NULL` o `s.id IS NULL`).
+       - Cuando se aplica el filtro `servicio_id`, el importe reservado y los minutos de cada cita reflejan exactamente el subtotal histórico de las líneas que coinciden con dicho servicio (`importe_Total_Cita` conserva el total completo de la cita como referencia informativa).
+     - **Distinción explícita entre Importe Reservado Histórico e Ingreso Efectivamente Pagado (`evaluarEstadoPagoCita`):**
+       - Distingue en el resumen ejecutivo, en la tabla de reservas y en el CSV entre:
+         - **`importe_reservado_total` (`Importe Reservado (Comprometido Histórico)`):** Suma de los importes históricos de las reservas confirmadas en agenda.
+         - **`ingreso_pagado_total` (`Ingreso Efectivamente Pagado`):** Suma únicamente de las citas cuyo estado de pago sea efectivamente `'pagado'`. Mientras no exista cobro confirmado (o antes de la integración de pasarela de Fase 6C), toda reserva se reporta explícitamente con `estado_pago = 'pendiente_pago'` (`Pendiente de pago`) e `ingreso_pagado = 0.00`, sin confundir reservas agendadas con ingresos cobrados.
+     - **Exportación CSV segura contra *CSV Formula Injection* (`sanearCeldaCsv` y `generarCsv`):**
+       - Incluye cabecera UTF-8 BOM (`\xEF\xBB\xBF`) para compatibilidad directa con Excel y hojas de cálculo en español.
+       - `ReporteService::sanearCeldaCsv()` inspecciona tanto el primer carácter de la cadena como el primer carácter tras espacios iniciales (`ltrim`); si comienza con `=`, `+`, `-`, `@`, tabulador (`\t`) o salto de línea (`\r`, `\n`), antepone un apóstrofe (`'`) para neutralizar la ejecución de fórmulas al abrir el archivo en Excel, LibreOffice Calc o Google Sheets, y normaliza saltos de línea internos a espacios antes de serializar con `fputcsv()`.
+   - **`Repositories\ReporteRepository` (`repositories/ReporteRepository.php`):**
+     - Implementa exclusivamente sentencias preparadas (`prepare` + `bind_param` + `execute`) y traduce cualquier error de MySQL en `PersistenceException`.
+     - Métodos: `listarProfesionalesCatalogo()`, `listarServiciosCatalogo()`, `obtenerHorariosProfesionales()`, `obtenerDescansosProfesionales()`, `obtenerBloqueosEnRango()` y `obtenerFilasReservasEnRango()` (con filtro `EXISTS` cuando se selecciona `servicio_id`, garantizando que se carguen todas las líneas de la cita que contiene ese servicio y ordenando determinísticamente por `c.fecha ASC, COALESCE(c.hora_inicio, c.hora) ASC, c.id ASC, cs.id ASC`).
+   - **Interfaz Administrativa (`views/reportes/index.php`, `views/templates/barra.php`, `src/scss/layout/_admin.scss`, `public/build/css/app.css`):**
+     - Enlace `"Ver Reportes"` en la barra de navegación administrativa (`views/templates/barra.php`).
+     - Formulario accesible de filtros (`fecha_inicio`, `fecha_fin`, `profesional_id`, `servicio_id`), acciones `"Filtrar Reporte"`, `"Exportar CSV"` (conservando los parámetros activos en la query string) y `"Restablecer"`.
+     - Tarjetas KPI ejecutivas (Total de citas, Minutos ocupados vs disponibles, Ocupación global, **Importe Reservado Histórico** e **Ingreso Efectivamente Pagado** con nota aclaratoria explícita).
+     - Tabla de ocupación por profesional, tabla de desglose por servicio histórico y listado detallado de reservas con estados vacíos claros cuando no existen registros en el rango.
+
+### 2. Validación Ejecutada en Fase 6B (Desarrollador)
+
+#### A. Suite Completa PHPUnit (Ejecutada en Docker PHP 8.2.34 + MySQL 8.0 Aislado)
+- **Versión efectiva:** `PHPUnit 10.5.66 by Sebastian Bergmann and contributors.` (`Runtime: PHP 8.2.34`, `Configuration: /app/phpunit.xml`).
+- **Comando ejecutado:**
+  `docker run --rm --name appsalon-web-phpunit-f6b --network appsalon-net-phpunit-f6b -v "${PWD}:/app" -w /app -e APP_ENV=testing -e DB_HOST=appsalon-db-phpunit-f6b -e DB_PORT=3306 -e DB_USER=root -e DB_PASS=root -e DB_NAME=appsalon_f6b_test appsalon-php-test php -d variables_order=EGPCS vendor/bin/phpunit --colors=never`
+- **Resultado:** `OK (161 tests, 1817 assertions)` (`Time: 00:27.402, Memory: 16.00 MB`) — Código de salida `0`.
+- **Cobertura añadida en Fase 6B:**
+  - `Tests\Unit\ReporteServiceTest` (`tests/Unit/ReporteServiceTest.php` — 4 pruebas unitarias):
+    1. `testValidacionDeFiltrosRechazaRangosInvalidosFechasInvertidasYParametrosNoEscalares`: verifica rechazo `422` (`STATUS_INVALID`) ante fechas invertidas, formatos no válidos, rangos mayores a 366 días, IDs no numéricos y parámetros tipo array, sin ejecutar consultas al repositorio.
+    2. `testCalculoOcupacionDescuentaDescansosYBloqueosSinDivisionPorCero`: verifica el recorte exacto de descansos y bloqueos parciales (`540 - 60 - 90 = 390 min`), el bloqueo de día completo (`0 min` disponibles y `0.00%` sin división por cero) y el cálculo de ocupación (`150 / 390 = 38.46%`).
+    3. `testImportesHistoricosYDistincionExplicitaEntreReservadoYPagado`: verifica preservación del snapshot histórico (`$45.00` y `60 min` frente a cambios posteriores del catálogo a `$99.00` y `90 min`) y distinción entre `importe_reservado_total` (`$45.00`) e `ingreso_pagado_total` (`$0.00` cuando `estado_pago = 'pendiente_pago'`).
+    4. `testSanitizacionCsvNeutralizaFormulaInjectionEnCeldasPeligrosas`: verifica neutralización de `=`, `+`, `-`, `@`, `\t`, `\r` y fórmulas precedidas por espacios en `sanearCeldaCsv()` y `generarCsv()`.
+  - `Tests\Integration\Fase6BReportesIntegrationTest` (`tests/Integration/Fase6BReportesIntegrationTest.php` — 4 pruebas de integración con MySQL real y HTTP aisladas):
+    1. `testReporteEnBaseDatosRealPreservaSnapshotsHistoricosOcupacionEIngresoPagadoCero`: verifica contra MySQL real la preservación de precios/nombres/duraciones históricos tras modificar un servicio y eliminar otro del catálogo, el cálculo de ocupación con horarios/descansos/bloqueos reales, el filtro por `servicio_id`, el filtro `profesional_id = 'sin_profesional'` para citas históricas y el estado vacío.
+    2. `testExportacionCsvConDatosRealesNeutralizaInyeccionDeFormulas`: verifica la exportación CSV con datos reales cuando el nombre de cliente o servicio inicia con `=cmd|' /C calc'!A0` o `@SUM(1+1)*cmd|' /C calc'!A0`.
+    3. `testPermisosAdministrativosEnRutasDeReportesBloqueanAnonimosYClientes`: verifica que `/admin/reportes` y `/admin/reportes/exportar` redirigen (`302 -> /`) tanto a usuarios anónimos como a clientes autenticados no administradores (`admin = 0`).
+    4. `testEndpointsHttpDeReportesYExportacionCsvParaAdministrador`: verifica respuestas HTTP `200` en `GET /admin/reportes` y `GET /admin/reportes/exportar`, encabezados `text/csv`, y respuesta HTTP `422` ante filtros inválidos.
+
+#### B. Verificación E2E en Navegador con JavaScript Habilitado (`tests/verificar_navegador.ps1` + `tests/browser_e2e_test.js`)
+- **Ejecución del Desarrollador (`comprehensive_project_audit_roadmap`):**
+  - **RUN_ID:** `a1ca5acb73e54a49a7e83ec784e0eb4e` (Contenedores efímeros `appsalon-db-test-a1ca5acb73e54a49a7e83ec784e0eb4e`, `appsalon-smtp-test-a1ca5acb73e54a49a7e83ec784e0eb4e` y `appsalon-web-test-a1ca5acb73e54a49a7e83ec784e0eb4e`, puerto dinámico `http://localhost:32793`, BD aislada `appsalon_browser_test`).
+  - **Resultado:** 18/18 comprobaciones E2E superadas (`ADMIN-01` a `ADMIN-05`, `PROF-01`, `PROF-02`, `PRE-01`, `DISP-01`, `REC-01` a `REC-05`, `RES-01`, `REP-01`, `AUTH-01`, `NOTIF-01`) + verificación de persistencia en MySQL — Código de salida `0`.
+  - **Detalle de `REP-01`:** Verifica en navegador real `/admin/reportes` para la fecha de reserva (`2026-10-12`), comprobando la ocupación de `Valeria Castro` (`16.67%`, `90 / 540 min`) y `Sofía Andrade` (`0.00%`, `0 / 390 min` tras descontar descanso y bloqueo), la distinción explícita entre importe reservado (`$195.00`) e ingreso efectivamente pagado (`$0.00` — `Pendiente de pago`), el filtrado por servicio (`#4` -> `$115.00`) y la descarga válida de `/admin/reportes/exportar`.
 
 ---
 
@@ -514,7 +584,10 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 | **Fase 2C** | Separación de responsabilidades en usuarios y autenticación (`UsuarioRepository`, `AuthService`, desacoplamiento de `Usuario`) | `Completada` |
 | **Fase 3A** | Profesionales, servicios con duración, horarios, descansos y bloqueos | `Completada` |
 | **Fase 4A** | Cálculo de disponibilidad por profesional según agenda (`DisponibilidadService`, `GET /api/disponibilidad`) | `Completada` |
-| **Fase 4B** | Integración de disponibilidad con citas existentes, bloqueo transaccional y prevención de reservas simultáneas | `Completada (En Revisión)` |
-| **Fase 5** | Interfaz accesible de reservas y panel administrativo | `Pendiente` |
-| **Fase 6** | Pagos (Stripe / Mercado Pago), notificaciones multicanal y reportes | `Pendiente` |
+| **Fase 4B** | Integración de disponibilidad con citas existentes, bloqueo transaccional y prevención de reservas simultáneas | `Completada` |
+| **Fase 5** | Interfaz accesible de reservas y panel administrativo | `Completada` |
+| **Fase 6A** | Notificaciones transaccionales de citas, recordatorios configurables y cola de reintentos idempotente | `Completada` |
+| **Fase 6B** | Reportes administrativos de reservas, ocupación por profesional, importes históricos y exportación CSV segura | `Completada (En Auditoría)` |
+| **Fase 6C** | Base para pagos (*Payment Gateway Interface*, proveedor simulado e idempotencia de notificaciones) | `Pendiente` |
+
 

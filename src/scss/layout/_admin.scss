@@ -41,3 +41,105 @@
         margin: 0;
     }
 }
+
+.acciones-reportes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+    margin-top: 2rem;
+
+    .boton {
+        margin: 0;
+    }
+}
+
+.reportes-seccion {
+    margin-top: 3rem;
+    padding-top: 2rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.2);
+
+    .reportes-nota-pagos {
+        font-size: 1.4rem;
+        color: v.$gris;
+        margin-bottom: 2rem;
+        text-align: center;
+    }
+
+    .reportes-vacio {
+        text-align: center;
+        color: v.$gris;
+        padding: 2rem;
+        border: 1px dashed rgba(255, 255, 255, 0.25);
+        border-radius: 0.8rem;
+    }
+}
+
+.reportes-kpis {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(21rem, 1fr));
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+}
+
+.reporte-kpi {
+    background-color: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 1rem;
+    padding: 1.6rem;
+    text-align: center;
+
+    h3 {
+        font-size: 1.5rem;
+        margin: 0 0 1rem 0;
+        color: v.$azul;
+    }
+
+    .kpi-valor {
+        font-size: 2.6rem;
+        font-weight: v.$bold;
+        color: v.$blanco;
+        margin: 0 0 0.8rem 0;
+    }
+
+    .kpi-detalle {
+        font-size: 1.3rem;
+        color: v.$gris;
+        margin: 0;
+    }
+}
+
+.tabla-contenedor {
+    overflow-x: auto;
+    margin-top: 1.5rem;
+}
+
+.tabla-reportes {
+    width: 100%;
+    border-collapse: collapse;
+    color: v.$blanco;
+    font-size: 1.5rem;
+
+    th,
+    td {
+        padding: 1rem 1.2rem;
+        text-align: left;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+    }
+
+    th {
+        background-color: rgba(13, 166, 243, 0.2);
+        color: v.$blanco;
+        font-weight: v.$bold;
+    }
+
+    tbody tr:hover {
+        background-color: rgba(255, 255, 255, 0.05);
+    }
+
+    .etiqueta-historico {
+        font-size: 1.2rem;
+        color: v.$gris;
+        display: inline-block;
+        margin-left: 0.5rem;
+    }
+}

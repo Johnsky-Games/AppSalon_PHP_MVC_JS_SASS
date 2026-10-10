@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-10-10T22:49:48.127Z",
+  "timestamp": "2026-10-10T23:14:28.846Z",
   "navegador": "Chrome Headless (Puppeteer-Core)",
   "citaCreadaId": 3,
   "citaTemporalEliminadaId": 1,
@@ -46,7 +46,7 @@
       "id": "PRE-01",
       "name": "Login interactivo de cliente y redirección autorizada a /cita",
       "success": true,
-      "details": "URL: http://localhost:32791/cita"
+      "details": "URL: http://localhost:32793/cita"
     },
     {
       "id": "DISP-01",
@@ -89,6 +89,12 @@
       "name": "Consulta administrativa por fecha en /admin (profesional, intervalo y snapshot), eliminación en /api/eliminar y liberación de ocupación",
       "success": true,
       "details": "Citas consultadas en /admin?fecha=2026-10-12 con profesional e intervalo; cita temporal ID 1 eliminada liberando 10:00-11:00; cita principal ID 3 ($195, Valeria Castro, 11:30-13:00) conservada."
+    },
+    {
+      "id": "REP-01",
+      "name": "Reportes administrativos (/admin/reportes y /admin/reportes/exportar): ocupación sobre horas disponibles, importe reservado histórico vs ingreso pagado y exportación CSV",
+      "success": true,
+      "details": "Valeria Castro 16.67% (90/540 min), Sofía Andrade 0.00% (0/390 min); reservado $195.00 vs pagado $0.00; filtro servicio #4 ($115.00) y exportación CSV verificados."
     },
     {
       "id": "AUTH-01",

@@ -7,6 +7,7 @@ use Controllers\CitaController;
 use Controllers\LoginController;
 use Controllers\APIController;
 use Controllers\ProfesionalController;
+use Controllers\ReporteController;
 use Controllers\ServicioController;
 use MVC\Router;
 
@@ -67,6 +68,10 @@ $router->post('/profesionales/descansos/crear', [ProfesionalController::class, '
 $router->post('/profesionales/descansos/eliminar', [ProfesionalController::class, 'eliminarDescanso']);
 $router->post('/profesionales/bloqueos/crear', [ProfesionalController::class, 'crearBloqueo']);
 $router->post('/profesionales/bloqueos/eliminar', [ProfesionalController::class, 'eliminarBloqueo']);
+
+//Reportes Administrativos (Fase 6B)
+$router->get('/admin/reportes', [ReporteController::class, 'index']);
+$router->get('/admin/reportes/exportar', [ReporteController::class, 'exportarCsv']);
 
 // Comprueba y valida las rutas, que existan y les asigna las funciones del Controlador
 try {
