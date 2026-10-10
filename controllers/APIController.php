@@ -2,19 +2,25 @@
 
 namespace Controllers;
 
-use Model\Cita;
-use Model\CitaServicio;
 use Model\ActiveRecord;
+use Repositories\CitaRepository;
 use Repositories\ServicioRepository;
+use Services\CitaService;
 use Services\ServicioService;
 
 class APIController
 {
     private static ?ServicioService $servicioService = null;
+    private static ?CitaService $citaService = null;
 
     public static function setServicioService(?ServicioService $service): void
     {
         self::$servicioService = $service;
+    }
+
+    public static function setCitaService(?CitaService $service): void
+    {
+        self::$citaService = $service;
     }
 
     private static function obtenerServicioService(): ServicioService
@@ -24,6 +30,19 @@ class APIController
         }
 
         return new ServicioService(new ServicioRepository(ActiveRecord::getDB()));
+    }
+
+    private static function obtenerCitaService(): CitaService
+    {
+        if (self::$citaService !== null) {
+            return self::$citaService;
+        }
+
+        $db = ActiveRecord::getDB();
+        return new CitaService(
+            new CitaRepository($db),
+            new ServicioRepository($db)
+        );
     }
 
     public static function index()
@@ -47,8 +66,8 @@ class APIController
 
     /**
      * Guarda una cita y sus servicios dentro de una transacción atómica.
-     * Valida autenticación, CSRF, tipos, reglas de negocio en servidor y asigna la cita
-     * estrictamente a la sesión autenticada (mitigando IDOR).
+     * Valida autenticación y CSRF en el controlador, y delega reglas de negocio
+     * y persistencia a CitaService entregando la identidad verificada de la sesión.
      */
     public static function guardar()
     {
@@ -71,165 +90,43 @@ class APIController
             return;
         }
 
-        // 3. Sanitización y Validación de Tipos en el Servidor
-        $fecha = is_string($_POST['fecha'] ?? null) ? trim($_POST['fecha']) : '';
-        $hora = is_string($_POST['hora'] ?? null) ? trim($_POST['hora']) : '';
-        $serviciosRaw = is_string($_POST['servicios'] ?? null) ? trim($_POST['servicios']) : '';
+        // 3. Delegar validación de negocio y persistencia atómica a CitaService
+        // entregando la identidad verificada desde la sesión (nunca del POST)
+        $usuarioIdAutenticado = $_SESSION['id'];
+        $resultado = self::obtenerCitaService()->reservar($usuarioIdAutenticado, $_POST);
 
-        // Validar formato estricto de fecha (AAAA-MM-DD)
-        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $fecha)) {
+        if ($resultado['status'] === CitaService::STATUS_UNAUTHORIZED) {
+            http_response_code(401);
+            echo json_encode(['resultado' => false, 'error' => $resultado['error']]);
+            detener_ejecucion(401);
+            return;
+        }
+
+        if (
+            $resultado['status'] === CitaService::STATUS_INVALID
+            || $resultado['status'] === CitaService::STATUS_NOT_FOUND
+        ) {
             http_response_code(422);
-            echo json_encode(['resultado' => false, 'error' => 'Formato de fecha inválido. Se requiere AAAA-MM-DD.']);
+            echo json_encode(['resultado' => false, 'error' => $resultado['error']]);
             detener_ejecucion(422);
             return;
         }
 
-        $partesFecha = explode('-', $fecha);
-        if (!checkdate((int)$partesFecha[1], (int)$partesFecha[2], (int)$partesFecha[0])) {
-            http_response_code(422);
-            echo json_encode(['resultado' => false, 'error' => 'La fecha ingresada no corresponde a un día de calendario válido.']);
-            detener_ejecucion(422);
-            return;
-        }
-
-        // Validar que la fecha sea estrictamente futura (mínimo mañana, alineado con min del input y política comercial)
-        $fechaHoy = date('Y-m-d');
-        if ($fecha <= $fechaHoy) {
-            http_response_code(422);
-            echo json_encode(['resultado' => false, 'error' => 'No se pueden agendar citas para el mismo día ni para fechas pasadas. La reserva debe ser con al menos un día de anticipación.']);
-            detener_ejecucion(422);
-            return;
-        }
-
-        // Validar exclusión de fines de semana (0 = Domingo, 6 = Sábado)
-        $diaSemana = (int)date('w', strtotime($fecha));
-        if (in_array($diaSemana, [0, 6], true)) {
-            http_response_code(422);
-            echo json_encode(['resultado' => false, 'error' => 'No se puede agendar citas en fines de semana (sábados o domingos).']);
-            detener_ejecucion(422);
-            return;
-        }
-
-        // Validar formato estricto de hora (HH:MM únicamente)
-        if (!preg_match('/^(?:[01]\d|2[0-3]):[0-5]\d$/', $hora)) {
-            http_response_code(422);
-            echo json_encode(['resultado' => false, 'error' => 'Formato de hora inválido. Se requiere HH:MM.']);
-            detener_ejecucion(422);
-            return;
-        }
-
-        $partesHora = explode(':', $hora);
-        $horaInt = (int)$partesHora[0];
-        $minutosInt = (int)$partesHora[1];
-
-        // Horario de atención: 10:00 a 18:00 horas inclusive (límite superior 18:00)
-        if ($horaInt < 10 || $horaInt > 18 || ($horaInt === 18 && $minutosInt > 0)) {
-            http_response_code(422);
-            echo json_encode(['resultado' => false, 'error' => 'El horario de atención es de 10:00 a 18:00 horas.']);
-            detener_ejecucion(422);
-            return;
-        }
-
-        // Validar servicios seleccionados: enteros positivos y política explícita de desduplicación
-        $partesServicios = array_filter(array_map('trim', explode(',', $serviciosRaw)), fn($s) => $s !== '');
-        if (empty($partesServicios)) {
-            http_response_code(422);
-            echo json_encode(['resultado' => false, 'error' => 'Debes seleccionar al menos un servicio']);
-            detener_ejecucion(422);
-            return;
-        }
-
-        $idServicios = [];
-        foreach ($partesServicios as $p) {
-            $idVal = filter_var($p, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
-            if ($idVal === false) {
-                http_response_code(422);
-                echo json_encode(['resultado' => false, 'error' => 'Uno o más identificadores de servicio son inválidos. Deben ser enteros positivos.']);
-                detener_ejecucion(422);
-                return;
-            }
-            $idServicios[] = $idVal;
-        }
-
-        // Desduplicar servicios repetidos
-        $idServicios = array_values(array_unique($idServicios));
-
-        // Comprobar existencia real de los servicios en la base de datos mediante ServicioService
-        $servicioService = self::obtenerServicioService();
-        foreach ($idServicios as $idServicio) {
-            $consultaServicio = $servicioService->obtenerPorId($idServicio);
-            if ($consultaServicio['status'] === ServicioService::STATUS_ERROR) {
-                http_response_code(500);
-                echo json_encode(['resultado' => false, 'error' => 'Servicio de base de datos no disponible']);
-                detener_ejecucion(500);
-                return;
-            }
-            if ($consultaServicio['status'] !== ServicioService::STATUS_OK || !$consultaServicio['servicio']) {
-                http_response_code(422);
-                echo json_encode(['resultado' => false, 'error' => 'Uno o más servicios seleccionados no existen o no son válidos']);
-                detener_ejecucion(422);
-                return;
-            }
-        }
-
-        // 4. Construcción de Cita con Usuario forzado desde la SESIÓN (Nunca del POST)
-        $cita = new Cita([
-            'fecha' => $fecha,
-            'hora' => $hora,
-            'usuarioId' => (int)$_SESSION['id']
-        ]);
-
-        // 5. Persistencia Atómica con Transacción
-        $db = ActiveRecord::getDB();
-        if (!$db) {
+        if ($resultado['status'] === CitaService::STATUS_ERROR) {
             http_response_code(500);
-            echo json_encode(['resultado' => false, 'error' => 'Servicio de base de datos no disponible']);
-            detener_ejecucion(500);
+            echo json_encode(['resultado' => false, 'error' => $resultado['error']]);
             return;
         }
 
-        if (!$db->begin_transaction()) {
-            http_response_code(500);
-            echo json_encode(['resultado' => false, 'error' => 'No se pudo iniciar la transacción']);
-            detener_ejecucion(500);
-            return;
-        }
-
-        try {
-            $resultado = $cita->guardar();
-            if (empty($resultado['resultado']) || empty($resultado['id'])) {
-                throw new \RuntimeException("Error al registrar la cita principal");
-            }
-
-            $idCita = (int)$resultado['id'];
-
-            foreach ($idServicios as $idServicio) {
-                $citaServicio = new CitaServicio([
-                    'citaId' => $idCita,
-                    'servicioId' => $idServicio
-                ]);
-                $resultadoServicio = $citaServicio->guardar();
-                if (empty($resultadoServicio['resultado'])) {
-                    throw new \RuntimeException("Error al registrar el servicio asociado ID: " . $idServicio);
-                }
-            }
-
-            if (!$db->commit()) {
-                throw new \RuntimeException("Fallo al confirmar la transacción de la reserva");
-            }
-
-            http_response_code(200);
-            // Conservar el contrato JSON esperado por src/js/app.js (resultado.resultado truthy)
-            echo json_encode(['resultado' => $resultado]);
-        } catch (\Throwable $e) {
-            $db->rollback();
-            http_response_code(500);
-            echo json_encode(['resultado' => false, 'error' => 'No se pudo procesar la reserva. Operación cancelada.']);
-        }
+        http_response_code(200);
+        // Conservar el contrato JSON esperado por src/js/app.js (resultado.resultado truthy)
+        echo json_encode(['resultado' => $resultado['resultado']]);
     }
 
     /**
-     * Eliminación de cita con verificación de pertenencia (IDOR), autenticación y CSRF.
+     * Eliminación de cita con verificación de autenticación y CSRF en el controlador,
+     * delegando la verificación de pertenencia (propietario o administrador) y el
+     * borrado transaccional a CitaService.
      */
     public static function eliminar()
     {
@@ -239,29 +136,38 @@ class APIController
             exigir_csrf();
             isAuth();
 
-            $id = filter_var($_POST['id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
-            if ($id === false) {
+            $usuarioIdAutenticado = $_SESSION['id'] ?? null;
+            $esAdmin = isset($_SESSION['admin']) && (string)$_SESSION['admin'] === '1';
+
+            $resultado = self::obtenerCitaService()->eliminar(
+                $_POST['id'] ?? null,
+                $usuarioIdAutenticado,
+                $esAdmin
+            );
+
+            if ($resultado['status'] === CitaService::STATUS_INVALID) {
                 header('Location: /admin');
                 detener_ejecucion(302);
                 return;
             }
 
-            $cita = Cita::find($id);
-            if (!$cita) {
+            if ($resultado['status'] === CitaService::STATUS_NOT_FOUND) {
                 header('Location: ' . ($_SERVER['HTTP_REFERER'] ?? '/admin'));
                 detener_ejecucion(302);
                 return;
             }
 
-            // Comprobación de pertenencia: Solo el dueño de la cita o un Administrador pueden eliminarla
-            $esAdmin = isset($_SESSION['admin']) && (string)$_SESSION['admin'] === '1';
-            $esPropietario = (string)$cita->usuarioId === (string)$_SESSION['id'];
-
-            if (!$esAdmin && !$esPropietario) {
+            if (
+                $resultado['status'] === CitaService::STATUS_FORBIDDEN
+                || $resultado['status'] === CitaService::STATUS_UNAUTHORIZED
+            ) {
                 http_response_code(403);
                 if (es_peticion_json()) {
                     header('Content-Type: application/json; charset=utf-8');
-                    echo json_encode(['resultado' => false, 'error' => 'No tienes autorización para eliminar esta cita']);
+                    echo json_encode([
+                        'resultado' => false,
+                        'error' => $resultado['error'] ?? 'No tienes autorización para eliminar esta cita'
+                    ]);
                 } else {
                     echo "Error 403: No tienes autorización para eliminar esta cita.";
                 }
@@ -269,45 +175,15 @@ class APIController
                 return;
             }
 
-            $db = ActiveRecord::getDB();
-            if (!$db) {
-                header('Location: ' . ($_SERVER['HTTP_REFERER'] ?? '/admin'));
-                detener_ejecucion(302);
+            if ($resultado['status'] === CitaService::STATUS_ERROR && es_peticion_json()) {
+                http_response_code(500);
+                header('Content-Type: application/json; charset=utf-8');
+                echo json_encode([
+                    'resultado' => false,
+                    'error' => $resultado['error'] ?? 'No fue posible eliminar la cita'
+                ]);
+                detener_ejecucion(500);
                 return;
-            }
-
-            if (!$db->begin_transaction()) {
-                header('Location: ' . ($_SERVER['HTTP_REFERER'] ?? '/admin'));
-                detener_ejecucion(302);
-                return;
-            }
-
-            $eliminadoExitoso = false;
-            try {
-                // Eliminar servicios asociados en citasservicios
-                $stmt = $db->prepare("DELETE FROM citasservicios WHERE citaId = ?");
-                if (!$stmt) {
-                    throw new \RuntimeException("Fallo al preparar eliminación de servicios");
-                }
-
-                $stmt->bind_param('i', $id);
-                if (!$stmt->execute()) {
-                    $stmt->close();
-                    throw new \RuntimeException("Fallo al ejecutar eliminación de servicios");
-                }
-                $stmt->close();
-
-                if (!$cita->eliminar()) {
-                    throw new \RuntimeException("Fallo al eliminar registro de cita");
-                }
-
-                if (!$db->commit()) {
-                    throw new \RuntimeException("Fallo al confirmar la transacción");
-                }
-
-                $eliminadoExitoso = true;
-            } catch (\Throwable $e) {
-                $db->rollback();
             }
 
             $destino = $_SERVER['HTTP_REFERER'] ?? ($esAdmin ? '/admin' : '/cita');

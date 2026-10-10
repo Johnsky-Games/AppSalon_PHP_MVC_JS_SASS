@@ -1,7 +1,8 @@
 {
-  "timestamp": "2026-10-10T14:46:19.236Z",
+  "timestamp": "2026-10-10T15:49:54.087Z",
   "navegador": "Chrome Headless (Puppeteer-Core)",
   "citaCreadaId": 1,
+  "citaTemporalEliminadaId": 2,
   "fechaReservaEsperada": "2026-10-12",
   "fechaRechazoFinDeSemana": "2026-10-17",
   "testResults": [
@@ -33,7 +34,7 @@
       "id": "PRE-01",
       "name": "Login interactivo de cliente y redirección autorizada a /cita",
       "success": true,
-      "details": "URL: http://localhost:32770/cita"
+      "details": "URL: http://localhost:32773/cita"
     },
     {
       "id": "REC-01",
@@ -58,6 +59,12 @@
       "name": "Renderizado de resumen, envío asíncrono con CSRF, respuesta 200 JSON y alerta SweetAlert2",
       "success": true,
       "details": "Resumen validado; POST /api/citas exitoso (id: 1); SweetAlert2 ('Cita Creada') desplegado en pantalla."
+    },
+    {
+      "id": "ADMIN-05",
+      "name": "Consulta administrativa por fecha en /admin y eliminación de cita con CSRF en /api/eliminar",
+      "success": true,
+      "details": "Citas consultadas en /admin?fecha=2026-10-12; cita temporal ID 2 eliminada; cita principal ID 1 ($195) conservada."
     },
     {
       "id": "REC-05",

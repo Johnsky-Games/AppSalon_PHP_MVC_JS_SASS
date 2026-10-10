@@ -2,40 +2,52 @@
 
 namespace Controllers;
 
-use Model\AdminCita;
 use Model\ActiveRecord;
 use MVC\Router;
+use Repositories\CitaRepository;
+use Repositories\ServicioRepository;
+use Services\CitaService;
 
 class AdminController
 {
+    private static ?CitaService $citaService = null;
+
+    public static function setCitaService(?CitaService $service): void
+    {
+        self::$citaService = $service;
+    }
+
+    private static function obtenerCitaService(): CitaService
+    {
+        if (self::$citaService !== null) {
+            return self::$citaService;
+        }
+
+        $db = ActiveRecord::getDB();
+        return new CitaService(
+            new CitaRepository($db),
+            new ServicioRepository($db)
+        );
+    }
+
     public static function index(Router $router)
     {
         iniciar_sesion_segura();
         isAdmin();
 
-        $fecha = trim($_GET['fecha'] ?? $_GET['fecha_'] ?? date('Y-m-d'));
-        $fechas = explode('-', $fecha);
+        $fechaParam = $_GET['fecha'] ?? $_GET['fecha_'] ?? null;
+        $resultado = self::obtenerCitaService()->consultarCitasAdmin($fechaParam);
 
-        if (count($fechas) !== 3 || !checkdate((int)$fechas[1], (int)$fechas[2], (int)$fechas[0])) {
-            $fecha = date('Y-m-d');
+        if ($resultado['status'] === CitaService::STATUS_ERROR) {
+            http_response_code(500);
         }
-
-        // Consultar base de datos utilizando consulta preparada
-        $consulta = "SELECT citas.id, citas.hora, CONCAT(usuarios.nombre, ' ', usuarios.apellido) as cliente, ";
-        $consulta .= " usuarios.email, usuarios.telefono, servicios.nombre as servicio, servicios.precio ";
-        $consulta .= " FROM citas ";
-        $consulta .= " LEFT OUTER JOIN usuarios ON citas.usuarioId = usuarios.id ";
-        $consulta .= " LEFT OUTER JOIN citasservicios ON citasservicios.citaId = citas.id ";
-        $consulta .= " LEFT OUTER JOIN servicios ON servicios.id = citasservicios.servicioId ";
-        $consulta .= " WHERE fecha = ? ";
-
-        $citas = ActiveRecord::consultarSQLPreparado($consulta, 's', [$fecha]);
 
         $router->render('admin/index', [
             'nombre' => $_SESSION['nombre'] ?? '',
             'apellido' => $_SESSION['apellido'] ?? '',
-            'citas' => $citas,
-            'fecha' => $fecha
+            'citas' => $resultado['citas'],
+            'fecha' => $resultado['fecha'],
+            'alertas' => $resultado['alertas'] ?? []
         ]);
     }
 }

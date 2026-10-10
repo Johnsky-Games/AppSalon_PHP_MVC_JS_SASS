@@ -501,6 +501,96 @@ async function runBrowserTests() {
         recordTest('REC-04', 'Renderizado de resumen, envío asíncrono con CSRF, respuesta 200 JSON y alerta SweetAlert2', true,
             `Resumen validado; POST /api/citas exitoso (id: ${citaIdCreada}); SweetAlert2 ('${swalTitle}') desplegado en pantalla.`);
 
+        // Crear una segunda cita temporal para verificar su visualización y eliminación desde /admin (/api/eliminar)
+        const csrfTokenCliente = await page.$eval('#csrf_token', el => el.value);
+        const tempCitaRes = await page.evaluate(async ({ fecha, servicioId, csrf }) => {
+            const fd = new FormData();
+            fd.append('fecha', fecha);
+            fd.append('hora', '15:00');
+            fd.append('servicios', String(servicioId));
+            fd.append('csrf_token', csrf);
+            const r = await fetch('/api/citas', {
+                method: 'POST',
+                headers: { 'X-CSRF-TOKEN': csrf },
+                body: fd
+            });
+            return { status: r.status, body: await r.json() };
+        }, { fecha: validDate, servicioId: servicioId1, csrf: csrfTokenCliente });
+
+        const citaTemporalId = tempCitaRes.body && tempCitaRes.body.resultado ? tempCitaRes.body.resultado.id : null;
+        if (tempCitaRes.status !== 200 || !citaTemporalId) {
+            throw new Error(`No se pudo crear la cita temporal para prueba de eliminación en /admin: ${JSON.stringify(tempCitaRes)}`);
+        }
+
+        // Cerrar sesión de cliente y autenticar como Administrador para verificar /admin y /api/eliminar
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.evaluate(() => {
+                const logoutForm = document.querySelector('.barra form[action="/logout"]');
+                if (!logoutForm) throw new Error('Formulario /logout no encontrado');
+                logoutForm.submit();
+            })
+        ]);
+
+        console.log('\n>>> [FASE 2B - ADMIN CITAS] Consulta de citas por fecha en /admin y eliminación en /api/eliminar...');
+        await page.waitForSelector('input[name="email"]', { timeout: 5000 });
+        await page.type('input[name="email"]', 'admin@appsalon.com');
+        await page.type('input[name="password"]', 'Password123!');
+
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('input[type="submit"]')
+        ]);
+
+        if (!page.url().includes('/admin')) {
+            throw new Error(`Se esperaba redirección a /admin tras login de administrador, obtenido: ${page.url()}`);
+        }
+
+        // Filtrar citas por fecha usando el selector #fecha (activa buscador.js -> ?fecha=YYYY-MM-DD)
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.evaluate((fechaBusqueda) => {
+                const inputFecha = document.querySelector('#fecha');
+                inputFecha.value = fechaBusqueda;
+                inputFecha.dispatchEvent(new Event('input', { bubbles: true }));
+            }, validDate)
+        ]);
+
+        const fechaEnInputAdmin = await page.$eval('#fecha', el => el.value);
+        if (!decodeURIComponent(page.url()).includes(validDate) || fechaEnInputAdmin !== validDate) {
+            throw new Error(`El buscador de /admin no aplicó la fecha ${validDate}, URL actual: ${page.url()}, input: ${fechaEnInputAdmin}`);
+        }
+
+        const textoCitasAdminAntes = await page.$eval('.citas-admin', el => el.textContent);
+        if (
+            !textoCitasAdminAntes.includes('Carlos Mendoza') ||
+            !textoCitasAdminAntes.includes('Masaje Capilar Premium 115.00') ||
+            !textoCitasAdminAntes.includes('$ 195')
+        ) {
+            throw new Error(`La vista /admin?fecha=${validDate} no mostró los detalles esperados de la cita reservada: ${textoCitasAdminAntes}`);
+        }
+
+        // Eliminar la cita temporal desde /admin mediante su formulario POST /api/eliminar
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.evaluate((idBorrar) => {
+                const inputId = document.querySelector(`form[action="/api/eliminar"] input[name="id"][value="${idBorrar}"]`);
+                if (!inputId || !inputId.form) {
+                    throw new Error(`No se encontró formulario de eliminación para la cita ID ${idBorrar} en /admin`);
+                }
+                inputId.form.submit();
+            }, citaTemporalId)
+        ]);
+
+        const existeCitaTemporalTrasBorrar = await page.$(`form[action="/api/eliminar"] input[name="id"][value="${citaTemporalId}"]`);
+        const sigueCitaPrincipal = await page.$(`form[action="/api/eliminar"] input[name="id"][value="${citaIdCreada}"]`);
+        if (existeCitaTemporalTrasBorrar !== null || sigueCitaPrincipal === null) {
+            throw new Error(`Estado inesperado tras eliminar cita temporal ${citaTemporalId}: temporalSigue=${existeCitaTemporalTrasBorrar !== null}, principalSigue=${sigueCitaPrincipal !== null}`);
+        }
+
+        recordTest('ADMIN-05', 'Consulta administrativa por fecha en /admin y eliminación de cita con CSRF en /api/eliminar', true,
+            `Citas consultadas en /admin?fecha=${validDate}; cita temporal ID ${citaTemporalId} eliminada; cita principal ID ${citaIdCreada} ($195) conservada.`);
+
         // ------------------------------------------------------------------
         // RECORRIDO 5: Ausencia de Errores de Consola y Fallos de Red
         // ------------------------------------------------------------------
@@ -528,6 +618,7 @@ async function runBrowserTests() {
             timestamp: new Date().toISOString(),
             navegador: 'Chrome Headless (Puppeteer-Core)',
             citaCreadaId: citaIdCreada,
+            citaTemporalEliminadaId: citaTemporalId,
             fechaReservaEsperada: validDate,
             fechaRechazoFinDeSemana: weekendDate,
             testResults,

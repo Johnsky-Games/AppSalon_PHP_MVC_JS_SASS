@@ -13,6 +13,7 @@ use Model\Usuario;
 use MVC\Router;
 use mysqli;
 use PHPUnit\Framework\TestCase;
+use Repositories\CitaRepository;
 use Repositories\PersistenceException;
 use Repositories\ServicioRepository;
 use Services\ServicioService;
@@ -425,18 +426,19 @@ class ServicioModuloIntegrationTest extends TestCase
             'precio' => '120.00'
         ])['id'];
 
+        $citaRepo = new CitaRepository(self::$db);
         $cita = new Cita([
             'fecha' => date('Y-m-d', strtotime('next Monday')),
             'hora' => '11:00',
             'usuarioId' => $idUsuario
         ]);
-        $idCita = (int)$cita->guardar()['id'];
+        $idCita = $citaRepo->createCita($cita);
 
         $citaServicio = new CitaServicio([
             'citaId' => $idCita,
             'servicioId' => $idServicio
         ]);
-        $idCitaServicio = (int)$citaServicio->guardar()['id'];
+        $idCitaServicio = $citaRepo->createCitaServicio($citaServicio);
 
         // Eliminar el servicio del catálogo
         $resElim = $service->eliminar($idServicio);
@@ -444,9 +446,10 @@ class ServicioModuloIntegrationTest extends TestCase
 
         // Comprobar que el servicio fue eliminado del catálogo pero la cita y citasservicios persisten intactos
         $this->assertNull((new ServicioRepository(self::$db))->findById($idServicio));
-        $this->assertNotNull(Cita::find($idCita), 'La cita histórica no debe eliminarse al borrar un servicio');
+        $this->assertNotNull($citaRepo->findById($idCita), 'La cita histórica no debe eliminarse al borrar un servicio');
 
         $resRel = self::$db->query("SELECT * FROM citasservicios WHERE id = {$idCitaServicio}");
         $this->assertSame(1, $resRel->num_rows, 'El vínculo histórico en citasservicios debe conservarse sin borrado en cascada');
     }
 }
+

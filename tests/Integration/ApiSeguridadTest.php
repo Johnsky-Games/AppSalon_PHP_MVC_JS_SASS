@@ -9,6 +9,7 @@ use Model\Servicio;
 use Model\Cita;
 use Model\CitaServicio;
 use Controllers\APIController;
+use Repositories\CitaRepository;
 use Repositories\ServicioRepository;
 use AppTerminationException;
 use mysqli;
@@ -46,6 +47,8 @@ class ApiSeguridadTest extends TestCase
         $_POST = [];
         $_SERVER['HTTP_X_CSRF_TOKEN'] = null;
         $_SERVER['REQUEST_METHOD'] = 'POST';
+        APIController::setServicioService(null);
+        APIController::setCitaService(null);
         http_response_code(200);
     }
 
@@ -115,13 +118,13 @@ class ApiSeguridadTest extends TestCase
         $idB = (int)$resB['id'];
 
         // 2. Crear cita perteneciente al Usuario A
+        $citaRepo = new CitaRepository(self::$db);
         $citaA = new Cita([
             'fecha' => '2026-10-20',
             'hora' => '14:00',
             'usuarioId' => $idA
         ]);
-        $resCita = $citaA->guardar();
-        $idCita = (int)$resCita['id'];
+        $idCita = $citaRepo->createCita($citaA);
 
         // 3. Usuario B intenta eliminar la cita de Usuario A enviando id de la cita de A
         $_SESSION['login'] = true;
@@ -145,7 +148,7 @@ class ApiSeguridadTest extends TestCase
         $this->assertSame(403, http_response_code(), 'Eliminar cita ajena debe retornar 403 Forbidden');
 
         // 4. Demostrar que la cita sigue intacta en la base de datos
-        $citaVerificada = Cita::find($idCita);
+        $citaVerificada = $citaRepo->findById($idCita);
         $this->assertNotNull($citaVerificada, 'La cita del Usuario A no debe ser eliminada por el Usuario B');
     }
 
@@ -158,13 +161,13 @@ class ApiSeguridadTest extends TestCase
         $resU = $usuario->guardar();
         $idUsuario = (int)$resU['id'];
 
+        $citaRepo = new CitaRepository(self::$db);
         $cita = new Cita([
             'fecha' => '2026-10-22',
             'hora' => '15:00',
             'usuarioId' => $idUsuario
         ]);
-        $resC = $cita->guardar();
-        $idCita = (int)$resC['id'];
+        $idCita = $citaRepo->createCita($cita);
 
         $_SESSION['login'] = true;
         $_SESSION['id'] = $idUsuario;
@@ -185,7 +188,7 @@ class ApiSeguridadTest extends TestCase
         }
 
         // Verificar que la cita fue eliminada
-        $citaEliminada = Cita::find($idCita);
+        $citaEliminada = $citaRepo->findById($idCita);
         $this->assertNull($citaEliminada, 'El propietario debe poder eliminar su propia cita');
     }
 
@@ -230,7 +233,7 @@ class ApiSeguridadTest extends TestCase
         $this->assertTrue((bool)$json['resultado']['resultado']);
 
         $idCitaCreada = (int)$json['resultado']['id'];
-        $citaGuardada = Cita::find($idCitaCreada);
+        $citaGuardada = (new CitaRepository(self::$db))->findById($idCitaCreada);
 
         $this->assertNotNull($citaGuardada);
         // Debe haberse asignado a la sesión del usuario real (idUsuarioReal), NUNCA a 9999
@@ -388,19 +391,19 @@ class ApiSeguridadTest extends TestCase
         $servicio = new Servicio(['nombre' => 'Barba', 'precio' => '40.00']);
         $servicioId = (new ServicioRepository(self::$db))->create($servicio);
 
+        $citaRepo = new CitaRepository(self::$db);
         $cita = new Cita([
             'fecha' => date('Y-m-d', strtotime('next Thursday')),
             'hora' => '15:00',
             'usuarioId' => $clienteId
         ]);
-        $resCita = $cita->guardar();
-        $citaId = (int)$resCita['id'];
+        $citaId = $citaRepo->createCita($cita);
 
         $cs = new CitaServicio([
             'citaId' => $citaId,
             'servicioId' => $servicioId
         ]);
-        $cs->guardar();
+        $citaRepo->createCitaServicio($cs);
 
         // Autenticar al cliente propietario
         $_SESSION['login'] = true;
@@ -425,3 +428,4 @@ class ApiSeguridadTest extends TestCase
         $this->assertSame(0, $checkCS->num_rows, 'Los servicios asociados deben haber sido eliminados');
     }
 }
+
