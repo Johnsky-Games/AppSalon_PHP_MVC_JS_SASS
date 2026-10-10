@@ -11,12 +11,11 @@
 const path = require('path');
 const fs = require('fs');
 
-// Cargar puppeteer-core de forma robusta
+// Cargar puppeteer-core (prioriza PUPPETEER_CORE_PATH o instalación local en node_modules)
 const defaultCandidates = [
     process.env.PUPPETEER_CORE_PATH,
     path.resolve(__dirname, '../node_modules/puppeteer-core'),
-    path.resolve(__dirname, 'node_modules/puppeteer-core'),
-    'C:/Users/jonat/.gemini/antigravity/brain/e9788218-5667-449d-8c01-3245505116ca/scratch/browser_env/node_modules/puppeteer-core'
+    path.resolve(__dirname, 'node_modules/puppeteer-core')
 ].filter(Boolean);
 
 let puppeteer = null;
@@ -32,7 +31,7 @@ if (!puppeteer) {
     try {
         puppeteer = require('puppeteer-core');
     } catch (e) {
-        throw new Error('No se pudo encontrar puppeteer-core. Instálalo o define PUPPETEER_CORE_PATH.');
+        throw new Error('No se pudo encontrar puppeteer-core. Ejecuta "npm install --save-dev puppeteer-core" o define la variable de entorno PUPPETEER_CORE_PATH.');
     }
 }
 
@@ -47,13 +46,50 @@ const defaultChromePaths = [
     '/usr/bin/chromium-browser'
 ].filter(Boolean);
 
-const CHROME_PATH = defaultChromePaths.find(p => fs.existsSync(p)) || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+const CHROME_PATH = process.env.CHROME_BIN || defaultChromePaths.find(p => fs.existsSync(p)) || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+
+/**
+ * Calcula fechas futuras dinámicas para la prueba:
+ * - Un sábado futuro para verificar el rechazo de fines de semana.
+ * - Un día laborable futuro (lunes a viernes) para la reserva válida y su persistencia.
+ * Si se definen TEST_REJECT_WEEKEND_DATE y TEST_VALID_BOOKING_DATE en el entorno, se usan esas fechas compartidas.
+ */
+function calcularFechasPrueba() {
+    let weekendDate = process.env.TEST_REJECT_WEEKEND_DATE;
+    let validDate = process.env.TEST_VALID_BOOKING_DATE;
+
+    if (!weekendDate || !validDate) {
+        const today = new Date();
+        for (let i = 1; i <= 14; i++) {
+            const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() + i);
+            const yyyy = d.getFullYear();
+            const mm = String(d.getMonth() + 1).padStart(2, '0');
+            const dd = String(d.getDate()).padStart(2, '0');
+            const formatted = `${yyyy}-${mm}-${dd}`;
+            const utcDay = new Date(formatted).getUTCDay();
+
+            if (utcDay === 6 && !weekendDate) { // Sábado
+                weekendDate = formatted;
+            }
+            if (utcDay >= 1 && utcDay <= 5 && !validDate) { // Lunes a Viernes
+                validDate = formatted;
+            }
+        }
+    }
+
+    return { weekendDate, validDate };
+}
 
 async function runBrowserTests() {
+    const { weekendDate, validDate } = calcularFechasPrueba();
+
     console.log('======================================================================');
     console.log('SUITE DE PRUEBAS EN NAVEGADOR WEB (JAVASCRIPT HABILITADO) — APPSALON');
     console.log('URL Base:', BASE_URL);
     console.log('Binario Navegador:', CHROME_PATH);
+    console.log('Fechas dinámicas calculadas:');
+    console.log(' - Sábado (rechazo FDS):', weekendDate);
+    console.log(' - Día laborable (reserva válida):', validDate);
     console.log('======================================================================\n');
 
     const consoleErrors = [];
@@ -224,12 +260,12 @@ async function runBrowserTests() {
         // ------------------------------------------------------------------
         console.log('\n>>> [RECORRIDO 3] Validación interactiva de fecha y horario en cliente...');
 
-        // 3.1 Probar fecha de fin de semana (Sábado: 2026-10-17)
-        await page.evaluate(() => {
+        // 3.1 Probar fecha de fin de semana (Sábado futuro calculado dinámicamente)
+        await page.evaluate((sabado) => {
             const fechaInput = document.querySelector('#fecha');
-            fechaInput.value = '2026-10-17'; // Sábado
+            fechaInput.value = sabado;
             fechaInput.dispatchEvent(new Event('input', { bubbles: true }));
-        });
+        }, weekendDate);
 
         // Esperar a que aparezca la alerta de fin de semana
         await page.waitForSelector('.formulario .alerta.error', { timeout: 3000 });
@@ -261,26 +297,26 @@ async function runBrowserTests() {
             throw new Error(`El campo de hora no se limpió ante horario inválido, valor: '${horaLimpiada}'`);
         }
 
-        // 3.3 Asignar fecha y hora válidas (Martes futuro: 2026-10-20, Hora: 11:30)
-        await page.evaluate(() => {
+        // 3.3 Asignar fecha y hora válidas (Día laborable futuro calculado, Hora: 11:30)
+        await page.evaluate((laborable) => {
             const fechaInput = document.querySelector('#fecha');
-            fechaInput.value = '2026-10-20'; // Martes futuro
+            fechaInput.value = laborable;
             fechaInput.dispatchEvent(new Event('input', { bubbles: true }));
 
             const horaInput = document.querySelector('#hora');
             horaInput.value = '11:30';
             horaInput.dispatchEvent(new Event('input', { bubbles: true }));
-        });
+        }, validDate);
 
         const fechaFinalValida = await page.$eval('#fecha', el => el.value);
         const horaFinalValida = await page.$eval('#hora', el => el.value);
 
-        if (fechaFinalValida !== '2026-10-20' || horaFinalValida !== '11:30') {
-            throw new Error(`Valores válidos no retenidos en inputs: fecha='${fechaFinalValida}', hora='${horaFinalValida}'`);
+        if (fechaFinalValida !== validDate || horaFinalValida !== '11:30') {
+            throw new Error(`Valores válidos no retenidos en inputs: fecha='${fechaFinalValida}' (esperada='${validDate}'), hora='${horaFinalValida}'`);
         }
 
         recordTest('REC-03', 'Validación interactiva de restricciones en fecha (no FDS) y horario (10:00-18:00)', true,
-            `Fines de semana rechazados con alerta; horas no comerciales rechazadas; fecha válida '2026-10-20' y hora '11:30' aceptadas.`);
+            `Fines de semana rechazados con alerta (sábado probado: ${weekendDate}); horas no comerciales rechazadas; fecha válida '${validDate}' y hora '11:30' aceptadas.`);
 
         // ------------------------------------------------------------------
         // RECORRIDO 4: Resumen, Envío Real vía Fetch y Alerta SweetAlert2
@@ -379,6 +415,8 @@ async function runBrowserTests() {
             timestamp: new Date().toISOString(),
             navegador: 'Chrome Headless (Puppeteer-Core)',
             citaCreadaId: citaIdCreada,
+            fechaReservaEsperada: validDate,
+            fechaRechazoFinDeSemana: weekendDate,
             testResults,
             consoleErrors,
             failedRequests

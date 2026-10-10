@@ -1,7 +1,9 @@
 {
-  "timestamp": "2026-10-10T05:34:08.126Z",
+  "timestamp": "2026-10-10T05:49:44.463Z",
   "navegador": "Chrome Headless (Puppeteer-Core)",
   "citaCreadaId": 1,
+  "fechaReservaEsperada": "2026-10-12",
+  "fechaRechazoFinDeSemana": "2026-10-17",
   "testResults": [
     {
       "id": "PRE-01",
@@ -25,7 +27,7 @@
       "id": "REC-03",
       "name": "Validación interactiva de restricciones en fecha (no FDS) y horario (10:00-18:00)",
       "success": true,
-      "details": "Fines de semana rechazados con alerta; horas no comerciales rechazadas; fecha válida '2026-10-20' y hora '11:30' aceptadas."
+      "details": "Fines de semana rechazados con alerta (sábado probado: 2026-10-17); horas no comerciales rechazadas; fecha válida '2026-10-12' y hora '11:30' aceptadas."
     },
     {
       "id": "REC-04",

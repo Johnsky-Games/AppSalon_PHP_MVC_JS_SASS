@@ -144,19 +144,42 @@ try {
     }
     if (-not $webReady) { throw "Servidor web no respondio en http://localhost:3000 tras 30s" }
 
-    # 6. Ejecutar la suite interactiva de navegador en Node.js (Puppeteer Headless Chrome)
+    # 6. Calcular fechas futuras dinámicas compartidas entre el runner y la comprobación MySQL
     Write-Host ""
-    Write-Host "[5/6] Ejecutando recorridos interactivos en navegador con JavaScript..." -ForegroundColor Cyan
-    $scratchPuppeteer = "C:/Users/jonat/.gemini/antigravity/brain/e9788218-5667-449d-8c01-3245505116ca/scratch/browser_env/node_modules/puppeteer-core"
-    if (Test-Path $scratchPuppeteer) {
-        $env:PUPPETEER_CORE_PATH = $scratchPuppeteer
+    Write-Host "[5/6] Calculando fechas de prueba y ejecutando suite en navegador con JavaScript..." -ForegroundColor Cyan
+
+    $baseDate = (Get-Date).Date
+    $proximoSabado = $null
+    $diaLaborable = $null
+
+    for ($i = 1; $i -le 14; $i++) {
+        $candidate = $baseDate.AddDays($i)
+        $formatted = $candidate.ToString("yyyy-MM-dd")
+        if ($candidate.DayOfWeek -eq [System.DayOfWeek]::Saturday -and $null -eq $proximoSabado) {
+            $proximoSabado = $formatted
+        }
+        if ($candidate.DayOfWeek -ge [System.DayOfWeek]::Monday -and $candidate.DayOfWeek -le [System.DayOfWeek]::Friday -and $null -eq $diaLaborable) {
+            $diaLaborable = $formatted
+        }
     }
+
+    if (-not $proximoSabado -or -not $diaLaborable) {
+        throw "No se pudieron calcular las fechas de prueba dinámicas."
+    }
+
+    Write-Host " -> Fechas dinámicas calculadas:" -ForegroundColor Cyan
+    Write-Host "    - Sábado (rechazo en cliente): $proximoSabado" -ForegroundColor Cyan
+    Write-Host "    - Día laborable (reserva válida): $diaLaborable" -ForegroundColor Cyan
+
+    $env:TEST_REJECT_WEEKEND_DATE = $proximoSabado
+    $env:TEST_VALID_BOOKING_DATE = $diaLaborable
+
     $nodeCmd = "node tests/browser_e2e_test.js"
     Invoke-Expression $nodeCmd
     $nodeExitCode = $LASTEXITCODE
 
     if ($nodeExitCode -ne 0) {
-        throw "La suite en navegador web finalizo con error (codigo $nodeExitCode)."
+        throw "La suite en navegador web finalizó con error (código $nodeExitCode)."
     }
 
     # 7. Validar persistencia real en base de datos de la cita generada por el navegador
@@ -167,7 +190,7 @@ try {
     Write-Host " -> Registro en base de datos (id | fecha | hora | usuarioId | servicios): $dbOutput"
 
     if (-not $dbOutput) {
-        throw "No se encontro ningun registro de cita persistido en la base de datos para el usuario 1."
+        throw "No se encontró ningún registro de cita persistido en la base de datos para el usuario 1."
     }
 
     $dbCols = -split $dbOutput
@@ -177,11 +200,11 @@ try {
     $citaUsuarioId = $dbCols[3]
     $citaTotalServicios = $dbCols[4]
 
-    if ($citaUsuarioId -ne "1" -or $citaFecha -ne "2026-10-20" -or $citaHora -ne "11:30:00" -or [int]$citaTotalServicios -ne 2) {
-        throw "Inconsistencia en datos persistidos en BD: ID=$citaId, Fecha=$citaFecha, Hora=$citaHora, UsuarioId=$citaUsuarioId, Servicios=$citaTotalServicios"
+    if ($citaUsuarioId -ne "1" -or $citaFecha -ne $diaLaborable -or $citaHora -ne "11:30:00" -or [int]$citaTotalServicios -ne 2) {
+        throw "Inconsistencia en datos persistidos en BD: ID=$citaId, Fecha=$citaFecha (esperada=$diaLaborable), Hora=$citaHora, UsuarioId=$citaUsuarioId, Servicios=$citaTotalServicios"
     }
 
-    Write-Host " -> Cita ID $citaId verificada: fecha $citaFecha, hora $citaHora, usuario $citaUsuarioId con $citaTotalServicios servicios asociados." -ForegroundColor Green
+    Write-Host " -> Cita ID $citaId verificada: fecha $citaFecha (coincide con fecha calculada compartida $diaLaborable), hora $citaHora, usuario $citaUsuarioId con $citaTotalServicios servicios asociados." -ForegroundColor Green
 
     $testSuccess = $true
     $testExitCode = 0
