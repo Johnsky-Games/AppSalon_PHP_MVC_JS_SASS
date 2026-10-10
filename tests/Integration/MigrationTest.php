@@ -121,6 +121,8 @@ class MigrationTest extends TestCase
         $this->assertStringContainsString('[OK] Migración 002_innodb_and_rate_limit_window aplicada exitosamente.', $resUpgrade['stdout']);
         $this->assertStringContainsString('[+] Aplicando migración: 003_profesionales_duracion_y_horarios', $resUpgrade['stdout']);
         $this->assertStringContainsString('[OK] Migración 003_profesionales_duracion_y_horarios aplicada exitosamente.', $resUpgrade['stdout']);
+        $this->assertStringContainsString('[+] Aplicando migración: 004_reservas_profesional_ocupacion_historico', $resUpgrade['stdout']);
+        $this->assertStringContainsString('[OK] Migración 004_reservas_profesional_ocupacion_historico aplicada exitosamente.', $resUpgrade['stdout']);
 
         // 4. Demostrar preservación íntegra de los datos existentes completos
         $resUsuario = $upgradeDb->query("SELECT * FROM usuarios WHERE id = {$clienteId}")->fetch_assoc();
@@ -158,11 +160,18 @@ class MigrationTest extends TestCase
         $this->assertSame('2026-11-15', $resCitas['fecha']);
         $this->assertSame('11:00:00', $resCitas['hora']);
         $this->assertSame((string)$clienteId, (string)$resCitas['usuarioId']);
+        $this->assertNull($resCitas['profesionalId'], 'Las citas históricas no deben recibir asignaciones inventadas de profesional');
+        $this->assertNull($resCitas['hora_inicio']);
+        $this->assertNull($resCitas['hora_fin']);
+        $this->assertNull($resCitas['duracion_total_minutos']);
 
-        $resCS = $upgradeDb->query("SELECT servicioId FROM citasservicios WHERE citaId = {$citaId} ORDER BY servicioId ASC");
+        $resCS = $upgradeDb->query("SELECT servicioId, nombre_servicio, precio_servicio, duracion_minutos FROM citasservicios WHERE citaId = {$citaId} ORDER BY servicioId ASC");
         $csRows = [];
         while ($row = $resCS->fetch_assoc()) {
             $csRows[] = (int)$row['servicioId'];
+            $this->assertNull($row['nombre_servicio']);
+            $this->assertNull($row['precio_servicio']);
+            $this->assertNull($row['duracion_minutos']);
         }
         $this->assertEquals([(int)$servicio1Id, (int)$servicio2Id], $csRows);
 
@@ -179,6 +188,7 @@ class MigrationTest extends TestCase
         $this->assertStringContainsString('[+] Aplicando migración: 001_security_hardening', $resFresh['stdout']);
         $this->assertStringContainsString('[+] Aplicando migración: 002_innodb_and_rate_limit_window', $resFresh['stdout']);
         $this->assertStringContainsString('[+] Aplicando migración: 003_profesionales_duracion_y_horarios', $resFresh['stdout']);
+        $this->assertStringContainsString('[+] Aplicando migración: 004_reservas_profesional_ocupacion_historico', $resFresh['stdout']);
 
         // 6. Comparar esquemas exactos entre ambas instalaciones: columnas, tipos, nulabilidad, defaults, índices y motores
         $tablas = [

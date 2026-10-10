@@ -3,18 +3,94 @@
 Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerdo con la metodología de entregas auditables por **ChatGPT** (revisión estática de código) y ejecución/verificación por **Antigravity** (desarrollo y pruebas dinámicas automatizadas), sujeto a la aprobación final del **Propietario**.
 
 > **Roles y Criterios:**
-> - **Desarrollo y Pruebas Automatizadas (Antigravity):** Implementación de código y ejecución de la suite completa de pruebas unitarias e integrales (124 pruebas, 1216 aserciones en PHPUnit 10.5.66), escenarios funcionales HTTP y suite E2E en navegador real Headless Chrome (`tests/verificar_navegador.ps1` y `tests/browser_e2e_test.js`).
+> - **Desarrollo y Pruebas Automatizadas (Antigravity):** Implementación de código y ejecución de la suite completa de pruebas unitarias e integrales (137 pruebas, 1399 aserciones en PHPUnit 10.5.66), escenarios funcionales HTTP y suite E2E en navegador real Headless Chrome (`tests/verificar_navegador.ps1` y `tests/browser_e2e_test.js`).
 > - **Revisión Estática Externa (ChatGPT):** Auditoría independiente de código de aplicación, arquitectura por capas, contratos transaccionales y revisión estática de scripts Bash.
 > - **Aprobación Final y Despliegue (Propietario):** Decisión formal sobre fusiones hacia `main` y despliegues en producción.
 
 ---
 
+## Fase 4B: Reservas con Profesional, Ocupación Real y Protección contra Reservas Concurrentes
+
+- **Rama:** `feature/fase-4b-reservas-concurrencia`
+- **Commit Base (Fase 4A aceptada):** `939d84dbb9dcec67bc83421eaa5cbdc90389034a`
+- **Estado General de Fase 4B:** **Completada (Pendiente de Revisión Externa)**
+
+### 1. Diseño Arquitectónico, Migración Incremental e Inmutabilidad Histórica
+
+1. **Migración Incremental (`database/migrations/004_reservas_profesional_ocupacion_historico.sql` + `_rollback.sql`):**
+   - **Tabla `citas`:** Incorpora las columnas anulables `profesionalId INT(11) NULL`, `hora_inicio TIME NULL`, `hora_fin TIME NULL` y `duracion_total_minutos INT(11) NULL`, el índice compuesto `idx_citas_profesional_fecha_intervalo (profesionalId, fecha, hora_inicio, hora_fin)` y la clave foránea `fk_citas_profesional` hacia `profesionales(id)` (`ON DELETE SET NULL ON UPDATE CASCADE`).
+   - **Tabla `citasservicios`:** Incorpora las columnas anulables de snapshot histórico `nombre_servicio VARCHAR(60) NULL`, `precio_servicio DECIMAL(5,2) NULL` y `duracion_minutos INT(11) NULL`, y modifica `fk_citasservicios_servicio` a `ON DELETE SET NULL ON UPDATE SET NULL` para que la eliminación posterior de un servicio en el catálogo nunca destruya las líneas históricas de citas pasadas o futuras ya reservadas.
+   - **Representación explícita de citas históricas:** Las citas creadas antes de la Fase 4B (o mediante el flujo clásico del frontend actual mientras la Fase 5 no envíe `profesionalId`) conservan `profesionalId = NULL`, `hora_inicio = NULL`, `hora_fin = NULL` y `duracion_total_minutos = NULL`, así como `nombre_servicio = NULL`, `precio_servicio = NULL` y `duracion_minutos = NULL` en `citasservicios`. **No se inventan ni asignan profesionales retrospectivamente a citas históricas.**
+   - **Inmutabilidad de reservas con profesional:** Al crear una reserva con profesional, `CitaRepository::crearReservaConProfesionalAtomica()` captura y persiste `nombre_servicio`, `precio_servicio` y `duracion_minutos` de cada servicio desde el catálogo oficial (`servicios`), además de `hora_inicio`, `hora_fin` y `duracion_total_minutos` en `citas`. `CitaRepository::findAdminCitasByFecha()` proyecta `COALESCE(citasservicios.nombre_servicio, servicios.nombre)`, `COALESCE(citasservicios.precio_servicio, servicios.precio)` y `COALESCE(citasservicios.duracion_minutos, servicios.duracion_minutos)`, preservando los importes y duraciones históricos si el servicio se edita o elimina posteriormente en el catálogo, y haciendo fallback transparente al catálogo en citas históricas (`NULL`).
+
+2. **Descuento de Ocupación Real y Semántica Semiabierta `[inicio, fin)` (`Services\DisponibilidadService`):**
+   - `DisponibilidadService::consultar()` incorpora `CitaRepository::findOcupacionByProfesionalEnFecha($profesionalId, $fecha)` y resta los intervalos `[hora_inicio, hora_fin)` de las citas existentes del profesional en esa fecha junto con los descansos y bloqueos vigentes.
+   - **Semántica semiabierta `[inicio, fin)`:** Dos intervalos `[A_inicio, A_fin)` y `[B_inicio, B_fin)` se solapan si y solo si `A_inicio < B_fin && B_inicio < A_fin`. En consecuencia:
+     - Se permiten reservas contiguas donde `finA == inicioB` o `finB == inicioA` (y reservas que terminan exactamente al iniciar un descanso, bloqueo o fin de turno, o que comienzan exactamente al finalizar uno).
+     - Se rechazan todos los solapamientos parciales o totales con HTTP `409` (`status: 'conflict'`, `codigo: 'conflicto_ocupacion'`).
+   - **Liberación de ocupación al eliminar:** Al eliminar una cita autorizada mediante `POST /api/eliminar` (`CitaService::eliminar` $\rightarrow$ `CitaRepository::eliminarCitaAtomica`), su intervalo deja de existir en `citas` y vuelve a ofrecerse inmediatamente en `GET /api/disponibilidad` y a admitirse en `POST /api/citas`.
+
+3. **Orden de Bloqueo Transaccional InnoDB y Garantía de Lecturas Actuales (`Repositories\CitaRepository` y `Repositories\ProfesionalRepository`):**
+   - Para evitar condiciones de carrera (*race conditions*), reservas duplicadas/solapadas y *deadlocks* entre operaciones concurrentes, todas las transacciones que reservan, eliminan citas de un profesional o mutan la agenda/estado de un profesional siguen un **orden canónico estricto de adquisición de bloqueos InnoDB**:
+     1. **`profesionales` (`FOR UPDATE` por `PRIMARY KEY id`):** `SELECT id, nombre, activo FROM profesionales WHERE id = ? LIMIT 1 FOR UPDATE`. Serializa en el punto de entrada todas las operaciones concurrentes sobre el **mismo** profesional (reservas simultáneas, eliminación de citas y mutaciones administrativas en `ProfesionalRepository`: `updateWithServicios`, `updateActivo`, `replaceHorarios`, `createDescanso`, `deleteDescanso`, `createBloqueo`, `deleteBloqueo`).
+     2. **`servicios` (`FOR SHARE` en orden ascendente de `PRIMARY KEY id`):** `SELECT id, nombre, precio, duracion_minutos FROM servicios WHERE id IN (...) ORDER BY id ASC FOR SHARE`. Garantiza lectura actual de precios y duraciones oficiales y orden determinista de bloqueo entre múltiples servicios.
+     3. **`profesionales_servicios` (`FOR SHARE`):** `SELECT servicioId FROM profesionales_servicios WHERE profesionalId = ? ORDER BY servicioId ASC FOR SHARE`.
+     4. **Agenda del profesional (`FOR SHARE`):** `horarios_profesionales`, `descansos_profesionales` y `bloqueos_profesionales` del profesional para el día/fecha solicitados.
+     5. **`citas` del profesional en la fecha (`FOR UPDATE`):** `SELECT id, fecha, hora, hora_inicio, hora_fin, duracion_total_minutos, usuarioId, profesionalId FROM citas WHERE profesionalId = ? AND fecha = ? ORDER BY COALESCE(hora_inicio, hora) ASC, id ASC FOR UPDATE`.
+     6. **Escrituras (`INSERT INTO citas` e `INSERT INTO citasservicios`) y `COMMIT` (o `ROLLBACK` íntegro ante cualquier conflicto o fallo SQL).**
+   - **Aislamiento `READ COMMITTED` + Lecturas Bloqueantes en `crearReservaConProfesionalAtomica`:** La transacción de reserva establece `SET TRANSACTION ISOLATION LEVEL READ COMMITTED` antes de `begin_transaction()` y ejecuta todas las lecturas de decisión con `FOR UPDATE` / `FOR SHARE`. Esto garantiza que:
+     - Todas las lecturas realizadas tras adquirir el bloqueo exclusivo de `profesionales.id` sean **lecturas actuales** (*current reads*) del último estado confirmado (viendo cualquier cita, bloqueo, cambio de horario o desactivación recién confirmada por una transacción previa, y nunca un *snapshot* MVCC anterior).
+     - Las lecturas sobre índices secundarios (`citas`, `horarios_profesionales`, etc.) utilicen bloqueos de registro (`REC_NOT_GAP`) sin bloquear el hueco `supremum` entre profesionales distintos, permitiendo que reservas simultáneas sobre **profesionales diferentes** (`profA != profB`) en el mismo intervalo y con los mismos servicios se ejecuten en paralelo con respuesta `200` sin interbloqueos (*deadlocks*).
+
+4. **Contrato HTTP/JSON en `POST /api/citas` (`Controllers\APIController::guardar` y `Services\CitaService`):**
+   - El `usuarioId` se toma exclusivamente de `$_SESSION['id']`. Se ignoran `usuarioId`, `id`, duraciones, precios y `hora_fin` enviados por el cliente.
+   - Si la petición no incluye `profesionalId` (`profesionalId` / `profesional_id` / `profesional`), se conserva intacto el flujo clásico compatible con `src/js/app.js`.
+   - Si incluye `profesionalId`, revalida y persiste atómicamente devolviendo:
+     - `200`: `{"resultado": {"resultado": true, "id": ...}, "id": ..., "profesionalId": ..., "fecha": "...", "hora_inicio": "HH:MM", "hora_fin": "HH:MM", "duracion_total_minutos": ...}` (manteniendo `resultado.resultado = true` requerido por el frontend actual).
+     - `401`: No autenticado.
+     - `403`: Token CSRF inválido o ausente.
+     - `404`: Profesional inexistente (`codigo: 'profesional_no_encontrado'`).
+     - `409`: Profesional inactivo (`codigo: 'profesional_inactivo'`) o conflicto de ocupación por solapamiento (`codigo: 'conflicto_ocupacion'`).
+     - `422`: Parámetros/fecha/hora inválidos (`codigo: 'solicitud_invalida'`), servicio inexistente (`codigo: 'servicio_inexistente'`), servicio incompatible (`codigo: 'servicios_incompatibles'`) o intervalo fuera de horario / en descanso / en bloqueo (`codigo: 'fuera_de_horario'`).
+     - `500`: Fallo SQL real o dato corrupto en catálogo con rollback completo y sin filtrar detalles internos de MySQL.
+
+### 2. Validación Ejecutada en Fase 4B (Antigravity)
+
+#### A. Suite Completa PHPUnit (Ejecutada en Docker PHP 8.2.34 + MySQL 8.0 Aislado)
+- **Versión efectiva:** `PHPUnit 10.5.66 by Sebastian Bergmann and contributors.` (`Runtime: PHP 8.2.34`, `Configuration: /app/phpunit.xml`).
+- **Comando ejecutado:**
+  `docker run --rm --network appsalon-phpunit-net -v "${PWD}:/app" -w /app -e DB_HOST=appsalon-phpunit-db -e DB_PORT=3306 -e DB_USER=root -e DB_PASS=root -e DB_NAME=appsalon_test appsalon-php-test php -d variables_order=EGPCS vendor/bin/phpunit --colors=never`
+- **Resultado:** `OK (137 tests, 1399 assertions)` (`Time: 00:17.179, Memory: 14.00 MB`) — Código de salida `0`.
+- **Cobertura añadida en Fase 4B:**
+  - `Tests\Integration\MigrationTest`: verificación de migración `004_reservas_profesional_ocupacion_historico` en instalación limpia y actualización con datos previos, comprobando que las citas históricas conservan `profesionalId = NULL`, `hora_inicio = NULL`, `hora_fin = NULL`, `duracion_total_minutos = NULL` y que `citasservicios` conserva `nombre_servicio = NULL`, `precio_servicio = NULL`, `duracion_minutos = NULL`.
+  - `Tests\Unit\DisponibilidadServiceTest`: descuento de citas existentes del profesional en la fecha, admisión de citas contiguas (`finA == inicioB`) y rechazo de solapamientos parciales o totales.
+  - `Tests\Unit\CitaServiceTest`: delegación de reservas con profesional a la transacción atómica, cálculo de `hora_fin` y `duracion_total_minutos`, ignorado de `usuarioId`/`id`/precios/duraciones/`hora_fin` del cliente, y mapeo de estados (`200`, `404`, `409`, `422`, `500`).
+  - `Tests\Integration\ReservaConcurrenciaIntegrationTest` + `tests/Integration/concurrent_reserva_worker.php`:
+    - Reserva válida de uno y varios servicios con cálculo de duración, precios y `hora_fin` desde el catálogo ignorando valores manipulados del cliente.
+    - Inmutabilidad histórica de `citas` y `citasservicios` tras actualizar nombre/precio/duración de un servicio o eliminar un servicio del catálogo.
+    - Descuento de ocupación real en `GET /api/disponibilidad` y aceptación de citas contiguas (`finA == inicioB` e `inicio == finExistente`).
+    - Rechazo con HTTP `409` (`conflicto_ocupacion`) de solapamientos parciales (por inicio, por fin, envolvente, contenido) y totales.
+    - Rechazo por profesional inexistente (`404`), inactivo (`409`), servicio incompatible (`422`), fuera de horario (`422`), cruce con descanso (`422`), cruce con bloqueo (`422`) y fecha pasada o mismo día (`422`).
+    - **Concurrencia real multiproceso (workers paralelos sincronizados con barrera `READY`/`GO` y conexiones InnoDB independientes):**
+      1. Dos reservas simultáneas con profesionales distintos en el mismo intervalo: ambas exitosas (`200`) y `2` citas persistidas.
+      2. Dos reservas simultáneas sobre el mismo profesional e intervalo solapado: exactamente una `200` y otra `409` (`conflicto_ocupacion`), verificando en MySQL que solo existe `1` cita.
+      3. Mutación simultánea de agenda (inserción de bloqueo con lock `FOR UPDATE` activo, reemplazo de horarios semanales e inactivación de profesional) frente a reserva concurrente sobre ese rango: lectura actual tras adquirir el bloqueo y rechazo consistente (`422` / `409`) sin insertar citas inválidas.
+    - Liberación de disponibilidad en `GET /api/disponibilidad` y nueva reserva exitosa tras eliminar una cita autorizada.
+    - Conservación de citas históricas sin profesional (`NULL`) y del flujo de reserva sin `profesionalId` usado por el frontend actual.
+    - Preservación de autenticación (`401`), CSRF (`403`), autorización en eliminación y rollback completo ante fallo SQL real (`500`) mediante trigger en `citasservicios` sin dejar filas huérfanas en `citas`.
+
+#### B. Verificación E2E en Navegador con JavaScript Habilitado (`tests/verificar_navegador.ps1` + `tests/browser_e2e_test.js` + `tests/browser_test_report.json`)
+- **Comando ejecutado:** `powershell -ExecutionPolicy Bypass -File tests/verificar_navegador.ps1`
+- **Resultado (`RUN_ID: 94efb31fe250475cab44d2ecd181d5eb`):** 16 comprobaciones E2E superadas (`ADMIN-01` a `ADMIN-04`, `PROF-01`, `PROF-02`, `PRE-01`, `DISP-01`, `REC-01` a `REC-04`, `RES-01`, `ADMIN-05`, `AUTH-01`, `REC-05`) + verificación de persistencia en MySQL — Código de salida `0`.
+
+---
+
 ## Fase 4A: Cálculo de Disponibilidad por Profesional
 
-- **Rama:** `feature/fase-4a-disponibilidad`
+- **Rama:** `feature/fase-4a-disponibilidad` (commit revisado y aceptado `939d84dbb9dcec67bc83421eaa5cbdc90389034a`)
 - **Commit Base (Fase 3A):** `8ad121ea1b02c6ff51e0eb3891207e50bb383218` (corrección documental sobre `25c7e23e56cb28036d72f7e6feb17dad7492a39c`)
 - **Commit Previo Auditado (Fase 4A):** `7ecbc87c0dfdee096fdb7b42ce009b160244328b`
-- **Estado General de Fase 4A:** **Completada (Pendiente de Revisión Externa)**
+- **Estado General de Fase 4A:** **Completada y Revisada** (`939d84dbb9dcec67bc83421eaa5cbdc90389034a`)
 
 ### 1. Diseño Arquitectónico y Reglas de Dominio (`Services\DisponibilidadService`)
 
@@ -254,8 +330,8 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 | **Fase 2B** | Separación de responsabilidades en el flujo de citas y reservas (`CitaRepository`, `CitaService`) | `Completada` |
 | **Fase 2C** | Separación de responsabilidades en usuarios y autenticación (`UsuarioRepository`, `AuthService`, desacoplamiento de `Usuario`) | `Completada` |
 | **Fase 3A** | Profesionales, servicios con duración, horarios, descansos y bloqueos | `Completada` |
-| **Fase 4A** | Cálculo de disponibilidad por profesional según agenda (`DisponibilidadService`, `GET /api/disponibilidad`) | `Completada (En Revisión)` |
-| **Fase 4B** | Integración de disponibilidad con citas existentes, bloqueo transaccional y prevención de reservas simultáneas | `Pendiente` |
+| **Fase 4A** | Cálculo de disponibilidad por profesional según agenda (`DisponibilidadService`, `GET /api/disponibilidad`) | `Completada` |
+| **Fase 4B** | Integración de disponibilidad con citas existentes, bloqueo transaccional y prevención de reservas simultáneas | `Completada (En Revisión)` |
 | **Fase 5** | Interfaz accesible de reservas y panel administrativo | `Pendiente` |
 | **Fase 6** | Pagos (Stripe / Mercado Pago), notificaciones multicanal y reportes | `Pendiente` |
 

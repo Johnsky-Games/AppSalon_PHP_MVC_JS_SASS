@@ -817,26 +817,96 @@ async function runBrowserTests() {
         recordTest('REC-04', 'Renderizado de resumen, envío asíncrono con CSRF, respuesta 200 JSON y alerta SweetAlert2', true,
             `Resumen validado; POST /api/citas exitoso (id: ${citaIdCreada}); SweetAlert2 ('${swalTitle}') desplegado en pantalla.`);
 
-        // Crear una segunda cita temporal para verificar su visualización y eliminación desde /admin (/api/eliminar)
+        // ------------------------------------------------------------------
+        // FASE 4B - RESERVA CON PROFESIONAL, OCUPACIÓN REAL Y CONFLICTO 409 (RES-01)
+        // ------------------------------------------------------------------
+        console.log('\n>>> [FASE 4B - RESERVAS CON PROFESIONAL] Reserva con profesional, descuento en GET /api/disponibilidad y rechazo 409 por solapamiento...');
         const csrfTokenCliente = await page.$eval('#csrf_token', el => el.value);
-        const tempCitaRes = await page.evaluate(async ({ fecha, servicioId, csrf }) => {
+        const tempCitaRes = await page.evaluate(async ({ fecha, csrf }) => {
             const fd = new FormData();
+            fd.append('profesionalId', '1');
             fd.append('fecha', fecha);
-            fd.append('hora', '15:00');
-            fd.append('servicios', String(servicioId));
+            fd.append('hora', '10:00');
+            fd.append('hora_fin', '10:05');
+            fd.append('duracion_total_minutos', '5');
+            fd.append('servicios', '1,2');
             fd.append('csrf_token', csrf);
             const r = await fetch('/api/citas', {
                 method: 'POST',
-                headers: { 'X-CSRF-TOKEN': csrf },
+                headers: { 'X-CSRF-TOKEN': csrf, 'Accept': 'application/json' },
                 body: fd
             });
-            return { status: r.status, body: await r.json() };
-        }, { fecha: validDate, servicioId: servicioId1, csrf: csrfTokenCliente });
+            const bodyReserve = await r.json();
+
+            const rDispOcupada = await fetch(`/api/disponibilidad?profesionalId=1&fecha=${encodeURIComponent(fecha)}&servicios=1,2`, {
+                headers: { 'Accept': 'application/json' }
+            });
+            const dispOcupada = await rDispOcupada.json();
+
+            return {
+                status: r.status,
+                body: bodyReserve,
+                dispStatus: rDispOcupada.status,
+                dispBody: dispOcupada
+            };
+        }, { fecha: validDate, csrf: csrfTokenCliente });
 
         const citaTemporalId = tempCitaRes.body && tempCitaRes.body.resultado ? tempCitaRes.body.resultado.id : null;
-        if (tempCitaRes.status !== 200 || !citaTemporalId) {
-            throw new Error(`No se pudo crear la cita temporal para prueba de eliminación en /admin: ${JSON.stringify(tempCitaRes)}`);
+        if (
+            tempCitaRes.status !== 200 ||
+            !citaTemporalId ||
+            tempCitaRes.body.profesionalId !== 1 ||
+            tempCitaRes.body.hora_inicio !== '10:00' ||
+            tempCitaRes.body.hora_fin !== '11:00' ||
+            tempCitaRes.body.duracion_total_minutos !== 60
+        ) {
+            throw new Error(`Fallo al crear reserva con profesional en POST /api/citas: ${JSON.stringify(tempCitaRes)}`);
         }
+
+        const paresTrasReserva = Array.isArray(tempCitaRes.dispBody.intervalos)
+            ? tempCitaRes.dispBody.intervalos.map(i => `${i.inicio}-${i.fin}`)
+            : [];
+        if (
+            tempCitaRes.dispStatus !== 200 ||
+            paresTrasReserva.includes('10:00-11:00') ||
+            paresTrasReserva.includes('10:15-11:15') ||
+            !paresTrasReserva.includes('11:00-12:00')
+        ) {
+            throw new Error(`GET /api/disponibilidad no descontó [10:00, 11:00) o no conservó contiguo [11:00, 12:00): ${JSON.stringify(paresTrasReserva)}`);
+        }
+
+        // Intentar reserva solapada en 10:30 sobre el mismo profesional -> debe responder HTTP 409 conflicto_ocupacion
+        const cookiesCliente = await page.cookies();
+        const cookieHeaderCliente = cookiesCliente.map(c => `${c.name}=${c.value}`).join('; ');
+        const paramsConflicto = new URLSearchParams({
+            profesionalId: '1',
+            fecha: validDate,
+            hora: '10:30',
+            servicios: '1,2',
+            csrf_token: csrfTokenCliente
+        });
+        const rConflicto = await fetch(`${BASE_URL}/api/citas`, {
+            method: 'POST',
+            headers: {
+                'Accept': 'application/json',
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-CSRF-TOKEN': csrfTokenCliente,
+                'Cookie': cookieHeaderCliente
+            },
+            body: paramsConflicto.toString()
+        });
+        const conflictoStatus = rConflicto.status;
+        const conflictoBody = await rConflicto.json();
+        if (
+            conflictoStatus !== 409 ||
+            conflictoBody.resultado !== false ||
+            conflictoBody.codigo !== 'conflicto_ocupacion'
+        ) {
+            throw new Error(`Se esperaba HTTP 409 conflicto_ocupacion al solapar reserva en 10:30, obtenido (${conflictoStatus}): ${JSON.stringify(conflictoBody)}`);
+        }
+
+        recordTest('RES-01', 'Reserva con profesional en POST /api/citas, descuento de ocupación en GET /api/disponibilidad, cita contigua y rechazo 409 por solapamiento', true,
+            `Cita con profesional ID ${citaTemporalId} [10:00, 11:00) creada (60 min desde catálogo); descontada en disponibilidad manteniendo contiguo 11:00-12:00; solape 10:30 rechazado con 409.`);
 
         // Cerrar sesión de cliente y autenticar como Administrador para verificar /admin y /api/eliminar
         await Promise.all([
@@ -904,8 +974,22 @@ async function runBrowserTests() {
             throw new Error(`Estado inesperado tras eliminar cita temporal ${citaTemporalId}: temporalSigue=${existeCitaTemporalTrasBorrar !== null}, principalSigue=${sigueCitaPrincipal !== null}`);
         }
 
-        recordTest('ADMIN-05', 'Consulta administrativa por fecha en /admin y eliminación de cita con CSRF en /api/eliminar', true,
-            `Citas consultadas en /admin?fecha=${validDate}; cita temporal ID ${citaTemporalId} eliminada; cita principal ID ${citaIdCreada} ($195) conservada.`);
+        // Verificar que tras eliminar la cita con profesional en /api/eliminar, el intervalo 10:00-11:00 se libera en GET /api/disponibilidad
+        const dispTrasEliminar = await page.evaluate(async (fecha) => {
+            const r = await fetch(`/api/disponibilidad?profesionalId=1&fecha=${encodeURIComponent(fecha)}&servicios=1,2`, {
+                headers: { 'Accept': 'application/json' }
+            });
+            return { status: r.status, body: await r.json() };
+        }, validDate);
+        const paresTrasEliminar = Array.isArray(dispTrasEliminar.body.intervalos)
+            ? dispTrasEliminar.body.intervalos.map(i => `${i.inicio}-${i.fin}`)
+            : [];
+        if (dispTrasEliminar.status !== 200 || !paresTrasEliminar.includes('10:00-11:00')) {
+            throw new Error(`La disponibilidad de 10:00-11:00 no se liberó tras eliminar la cita ${citaTemporalId}: ${JSON.stringify(paresTrasEliminar)}`);
+        }
+
+        recordTest('ADMIN-05', 'Consulta administrativa por fecha en /admin, eliminación de cita con CSRF en /api/eliminar y liberación de ocupación', true,
+            `Citas consultadas en /admin?fecha=${validDate}; cita temporal ID ${citaTemporalId} eliminada y horario 10:00-11:00 liberado; cita principal ID ${citaIdCreada} ($195) conservada.`);
 
         // ------------------------------------------------------------------
         // BLOQUE FASE 2C (AUTH-01): Registro, Login no confirmado, Reenvío y Olvidé

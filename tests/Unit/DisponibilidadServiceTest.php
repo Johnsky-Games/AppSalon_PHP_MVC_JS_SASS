@@ -486,6 +486,62 @@ class DisponibilidadServiceTest extends TestCase
             'duracion_nula' => [null],
         ];
     }
+
+    public function testDescuentaCitasExistentesYAdmiteCitasContiguasEnSemanticaSemiabierta(): void
+    {
+        $profRepo = $this->createMock(ProfesionalRepository::class);
+        $profRepo->method('findById')->willReturn($this->crearProfesionalActivo([1]));
+        $profRepo->method('findHorariosByProfesionalYDia')->with(1, 1)->willReturn([
+            new HorarioProfesional([
+                'id' => 1,
+                'profesionalId' => 1,
+                'dia_semana' => 1,
+                'hora_inicio' => '09:00',
+                'hora_fin' => '12:00'
+            ])
+        ]);
+        $profRepo->method('findDescansosByProfesionalYDia')->willReturn([]);
+        $profRepo->method('findBloqueosByProfesionalEnFecha')->willReturn([]);
+
+        $servRepo = $this->createMock(ServicioRepository::class);
+        $servRepo->method('findById')->with(1)->willReturn(new Servicio([
+            'id' => 1,
+            'nombre' => 'Corte + Lavado',
+            'precio' => '45.00',
+            'duracion_minutos' => 45
+        ]));
+
+        $citaRepo = $this->createMock(\Repositories\CitaRepository::class);
+        $citaRepo->method('findOcupacionByProfesionalEnFecha')->with(1, '2026-10-12')->willReturn([
+            new \Model\Cita([
+                'id' => 50,
+                'fecha' => '2026-10-12',
+                'hora' => '09:45:00',
+                'hora_inicio' => '09:45:00',
+                'hora_fin' => '10:30:00',
+                'duracion_total_minutos' => 45,
+                'usuarioId' => 7,
+                'profesionalId' => 1
+            ])
+        ]);
+
+        $service = new DisponibilidadService($profRepo, $servRepo, 15, $citaRepo);
+        $res = $service->consultar(1, '2026-10-12', [1]);
+
+        $this->assertSame(DisponibilidadService::STATUS_OK, $res['status']);
+        $this->assertSame(200, $res['httpCode']);
+        $this->assertTrue($res['disponible']);
+
+        $pares = array_map(fn(array $i) => $i['inicio'] . '-' . $i['fin'], $res['intervalos']);
+        $this->assertSame([
+            '09:00-09:45', // Contiguo exacto antes de 09:45-10:30
+            '10:30-11:15', // Contiguo exacto después de 09:45-10:30
+            '10:45-11:30',
+            '11:00-11:45',
+            '11:15-12:00',
+        ], $pares);
+    }
 }
+
 
 

@@ -2,13 +2,15 @@
 
 namespace Services;
 
+use Model\Cita;
 use Model\HorarioProfesional;
+use Repositories\CitaRepository;
 use Repositories\PersistenceException;
 use Repositories\ProfesionalRepository;
 use Repositories\ServicioRepository;
 
 /**
- * Servicio de dominio para el cálculo de disponibilidad por profesional (Fase 4A).
+ * Servicio de dominio para el cálculo de disponibilidad por profesional (Fases 4A y 4B).
  *
  * Responsabilidades:
  * 1. Exigir un profesional existente y activo (`activo = 1`) que pueda realizar todos los servicios solicitados.
@@ -16,13 +18,13 @@ use Repositories\ServicioRepository;
  *    ignorando cualquier duración enviada por el cliente.
  * 3. Evaluar la fecha y los intervalos explícitamente en la zona horaria `America/Guayaquil`
  *    considerando todas las franjas laborales configuradas para el día de la semana.
- * 4. Excluir descansos recurrentes (`descansos_profesionales`) y bloqueos puntuales o de rango
- *    (`bloqueos_profesionales`) aplicables a la fecha consultada (tanto de día completo como parciales).
+ * 4. Excluir descansos recurrentes (`descansos_profesionales`), bloqueos puntuales o de rango
+ *    (`bloqueos_profesionales`) y reservas existentes (`citas`) del profesional en la fecha consultada.
  * 5. Devolver únicamente intervalos donde quepa la duración combinada completa dentro de una misma
- *    ventana libre continua, sin atravesar descansos, bloqueos ni huecos entre turnos.
+ *    ventana libre continua, sin atravesar descansos, bloqueos, citas existentes ni huecos entre turnos.
  * 6. Emplear semántica de intervalos semiabiertos `[inicio, fin)`, permitiendo que una atención
- *    termine exactamente cuando comienza un descanso, bloqueo o fin de turno (`fin == restriccion_inicio`)
- *    y que otra comience exactamente cuando termina una restricción (`inicio == restriccion_fin`).
+ *    termine exactamente cuando comienza un descanso, bloqueo, cita existente o fin de turno (`fin == restriccion_inicio`)
+ *    y que otra comience exactamente cuando termina una restricción o cita previa (`inicio == restriccion_fin`).
  *
  * Supuesto configurable sobre el paso entre horas de inicio:
  * - `DEFAULT_PASO_MINUTOS = 15`: Valor inicial de 15 minutos entre posibles horas de inicio dentro de
@@ -30,9 +32,6 @@ use Repositories\ServicioRepository;
  *   (parametrizable por constructor, `setPasoMinutos()`, variable de entorno `AGENDA_PASO_MINUTOS`
  *   o parámetro de consulta) y no como una regla fija confirmada del negocio.
  *
- * Alcance de Fase 4A:
- * - Este servicio calcula la disponibilidad teórica según la configuración de agenda del profesional.
- * - No bloquea ni garantiza los intervalos frente a reservas existentes o concurrentes (alcance de Fase 4B).
  * - No accede directamente a superglobales HTTP (`$_GET`, `$_POST`, `$_SESSION`).
  */
 class DisponibilidadService
@@ -60,19 +59,29 @@ class DisponibilidadService
      */
     public const DEFAULT_PASO_MINUTOS = 15;
 
-    public const AVISO_ALCANCE_FASE_4A = 'Disponibilidad calculada según la configuración de agenda del profesional (Fase 4A); no representa reserva ni garantiza bloqueo frente a citas existentes o concurrentes (Fase 4B).';
+    public const AVISO_ALCANCE_FASE_4A = 'Disponibilidad calculada según la configuración de agenda y citas registradas del profesional; la confirmación definitiva de una reserva se realiza transaccionalmente al guardar.';
 
     private ProfesionalRepository $profesionalRepository;
     private ServicioRepository $servicioRepository;
+    private ?CitaRepository $citaRepository;
     private int $pasoMinutos;
 
     public function __construct(
         ?ProfesionalRepository $profesionalRepository = null,
         ?ServicioRepository $servicioRepository = null,
-        ?int $pasoMinutos = null
+        ?int $pasoMinutos = null,
+        ?CitaRepository $citaRepository = null
     ) {
         $this->profesionalRepository = $profesionalRepository ?? new ProfesionalRepository();
-        $this->servicioRepository = $servicioRepository ?? new ServicioRepository($this->profesionalRepository->getDb());
+        $db = $this->profesionalRepository->getDb();
+        $this->servicioRepository = $servicioRepository ?? new ServicioRepository($db);
+        if ($citaRepository !== null) {
+            $this->citaRepository = $citaRepository;
+        } elseif ($db instanceof \mysqli) {
+            $this->citaRepository = new CitaRepository($db);
+        } else {
+            $this->citaRepository = null;
+        }
         $this->pasoMinutos = $this->resolverPasoInicial($pasoMinutos);
     }
 
@@ -501,10 +510,21 @@ class DisponibilidadService
                 ];
             }
 
-            // Consultar todas las franjas laborales del día, descansos del día y bloqueos aplicables a la fecha
+            // Consultar todas las franjas laborales del día, descansos del día, bloqueos y citas existentes
             $horariosDia = $this->profesionalRepository->findHorariosByProfesionalYDia($profesionalId, $diaSemanaIso);
             $descansosDia = $this->profesionalRepository->findDescansosByProfesionalYDia($profesionalId, $diaSemanaIso);
             $bloqueosFecha = $this->profesionalRepository->findBloqueosByProfesionalEnFecha($profesionalId, $fecha);
+            $citasOcupadas = $this->citaRepository !== null
+                ? $this->citaRepository->findOcupacionByProfesionalEnFecha($profesionalId, $fecha)
+                : [];
+
+            $restriccionesCitas = [];
+            foreach ($citasOcupadas as $citaOcupada) {
+                $intervaloCita = $this->extraerIntervaloOcupadoDeCita($citaOcupada);
+                if ($intervaloCita !== null) {
+                    $restriccionesCitas[] = $intervaloCita;
+                }
+            }
         } catch (PersistenceException $e) {
             return $this->construirRespuestaError(
                 self::STATUS_ERROR,
@@ -514,7 +534,7 @@ class DisponibilidadService
             );
         }
 
-        // 3. Construir restricciones aplicables al día en America/Guayaquil (descansos + bloqueos)
+        // 3. Construir restricciones aplicables al día en America/Guayaquil (descansos + bloqueos + citas existentes)
         $restricciones = [];
 
         foreach ($descansosDia as $descanso) {
@@ -541,6 +561,10 @@ class DisponibilidadService
                     $restricciones[] = ['inicio' => $bInicio, 'fin' => $bFin];
                 }
             }
+        }
+
+        foreach ($restriccionesCitas as $restriccionCita) {
+            $restricciones[] = $restriccionCita;
         }
 
         // Ordenar franjas laborales por hora de inicio ascendente
@@ -588,7 +612,7 @@ class DisponibilidadService
                     $dtFin = $dtInicio->modify('+' . $duracionTotalMinutos . ' minutes');
 
                     $inicioFormateado = $dtInicio->format('H:i');
-                    $finFormateado = $finishSameDay = ($finMin === 1440) ? '24:00' : $dtFin->format('H:i');
+                    $finFormateado = ($finMin === 1440) ? '24:00' : $dtFin->format('H:i');
 
                     $clave = $inicioFormateado . '-' . $finFormateado;
                     if (isset($clavesVistas[$clave])) {
@@ -625,6 +649,48 @@ class DisponibilidadService
             'intervalos' => $intervalosDisponibles,
             'aviso_alcance' => self::AVISO_ALCANCE_FASE_4A,
         ];
+    }
+
+    /**
+     * Extrae el intervalo semiabierto `[inicio, fin)` en minutos de una cita ocupada del profesional.
+     *
+     * @param Cita $cita
+     * @return array{inicio: int, fin: int}|null
+     * @throws PersistenceException Si los datos de intervalo de la cita son corruptos.
+     */
+    private function extraerIntervaloOcupadoDeCita(Cita $cita): ?array
+    {
+        $horaInicioStr = ($cita->hora_inicio !== null && trim((string)$cita->hora_inicio) !== '')
+            ? (string)$cita->hora_inicio
+            : (string)$cita->hora;
+
+        $normInicio = HorarioProfesional::normalizarHora($horaInicioStr);
+        if ($normInicio === '') {
+            throw new PersistenceException("Hora de inicio inválida en cita ocupada ID {$cita->id}.");
+        }
+        $inicioMin = self::horaAMinutos($normInicio);
+
+        if ($cita->hora_fin !== null && trim((string)$cita->hora_fin) !== '') {
+            $normFin = HorarioProfesional::normalizarHora((string)$cita->hora_fin);
+            if ($normFin === '') {
+                throw new PersistenceException("Hora de fin inválida en cita ocupada ID {$cita->id}.");
+            }
+            $finMin = self::horaAMinutos($normFin);
+        } elseif ($cita->duracion_total_minutos !== null) {
+            $dur = $this->validarDuracionCatalogo($cita->duracion_total_minutos);
+            if ($dur === null) {
+                throw new PersistenceException("Duración ocupada inválida en cita ID {$cita->id}.");
+            }
+            $finMin = $inicioMin + $dur;
+        } else {
+            throw new PersistenceException("Cita ocupada ID {$cita->id} sin intervalo de fin definido.");
+        }
+
+        if ($inicioMin >= $finMin) {
+            throw new PersistenceException("Intervalo ocupado inválido en cita ID {$cita->id}.");
+        }
+
+        return ['inicio' => $inicioMin, 'fin' => $finMin];
     }
 
     private function construirRespuestaError(string $status, string $codigo, int $httpCode, string $mensaje): array

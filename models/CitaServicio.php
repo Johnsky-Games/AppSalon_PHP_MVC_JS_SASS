@@ -11,6 +11,9 @@ class CitaServicio
     public $id;
     public $citaId;
     public $servicioId;
+    public $nombre_servicio;
+    public $precio_servicio;
+    public $duracion_minutos;
 
     public function __construct($args = [])
     {
@@ -43,6 +46,26 @@ class CitaServicio
             $this->servicioId = trim($rawServicioId);
         } else {
             $this->servicioId = '';
+        }
+
+        $this->nombre_servicio = isset($args['nombre_servicio']) && is_string($args['nombre_servicio']) && trim($args['nombre_servicio']) !== ''
+            ? trim($args['nombre_servicio'])
+            : null;
+
+        if (isset($args['precio_servicio']) && (is_string($args['precio_servicio']) || is_int($args['precio_servicio']) || is_float($args['precio_servicio']))) {
+            $precioStr = trim((string)$args['precio_servicio']);
+            $this->precio_servicio = $precioStr !== '' ? $precioStr : null;
+        } else {
+            $this->precio_servicio = null;
+        }
+
+        $rawDuracion = $args['duracion_minutos'] ?? null;
+        if (is_int($rawDuracion) && $rawDuracion > 0) {
+            $this->duracion_minutos = (string)$rawDuracion;
+        } elseif (is_string($rawDuracion) && ctype_digit(trim($rawDuracion)) && (int)trim($rawDuracion) > 0) {
+            $this->duracion_minutos = trim($rawDuracion);
+        } else {
+            $this->duracion_minutos = null;
         }
     }
 }

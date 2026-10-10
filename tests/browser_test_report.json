@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-10-10T20:11:57.717Z",
+  "timestamp": "2026-10-10T21:02:51.573Z",
   "navegador": "Chrome Headless (Puppeteer-Core)",
   "citaCreadaId": 1,
   "citaTemporalEliminadaId": 2,
@@ -46,7 +46,7 @@
       "id": "PRE-01",
       "name": "Login interactivo de cliente y redirección autorizada a /cita",
       "success": true,
-      "details": "URL: http://localhost:32784/cita"
+      "details": "URL: http://localhost:32785/cita"
     },
     {
       "id": "DISP-01",
@@ -79,10 +79,16 @@
       "details": "Resumen validado; POST /api/citas exitoso (id: 1); SweetAlert2 ('Cita Creada') desplegado en pantalla."
     },
     {
-      "id": "ADMIN-05",
-      "name": "Consulta administrativa por fecha en /admin y eliminación de cita con CSRF en /api/eliminar",
+      "id": "RES-01",
+      "name": "Reserva con profesional en POST /api/citas, descuento de ocupación en GET /api/disponibilidad, cita contigua y rechazo 409 por solapamiento",
       "success": true,
-      "details": "Citas consultadas en /admin?fecha=2026-10-12; cita temporal ID 2 eliminada; cita principal ID 1 ($195) conservada."
+      "details": "Cita con profesional ID 2 [10:00, 11:00) creada (60 min desde catálogo); descontada en disponibilidad manteniendo contiguo 11:00-12:00; solape 10:30 rechazado con 409."
+    },
+    {
+      "id": "ADMIN-05",
+      "name": "Consulta administrativa por fecha en /admin, eliminación de cita con CSRF en /api/eliminar y liberación de ocupación",
+      "success": true,
+      "details": "Citas consultadas en /admin?fecha=2026-10-12; cita temporal ID 2 eliminada y horario 10:00-11:00 liberado; cita principal ID 1 ($195) conservada."
     },
     {
       "id": "AUTH-01",

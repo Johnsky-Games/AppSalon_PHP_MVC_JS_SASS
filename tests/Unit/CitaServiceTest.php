@@ -207,4 +207,47 @@ class CitaServiceTest extends TestCase
         $this->assertSame(CitaService::STATUS_INVALID, $resServicioInvalido['status']);
         $this->assertStringContainsString('enteros positivos', $resServicioInvalido['error']);
     }
+
+    public function testReservarConProfesionalValidaRelojSustituibleEnAmericaGuayaquilYParametrosDeEntrada(): void
+    {
+        // En UTC es 2026-11-20 02:30:00, pero en America/Guayaquil (UTC-5) todavía es 2026-11-19 21:30:00
+        $relojFijoUtc = new \DateTimeImmutable('2026-11-20 02:30:00', new \DateTimeZone('UTC'));
+        $service = new CitaService(null, null, $relojFijoUtc);
+
+        $this->assertSame('2026-11-19', $service->obtenerAhora()->format('Y-m-d'));
+
+        // Mismo día en America/Guayaquil (2026-11-19) debe rechazarse con 422
+        $resMismoDia = $service->reservar(1, [
+            'profesionalId' => 2,
+            'fecha' => '2026-11-19',
+            'hora' => '10:00',
+            'servicios' => '1'
+        ]);
+        $this->assertSame(CitaService::STATUS_INVALID, $resMismoDia['status']);
+        $this->assertSame(422, $resMismoDia['httpCode']);
+        $this->assertSame('fecha_no_futura', $resMismoDia['codigo']);
+
+        // profesionalId inválido (0, negativo, texto o vacío)
+        foreach ([0, '0', -3, 'abc', '', ['1']] as $profInvalido) {
+            $resProfInv = $service->reservar(1, [
+                'profesionalId' => $profInvalido,
+                'fecha' => '2026-11-20',
+                'hora' => '10:00',
+                'servicios' => '1'
+            ]);
+            $this->assertSame(CitaService::STATUS_INVALID, $resProfInv['status']);
+            $this->assertSame(422, $resProfInv['httpCode']);
+        }
+
+        // Usuario no autenticado con profesionalId
+        $resNoAuth = $service->reservar(null, [
+            'profesionalId' => 2,
+            'fecha' => '2026-11-20',
+            'hora' => '10:00',
+            'servicios' => '1'
+        ]);
+        $this->assertSame(CitaService::STATUS_UNAUTHORIZED, $resNoAuth['status']);
+        $this->assertSame(401, $resNoAuth['httpCode']);
+    }
 }
+

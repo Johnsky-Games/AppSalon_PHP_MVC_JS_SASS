@@ -62,7 +62,9 @@ class APIController
         $db = ActiveRecord::getDB();
         return new DisponibilidadService(
             new ProfesionalRepository($db),
-            new ServicioRepository($db)
+            new ServicioRepository($db),
+            null,
+            new CitaRepository($db)
         );
     }
 
@@ -86,10 +88,11 @@ class APIController
     }
 
     /**
-     * Endpoint de lectura autenticado `GET /api/disponibilidad` (Fase 4A).
+     * Endpoint de lectura autenticado `GET /api/disponibilidad` (Fases 4A y 4B).
      *
-     * Calcula los intervalos disponibles `[inicio, fin)` según la configuración de agenda del profesional
-     * en `America/Guayaquil` y la duración total del catálogo para los servicios seleccionados.
+     * Calcula los intervalos disponibles `[inicio, fin)` según la configuración de agenda del profesional,
+     * descontando descansos, bloqueos y citas existentes en `America/Guayaquil`, y calculando la duración
+     * total desde el catálogo para los servicios seleccionados.
      *
      * Distingue:
      * - No autenticado (`HTTP 401`, `status: 'unauthorized'`, `codigo: 'no_autenticado'`).
@@ -147,7 +150,12 @@ class APIController
         header('Content-Type: application/json; charset=utf-8');
 
         // 1. Verificación de Autenticación
-        if (!isset($_SESSION['login']) || $_SESSION['login'] !== true || empty($_SESSION['id'])) {
+        $idSesion = $_SESSION['id'] ?? null;
+        $esIdValido = is_int($idSesion)
+            ? $idSesion >= 1
+            : (is_string($idSesion) && ctype_digit(trim($idSesion)) && (int)trim($idSesion) >= 1);
+
+        if (!isset($_SESSION['login']) || $_SESSION['login'] !== true || !$esIdValido) {
             http_response_code(401);
             echo json_encode(['resultado' => false, 'error' => 'No autenticado']);
             detener_ejecucion(401);
@@ -174,12 +182,44 @@ class APIController
             return;
         }
 
+        if ($resultado['status'] === CitaService::STATUS_CONFLICT) {
+            http_response_code(409);
+            echo json_encode([
+                'resultado' => false,
+                'status' => $resultado['status'],
+                'codigo' => $resultado['codigo'] ?? 'conflicto_ocupacion',
+                'error' => $resultado['error']
+            ]);
+            detener_ejecucion(409);
+            return;
+        }
+
+        if (
+            $resultado['status'] === CitaService::STATUS_NOT_FOUND
+            && (int)($resultado['httpCode'] ?? 422) === 404
+        ) {
+            http_response_code(404);
+            echo json_encode([
+                'resultado' => false,
+                'status' => $resultado['status'],
+                'codigo' => $resultado['codigo'] ?? 'profesional_no_encontrado',
+                'error' => $resultado['error']
+            ]);
+            detener_ejecucion(404);
+            return;
+        }
+
         if (
             $resultado['status'] === CitaService::STATUS_INVALID
             || $resultado['status'] === CitaService::STATUS_NOT_FOUND
         ) {
             http_response_code(422);
-            echo json_encode(['resultado' => false, 'error' => $resultado['error']]);
+            echo json_encode([
+                'resultado' => false,
+                'status' => $resultado['status'],
+                'codigo' => $resultado['codigo'] ?? 'solicitud_invalida',
+                'error' => $resultado['error']
+            ]);
             detener_ejecucion(422);
             return;
         }
@@ -192,7 +232,16 @@ class APIController
 
         http_response_code(200);
         // Conservar el contrato JSON esperado por src/js/app.js (resultado.resultado truthy)
-        echo json_encode(['resultado' => $resultado['resultado']]);
+        $respuesta = ['resultado' => $resultado['resultado']];
+        if (isset($resultado['profesionalId'])) {
+            $respuesta['id'] = $resultado['id'];
+            $respuesta['profesionalId'] = $resultado['profesionalId'];
+            $respuesta['fecha'] = $resultado['fecha'];
+            $respuesta['hora_inicio'] = $resultado['hora_inicio'];
+            $respuesta['hora_fin'] = $resultado['hora_fin'];
+            $respuesta['duracion_total_minutos'] = $resultado['duracion_total_minutos'];
+        }
+        echo json_encode($respuesta);
     }
 
     /**

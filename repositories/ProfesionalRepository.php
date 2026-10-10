@@ -296,6 +296,12 @@ class ProfesionalRepository
             }
             $inTransaction = true;
 
+            if (!$this->bloquearProfesionalParaMutacion($db, $id)) {
+                $db->rollback();
+                $inTransaction = false;
+                return false;
+            }
+
             $stmt = $db->prepare("UPDATE profesionales SET nombre = ?, activo = ? WHERE id = ? LIMIT 1");
             if (!$stmt) {
                 throw new PersistenceException("Error al preparar actualización de profesional: " . $db->error);
@@ -311,14 +317,7 @@ class ProfesionalRepository
                 throw new PersistenceException("Error al ejecutar actualización de profesional: " . $err);
             }
 
-            $afectadas = $stmt->affected_rows;
             $stmt->close();
-
-            if ($afectadas === 0 && !$this->existeProfesionalPorId($db, $id)) {
-                $db->rollback();
-                $inTransaction = false;
-                return false;
-            }
 
             $stmtDel = $db->prepare("DELETE FROM profesionales_servicios WHERE profesionalId = ?");
             if (!$stmtDel) {
@@ -358,6 +357,7 @@ class ProfesionalRepository
 
     /**
      * Actualiza el estado activo/inactivo de un profesional conservando referencias históricas.
+     * Coordina con reservas concurrentes mediante bloqueo FOR UPDATE sobre `profesionales`.
      *
      * @param int $id
      * @param int $activo 1 o 0.
@@ -372,8 +372,20 @@ class ProfesionalRepository
 
         $db = $this->resolveDb();
         $estado = $activo === 1 ? 1 : 0;
+        $inTransaction = false;
 
         try {
+            if (!$db->begin_transaction()) {
+                throw new PersistenceException("No se pudo iniciar transacción para actualizar estado del profesional: " . $db->error);
+            }
+            $inTransaction = true;
+
+            if (!$this->bloquearProfesionalParaMutacion($db, $id)) {
+                $db->rollback();
+                $inTransaction = false;
+                return false;
+            }
+
             $stmt = $db->prepare("UPDATE profesionales SET activo = ? WHERE id = ? LIMIT 1");
             if (!$stmt) {
                 throw new PersistenceException("Error al preparar cambio de estado de profesional: " . $db->error);
@@ -386,40 +398,50 @@ class ProfesionalRepository
                 throw new PersistenceException("Error al ejecutar cambio de estado de profesional: " . $err);
             }
 
-            $afectadas = $stmt->affected_rows;
             $stmt->close();
 
-            if ($afectadas > 0) {
-                return true;
+            if (!$db->commit()) {
+                throw new PersistenceException("Error al confirmar cambio de estado de profesional: " . $db->error);
             }
+            $inTransaction = false;
 
-            return $this->existeProfesionalPorId($db, $id);
+            return true;
         } catch (PersistenceException $e) {
+            if ($inTransaction) {
+                @$db->rollback();
+            }
             error_log("[ProfesionalRepository::updateActivo] " . $e->getMessage());
             throw $e;
         } catch (\Throwable $e) {
+            if ($inTransaction) {
+                @$db->rollback();
+            }
             error_log("[ProfesionalRepository::updateActivo] Excepción inesperada: " . $e->getMessage());
             throw new PersistenceException("Fallo en la capa de persistencia al actualizar estado del profesional.", 0, $e);
         }
     }
 
-    private function existeProfesionalPorId(mysqli $db, int $id): bool
+    /**
+     * Adquiere bloqueo exclusivo de fila (`FOR UPDATE`) sobre el registro del profesional
+     * para serializar mutaciones de agenda/estado frente a reservas concurrentes en InnoDB.
+     */
+    private function bloquearProfesionalParaMutacion(mysqli $db, int $id): bool
     {
-        $stmt = $db->prepare("SELECT id FROM profesionales WHERE id = ? LIMIT 1");
+        $stmt = $db->prepare("SELECT id FROM profesionales WHERE id = ? LIMIT 1 FOR UPDATE");
         if (!$stmt) {
-            throw new PersistenceException("Error al preparar verificación de profesional: " . $db->error);
+            throw new PersistenceException("Error al preparar bloqueo de profesional: " . $db->error);
         }
         $stmt->bind_param('i', $id);
         if (!$stmt->execute()) {
             $err = $stmt->error;
             $stmt->close();
-            throw new PersistenceException("Error al verificar existencia de profesional: " . $err);
+            throw new PersistenceException("Error al adquirir bloqueo de profesional: " . $err);
         }
         $res = $stmt->get_result();
         if ($res === false) {
             $err = $stmt->error;
             $stmt->close();
-            throw new PersistenceException("Error al leer existencia de profesional: " . $err);
+            throw new PersistenceException("Error al leer resultado de bloqueo de profesional: " . $err);
         }
         $existe = $res->fetch_assoc() !== null;
         $res->free();
@@ -595,6 +617,8 @@ class ProfesionalRepository
                 throw new PersistenceException("No se pudo iniciar transacción de horarios: " . $db->error);
             }
             $inTransaction = true;
+
+            $this->bloquearProfesionalParaMutacion($db, $profesionalId);
 
             $stmtDel = $db->prepare("DELETE FROM horarios_profesionales WHERE profesionalId = ?");
             if (!$stmtDel) {
@@ -784,8 +808,17 @@ class ProfesionalRepository
     public function createDescanso(DescansoProfesional $descanso): int
     {
         $db = $this->resolveDb();
+        $inTransaction = false;
 
         try {
+            if (!$db->begin_transaction()) {
+                throw new PersistenceException("No se pudo iniciar transacción para crear descanso: " . $db->error);
+            }
+            $inTransaction = true;
+
+            $profId = (int)$descanso->profesionalId;
+            $this->bloquearProfesionalParaMutacion($db, $profId);
+
             $stmt = $db->prepare(
                 "INSERT INTO descansos_profesionales (profesionalId, dia_semana, hora_inicio, hora_fin, motivo)
                  VALUES (?, ?, ?, ?, ?)"
@@ -794,7 +827,6 @@ class ProfesionalRepository
                 throw new PersistenceException("Error al preparar inserción de descanso: " . $db->error);
             }
 
-            $profId = (int)$descanso->profesionalId;
             $dia = (int)$descanso->dia_semana;
             $inicio = (string)$descanso->hora_inicio;
             $fin = (string)$descanso->hora_fin;
@@ -815,12 +847,23 @@ class ProfesionalRepository
                 throw new PersistenceException("La inserción del descanso no afectó ninguna fila.");
             }
 
+            if (!$db->commit()) {
+                throw new PersistenceException("Error al confirmar inserción de descanso: " . $db->error);
+            }
+            $inTransaction = false;
+
             $descanso->id = (string)$insertId;
             return $insertId;
         } catch (PersistenceException $e) {
+            if ($inTransaction) {
+                @$db->rollback();
+            }
             error_log("[ProfesionalRepository::createDescanso] " . $e->getMessage());
             throw $e;
         } catch (\Throwable $e) {
+            if ($inTransaction) {
+                @$db->rollback();
+            }
             error_log("[ProfesionalRepository::createDescanso] Excepción inesperada: " . $e->getMessage());
             throw new PersistenceException("Fallo en la capa de persistencia al crear descanso.", 0, $e);
         }
@@ -841,8 +884,16 @@ class ProfesionalRepository
         }
 
         $db = $this->resolveDb();
+        $inTransaction = false;
 
         try {
+            if (!$db->begin_transaction()) {
+                throw new PersistenceException("No se pudo iniciar transacción para eliminar descanso: " . $db->error);
+            }
+            $inTransaction = true;
+
+            $this->bloquearProfesionalParaMutacion($db, $profesionalId);
+
             $stmt = $db->prepare(
                 "DELETE FROM descansos_profesionales WHERE id = ? AND profesionalId = ? LIMIT 1"
             );
@@ -860,11 +911,22 @@ class ProfesionalRepository
             $afectadas = $stmt->affected_rows;
             $stmt->close();
 
+            if (!$db->commit()) {
+                throw new PersistenceException("Error al confirmar eliminación de descanso: " . $db->error);
+            }
+            $inTransaction = false;
+
             return $afectadas > 0;
         } catch (PersistenceException $e) {
+            if ($inTransaction) {
+                @$db->rollback();
+            }
             error_log("[ProfesionalRepository::deleteDescanso] " . $e->getMessage());
             throw $e;
         } catch (\Throwable $e) {
+            if ($inTransaction) {
+                @$db->rollback();
+            }
             error_log("[ProfesionalRepository::deleteDescanso] Excepción inesperada: " . $e->getMessage());
             throw new PersistenceException("Fallo en la capa de persistencia al eliminar descanso.", 0, $e);
         }
@@ -996,8 +1058,17 @@ class ProfesionalRepository
     public function createBloqueo(BloqueoProfesional $bloqueo): int
     {
         $db = $this->resolveDb();
+        $inTransaction = false;
 
         try {
+            if (!$db->begin_transaction()) {
+                throw new PersistenceException("No se pudo iniciar transacción para crear bloqueo: " . $db->error);
+            }
+            $inTransaction = true;
+
+            $profId = (int)$bloqueo->profesionalId;
+            $this->bloquearProfesionalParaMutacion($db, $profId);
+
             $stmt = $db->prepare(
                 "INSERT INTO bloqueos_profesionales (profesionalId, fecha_inicio, fecha_fin, hora_inicio, hora_fin, motivo)
                  VALUES (?, ?, ?, ?, ?, ?)"
@@ -1006,7 +1077,6 @@ class ProfesionalRepository
                 throw new PersistenceException("Error al preparar inserción de bloqueo: " . $db->error);
             }
 
-            $profId = (int)$bloqueo->profesionalId;
             $fechaInicio = (string)$bloqueo->fecha_inicio;
             $fechaFin = (string)$bloqueo->fecha_fin;
             $horaInicio = $bloqueo->hora_inicio;
@@ -1028,12 +1098,23 @@ class ProfesionalRepository
                 throw new PersistenceException("La inserción del bloqueo no afectó ninguna fila.");
             }
 
+            if (!$db->commit()) {
+                throw new PersistenceException("Error al confirmar inserción de bloqueo: " . $db->error);
+            }
+            $inTransaction = false;
+
             $bloqueo->id = (string)$insertId;
             return $insertId;
         } catch (PersistenceException $e) {
+            if ($inTransaction) {
+                @$db->rollback();
+            }
             error_log("[ProfesionalRepository::createBloqueo] " . $e->getMessage());
             throw $e;
         } catch (\Throwable $e) {
+            if ($inTransaction) {
+                @$db->rollback();
+            }
             error_log("[ProfesionalRepository::createBloqueo] Excepción inesperada: " . $e->getMessage());
             throw new PersistenceException("Fallo en la capa de persistencia al crear bloqueo.", 0, $e);
         }
@@ -1054,8 +1135,16 @@ class ProfesionalRepository
         }
 
         $db = $this->resolveDb();
+        $inTransaction = false;
 
         try {
+            if (!$db->begin_transaction()) {
+                throw new PersistenceException("No se pudo iniciar transacción para eliminar bloqueo: " . $db->error);
+            }
+            $inTransaction = true;
+
+            $this->bloquearProfesionalParaMutacion($db, $profesionalId);
+
             $stmt = $db->prepare(
                 "DELETE FROM bloqueos_profesionales WHERE id = ? AND profesionalId = ? LIMIT 1"
             );
@@ -1073,11 +1162,22 @@ class ProfesionalRepository
             $afectadas = $stmt->affected_rows;
             $stmt->close();
 
+            if (!$db->commit()) {
+                throw new PersistenceException("Error al confirmar eliminación de bloqueo: " . $db->error);
+            }
+            $inTransaction = false;
+
             return $afectadas > 0;
         } catch (PersistenceException $e) {
+            if ($inTransaction) {
+                @$db->rollback();
+            }
             error_log("[ProfesionalRepository::deleteBloqueo] " . $e->getMessage());
             throw $e;
         } catch (\Throwable $e) {
+            if ($inTransaction) {
+                @$db->rollback();
+            }
             error_log("[ProfesionalRepository::deleteBloqueo] Excepción inesperada: " . $e->getMessage());
             throw new PersistenceException("Fallo en la capa de persistencia al eliminar bloqueo.", 0, $e);
         }
