@@ -187,12 +187,31 @@ Se ejecutó de extremo a extremo contra el servidor HTTP real en `http://appsalo
 | **6** | **Eliminación y Anti-IDOR** | **Ejecutado** | `POST /api/eliminar` (IDOR vs Propietario) | Intento IDOR: `403 Forbidden`<br>Eliminación dueño: `302` $\rightarrow$ `/cita` | Intento de eliminación por un segundo cliente rechazado con 403 (la cita se mantiene intacta). Eliminación por su dueño borra la cita y servicios asociados en una transacción atómica. |
 | **7** | **Logout Seguro por POST con CSRF** | **Ejecutado** | `GET /logout` vs `POST /logout` | `GET`: `302` (sesión preservada)<br>`POST`: `302` $\rightarrow$ `/` (sesión destruida) | Petición posterior a `/cita` rechazada con `302` hacia `/` al destruirse la sesión. |
 
-### B. Comprobación Funcional en Navegador con JavaScript (UI Cliente — Estado: `Pendiente`)
-La interacción visual en navegador web que involucra la ejecución de scripts cliente en JavaScript ([src/js/app.js](file:///src/js/app.js)) queda explícitamente marcada como **`Pendiente`** de ejecución manual por el revisor o mediante harness automatizado de navegador (e.g. Playwright / Puppeteer):
-- Navegación interactiva por pasos/pestañas de reserva (Paso 1: Servicios, Paso 2: Información de Cita, Paso 3: Resumen).
-- Invocación de `fetch` en el cliente para obtener `/api/servicios` y renderizar tarjetas de servicios en el DOM con selector de clase `.seleccionado`.
-- Datepicker interactivo con deshabilitación de sábados/domingos y fechas pasadas en el cliente.
-- Despliegue dinámico de alertas flotantes en el DOM sin recargar la página.
+### B. Comprobación Funcional en Navegador con JavaScript (UI Cliente — Estado: `Ejecutado Dinámicamente`)
+La interacción visual en navegador web que involucra la ejecución completa de scripts cliente en JavaScript ([src/js/app.js](file:///src/js/app.js)) fue verificada y superada al 100% mediante una suite automatizada E2E con **Puppeteer Headless Chrome** ([tests/browser_e2e_test.js](file:///tests/browser_e2e_test.js)) orquestada por el arnés de entorno aislado [tests/verificar_navegador.ps1](file:///tests/verificar_navegador.ps1).
+
+#### Comando de Ejecución Automatizada:
+```powershell
+.\tests\verificar_navegador.ps1
+```
+
+#### Arquitectura de Aislamiento y Resiliencia del Arnés:
+1. **Red y Base Aisladas:** Genera un identificador único `$RUN_ID` (GUID), red Docker `appsalon-brw-net-<RUN_ID>` y base de datos `appsalon_browser_test` en MySQL 8.
+2. **Esquema y Migraciones:** Aplica `database/schema_base.sql` y ejecuta `php database/migrador.php up` (migraciones 001 y 002).
+3. **Semillero de Prueba:** Inserta 3 servicios de catálogo y un usuario cliente de prueba (`carlos@correo.com`) sin tocar datos previos.
+4. **Protección Estricta de Configuración:** Respalda `includes/.env` con comprobación SHA-256 previa, levanta servidor web PHP embebido en puerto 3000 y restaura incondicionalmente el archivo `.env` original en `finally` con verificación SHA-256 byte a byte.
+5. **Verificación de Persistencia:** Consulta directamente la base de datos tras la interacción del navegador y confirma que la cita y los servicios seleccionados fueron persistidos en MySQL con IDs, fechas y horas exactas.
+6. **Limpieza Garantizada:** Elimina todos los contenedores y la red creada específicamente para la ejecución.
+
+#### Recorridos Verificados en Navegador Web:
+| Identificador | Recorrido Interactivo | Resultado Esperado vs Observado | Evidencia Técnica y Sanitizada |
+|:---:|---|---|---|
+| **PRE-01** | **Autenticación en Login** | Formulario en `/` autentica a `carlos@correo.com` y redirige a `/cita`. | URL final `http://localhost:3000/cita`, vista de reserva montada. |
+| **REC-01** | **Carga de Servicios y Selección Visual** | `/api/servicios` carga 3 tarjetas; clic activa `.seleccionado`, segundo clic deselecciona; selección múltiple preservada. | Catálogo renderizado; toggle interactivo verificado; servicios `[1, 3]` seleccionados. |
+| **REC-02** | **Navegación de Pasos y Preservación de Estado** | Botones de paginación y pestañas alternan `#paso-1` y `#paso-2`. Nombre prellenado de sesión (`Carlos Mendoza`) y selección de servicios intacta al retroceder. | Navegación fluida (Paso 1 $\rightarrow$ Paso 2 $\rightarrow$ Paso 1 $\rightarrow$ Paso 2); estado en memoria cliente intacto. |
+| **REC-03** | **Validación Interactiva de Fechas y Horas** | Sábado `2026-10-17` genera alerta *"Fines de semana no permitidos"* y limpia campo; hora `08:30` genera alerta *"Hora no válida (10:00 a 18:00)"* y limpia campo; fecha `2026-10-20` y hora `11:30` son retenidas. | Alertas DOM dinámicas desplegadas y removidas automáticamente; inputs retienen únicamente valores válidos. |
+| **REC-04** | **Resumen, Envío Asíncrono y Persistencia** | Paso 3 renderiza resumen formateado; clic en "Reservar Cita" despacha `fetch POST /api/citas` con CSRF; responde HTTP 200 JSON `{resultado: {resultado: true, id: 1}}`; SweetAlert2 despliega modal *"Cita Creada"*. | Modal `.swal2-popup` verificado en pantalla; persistencia en BD confirmada (`id: 1`, `fecha: 2026-10-20`, `hora: 11:30:00`, 2 servicios). |
+| **REC-05** | **Ausencia de Errores de Consola y Red** | Cero errores en consola de JavaScript y cero solicitudes de red fallidas. | Errores consola: 0, Fallos de red: 0. Favicon vacío (`<link rel="icon" href="data:,">`) previene 404s automáticos de navegadores modernos. |
 
 ---
 

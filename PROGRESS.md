@@ -18,7 +18,7 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 - **Pruebas Automatizadas Ejecutadas Dinámicamente (Antigravity):** **Probado** (52 pruebas automatizadas, 360 aserciones, 0 fallos, 0 errores, 0 advertencias en entorno Docker PHP 8.2 + MySQL 8.0, incluyendo `FunctionalRunnerSecurityTest` que garantiza rechazo estricto de bases no autorizadas antes de modificar datos).
 - **Verificación Funcional HTTP (Antigravity):** **Ejecutado Dinámicamente** (7 de 7 escenarios probados de extremo a extremo contra servidor real `http://localhost:3000`, base de datos aislada `appsalon_func_test`, tokens sanitizados y receptor SMTP mock).
 - **Scripts de Reproducción:** PowerShell ejecutado y verificado dinámicamente; Bash revisado estáticamente.
-- **Comprobación Funcional en Navegador con JavaScript (UI Cliente):** **Pendiente Real del Plan Original** (Interacción DOM interactiva con [src/js/app.js](file:///src/js/app.js): navegación de pestañas de cita, datepicker en navegador y alertas dinámicas en cliente, pendiente de verificación manual o suite E2E de navegador).
+- **Comprobación Funcional en Navegador con JavaScript (UI Cliente):** **Ejecutado Dinámicamente** (Suite automatizada E2E en navegador real Headless Chrome con JavaScript habilitado vía [tests/verificar_navegador.ps1](file:///tests/verificar_navegador.ps1) y [tests/browser_e2e_test.js](file:///tests/browser_e2e_test.js); cubriendo login, carga de catálogo desde `/api/servicios`, selección y deselección visual `.seleccionado`, navegación de tres pasos y tabs con preservación de estado en cliente, validación interactiva de fechas y horarios, renderizado de resumen, envío asíncrono con token CSRF, alerta SweetAlert2, persistencia verificada en MySQL y 0 errores de consola o red).
 - **Documentación Completa:** Disponible en [GUIA_ENTREGA_1.md](file:///GUIA_ENTREGA_1.md) y [database/README.md](file:///database/README.md).
 - **Estado General de Entrega 1:** **Listo para Revisión Final del Propietario** (Pendiente de aprobación previa para merge a `main`).
 
@@ -37,13 +37,17 @@ Ejecución de extremo a extremo contra servidor PHP (`http://appsalon-web:3000`)
 
 ---
 
-### Verificación en Navegador con JavaScript (UI Cliente):
-| Área de Interfaz | Estado | Alcance / Detalle |
-| :--- | :---: | :--- |
-| Pestañas de Reserva (Pasos 1, 2 y 3) | `Pendiente` | Cambio dinámico de pasos en DOM gestionado por `src/js/app.js` |
-| Carga de Servicios vía Fetch | `Pendiente` | Consumo asíncrono de `/api/servicios` y resaltado con clase `.seleccionado` |
-| Restricciones en Datepicker | `Pendiente` | Bloqueo interactivo en UI de fines de semana y fechas pasadas |
-| Alertas DOM Dinámicas | `Pendiente` | Inserción y remoción automática de alertas temporizadas en cliente |
+### Verificación en Navegador con JavaScript Habilitado (UI Cliente):
+Ejecución en navegador real Headless Chrome (`tests/browser_e2e_test.js`) contra servidor web real (`http://localhost:3000`) en base de datos aislada `appsalon_browser_test` controlada por el arnés [tests/verificar_navegador.ps1](file:///tests/verificar_navegador.ps1).
+
+| Recorrido en Navegador | Identificador | Estado | Resultado Esperado vs Observado | Evidencia Técnica y Sanitizada |
+| :--- | :---: | :---: | :--- | :--- |
+| **Autenticación en UI de Login** | `PRE-01` | **Probado** | Formulario `email` y `password` autentica cliente ficticio `carlos@correo.com` y redirige a `/cita`. | URL final `http://localhost:3000/cita`, vista de reserva renderizada. |
+| **Carga de Servicios y Selección Visual** | `REC-01` | **Probado** | Petición asíncrona a `/api/servicios`, renderizado de catálogo de tarjetas; clic añade clase `.seleccionado`, segundo clic remueve clase `.seleccionado`. Selección múltiple preservada. | 3 servicios renderizados; toggle comprobado; IDs seleccionados: `[1, 3]`. |
+| **Navegación de Pasos y Preservación de Estado** | `REC-02` | **Probado** | Botones de paginación (`#siguiente`, `#anterior`) y pestañas (`.tabs button[data-paso]`) alternan vistas `#paso-1`, `#paso-2`, `#paso-3`. Nombre prellenado de sesión (`Carlos Mendoza`) y selección de servicios intacta al retroceder. | Navegación Paso 1 $\rightarrow$ Paso 2 $\rightarrow$ Paso 1 $\rightarrow$ Paso 2 superada; `.seleccionado` intacto. |
+| **Validación Interactiva de Fechas y Horas** | `REC-03` | **Probado** | Sábado `2026-10-17` genera alerta *"Fines de semana no permitidos"* y limpia input. Hora `08:30` genera alerta *"Hora no válida (10:00 a 18:00)"* y limpia input. Fecha válida `2026-10-20` y hora `11:30` aceptadas. | Alertas dinámicas DOM desplegadas y auto-removidas; inputs retienen únicamente valores conformes a reglas de negocio. |
+| **Resumen, Envío Asíncrono y Persistencia en BD** | `REC-04` | **Probado** | Paso 3 renderiza datos formateados; clic en "Reservar Cita" despacha `POST /api/citas` con CSRF; responde `200 OK` JSON `{resultado: {resultado: true, id: 1}}`; SweetAlert2 despliega modal *"Cita Creada"*. | Modal `.swal2-popup` verificado en DOM; BD `appsalon_browser_test` registra `citas` (`id: 1`, `fecha: 2026-10-20`, `hora: 11:30:00`, `usuarioId: 1`) y 2 filas en `citasservicios`. |
+| **Monitorización de Consola y Red** | `REC-05` | **Probado** | Cero errores de consola de JavaScript (`console.error`) y cero peticiones de red fallidas (`requestfailed`). | Errores consola: 0, Peticiones fallidas: 0. Favicon vacío integrado en layout (`<link rel="icon" href="data:,">`) previene 404s en navegadores modernos. |
 
 ---
 
