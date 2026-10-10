@@ -16,15 +16,23 @@
         flex: 0 0 10rem;
     }
 
-    input {
+    input,
+    select {
         flex: 1;
         border: none;
         padding: calc(v.$separacion / 4);
         border-radius: 1rem;
+        background-color: v.$blanco;
+        color: v.$negro;
+
+        &:focus-visible {
+            outline: 3px solid v.$azul;
+            outline-offset: 2px;
+        }
 
         &:disabled {
             background-color: lighten(v.$negro , 30%);
             color: v.$blanco;
         }
     }
-}
+}

@@ -8,6 +8,7 @@ use Repositories\ProfesionalRepository;
 use Repositories\ServicioRepository;
 use Services\CitaService;
 use Services\DisponibilidadService;
+use Services\ProfesionalService;
 use Services\ServicioService;
 
 class APIController
@@ -15,6 +16,7 @@ class APIController
     private static ?ServicioService $servicioService = null;
     private static ?CitaService $citaService = null;
     private static ?DisponibilidadService $disponibilidadService = null;
+    private static ?ProfesionalService $profesionalService = null;
 
     public static function setServicioService(?ServicioService $service): void
     {
@@ -29,6 +31,11 @@ class APIController
     public static function setDisponibilidadService(?DisponibilidadService $service): void
     {
         self::$disponibilidadService = $service;
+    }
+
+    public static function setProfesionalService(?ProfesionalService $service): void
+    {
+        self::$profesionalService = $service;
     }
 
     private static function obtenerServicioService(): ServicioService
@@ -68,6 +75,30 @@ class APIController
         );
     }
 
+    private static function obtenerProfesionalService(): ProfesionalService
+    {
+        if (self::$profesionalService !== null) {
+            return self::$profesionalService;
+        }
+
+        $db = ActiveRecord::getDB();
+        return new ProfesionalService(
+            new ProfesionalRepository($db),
+            new ServicioRepository($db)
+        );
+    }
+
+    private static function solicitaRespuestaJsonExplicita(): bool
+    {
+        $accept = $_SERVER['HTTP_ACCEPT'] ?? '';
+        $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
+        $requestedWith = $_SERVER['HTTP_X_REQUESTED_WITH'] ?? '';
+
+        return str_contains($accept, 'application/json')
+            || str_contains($contentType, 'application/json')
+            || strtolower($requestedWith) === 'xmlhttprequest';
+    }
+
     public static function index()
     {
         header('Content-Type: application/json; charset=utf-8');
@@ -85,6 +116,86 @@ class APIController
 
         http_response_code(200);
         echo json_encode($resultado['servicios']);
+    }
+
+    /**
+     * Endpoint autenticado `GET /api/profesionales` (Fase 5).
+     * Devuelve los profesionales activos (`activo = 1`) junto con los IDs de servicios que cada uno
+     * puede realizar y su compatibilidad con los servicios solicitados (`?servicios=1,2`).
+     */
+    public static function profesionales()
+    {
+        iniciar_sesion_segura();
+        header('Content-Type: application/json; charset=utf-8');
+
+        $idSesion = $_SESSION['id'] ?? null;
+        $esIdValido = is_int($idSesion)
+            ? $idSesion >= 1
+            : (is_string($idSesion) && ctype_digit(trim($idSesion)) && (int)trim($idSesion) >= 1);
+
+        if (!isset($_SESSION['login']) || $_SESSION['login'] !== true || !$esIdValido) {
+            http_response_code(401);
+            echo json_encode([
+                'resultado' => false,
+                'status' => 'unauthorized',
+                'codigo' => 'no_autenticado',
+                'profesionales' => [],
+                'profesionales_compatibles' => [],
+                'error' => 'No autenticado'
+            ]);
+            detener_ejecucion(401);
+            return;
+        }
+
+        $resultado = self::obtenerProfesionalService()->consultarParaReserva($_GET);
+        $httpCode = (int)($resultado['httpCode'] ?? 200);
+        unset($resultado['httpCode']);
+
+        http_response_code($httpCode);
+        echo json_encode($resultado);
+        if ($httpCode !== 200) {
+            detener_ejecucion($httpCode);
+        }
+    }
+
+    /**
+     * Endpoint autenticado `GET /api/mis-citas` (Fase 5).
+     * Consulta únicamente las citas pertenecientes al cliente autenticado en sesión (`$_SESSION['id']`),
+     * incluyendo profesional asignado o indicación de cita histórica sin profesional, intervalo `[hora_inicio, hora_fin)`,
+     * snapshot histórico de servicios, total e indicador `puede_cancelar`.
+     */
+    public static function misCitas()
+    {
+        iniciar_sesion_segura();
+        header('Content-Type: application/json; charset=utf-8');
+
+        $idSesion = $_SESSION['id'] ?? null;
+        $esIdValido = is_int($idSesion)
+            ? $idSesion >= 1
+            : (is_string($idSesion) && ctype_digit(trim($idSesion)) && (int)trim($idSesion) >= 1);
+
+        if (!isset($_SESSION['login']) || $_SESSION['login'] !== true || !$esIdValido) {
+            http_response_code(401);
+            echo json_encode([
+                'resultado' => false,
+                'status' => 'unauthorized',
+                'codigo' => 'no_autenticado',
+                'citas' => [],
+                'error' => 'No autenticado'
+            ]);
+            detener_ejecucion(401);
+            return;
+        }
+
+        $resultado = self::obtenerCitaService()->consultarCitasCliente($_SESSION['id']);
+        $httpCode = (int)($resultado['httpCode'] ?? 200);
+        unset($resultado['httpCode']);
+
+        http_response_code($httpCode);
+        echo json_encode($resultado);
+        if ($httpCode !== 200) {
+            detener_ejecucion($httpCode);
+        }
     }
 
     /**
@@ -248,6 +359,8 @@ class APIController
      * Eliminación de cita con verificación de autenticación y CSRF en el controlador,
      * delegando la verificación de pertenencia (propietario o administrador) y el
      * borrado transaccional a CitaService.
+     * Soporta tanto envíos de formulario tradicional (302 Location) como peticiones
+     * asíncronas JSON con `Accept: application/json`.
      */
     public static function eliminar()
     {
@@ -259,6 +372,7 @@ class APIController
 
             $usuarioIdAutenticado = $_SESSION['id'] ?? null;
             $esAdmin = isset($_SESSION['admin']) && (string)$_SESSION['admin'] === '1';
+            $esJsonExplicito = self::solicitaRespuestaJsonExplicita();
 
             $resultado = self::obtenerCitaService()->eliminar(
                 $_POST['id'] ?? null,
@@ -267,12 +381,36 @@ class APIController
             );
 
             if ($resultado['status'] === CitaService::STATUS_INVALID) {
+                if ($esJsonExplicito) {
+                    http_response_code(422);
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode([
+                        'resultado' => false,
+                        'status' => 'invalid',
+                        'codigo' => 'solicitud_invalida',
+                        'error' => $resultado['error'] ?? 'Identificador de cita inválido.'
+                    ]);
+                    detener_ejecucion(422);
+                    return;
+                }
                 header('Location: /admin');
                 detener_ejecucion(302);
                 return;
             }
 
             if ($resultado['status'] === CitaService::STATUS_NOT_FOUND) {
+                if ($esJsonExplicito) {
+                    http_response_code(404);
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode([
+                        'resultado' => false,
+                        'status' => 'not_found',
+                        'codigo' => 'cita_no_encontrada',
+                        'error' => $resultado['error'] ?? 'La cita solicitada no existe.'
+                    ]);
+                    detener_ejecucion(404);
+                    return;
+                }
                 header('Location: ' . ($_SERVER['HTTP_REFERER'] ?? '/admin'));
                 detener_ejecucion(302);
                 return;
@@ -287,6 +425,8 @@ class APIController
                     header('Content-Type: application/json; charset=utf-8');
                     echo json_encode([
                         'resultado' => false,
+                        'status' => 'forbidden',
+                        'codigo' => 'no_autorizado',
                         'error' => $resultado['error'] ?? 'No tienes autorización para eliminar esta cita'
                     ]);
                 } else {
@@ -309,6 +449,19 @@ class APIController
                     echo "Error 500: " . s((string)$mensajeError);
                 }
                 detener_ejecucion(500);
+                return;
+            }
+
+            if ($esJsonExplicito) {
+                http_response_code(200);
+                header('Content-Type: application/json; charset=utf-8');
+                echo json_encode([
+                    'resultado' => true,
+                    'status' => 'ok',
+                    'id' => (int)($_POST['id'] ?? 0),
+                    'mensaje' => 'Cita cancelada correctamente'
+                ]);
+                detener_ejecucion(200);
                 return;
             }
 

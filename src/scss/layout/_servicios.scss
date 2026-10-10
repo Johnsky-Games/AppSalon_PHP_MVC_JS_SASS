@@ -18,7 +18,13 @@
         text-align: center;
 
         &:hover {
-            transform: scale(1.1);
+            transform: scale(1.03);
+            cursor: pointer;
+        }
+
+        &:focus-visible {
+            outline: 3px solid v.$azul;
+            outline-offset: 3px;
         }
 
         &.seleccionado {
@@ -34,6 +40,12 @@
             margin: 0 0 calc(v.$separacion / 4);
         }
 
+        .duracion-servicio {
+            font-size: 1.6rem;
+            font-weight: v.$regular;
+            color: darken(v.$gris, 35%);
+        }
+
         .precio-servicio {
             color: v.$azul;
             font-weight: v.$bold;
@@ -41,4 +53,4 @@
             margin: 0;
         }
     }
-}
+}

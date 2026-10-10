@@ -14,6 +14,7 @@ class AdminCita
     public $hora_fin;
     public $duracion_total_minutos;
     public $profesionalId;
+    public $profesional_nombre;
     public $cliente;
     public $email;
     public $telefono;
@@ -36,6 +37,9 @@ class AdminCita
             : null;
         $this->profesionalId = isset($args['profesionalId']) && is_scalar($args['profesionalId'])
             ? (string)$args['profesionalId']
+            : null;
+        $this->profesional_nombre = isset($args['profesional_nombre']) && is_string($args['profesional_nombre']) && trim($args['profesional_nombre']) !== ''
+            ? trim($args['profesional_nombre'])
             : null;
         $this->cliente = isset($args['cliente']) && is_string($args['cliente']) ? $args['cliente'] : '';
         $this->email = isset($args['email']) && is_string($args['email']) ? $args['email'] : '';

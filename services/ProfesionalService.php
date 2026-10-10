@@ -1268,4 +1268,106 @@ class ProfesionalService
             ];
         }
     }
+
+    /**
+     * Consulta los profesionales activos (`activo = 1`) junto con los IDs de servicios que cada uno
+     * puede realizar y evalúa su compatibilidad con los servicios solicitados (`?servicios=1,2`).
+     *
+     * @param array<string, mixed> $queryParams Parámetros de consulta (opcional `servicios`).
+     * @return array<string, mixed>
+     */
+    public function consultarParaReserva(array $queryParams = []): array
+    {
+        $serviciosSolicitados = [];
+        if (array_key_exists('servicios', $queryParams) && $queryParams['servicios'] !== null && $queryParams['servicios'] !== '') {
+            $rawServicios = $queryParams['servicios'];
+            $partes = [];
+            if (is_string($rawServicios)) {
+                $partes = array_filter(array_map('trim', explode(',', $rawServicios)), fn($s) => $s !== '');
+            } elseif (is_array($rawServicios)) {
+                $partes = $rawServicios;
+            } else {
+                return [
+                    'status' => self::STATUS_INVALID,
+                    'codigo' => 'solicitud_invalida',
+                    'httpCode' => 422,
+                    'resultado' => false,
+                    'profesionales' => [],
+                    'profesionales_compatibles' => [],
+                    'error' => 'El parámetro servicios tiene un formato inválido.'
+                ];
+            }
+
+            foreach ($partes as $item) {
+                $idVal = $this->validarId($item);
+                if ($idVal === null) {
+                    return [
+                        'status' => self::STATUS_INVALID,
+                        'codigo' => 'solicitud_invalida',
+                        'httpCode' => 422,
+                        'resultado' => false,
+                        'profesionales' => [],
+                        'profesionales_compatibles' => [],
+                        'error' => 'Uno o más identificadores de servicio seleccionados no son válidos.'
+                    ];
+                }
+                $serviciosSolicitados[] = $idVal;
+            }
+            $serviciosSolicitados = array_values(array_unique($serviciosSolicitados));
+        }
+
+        try {
+            $activos = $this->profesionalRepository->findAll(true);
+            $profesionales = [];
+            $compatibles = [];
+
+            foreach ($activos as $prof) {
+                $serviciosProf = array_values(array_unique(array_map('intval', $prof->servicioIds)));
+                $esCompatible = true;
+                if (!empty($serviciosSolicitados)) {
+                    foreach ($serviciosSolicitados as $sidReq) {
+                        if (!in_array($sidReq, $serviciosProf, true)) {
+                            $esCompatible = false;
+                            break;
+                        }
+                    }
+                }
+
+                $item = [
+                    'id' => (int)$prof->id,
+                    'nombre' => (string)$prof->nombre,
+                    'activo' => (int)$prof->activo,
+                    'servicios' => $serviciosProf,
+                    'servicios_nombres' => array_values($prof->serviciosNombres),
+                    'compatible' => $esCompatible,
+                ];
+
+                $profesionales[] = $item;
+                if ($esCompatible) {
+                    $compatibles[] = $item;
+                }
+            }
+
+            return [
+                'status' => self::STATUS_OK,
+                'codigo' => 'profesionales_listados',
+                'httpCode' => 200,
+                'resultado' => true,
+                'servicios_solicitados' => $serviciosSolicitados,
+                'profesionales' => $profesionales,
+                'profesionales_compatibles' => $compatibles,
+            ];
+        } catch (PersistenceException $e) {
+            return [
+                'status' => self::STATUS_ERROR,
+                'codigo' => 'error_persistencia',
+                'httpCode' => 500,
+                'resultado' => false,
+                'profesionales' => [],
+                'profesionales_compatibles' => [],
+                'error' => 'No fue posible consultar el catálogo de profesionales.'
+            ];
+        }
+    }
 }
+

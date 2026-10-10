@@ -1,8 +1,8 @@
 {
-  "timestamp": "2026-10-10T21:02:51.573Z",
+  "timestamp": "2026-10-10T22:00:26.084Z",
   "navegador": "Chrome Headless (Puppeteer-Core)",
-  "citaCreadaId": 1,
-  "citaTemporalEliminadaId": 2,
+  "citaCreadaId": 3,
+  "citaTemporalEliminadaId": 1,
   "fechaReservaEsperada": "2026-10-12",
   "fechaRechazoFinDeSemana": "2026-10-17",
   "testResults": [
@@ -46,7 +46,7 @@
       "id": "PRE-01",
       "name": "Login interactivo de cliente y redirección autorizada a /cita",
       "success": true,
-      "details": "URL: http://localhost:32785/cita"
+      "details": "URL: http://localhost:32787/cita"
     },
     {
       "id": "DISP-01",
@@ -56,39 +56,39 @@
     },
     {
       "id": "REC-01",
-      "name": "Carga asíncrona de /api/servicios reflejando CRUD y alternancia de .seleccionado",
+      "name": "Carga asíncrona de /api/servicios reflejando CRUD, duración de servicios y alternancia accesible de .seleccionado",
       "success": true,
-      "details": "4 servicios renderizados (incluye 'Masaje Capilar Premium'); IDs seleccionados: [1, 4]"
+      "details": "4 servicios renderizados con duración (incluye 'Masaje Capilar Premium' 60 min); IDs seleccionados: [1, 4]"
     },
     {
       "id": "REC-02",
-      "name": "Navegación fluida por paginador y tabs con preservación de estado en cliente",
+      "name": "Navegación fluida por paginador y tabs, filtrado de profesionales compatibles y preservación de estado",
       "success": true,
-      "details": "Paso 1 -> Paso 2 -> Paso 1 -> Paso 2 comprobado; nombre prellenado: 'Carlos Mendoza'; selección preservada."
+      "details": "Paso 1 -> Paso 2 -> Paso 1 -> Paso 2 comprobado; profesional compatible filtrado ('Valeria Castro'); selección preservada."
     },
     {
       "id": "REC-03",
-      "name": "Validación interactiva de restricciones en fecha (no FDS) y horario (10:00-18:00)",
+      "name": "Carga dinámica de intervalos desde GET /api/disponibilidad, estado vacío en sábado e invalidación reactiva al cambiar servicios",
       "success": true,
-      "details": "Fines de semana rechazados con alerta (sábado probado: 2026-10-17); horas no comerciales rechazadas; fecha válida '2026-10-12' y hora '11:30' aceptadas."
-    },
-    {
-      "id": "REC-04",
-      "name": "Renderizado de resumen, envío asíncrono con CSRF, respuesta 200 JSON y alerta SweetAlert2",
-      "success": true,
-      "details": "Resumen validado; POST /api/citas exitoso (id: 1); SweetAlert2 ('Cita Creada') desplegado en pantalla."
+      "details": "Estado vacío en sábado (2026-10-17) verificado; invalidación reactiva de horario/profesional comprobada; intervalo '11:30 - 13:00' (90 min) seleccionado en '2026-10-12'."
     },
     {
       "id": "RES-01",
-      "name": "Reserva con profesional en POST /api/citas, descuento de ocupación en GET /api/disponibilidad, cita contigua y rechazo 409 por solapamiento",
+      "name": "Reserva con profesional en POST /api/citas, descuento de ocupación, rechazo 409 por solapamiento y cancelación desde #mis-citas en UI",
       "success": true,
-      "details": "Cita con profesional ID 2 [10:00, 11:00) creada (60 min desde catálogo); descontada en disponibilidad manteniendo contiguo 11:00-12:00; solape 10:30 rechazado con 409."
+      "details": "Cita ID 1 [10:00, 11:00) creada y descontada; solape 10:30 rechazado con 409; cita 2 [14:00, 15:00) visualizada y cancelada por el cliente en #mis-citas."
+    },
+    {
+      "id": "REC-04",
+      "name": "Renderizado de resumen con profesional, intervalo [11:30, 13:00), duración 90 min y total $195.00, envío con CSRF y SweetAlert2",
+      "success": true,
+      "details": "Resumen completo validado; POST /api/citas exitoso (id: 3, profesionalId: 2, 11:30-13:00, 90 min); SweetAlert2 ('Cita Creada') desplegado."
     },
     {
       "id": "ADMIN-05",
-      "name": "Consulta administrativa por fecha en /admin, eliminación de cita con CSRF en /api/eliminar y liberación de ocupación",
+      "name": "Consulta administrativa por fecha en /admin (profesional, intervalo y snapshot), eliminación en /api/eliminar y liberación de ocupación",
       "success": true,
-      "details": "Citas consultadas en /admin?fecha=2026-10-12; cita temporal ID 2 eliminada y horario 10:00-11:00 liberado; cita principal ID 1 ($195) conservada."
+      "details": "Citas consultadas en /admin?fecha=2026-10-12 con profesional e intervalo; cita temporal ID 1 eliminada liberando 10:00-11:00; cita principal ID 3 ($195, Valeria Castro, 11:30-13:00) conservada."
     },
     {
       "id": "AUTH-01",

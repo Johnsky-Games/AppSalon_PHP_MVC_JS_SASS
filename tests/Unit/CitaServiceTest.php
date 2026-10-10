@@ -249,5 +249,80 @@ class CitaServiceTest extends TestCase
         $this->assertSame(CitaService::STATUS_UNAUTHORIZED, $resNoAuth['status']);
         $this->assertSame(401, $resNoAuth['httpCode']);
     }
+
+    public function testPoliticaExplicitaEnrutaAReservarConProfesionalYEvitaReservasSinProfesionalInadvertidas(): void
+    {
+        $relojFijo = new \DateTimeImmutable('2026-11-18 12:00:00', new \DateTimeZone('America/Guayaquil'));
+        $service = new CitaService(null, null, $relojFijo);
+
+        try {
+            // 1. Clave profesionalId presente pero vacía o nula -> debe exigir profesional (422) y nunca caer al flujo clásico
+            foreach (['profesionalId' => '', 'profesionalId' => null, 'profesional_id' => '', 'profesional' => null] as $clave => $valor) {
+                $datos = [
+                    $clave => $valor,
+                    'fecha' => '2026-11-19',
+                    'hora' => '11:00',
+                    'servicios' => '1'
+                ];
+                $this->assertTrue($service->debeUsarFlujoConProfesional($datos));
+                $res = $service->reservar(1, $datos);
+                $this->assertSame(CitaService::STATUS_INVALID, $res['status']);
+                $this->assertSame(422, $res['httpCode']);
+                $this->assertSame('solicitud_invalida', $res['codigo']);
+            }
+
+            // 2. modo_reserva = 'profesional' o flujo = 'profesional' sin profesionalId -> exige profesional (422)
+            foreach (['modo_reserva' => 'profesional', 'flujo' => 'profesional'] as $campo => $modo) {
+                $datosModo = [
+                    $campo => $modo,
+                    'fecha' => '2026-11-19',
+                    'hora' => '11:00',
+                    'servicios' => '1'
+                ];
+                $this->assertTrue($service->debeUsarFlujoConProfesional($datosModo));
+                $resModo = $service->reservar(1, $datosModo);
+                $this->assertSame(CitaService::STATUS_INVALID, $resModo['status']);
+                $this->assertSame(422, $resModo['httpCode']);
+                $this->assertSame('solicitud_invalida', $resModo['codigo']);
+            }
+
+            // 3. Con exigirProfesional activo globalmente, rechaza solicitudes sin profesional salvo modo_reserva = 'clasico'
+            CitaService::setExigirProfesional(true);
+            $datosSinClave = [
+                'fecha' => '2026-11-19',
+                'hora' => '11:00',
+                'servicios' => '1'
+            ];
+            $this->assertTrue($service->debeUsarFlujoConProfesional($datosSinClave));
+            $resExigido = $service->reservar(1, $datosSinClave);
+            $this->assertSame(CitaService::STATUS_INVALID, $resExigido['status']);
+            $this->assertSame(422, $resExigido['httpCode']);
+
+            $datosClasicoExplicito = [
+                'modo_reserva' => 'clasico',
+                'fecha' => '2026-11-19',
+                'hora' => '11:00',
+                'servicios' => '1'
+            ];
+            $this->assertFalse($service->debeUsarFlujoConProfesional($datosClasicoExplicito));
+        } finally {
+            CitaService::setExigirProfesional(null);
+        }
+    }
+
+    public function testConsultarCitasClienteExigeIdentidadAutenticadaValidaSinLeerSesion(): void
+    {
+        $service = new CitaService();
+        $_SESSION['id'] = 99;
+
+        foreach ([null, '', 0, '0', -5, 'abc', ['1']] as $idInvalido) {
+            $res = $service->consultarCitasCliente($idInvalido);
+            $this->assertSame(CitaService::STATUS_UNAUTHORIZED, $res['status']);
+            $this->assertSame(401, $res['httpCode']);
+            $this->assertFalse($res['resultado']);
+            $this->assertSame([], $res['citas']);
+        }
+    }
 }
+
 

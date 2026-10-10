@@ -164,7 +164,7 @@ try {
         if ($candidate.DayOfWeek -eq [System.DayOfWeek]::Saturday -and $null -eq $proximoSabado) {
             $proximoSabado = $formatted
         }
-        if ($candidate.DayOfWeek -ge [System.DayOfWeek]::Monday -and $candidate.DayOfWeek -le [System.DayOfWeek]::Friday -and $null -eq $diaLaborable) {
+        if ($candidate.DayOfWeek -eq [System.DayOfWeek]::Monday -and $null -eq $diaLaborable) {
             $diaLaborable = $formatted
         }
     }
@@ -216,9 +216,9 @@ try {
     }
     Write-Host " -> Profesional y agenda verificados en BD (id | activo | servicios | horarios | descansos | bloqueos): $profCheck" -ForegroundColor Green
 
-    $querySql = "SELECT c.id, c.fecha, c.hora, c.usuarioId, COUNT(cs.id) AS total_servicios FROM citas c LEFT JOIN citasservicios cs ON c.id = cs.citaId WHERE c.usuarioId = 1 GROUP BY c.id ORDER BY c.id DESC LIMIT 1;"
+    $querySql = "SELECT c.id, c.fecha, c.hora, c.usuarioId, c.profesionalId, c.hora_inicio, c.hora_fin, c.duracion_total_minutos, COUNT(cs.id) AS total_servicios FROM citas c LEFT JOIN citasservicios cs ON c.id = cs.citaId WHERE c.usuarioId = 1 GROUP BY c.id ORDER BY c.id DESC LIMIT 1;"
     $dbOutput = docker exec $DbContainer mysql -uroot -proot -N -e "$querySql" $DbName 2>$null
-    Write-Host " -> Registro de cita en base de datos (id | fecha | hora | usuarioId | servicios): $dbOutput"
+    Write-Host " -> Registro de cita en base de datos (id | fecha | hora | usuarioId | profesionalId | hora_inicio | hora_fin | duracion_total_minutos | servicios): $dbOutput"
 
     if (-not $dbOutput) {
         throw "No se encontró ningún registro de cita persistido en la base de datos para el usuario 1."
@@ -229,13 +229,17 @@ try {
     $citaFecha = $dbCols[1]
     $citaHora = $dbCols[2]
     $citaUsuarioId = $dbCols[3]
-    $citaTotalServicios = $dbCols[4]
+    $citaProfesionalId = $dbCols[4]
+    $citaHoraInicio = $dbCols[5]
+    $citaHoraFin = $dbCols[6]
+    $citaDuracionTotal = $dbCols[7]
+    $citaTotalServicios = $dbCols[8]
 
-    if ($citaUsuarioId -ne "1" -or $citaFecha -ne $diaLaborable -or $citaHora -ne "11:30:00" -or [int]$citaTotalServicios -ne 2) {
-        throw "Inconsistencia en datos persistidos en BD: ID=$citaId, Fecha=$citaFecha (esperada=$diaLaborable), Hora=$citaHora, UsuarioId=$citaUsuarioId, Servicios=$citaTotalServicios"
+    if ($citaUsuarioId -ne "1" -or $citaFecha -ne $diaLaborable -or $citaHora -ne "11:30:00" -or $citaProfesionalId -ne "2" -or $citaHoraInicio -ne "11:30:00" -or $citaHoraFin -ne "13:00:00" -or [int]$citaDuracionTotal -ne 90 -or [int]$citaTotalServicios -ne 2) {
+        throw "Inconsistencia en datos persistidos en BD: ID=$citaId, Fecha=$citaFecha (esperada=$diaLaborable), Hora=$citaHora, UsuarioId=$citaUsuarioId, ProfesionalId=$citaProfesionalId, Intervalo=[$citaHoraInicio, $citaHoraFin), Duracion=$citaDuracionTotal, Servicios=$citaTotalServicios"
     }
 
-    Write-Host " -> Cita ID $citaId verificada: fecha $citaFecha (coincide con fecha calculada compartida $diaLaborable), hora $citaHora, usuario $citaUsuarioId con $citaTotalServicios servicios asociados." -ForegroundColor Green
+    Write-Host " -> Cita ID $citaId verificada: fecha $citaFecha (coincide con fecha calculada compartida $diaLaborable), profesional $citaProfesionalId, intervalo [$citaHoraInicio, $citaHoraFin) ($citaDuracionTotal min), usuario $citaUsuarioId con $citaTotalServicios servicios asociados." -ForegroundColor Green
 
     $testSuccess = $true
     $testExitCode = 0

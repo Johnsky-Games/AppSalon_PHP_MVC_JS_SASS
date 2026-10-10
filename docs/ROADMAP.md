@@ -26,7 +26,7 @@ Cada fase del proyecto se ejecuta bajo la coordinación de tres roles con respon
 | **Fase 3A** | `feature/fase-3a-profesionales-horarios` | `8ad121ea1b02c6ff51e0eb3891207e50bb383218` | **Aprobada** |
 | **Fase 4A** | `feature/fase-4a-disponibilidad` | `939d84dbb9dcec67bc83421eaa5cbdc90389034a` | **Aprobada** |
 | **Fase 4B** | `feature/fase-4b-reservas-concurrencia` | `83e2a24b235a72c2865453ec13ea055d96419700` | **Aprobada (`APROBADO`)** |
-| **Fase 5** | `feature/fase-5-interfaz-reservas` | — | **En Curso** |
+| **Fase 5** | `feature/fase-5-interfaz-reservas` | *(ver HEAD de rama)* | **Implementada — Lista para Auditoría** |
 | **Fase 6A** | `feature/fase-6a-notificaciones` *(prevista)* | — | **Pendiente** |
 | **Fase 6B** | `feature/fase-6b-reportes` *(prevista)* | — | **Pendiente** |
 | **Fase 6C** | `feature/fase-6c-base-pagos` *(prevista)* | — | **Pendiente** |
@@ -39,18 +39,18 @@ Cada fase del proyecto se ejecuta bajo la coordinación de tres roles con respon
 ### Fase 4B — Cerrada con Veredicto `APROBADO` (`83e2a24b235a72c2865453ec13ea055d96419700`)
 - Verificada en checkout separado (`auditing_fase_4b_reservas`) con `PHPUnit 10.5.66` (`137 tests, 1399 assertions`, exit `0`) y suite E2E en navegador (`RUN_ID: b9819badc55b4a2588a4db444a3f4b1c`, 16 comprobaciones `[OK]`, exit `0`). Ver detalle en `docs/AUDITORIA.md`.
 
-### Fase 5 — Interfaz de Reservas y Panel Administrativo
-- Selección de servicios y profesionales compatibles en el flujo de reservas.
-- Calendario y horarios disponibles obtenidos dinámicamente del backend (`GET /api/disponibilidad`).
-- Resumen completo con profesional, hora de inicio, hora de fin, duración total y precio total.
-- Actualización reactiva al cambiar servicios, profesional o fecha, invalidando selecciones obsoletas.
-- Estados visuales de carga, error y disponibilidad vacía.
-- Gestión de conflictos HTTP `409` y prevención de envíos duplicados.
-- Consulta y cancelación autorizada de citas por parte del cliente.
-- Panel administrativo con profesional asignado, intervalo horario (`hora_inicio` - `hora_fin`) y datos históricos de servicios, identificando citas antiguas sin inventar información.
-- Diseño móvil accesible, navegación por teclado y etiquetas asociadas.
-- Coherencia de fechas y horarios en `America/Guayaquil`.
-- Documentación y pruebas de la política del endpoint clásico para evitar reservas sin profesional inadvertidas en el nuevo flujo.
+### Fase 5 — Interfaz de Reservas y Panel Administrativo (Implementada y Verificada en Docker Aislado)
+- Selección de servicios con duración visible (`duracion_minutos min`) y filtrado dinámico de profesionales activos compatibles (`GET /api/profesionales`).
+- Calendario con fecha mínima calculada en `America/Guayaquil` y horarios disponibles obtenidos dinámicamente (`GET /api/disponibilidad`).
+- Resumen completo con profesional, intervalo `[hora_inicio, hora_fin)`, duración total y precio total.
+- Actualización reactiva al cambiar servicios, profesional o fecha, invalidando selecciones obsoletas y descartando respuestas asíncronas desfasadas (`disponibilidadRequestId`).
+- Estados visuales de carga, error y disponibilidad vacía (`status === 'empty'`).
+- Gestión de conflictos HTTP `409` con recarga automática de intervalos y prevención de envíos duplicados (`enviandoReserva`).
+- Consulta (`GET /api/mis-citas`) y cancelación autorizada (`POST /api/eliminar` con soporte JSON y CSRF) de citas por parte del cliente en `#mis-citas`.
+- Panel administrativo (`/admin`) con profesional asignado, intervalo horario (`hora_inicio - hora_fin`) y snapshot histórico de servicios, identificando explícitamente citas antiguas (`Sin profesional asignado (cita histórica)`) sin inventar información.
+- Diseño móvil accesible, navegación por teclado (`role="button"`, `role="radio"`, `:focus-visible`) y etiquetas asociadas.
+- Política explícita anti-bypass del endpoint clásico en `CitaService` (`modo_reserva = 'profesional'`, presencia de clave `profesionalId` y flag configurable `RESERVA_EXIGIR_PROFESIONAL`).
+- Verificada con `PHPUnit 10.5.66` (`OK (143 tests, 1512 assertions)`, exit `0`) y suite E2E en navegador (`tests/verificar_navegador.ps1`, 15 comprobaciones `[OK]`, `0` errores de consola, `0` peticiones fallidas, exit `0`).
 
 ### Fase 6A — Notificaciones
 - Correos transaccionales de confirmación y cancelación de citas.

@@ -1,3 +1,5 @@
+@use 'base/variables' as v;
+
 .seccion {
     padding: 5rem 0;
     display: none;
@@ -14,3 +16,81 @@
 .ocultar {
     display: none;
 }
+
+.campo-horarios {
+    align-items: flex-start;
+
+    .horarios-contenedor {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 1.2rem;
+    }
+}
+
+.estado-profesionales,
+.estado-disponibilidad {
+    padding: 1.2rem 1.5rem;
+    border-radius: 0.8rem;
+    font-size: 1.6rem;
+    margin: 0 0 1.5rem;
+    background-color: rgba(255, 255, 255, 0.08);
+    color: v.$blanco;
+
+    &.estado-loading {
+        border-left: 4px solid v.$azul;
+    }
+
+    &.estado-empty {
+        border-left: 4px solid #f0ad4e;
+    }
+
+    &.estado-error {
+        background-color: rgba(203, 0, 0, 0.25);
+        border-left: 4px solid v.$rojo;
+    }
+}
+
+.intervalos-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+    gap: 1rem;
+}
+
+.intervalo-btn {
+    background-color: v.$blanco;
+    color: v.$negro;
+    border: 2px solid transparent;
+    border-radius: 0.8rem;
+    padding: 1rem 1.2rem;
+    font-size: 1.6rem;
+    font-weight: v.$bold;
+    cursor: pointer;
+    transition: background-color 0.2s ease, color 0.2s ease, transform 0.15s ease;
+
+    &:hover {
+        border-color: v.$azul;
+        transform: translateY(-1px);
+    }
+
+    &:focus-visible {
+        outline: 3px solid v.$azul;
+        outline-offset: 2px;
+    }
+
+    &.seleccionado {
+        background-color: v.$azul;
+        color: v.$blanco;
+        border-color: v.$blanco;
+    }
+}
+
+.mis-citas-seccion {
+    margin-top: 4rem;
+    padding-top: 3rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.2);
+
+    .btn-cancelar-cita {
+        margin: 1.5rem 0 0;
+    }
+}

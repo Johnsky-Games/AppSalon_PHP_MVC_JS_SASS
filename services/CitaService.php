@@ -35,6 +35,8 @@ class CitaService
     private CitaRepository $citaRepository;
     private ServicioRepository $servicioRepository;
     private ?\DateTimeImmutable $ahoraReferencia;
+    private static ?bool $exigirProfesionalGlobal = null;
+    private ?bool $exigirProfesionalInstancia = null;
 
     public function __construct(
         ?CitaRepository $citaRepository = null,
@@ -45,6 +47,22 @@ class CitaService
         // Compartir la misma conexión del repositorio de citas cuando no se inyecta ServicioRepository aparte
         $this->servicioRepository = $servicioRepository ?? new ServicioRepository($this->citaRepository->getDb());
         $this->ahoraReferencia = $ahoraReferencia;
+    }
+
+    /**
+     * Configura globalmente si las reservas en `reservar()` exigen profesional salvo que se indique explícitamente `modo_reserva = 'clasico'`.
+     */
+    public static function setExigirProfesional(?bool $exigir): void
+    {
+        self::$exigirProfesionalGlobal = $exigir;
+    }
+
+    /**
+     * Configura en esta instancia si `reservar()` exige profesional.
+     */
+    public function setExigirProfesionalInstancia(?bool $exigir): void
+    {
+        $this->exigirProfesionalInstancia = $exigir;
     }
 
     /**
@@ -203,12 +221,14 @@ class CitaService
     }
 
     /**
-     * Determina si la solicitud incluye especificación de profesional (`profesionalId`, `profesional_id` o `profesional`).
+     * Determina si la solicitud incluye cualquiera de las claves de profesional (`profesionalId`, `profesional_id` o `profesional`),
+     * incluso si su valor es vacío (`""`) o `null`, para impedir que una reserva del flujo nuevo caiga accidentalmente
+     * en el flujo clásico sin profesional.
      */
     private function contieneParametroProfesional(array $datos): bool
     {
         foreach (['profesionalId', 'profesional_id', 'profesional'] as $clave) {
-            if (array_key_exists($clave, $datos) && $datos[$clave] !== null) {
+            if (array_key_exists($clave, $datos)) {
                 return true;
             }
         }
@@ -216,10 +236,52 @@ class CitaService
     }
 
     /**
+     * Evalúa la política explícita del endpoint `POST /api/citas`:
+     * - Si incluye `profesionalId` / `profesional_id` / `profesional` (incluso vacío o nulo) -> flujo con profesional.
+     * - Si incluye `modo_reserva = 'profesional'` o `flujo = 'profesional'` -> flujo con profesional.
+     * - Si incluye explícitamente `modo_reserva = 'clasico'` (sin clave de profesional) -> flujo clásico heredado.
+     * - Si está activo `setExigirProfesional(true)` o `RESERVA_EXIGIR_PROFESIONAL=1` -> flujo con profesional.
+     */
+    public function debeUsarFlujoConProfesional(array $datos): bool
+    {
+        if ($this->contieneParametroProfesional($datos)) {
+            return true;
+        }
+
+        $modoRaw = $datos['modo_reserva'] ?? ($datos['flujo'] ?? null);
+        $modo = is_string($modoRaw) ? strtolower(trim($modoRaw)) : '';
+
+        if ($modo === 'profesional') {
+            return true;
+        }
+
+        if ($modo === 'clasico' || $modo === 'legacy') {
+            return false;
+        }
+
+        if ($this->exigirProfesionalInstancia !== null) {
+            return $this->exigirProfesionalInstancia;
+        }
+
+        if (self::$exigirProfesionalGlobal !== null) {
+            return self::$exigirProfesionalGlobal;
+        }
+
+        $envExigir = getenv('RESERVA_EXIGIR_PROFESIONAL');
+        if ($envExigir === false && isset($_ENV['RESERVA_EXIGIR_PROFESIONAL'])) {
+            $envExigir = (string)$_ENV['RESERVA_EXIGIR_PROFESIONAL'];
+        }
+        if (is_string($envExigir) && in_array(strtolower(trim($envExigir)), ['1', 'true', 'yes', 'on'], true)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
      * Valida y ejecuta la creación de una nueva reserva.
-     * Si la solicitud incluye `profesionalId` (o `profesional_id` / `profesional`), delega a
-     * `reservarConProfesional()` aplicando revalidación transaccional de agenda, bloqueos y ocupación real.
-     * Si no incluye profesional, mantiene el flujo clásico compatible con el frontend actual.
+     * Aplica la política explícita de `debeUsarFlujoConProfesional()` para evitar reservas sin profesional
+     * inadvertidas en el nuevo flujo, manteniendo compatibilidad con pruebas heredadas del flujo clásico.
      *
      * @param mixed $usuarioIdAutenticado Identificador del usuario autenticado provisto por el controlador.
      * @param array $datos Datos de la solicitud. Ignora cualquier `usuarioId`, `id`, duraciones, precios o `hora_fin` enviados por el cliente.
@@ -227,7 +289,7 @@ class CitaService
      */
     public function reservar($usuarioIdAutenticado, array $datos): array
     {
-        if ($this->contieneParametroProfesional($datos)) {
+        if ($this->debeUsarFlujoConProfesional($datos)) {
             return $this->reservarConProfesional($usuarioIdAutenticado, $datos);
         }
 
@@ -704,4 +766,60 @@ class CitaService
             ];
         }
     }
+
+    /**
+     * Consulta las citas registradas del cliente autenticado (tomando siempre `$usuarioIdAutenticado` de sesión),
+     * incluyendo profesional asignado (o indicación explícita de cita histórica sin profesional),
+     * intervalo `[hora_inicio, hora_fin)`, duración total, snapshot histórico de servicios, total
+     * e indicador `puede_cancelar` evaluado en `America/Guayaquil`.
+     *
+     * @param mixed $usuarioIdAutenticado
+     * @return array<string, mixed>
+     */
+    public function consultarCitasCliente($usuarioIdAutenticado): array
+    {
+        $usuarioId = $this->validarId($usuarioIdAutenticado);
+        if ($usuarioId === null) {
+            return [
+                'status' => self::STATUS_UNAUTHORIZED,
+                'codigo' => 'no_autenticado',
+                'httpCode' => 401,
+                'resultado' => false,
+                'citas' => [],
+                'error' => 'No autenticado'
+            ];
+        }
+
+        $fechaHoy = $this->obtenerAhora()->format('Y-m-d');
+
+        try {
+            $citasRaw = $this->citaRepository->findCitasClienteByUsuarioId($usuarioId);
+            $citas = [];
+            foreach ($citasRaw as $c) {
+                $esFutura = ((string)$c['fecha'] > $fechaHoy);
+                $puedeCancelar = ((string)$c['fecha'] >= $fechaHoy);
+                $c['es_futura'] = $esFutura;
+                $c['puede_cancelar'] = $puedeCancelar;
+                $citas[] = $c;
+            }
+
+            return [
+                'status' => self::STATUS_OK,
+                'codigo' => 'citas_cliente_listadas',
+                'httpCode' => 200,
+                'resultado' => true,
+                'citas' => $citas,
+            ];
+        } catch (PersistenceException $e) {
+            return [
+                'status' => self::STATUS_ERROR,
+                'codigo' => 'error_persistencia',
+                'httpCode' => 500,
+                'resultado' => false,
+                'citas' => [],
+                'error' => 'No fue posible consultar tus citas en este momento.'
+            ];
+        }
+    }
 }
+

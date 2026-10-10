@@ -516,6 +516,50 @@ async function runBrowserTests() {
         recordTest('PROF-02', 'Carga de múltiples franjas del mismo día, guardado sin cambios verificado en MySQL y retirada explícita de franja individual', true,
             'Martes 08:00-12:00 y 14:00-18:00 preservados en MySQL al guardar sin cambios; retirada explícita eliminó solo 08:00-12:00 conservando 14:00-18:00.');
 
+        // Crear segunda profesional activa ("Valeria Castro") habilitada para Servicio 1 y "Masaje Capilar Premium" (Servicio 4)
+        // con horario Lunes 09:00-18:00 para probar filtrado de compatibilidad y reserva completa desde la UI en Fase 5
+        await page.goto(`${BASE_URL}/profesionales/crear`, { waitUntil: 'networkidle0' });
+        await page.type('#nombre', 'Valeria Castro');
+        await page.evaluate(() => {
+            const labels = Array.from(document.querySelectorAll('.servicios-asignables label, form.formulario label'));
+            const checks = Array.from(document.querySelectorAll('input[name="servicios[]"]'));
+            if (checks.length >= 1) {
+                checks[0].checked = true; // Corte de Cabello Hombre (30 min)
+            }
+            const checkPremium = checks.find(c => {
+                const parentText = (c.closest('.campo-check, label, div')?.textContent || '');
+                return parentText.includes('Masaje Capilar Premium');
+            }) || checks[checks.length - 1];
+            if (checkPremium) {
+                checkPremium.checked = true; // Masaje Capilar Premium (60 min)
+            }
+        });
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('form.formulario input[type="submit"]')
+        ]);
+
+        const hrefHorariosValeria = await page.evaluate(() => {
+            const items = Array.from(document.querySelectorAll('ul.profesionales-lista li'));
+            const target = items.find(li => li.textContent.includes('Valeria Castro'));
+            const link = target ? target.querySelector('a[href*="/profesionales/horarios"]') : null;
+            return link ? link.getAttribute('href') : null;
+        });
+        if (!hrefHorariosValeria) {
+            throw new Error('No se encontró enlace de horarios para la profesional Valeria Castro.');
+        }
+
+        await page.goto(`${BASE_URL}${hrefHorariosValeria}`, { waitUntil: 'networkidle0' });
+        await page.evaluate(() => {
+            document.querySelector('#horario_activo_1').checked = true;
+            document.querySelector('#horario_inicio_1').value = '09:00';
+            document.querySelector('#horario_fin_1').value = '18:00';
+        });
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('#form-horarios-semanales input[type="submit"]')
+        ]);
+
         // Cerrar sesión de administrador mediante POST /logout
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'networkidle0' }),
@@ -615,9 +659,9 @@ async function runBrowserTests() {
             `Duración catálogo 60 min respetada (${paresDispOk.length} intervalos en ${validDate}); incompatibilidad 422 y disponibilidad vacía 200 verificadas.`);
 
         // ------------------------------------------------------------------
-        // RECORRIDO 1: Carga de Servicios, Selección y Deselección Visual
+        // RECORRIDO 1: Carga de Servicios, Duración, Accesibilidad y Selección Visual
         // ------------------------------------------------------------------
-        console.log('\n>>> [RECORRIDO 1] Carga de servicios desde /api/servicios (incluyendo cambios CRUD), selección y deselección visual...');
+        console.log('\n>>> [RECORRIDO 1] Carga de servicios desde /api/servicios (con duración y accesibilidad), selección y deselección...');
 
         await page.waitForSelector('#servicios .servicio', { timeout: 5000 });
         const serviciosCards = await page.$$('#servicios .servicio');
@@ -627,21 +671,26 @@ async function runBrowserTests() {
             throw new Error(`Se esperaban exactamente 4 servicios en el catálogo de reserva tras el CRUD administrativo, encontrados: ${cantidadServicios}`);
         }
 
-        const nombresEnReserva = await page.$$eval('#servicios .servicio .nombre-servicio', els => els.map(e => e.textContent.trim()));
-        if (!nombresEnReserva.includes('Masaje Capilar Premium') || nombresEnReserva.includes('Servicio Temporal Borrar')) {
-            throw new Error(`El catálogo en /cita no refleja el estado actualizado por el CRUD: ${JSON.stringify(nombresEnReserva)}`);
+        const detallesTarjetas = await page.$$eval('#servicios .servicio', els => els.map(e => ({
+            nombre: e.querySelector('.nombre-servicio')?.textContent.trim(),
+            duracion: e.querySelector('.duracion-servicio')?.textContent.trim(),
+            role: e.getAttribute('role'),
+            tabindex: e.getAttribute('tabindex')
+        })));
+        const tarjetaPremium = detallesTarjetas.find(t => t.nombre === 'Masaje Capilar Premium');
+        if (!tarjetaPremium || tarjetaPremium.duracion !== '60 min' || tarjetaPremium.role !== 'button' || tarjetaPremium.tabindex !== '0') {
+            throw new Error(`El catálogo en /cita no muestra duración y atributos accesibles esperados: ${JSON.stringify(detallesTarjetas)}`);
         }
 
-        // Obtener datos del primer servicio y del servicio creado/actualizado en el CRUD
         const primerServicio = serviciosCards[0];
         const servicioId1 = await primerServicio.evaluate(el => el.dataset.idServicio);
         const servicioNombre1 = await primerServicio.evaluate(el => el.querySelector('.nombre-servicio')?.textContent);
 
         // 1.1 Clic para seleccionar el servicio 1
         await primerServicio.click();
-        const tieneClaseSeleccionado1 = await primerServicio.evaluate(el => el.classList.contains('seleccionado'));
+        const tieneClaseSeleccionado1 = await primerServicio.evaluate(el => el.classList.contains('seleccionado') && el.getAttribute('aria-pressed') === 'true');
         if (!tieneClaseSeleccionado1) {
-            throw new Error(`El servicio ${servicioNombre1} (ID ${servicioId1}) no recibió la clase .seleccionado al hacer clic.`);
+            throw new Error(`El servicio ${servicioNombre1} (ID ${servicioId1}) no recibió .seleccionado y aria-pressed="true".`);
         }
 
         // 1.2 Clic para deseleccionar el servicio 1
@@ -651,7 +700,7 @@ async function runBrowserTests() {
             throw new Error(`El servicio ${servicioNombre1} no removió la clase .seleccionado tras un segundo clic.`);
         }
 
-        // 1.3 Volver a seleccionar servicio 1 y seleccionar también el cuarto servicio ("Masaje Capilar Premium")
+        // 1.3 Volver a seleccionar servicio 1 y seleccionar también el cuarto servicio ("Masaje Capilar Premium", 60 min)
         await primerServicio.click();
         const cuartoServicio = serviciosCards[3];
         const servicioId4 = await cuartoServicio.evaluate(el => el.dataset.idServicio);
@@ -664,13 +713,13 @@ async function runBrowserTests() {
             throw new Error('Fallo al seleccionar múltiples servicios en el DOM.');
         }
 
-        recordTest('REC-01', 'Carga asíncrona de /api/servicios reflejando CRUD y alternancia de .seleccionado', true,
-            `${cantidadServicios} servicios renderizados (incluye 'Masaje Capilar Premium'); IDs seleccionados: [${servicioId1}, ${servicioId4}]`);
+        recordTest('REC-01', 'Carga asíncrona de /api/servicios reflejando CRUD, duración de servicios y alternancia accesible de .seleccionado', true,
+            `${cantidadServicios} servicios renderizados con duración (incluye 'Masaje Capilar Premium' 60 min); IDs seleccionados: [${servicioId1}, ${servicioId4}]`);
 
         // ------------------------------------------------------------------
-        // RECORRIDO 2: Navegación entre los Tres Pasos y Conservación de Estado
+        // RECORRIDO 2: Navegación entre Pasos, Profesionales Compatibles y Conservación de Estado
         // ------------------------------------------------------------------
-        console.log('\n>>> [RECORRIDO 2] Navegación entre pasos 1, 2 y 3 con conservación de datos...');
+        console.log('\n>>> [RECORRIDO 2] Navegación entre pasos 1, 2 y 3, filtrado de profesionales compatibles y conservación de datos...');
 
         const paso1Visible = await page.$eval('#paso-1', el => el.classList.contains('mostrar'));
         const tab1Activo = await page.$eval('.tabs button[data-paso="1"]', el => el.classList.contains('actual'));
@@ -683,15 +732,15 @@ async function runBrowserTests() {
         await page.click('#siguiente');
         await page.waitForFunction(() => document.querySelector('#paso-2.mostrar') !== null);
 
-        const paso2Visible = await page.$eval('#paso-2', el => el.classList.contains('mostrar'));
-        const tab2Activo = await page.$eval('.tabs button[data-paso="2"]', el => el.classList.contains('actual'));
-        if (!paso2Visible || !tab2Activo) {
-            throw new Error('Fallo al navegar a Paso 2 con botón #siguiente.');
-        }
-
         const nombrePrellenado = await page.$eval('#nombre', el => el.value);
         if (!nombrePrellenado || !nombrePrellenado.toLowerCase().includes('carlos')) {
             throw new Error(`Nombre de cliente no prellenado en Paso 2: '${nombrePrellenado}'`);
+        }
+
+        // Verificar que con [Servicio 1, Masaje Capilar Premium] solo aparece "Valeria Castro" como compatible (Sofía Andrade no realiza Masaje Capilar Premium)
+        const opcionesProfCompatibles = await page.$$eval('#profesional option', opts => opts.map(o => o.textContent.trim()).filter(t => !t.startsWith('--')));
+        if (!opcionesProfCompatibles.includes('Valeria Castro') || opcionesProfCompatibles.includes('Sofía Andrade')) {
+            throw new Error(`El selector #profesional no filtró correctamente por compatibilidad de servicios: ${JSON.stringify(opcionesProfCompatibles)}`);
         }
 
         await page.click('#anterior');
@@ -707,14 +756,15 @@ async function runBrowserTests() {
         await page.click('.tabs button[data-paso="2"]');
         await page.waitForFunction(() => document.querySelector('#paso-2.mostrar') !== null);
 
-        recordTest('REC-02', 'Navegación fluida por paginador y tabs con preservación de estado en cliente', true,
-            `Paso 1 -> Paso 2 -> Paso 1 -> Paso 2 comprobado; nombre prellenado: '${nombrePrellenado}'; selección preservada.`);
+        recordTest('REC-02', 'Navegación fluida por paginador y tabs, filtrado de profesionales compatibles y preservación de estado', true,
+            `Paso 1 -> Paso 2 -> Paso 1 -> Paso 2 comprobado; profesional compatible filtrado ('Valeria Castro'); selección preservada.`);
 
         // ------------------------------------------------------------------
-        // RECORRIDO 3: Validación Interactiva de Fecha y Horario en Cliente
+        // RECORRIDO 3: Selección de Profesional, Disponibilidad Dinámica, Estado Vacío e Invalidación Reactiva
         // ------------------------------------------------------------------
-        console.log('\n>>> [RECORRIDO 3] Validación interactiva de fecha y horario en cliente...');
+        console.log('\n>>> [RECORRIDO 3] Selección de profesional, carga dinámica de horarios, disponibilidad vacía e invalidación reactiva...');
 
+        // 3.1 Sin profesional seleccionado, intentar sábado rechaza fin de semana
         await page.evaluate((sabado) => {
             const fechaInput = document.querySelector('#fecha');
             fechaInput.value = sabado;
@@ -723,107 +773,88 @@ async function runBrowserTests() {
 
         await page.waitForSelector('.formulario .alerta.error', { timeout: 3000 });
         const textoAlertaFDS = await page.$eval('.formulario .alerta.error', el => el.textContent);
-        const fechaLimpiadaFDS = await page.$eval('#fecha', el => el.value);
-
         if (!textoAlertaFDS.includes('fin de semana')) {
             throw new Error(`Texto de alerta inesperado ante fin de semana: '${textoAlertaFDS}'`);
         }
-        if (fechaLimpiadaFDS !== '') {
-            throw new Error(`El campo de fecha no se limpió ante fin de semana, valor: '${fechaLimpiadaFDS}'`);
+
+        // 3.2 Seleccionar profesional compatible ("Valeria Castro", id="2")
+        await page.select('#profesional', '2');
+
+        // 3.3 Seleccionar sábado con profesional seleccionado -> consulta GET /api/disponibilidad y muestra estado vacío (empty)
+        await Promise.all([
+            page.waitForResponse(res => res.url().includes('/api/disponibilidad') && res.url().includes(weekendDate)),
+            page.evaluate((sabado) => {
+                const fechaInput = document.querySelector('#fecha');
+                fechaInput.value = sabado;
+                fechaInput.dispatchEvent(new Event('input', { bubbles: true }));
+            }, weekendDate)
+        ]);
+        await page.waitForFunction(() => document.querySelector('#estado-disponibilidad')?.dataset.estado === 'empty', { timeout: 5000 });
+        const botonesEnSabado = await page.$$('#contenedor-horarios-disponibles .intervalo-btn');
+        if (botonesEnSabado.length !== 0) {
+            throw new Error(`No debían renderizarse intervalos en sábado sin turnos, encontrados: ${botonesEnSabado.length}`);
         }
 
-        await page.evaluate(() => {
-            const horaInput = document.querySelector('#hora');
-            horaInput.value = '08:30';
-            horaInput.dispatchEvent(new Event('input', { bubbles: true }));
-        });
+        // 3.4 Seleccionar fecha laborable válida (Lunes) -> carga dinámica de intervalos de 90 min desde GET /api/disponibilidad
+        await Promise.all([
+            page.waitForResponse(res => res.url().includes('/api/disponibilidad') && res.url().includes(validDate)),
+            page.evaluate((laborable) => {
+                const fechaInput = document.querySelector('#fecha');
+                fechaInput.value = laborable;
+                fechaInput.dispatchEvent(new Event('input', { bubbles: true }));
+            }, validDate)
+        ]);
+        await page.waitForSelector('#contenedor-horarios-disponibles .intervalo-btn[data-inicio="11:30"]', { timeout: 5000 });
 
-        await page.waitForSelector('.formulario .alerta.error', { timeout: 3000 });
-        const textoAlertaHora = await page.$eval('.formulario .alerta.error', el => el.textContent);
-        const horaLimpiada = await page.$eval('#hora', el => el.value);
-
-        if (!textoAlertaHora.includes('10:00 a 18:00')) {
-            throw new Error(`Texto de alerta inesperado ante hora fuera de rango: '${textoAlertaHora}'`);
+        // Seleccionar primero 10:00 - 11:30 y comprobar que al cambiar servicios en Paso 1 se invalida reactivamente
+        await page.click('#contenedor-horarios-disponibles .intervalo-btn[data-inicio="10:00"]');
+        const horaAntesDeInvalidar = await page.$eval('#hora', el => el.value);
+        if (horaAntesDeInvalidar !== '10:00') {
+            throw new Error(`El botón de intervalo 10:00 no sincronizó #hora, valor actual: '${horaAntesDeInvalidar}'`);
         }
-        if (horaLimpiada !== '') {
-            throw new Error(`El campo de hora no se limpió ante horario inválido, valor: '${horaLimpiada}'`);
+
+        // Ir a Paso 1 y agregar Servicio 3 ("Corte de Barba", que ningún profesional realiza junto con 1 y 4) -> invalida profesional y horario
+        await page.click('.tabs button[data-paso="1"]');
+        const tercerServicio = serviciosCards[2];
+        await tercerServicio.click();
+        await page.click('.tabs button[data-paso="2"]');
+
+        const estadoIncompUI = await page.$eval('#estado-profesionales', el => el.textContent.trim());
+        const horaTrasInvalidar = await page.$eval('#hora', el => el.value);
+        if (!estadoIncompUI.includes('Ningún profesional activo') || horaTrasInvalidar !== '') {
+            throw new Error(`Fallo en invalidación reactiva al elegir combinación sin profesional compatible: estado='${estadoIncompUI}', hora='${horaTrasInvalidar}'`);
         }
 
-        await page.evaluate((laborable) => {
-            const fechaInput = document.querySelector('#fecha');
-            fechaInput.value = laborable;
-            fechaInput.dispatchEvent(new Event('input', { bubbles: true }));
+        // Quitar Servicio 3 en Paso 1, volver a Paso 2, re-seleccionar a Valeria Castro y elegir el intervalo 11:30 - 13:00
+        await page.click('.tabs button[data-paso="1"]');
+        await tercerServicio.click();
+        await page.click('.tabs button[data-paso="2"]');
 
-            const horaInput = document.querySelector('#hora');
-            horaInput.value = '11:30';
-            horaInput.dispatchEvent(new Event('input', { bubbles: true }));
-        }, validDate);
+        await Promise.all([
+            page.waitForResponse(res => res.url().includes('/api/disponibilidad') && res.url().includes('profesionalId=2')),
+            page.select('#profesional', '2')
+        ]);
+        await page.waitForSelector('#contenedor-horarios-disponibles .intervalo-btn[data-inicio="11:30"]', { timeout: 5000 });
+        await page.click('#contenedor-horarios-disponibles .intervalo-btn[data-inicio="11:30"]');
 
         const fechaFinalValida = await page.$eval('#fecha', el => el.value);
         const horaFinalValida = await page.$eval('#hora', el => el.value);
 
         if (fechaFinalValida !== validDate || horaFinalValida !== '11:30') {
-            throw new Error(`Valores válidos no retenidos en inputs: fecha='${fechaFinalValida}' (esperada='${validDate}'), hora='${horaFinalValida}'`);
+            throw new Error(`Valores válidos no retenidos: fecha='${fechaFinalValida}' (esperada='${validDate}'), hora='${horaFinalValida}'`);
         }
 
-        recordTest('REC-03', 'Validación interactiva de restricciones en fecha (no FDS) y horario (10:00-18:00)', true,
-            `Fines de semana rechazados con alerta (sábado probado: ${weekendDate}); horas no comerciales rechazadas; fecha válida '${validDate}' y hora '11:30' aceptadas.`);
+        recordTest('REC-03', 'Carga dinámica de intervalos desde GET /api/disponibilidad, estado vacío en sábado e invalidación reactiva al cambiar servicios', true,
+            `Estado vacío en sábado (${weekendDate}) verificado; invalidación reactiva de horario/profesional comprobada; intervalo '11:30 - 13:00' (90 min) seleccionado en '${validDate}'.`);
 
         // ------------------------------------------------------------------
-        // RECORRIDO 4: Resumen, Envío Real vía Fetch y Alerta SweetAlert2
+        // FASE 4B / FASE 5 - RESERVA CON PROFESIONAL, CONFLICTO 409 EN UI Y MIS CITAS (RES-01)
         // ------------------------------------------------------------------
-        console.log('\n>>> [RECORRIDO 4] Resumen de reserva, envío real vía fetch POST y SweetAlert2...');
-
-        await page.click('#siguiente');
-        await page.waitForFunction(() => document.querySelector('#paso-3.mostrar') !== null);
-
-        const headingServicios = await page.$eval('.contenido-resumen h3', el => el.textContent);
-        if (!headingServicios.includes('Resumen de Servicios')) {
-            throw new Error(`Encabezado de servicios en resumen no encontrado: '${headingServicios}'`);
-        }
-
-        const serviciosEnResumen = await page.$$('.contenido-resumen .contenedor-servicio');
-        if (serviciosEnResumen.length !== 2) {
-            throw new Error(`Se esperaban 2 servicios en el resumen, encontrados: ${serviciosEnResumen.length}`);
-        }
-
-        const botonReservar = await page.$('.contenido-resumen button.boton');
-        if (!botonReservar) {
-            throw new Error('Botón "Reservar Cita" no encontrado en el DOM del resumen.');
-        }
-
-        const [apiResponse] = await Promise.all([
-            page.waitForResponse(response => response.url().includes('/api/citas') && response.request().method() === 'POST'),
-            botonReservar.click()
-        ]);
-
-        const apiStatus = apiResponse.status();
-        const apiJson = await apiResponse.json();
-
-        if (apiStatus !== 200 || !apiJson.resultado) {
-            throw new Error(`Respuesta de API de reserva no exitosa: HTTP ${apiStatus}, cuerpo: ${JSON.stringify(apiJson)}`);
-        }
-
-        const citaIdCreada = apiJson.id || (apiJson.resultado && apiJson.resultado.id);
-
-        await page.waitForSelector('.swal2-popup', { timeout: 5000 });
-        const swalTitle = await page.$eval('.swal2-title', el => el.textContent);
-        const swalIcon = await page.$eval('.swal2-icon.swal2-success', el => el !== null);
-
-        if (!swalTitle.includes('Cita Creada') || !swalIcon) {
-            throw new Error(`Modal SweetAlert2 inesperado: título='${swalTitle}', iconoExito=${swalIcon}`);
-        }
-
-        recordTest('REC-04', 'Renderizado de resumen, envío asíncrono con CSRF, respuesta 200 JSON y alerta SweetAlert2', true,
-            `Resumen validado; POST /api/citas exitoso (id: ${citaIdCreada}); SweetAlert2 ('${swalTitle}') desplegado en pantalla.`);
-
-        // ------------------------------------------------------------------
-        // FASE 4B - RESERVA CON PROFESIONAL, OCUPACIÓN REAL Y CONFLICTO 409 (RES-01)
-        // ------------------------------------------------------------------
-        console.log('\n>>> [FASE 4B - RESERVAS CON PROFESIONAL] Reserva con profesional, descuento en GET /api/disponibilidad y rechazo 409 por solapamiento...');
+        console.log('\n>>> [FASE 4B / FASE 5] Reserva con profesional, manejo de conflicto 409, descuento de ocupación y cancelación por el cliente...');
         const csrfTokenCliente = await page.$eval('#csrf_token', el => el.value);
         const tempCitaRes = await page.evaluate(async ({ fecha, csrf }) => {
             const fd = new FormData();
+            fd.append('modo_reserva', 'profesional');
             fd.append('profesionalId', '1');
             fd.append('fecha', fecha);
             fd.append('hora', '10:00');
@@ -879,6 +910,7 @@ async function runBrowserTests() {
         const cookiesCliente = await page.cookies();
         const cookieHeaderCliente = cookiesCliente.map(c => `${c.name}=${c.value}`).join('; ');
         const paramsConflicto = new URLSearchParams({
+            modo_reserva: 'profesional',
             profesionalId: '1',
             fecha: validDate,
             hora: '10:30',
@@ -905,8 +937,99 @@ async function runBrowserTests() {
             throw new Error(`Se esperaba HTTP 409 conflicto_ocupacion al solapar reserva en 10:30, obtenido (${conflictoStatus}): ${JSON.stringify(conflictoBody)}`);
         }
 
-        recordTest('RES-01', 'Reserva con profesional en POST /api/citas, descuento de ocupación en GET /api/disponibilidad, cita contigua y rechazo 409 por solapamiento', true,
-            `Cita con profesional ID ${citaTemporalId} [10:00, 11:00) creada (60 min desde catálogo); descontada en disponibilidad manteniendo contiguo 11:00-12:00; solape 10:30 rechazado con 409.`);
+        // Crear una segunda cita temporal del cliente (14:00-15:00 en Sofía Andrade) y cancelarla desde la sección #mis-citas de la UI
+        const citaCancelarClienteId = await page.evaluate(async ({ fecha, csrf }) => {
+            const fd = new FormData();
+            fd.append('modo_reserva', 'profesional');
+            fd.append('profesionalId', '1');
+            fd.append('fecha', fecha);
+            fd.append('hora', '14:00');
+            fd.append('servicios', '1,2');
+            fd.append('csrf_token', csrf);
+            const r = await fetch('/api/citas', {
+                method: 'POST',
+                headers: { 'X-CSRF-TOKEN': csrf, 'Accept': 'application/json' },
+                body: fd
+            });
+            const j = await r.json();
+            await cargarMisCitas();
+            return j.id;
+        }, { fecha: validDate, csrf: csrfTokenCliente });
+
+        await page.waitForSelector(`#listado-mis-citas .btn-cancelar-cita[data-cita-id="${citaCancelarClienteId}"]`, { timeout: 5000 });
+        await Promise.all([
+            page.waitForResponse(res => res.url().includes('/api/eliminar') && res.request().method() === 'POST'),
+            page.click(`#listado-mis-citas .btn-cancelar-cita[data-cita-id="${citaCancelarClienteId}"]`)
+        ]);
+        await page.waitForFunction(
+            (idBorrado) => !document.querySelector(`#listado-mis-citas li[data-cita-id="${idBorrado}"]`),
+            { timeout: 5000 },
+            citaCancelarClienteId
+        );
+
+        recordTest('RES-01', 'Reserva con profesional en POST /api/citas, descuento de ocupación, rechazo 409 por solapamiento y cancelación desde #mis-citas en UI', true,
+            `Cita ID ${citaTemporalId} [10:00, 11:00) creada y descontada; solape 10:30 rechazado con 409; cita ${citaCancelarClienteId} [14:00, 15:00) visualizada y cancelada por el cliente en #mis-citas.`);
+
+        // ------------------------------------------------------------------
+        // RECORRIDO 4: Resumen Completo (Profesional, Inicio, Fin, Duración y Total), Envío Real vía Fetch y SweetAlert2
+        // ------------------------------------------------------------------
+        console.log('\n>>> [RECORRIDO 4] Resumen completo de reserva con profesional, envío real vía fetch POST y SweetAlert2...');
+
+        await page.click('#siguiente');
+        await page.waitForFunction(() => document.querySelector('#paso-3.mostrar') !== null);
+
+        const textoResumenCompleto = await page.$eval('.contenido-resumen', el => el.textContent);
+        if (
+            !textoResumenCompleto.includes('Resumen de Servicios') ||
+            !textoResumenCompleto.includes('Valeria Castro') ||
+            !textoResumenCompleto.includes('11:30 - 13:00') ||
+            !textoResumenCompleto.includes('90 min') ||
+            !textoResumenCompleto.includes('195.00')
+        ) {
+            throw new Error(`El resumen en Paso 3 no contiene profesional, intervalo, duración total y precio total esperados: '${textoResumenCompleto}'`);
+        }
+
+        const serviciosEnResumen = await page.$$('.contenido-resumen .contenedor-servicio');
+        if (serviciosEnResumen.length !== 2) {
+            throw new Error(`Se esperaban 2 servicios en el resumen, encontrados: ${serviciosEnResumen.length}`);
+        }
+
+        const botonReservar = await page.$('.contenido-resumen button.boton');
+        if (!botonReservar) {
+            throw new Error('Botón "Reservar Cita" no encontrado en el DOM del resumen.');
+        }
+
+        const [apiResponse] = await Promise.all([
+            page.waitForResponse(response => response.url().includes('/api/citas') && response.request().method() === 'POST'),
+            botonReservar.click()
+        ]);
+
+        const apiStatus = apiResponse.status();
+        const apiJson = await apiResponse.json();
+
+        if (
+            apiStatus !== 200 ||
+            !apiJson.resultado ||
+            apiJson.profesionalId !== 2 ||
+            apiJson.hora_inicio !== '11:30' ||
+            apiJson.hora_fin !== '13:00' ||
+            apiJson.duracion_total_minutos !== 90
+        ) {
+            throw new Error(`Respuesta de API de reserva desde UI no exitosa o incompleta: HTTP ${apiStatus}, cuerpo: ${JSON.stringify(apiJson)}`);
+        }
+
+        const citaIdCreada = apiJson.id || (apiJson.resultado && apiJson.resultado.id);
+
+        await page.waitForSelector('.swal2-popup', { timeout: 5000 });
+        const swalTitle = await page.$eval('.swal2-title', el => el.textContent);
+        const swalIcon = await page.$eval('.swal2-icon.swal2-success', el => el !== null);
+
+        if (!swalTitle.includes('Cita Creada') || !swalIcon) {
+            throw new Error(`Modal SweetAlert2 inesperado: título='${swalTitle}', iconoExito=${swalIcon}`);
+        }
+
+        recordTest('REC-04', 'Renderizado de resumen con profesional, intervalo [11:30, 13:00), duración 90 min y total $195.00, envío con CSRF y SweetAlert2', true,
+            `Resumen completo validado; POST /api/citas exitoso (id: ${citaIdCreada}, profesionalId: 2, 11:30-13:00, 90 min); SweetAlert2 ('${swalTitle}') desplegado.`);
 
         // Cerrar sesión de cliente y autenticar como Administrador para verificar /admin y /api/eliminar
         await Promise.all([
@@ -918,7 +1041,7 @@ async function runBrowserTests() {
             })
         ]);
 
-        console.log('\n>>> [FASE 2B - ADMIN CITAS] Consulta de citas por fecha en /admin y eliminación en /api/eliminar...');
+        console.log('\n>>> [FASE 2B / FASE 5 - ADMIN CITAS] Consulta de citas por fecha en /admin (profesional, intervalo y snapshot histórico) y eliminación en /api/eliminar...');
         await page.waitForSelector('input[name="email"]', { timeout: 5000 });
         await page.type('input[name="email"]', 'admin@appsalon.com');
         await page.type('input[name="password"]', 'Password123!');
@@ -950,10 +1073,14 @@ async function runBrowserTests() {
         const textoCitasAdminAntes = await page.$eval('.citas-admin', el => el.textContent);
         if (
             !textoCitasAdminAntes.includes('Carlos Mendoza') ||
-            !textoCitasAdminAntes.includes('Masaje Capilar Premium 115.00') ||
+            !textoCitasAdminAntes.includes('Valeria Castro') ||
+            !textoCitasAdminAntes.includes('11:30 - 13:00 (90 min)') ||
+            !textoCitasAdminAntes.includes('Sofía Andrade') ||
+            !textoCitasAdminAntes.includes('10:00 - 11:00 (60 min)') ||
+            !textoCitasAdminAntes.includes('Masaje Capilar Premium 115.00 (60 min)') ||
             !textoCitasAdminAntes.includes('$ 195')
         ) {
-            throw new Error(`La vista /admin?fecha=${validDate} no mostró los detalles esperados de la cita reservada: ${textoCitasAdminAntes}`);
+            throw new Error(`La vista /admin?fecha=${validDate} no mostró profesional, intervalo, duración y snapshot esperados: ${textoCitasAdminAntes}`);
         }
 
         // Eliminar la cita temporal desde /admin mediante su formulario POST /api/eliminar
@@ -988,8 +1115,8 @@ async function runBrowserTests() {
             throw new Error(`La disponibilidad de 10:00-11:00 no se liberó tras eliminar la cita ${citaTemporalId}: ${JSON.stringify(paresTrasEliminar)}`);
         }
 
-        recordTest('ADMIN-05', 'Consulta administrativa por fecha en /admin, eliminación de cita con CSRF en /api/eliminar y liberación de ocupación', true,
-            `Citas consultadas en /admin?fecha=${validDate}; cita temporal ID ${citaTemporalId} eliminada y horario 10:00-11:00 liberado; cita principal ID ${citaIdCreada} ($195) conservada.`);
+        recordTest('ADMIN-05', 'Consulta administrativa por fecha en /admin (profesional, intervalo y snapshot), eliminación en /api/eliminar y liberación de ocupación', true,
+            `Citas consultadas en /admin?fecha=${validDate} con profesional e intervalo; cita temporal ID ${citaTemporalId} eliminada liberando 10:00-11:00; cita principal ID ${citaIdCreada} ($195, Valeria Castro, 11:30-13:00) conservada.`);
 
         // ------------------------------------------------------------------
         // BLOQUE FASE 2C (AUTH-01): Registro, Login no confirmado, Reenvío y Olvidé

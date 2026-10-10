@@ -3,9 +3,81 @@
 Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerdo con la metodología de entregas auditables por **ChatGPT** (revisión estática de código) y ejecución/verificación por **Antigravity** (desarrollo y pruebas dinámicas automatizadas), sujeto a la aprobación final del **Propietario**.
 
 > **Roles y Criterios:**
-> - **Desarrollo y Pruebas Automatizadas (Antigravity):** Implementación de código y ejecución de la suite completa de pruebas unitarias e integrales (137 pruebas, 1399 aserciones en PHPUnit 10.5.66), escenarios funcionales HTTP y suite E2E en navegador real Headless Chrome (`tests/verificar_navegador.ps1` y `tests/browser_e2e_test.js`).
+> - **Desarrollo y Pruebas Automatizadas (Antigravity):** Implementación de código y ejecución de la suite completa de pruebas unitarias e integrales (143 pruebas, 1512 aserciones en PHPUnit 10.5.66), escenarios funcionales HTTP y suite E2E en navegador real Headless Chrome (`tests/verificar_navegador.ps1` y `tests/browser_e2e_test.js`).
 > - **Revisión Estática Externa (ChatGPT):** Auditoría independiente de código de aplicación, arquitectura por capas, contratos transaccionales y revisión estática de scripts Bash.
 > - **Aprobación Final y Despliegue (Propietario):** Decisión formal sobre fusiones hacia `main` y despliegues en producción.
+
+---
+
+## Fase 5: Interfaz de Reservas y Panel Administrativo
+
+- **Rama:** `feature/fase-5-interfaz-reservas`
+- **Commit Base (Fase 4B aprobada):** `c3353300f409a84c29254950b4be1abb2cb03125` (`83e2a24b235a72c2865453ec13ea055d96419700` + registro de auditoría Fase 4B)
+- **Estado General de Fase 5:** **Implementada y Verificada en Docker Aislado (Lista para Auditoría)**
+
+### 1. Diseño Arquitectónico, Nuevos Endpoints y Flujo Reactivo de Reserva
+
+1. **Catálogo de Profesionales Compatibles para Reserva (`GET /api/profesionales` — `APIController::profesionales` $\rightarrow$ `ProfesionalService::consultarParaReserva`):**
+   - Endpoint autenticado (`401` si no existe sesión activa).
+   - Consulta únicamente profesionales activos (`activo = 1`) mediante `ProfesionalRepository::findActivos()` y sus servicios habilitados (`profesionales_servicios`) en una sola consulta agrupada (`findServicioIdsByProfesionalIds`).
+   - Si recibe `?servicios=1,4` (o arreglo `servicios[]`), valida que cada servicio exista en el catálogo oficial (`422` `servicio_inexistente` si no existe) y evalúa la compatibilidad de cada profesional (`compatible: true|false`), devolviendo tanto la lista general `profesionales` como `profesionales_compatibles` (aquellos habilitados para realizar **todos** los servicios seleccionados).
+   - Mapea cualquier `PersistenceException` a HTTP `500` (`status: 'error'`, `codigo: 'error_persistencia'`) sin exponer detalles SQL.
+
+2. **Consulta y Cancelación Autorizada de Citas del Cliente (`GET /api/mis-citas` y `POST /api/eliminar`):**
+   - **`GET /api/mis-citas` (`APIController::misCitas` $\rightarrow$ `CitaService::consultarCitasCliente` $\rightarrow$ `CitaRepository::findCitasClienteByUsuarioId`):**
+     - Obtiene exclusivamente las citas cuyo `citas.usuarioId` coincide con `$_SESSION['id']` (aislamiento estricto por sesión; ignora cualquier `usuarioId` enviado por query string).
+     - Proyecta mediante sentencias preparadas el profesional asignado (`LEFT JOIN profesionales`), el intervalo `[hora_inicio, hora_fin)`, `duracion_total_minutos` y el snapshot histórico de servicios (`COALESCE(cs.nombre_servicio, s.nombre)`, `COALESCE(cs.precio_servicio, s.precio)`, `COALESCE(cs.duracion_minutos, s.duracion_minutos)`).
+     - Identifica explícitamente citas históricas sin profesional (`profesionalId === null` $\rightarrow$ `es_historica_sin_profesional: true`, sin inventar profesional ni duración).
+     - Evalúa `es_futura` y `puede_cancelar` en zona horaria explícita `America/Guayaquil` (`CitaService::TIMEZONE`).
+   - **`POST /api/eliminar` (`APIController::eliminar` $\rightarrow$ `CitaService::eliminar`):**
+     - Soporta tanto el envío tradicional por formulario HTML en `/admin` (respondiendo `302` hacia `HTTP_REFERER` / `/admin`) como peticiones asíncronas `fetch` desde `#mis-citas` con `Accept: application/json` (`solicitaRespuestaJsonExplicita()`), devolviendo JSON estructurado (`200` `ok`, `403` `forbidden`, `404` `not_found`, `422` `invalid`, `500` `error`) y exigiendo validación CSRF (`exigir_csrf()`) y autorización de propietario o administrador (`esPropietarioOAdmin`).
+     - Al cancelar una cita con profesional, la transacción atómica `CitaRepository::eliminarCitaAtomica()` libera de inmediato el intervalo en `citas`, permitiendo que vuelva a ofrecerse en `GET /api/disponibilidad`.
+
+3. **Política Explícita sobre el Flujo Clásico vs. Flujo con Profesional en `POST /api/citas` (`Services\CitaService`):**
+   - El frontend de Fase 5 (`src/js/app.js` / `public/build/js/app.js`) envía siempre `modo_reserva: 'profesional'` y `profesionalId` en el cuerpo de `POST /api/citas`.
+   - `CitaService::debeUsarFlujoConProfesional(array $datos)` aplica una política explícita en tres niveles para evitar que el nuevo flujo cree citas sin profesional por accidente:
+     1. **Exigencia global configurable (`CitaService::setExigirProfesional(true)`, `$service->setExigirProfesionalInstancia(true)` o variable de entorno `RESERVA_EXIGIR_PROFESIONAL=1`):** todas las llamadas a `POST /api/citas` exigen `profesionalId` válido y rechazan con HTTP `422` (`codigo: 'solicitud_invalida'`) cualquier intento sin profesional.
+     2. **Marca explícita del nuevo flujo (`modo_reserva = 'profesional'` o `flujo_profesional = '1'`):** fuerza la validación de `profesionalId` aunque el campo llegue vacío o nulo.
+     3. **Presencia de la clave `profesionalId` / `profesional_id` / `profesional` en el payload (`array_key_exists`):** incluso si su valor es `""` o `null`, se encamina a `crearReservaConProfesional()` y se rechaza con HTTP `422` (`Debe seleccionar un profesional válido.`) sin caer silenciosamente al flujo clásico.
+   - Únicamente los clientes o pruebas legadas que omiten por completo dichas claves (y cuando `RESERVA_EXIGIR_PROFESIONAL` no está activo) utilizan el flujo clásico de compatibilidad hacia atrás.
+
+4. **Interfaz Reactiva de Reservas (`views/cita/index.php`, `src/js/app.js`, `public/build/js/app.js` y SASS compilado):**
+   - **Paso 1 (Servicios):** Muestra nombre, precio y duración en minutos (`duracion_minutos min`) de cada servicio. Cada tarjeta es accesible por teclado (`role="button"`, `tabindex="0"`, `aria-pressed`, activación con `Enter` / `Espacio`).
+   - **Paso 2 (Profesional, Fecha y Horarios Disponibles):**
+     - Selector `<select id="profesional">` poblado dinámicamente desde `GET /api/profesionales?servicios=...` mostrando únicamente profesionales activos compatibles con todos los servicios seleccionados.
+     - Selector `<input id="fecha" type="date">` cuyo atributo `min` se calcula en servidor (`CitaController::index`) en zona horaria `America/Guayaquil` (`tomorrow`).
+     - Grilla dinámica de intervalos `#contenedor-horarios-disponibles` alimentada desde `GET /api/disponibilidad` con botones accesibles (`role="radio"`, `aria-checked`) que muestran `HH:MM - HH:MM`.
+     - **Invalidación reactiva y control de concurrencia en cliente:** Cualquier cambio en servicios, profesional o fecha limpia inmediatamente la hora de inicio/fin seleccionada, actualiza `#hora` y descarta respuestas obsoletas de `fetch` mediante contador incremental `disponibilidadRequestId`. Si al cambiar servicios el profesional previamente elegido deja de ser compatible, se limpia `cita.profesionalId` y se informa al usuario.
+     - **Estados claros de interfaz:** Mensajes diferenciados con `aria-live="polite"` para carga (`Consultando horarios disponibles...`), disponibilidad vacía (`status === 'empty'`), profesional inactivo/incompatible y error de red.
+   - **Paso 3 (Resumen y Confirmación) y Mis Citas (`#mis-citas`):**
+     - Muestra cliente, fecha formateada, profesional asignado, horario `[hora_inicio - hora_fin]`, duración total acumulada (`X min`), desglose de servicios con duración individual y total a pagar (`$X.XX`).
+     - Previene envíos duplicados deshabilitando `#boton-reservar-cita` (`enviandoReserva = true`, `aria-busy="true"`) durante la petición `POST /api/citas`.
+     - Ante conflicto HTTP `409` (`conflicto_ocupacion` o `profesional_inactivo`), conserva las selecciones del usuario, muestra alerta explicativa, retorna al Paso 2, limpia el intervalo agotado y recarga automáticamente `GET /api/disponibilidad`.
+     - La sección `#mis-citas` lista las reservas del cliente autenticado y permite cancelar citas futuras con token CSRF, refrescando tanto el listado como la disponibilidad.
+
+5. **Panel Administrativo (`views/admin/index.php`, `Models\AdminCita`, `CitaRepository::findAdminCitasByFecha`):**
+   - Muestra para cada cita el profesional asignado (`Profesional: {nombre}`), el intervalo horario (`Horario: {hora_inicio} - {hora_fin} ({duracion_total_minutos} min)`) y los servicios con su nombre, duración (`({duracion_minutos} min)`) y precio históricos capturados al reservar.
+   - Cuando una cita histórica carece de profesional (`profesionalId === null`), muestra explícitamente `Profesional: Sin profesional asignado (cita histórica)` y su hora original sin inventar datos.
+
+### 2. Validación Ejecutada en Fase 5 (Desarrollador)
+
+#### A. Suite Completa PHPUnit (Ejecutada en Docker PHP 8.2.34 + MySQL 8.0 Aislado)
+- **Versión efectiva:** `PHPUnit 10.5.66 by Sebastian Bergmann and contributors.` (`Runtime: PHP 8.2.34`, `Configuration: /app/phpunit.xml`).
+- **Comando ejecutado:**
+  `docker run --rm --network appsalon-phpunit-f5-final-net -v "${PWD}:/app" -w /app -e DB_HOST=appsalon-phpunit-f5-final-db -e DB_PORT=3306 -e DB_USER=root -e DB_PASS=root -e DB_NAME=appsalon_test appsalon-php-test php -d variables_order=EGPCS vendor/bin/phpunit --colors=never`
+- **Resultado:** `OK (143 tests, 1512 assertions)` (`Time: 00:19.528, Memory: 14.00 MB`) — Código de salida `0`.
+- **Cobertura añadida en Fase 5:**
+  - `Tests\Unit\CitaServiceTest`: verificación de la política del endpoint clásico (`modo_reserva = 'profesional'`, clave `profesionalId` vacía/nula y flag `setExigirProfesionalInstancia(true)` / `setExigirProfesional(true)` rechazados con `422` sin caer al flujo sin profesional) y consulta de citas del cliente (`consultarCitasCliente`) con cálculo de `puede_cancelar` en `America/Guayaquil` e identificación de citas históricas sin profesional.
+  - `Tests\Integration\Fase5InterfazReservasIntegrationTest`:
+    - `GET /api/profesionales`: control de autenticación (`401`), listado de profesionales activos, filtrado de compatibilidad por múltiples servicios (`?servicios=1,2`) y rechazo de servicios inexistentes (`422`).
+    - `GET /api/mis-citas`: aislamiento estricto por `$_SESSION['id']`, preservación de snapshot histórico tras editar/eliminar servicios en catálogo e identificación explícita de citas históricas con `profesionalId = NULL`.
+    - Política anti-bypass en `POST /api/citas`: rechazo `422` cuando se envía `modo_reserva = 'profesional'` sin profesional, `profesionalId = ""` o cuando `RESERVA_EXIGIR_PROFESIONAL=1` está activo, verificando `0` filas insertadas en `citas`.
+    - Cancelación en modo JSON (`POST /api/eliminar` con `Accept: application/json`): rechazo `403` para otro cliente sin borrar la cita, y cancelación `200` por el propietario liberando inmediatamente el intervalo en `GET /api/disponibilidad`.
+    - Renderizado integrado de `views/cita/index.php` (`min` en `America/Guayaquil`, controles accesibles y `#mis-citas`) y `views/admin/index.php` (profesional asignado, intervalo `[hora_inicio, hora_fin)`, duración total, snapshot histórico e indicación explícita `Sin profesional asignado (cita histórica)`).
+
+#### B. Verificación E2E en Navegador con JavaScript Habilitado (`tests/verificar_navegador.ps1` + `tests/browser_e2e_test.js` + `tests/browser_test_report.json`)
+- **Comando ejecutado:** `powershell -ExecutionPolicy Bypass -File tests/verificar_navegador.ps1`
+- **Resultado (`timestamp: 2026-10-10T22:00:26.084Z`):** 15 comprobaciones E2E superadas (`ADMIN-01` a `ADMIN-04`, `PROF-01`, `PROF-02`, `PRE-01`, `DISP-01`, `REC-01` a `REC-04`, `RES-01`, `ADMIN-05`, `AUTH-01`, `REC-05`) con `0` errores de consola, `0` peticiones fallidas y verificación estricta en MySQL (`profesionalId = 2`, `hora_inicio = 11:30:00`, `hora_fin = 13:00:00`, `duracion_total_minutos = 90`, `2` servicios asociados) — Código de salida `0`.
 
 ---
 

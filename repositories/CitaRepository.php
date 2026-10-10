@@ -1237,6 +1237,7 @@ class CitaRepository
 
         $consulta = "SELECT citas.id, citas.hora, citas.hora_inicio, citas.hora_fin, ";
         $consulta .= " citas.duracion_total_minutos, citas.profesionalId, ";
+        $consulta .= " profesionales.nombre as profesional_nombre, ";
         $consulta .= " CONCAT(usuarios.nombre, ' ', usuarios.apellido) as cliente, ";
         $consulta .= " usuarios.email, usuarios.telefono, ";
         $consulta .= " COALESCE(citasservicios.nombre_servicio, servicios.nombre) as servicio, ";
@@ -1244,6 +1245,7 @@ class CitaRepository
         $consulta .= " COALESCE(citasservicios.duracion_minutos, servicios.duracion_minutos) as duracion_minutos ";
         $consulta .= " FROM citas ";
         $consulta .= " LEFT OUTER JOIN usuarios ON citas.usuarioId = usuarios.id ";
+        $consulta .= " LEFT OUTER JOIN profesionales ON citas.profesionalId = profesionales.id ";
         $consulta .= " LEFT OUTER JOIN citasservicios ON citasservicios.citaId = citas.id ";
         $consulta .= " LEFT OUTER JOIN servicios ON servicios.id = citasservicios.servicioId ";
         $consulta .= " WHERE fecha = ? ";
@@ -1285,4 +1287,127 @@ class CitaRepository
             throw new PersistenceException("Fallo en la capa de persistencia al consultar citas administrativas.", 0, $e);
         }
     }
+
+    /**
+     * Consulta las citas pertenecientes a un cliente específico (`usuarioId`), agrupando sus servicios
+     * con el snapshot histórico (`COALESCE(citasservicios.*, servicios.*)`) e identificando explícitamente
+     * el profesional asignado o la condición de cita histórica sin profesional (`profesionalId = NULL`).
+     *
+     * @param int $usuarioId Identificador entero positivo del cliente.
+     * @return array<int, array<string, mixed>> Lista de citas agrupadas del cliente.
+     * @throws PersistenceException Si ocurre un fallo SQL.
+     */
+    public function findCitasClienteByUsuarioId(int $usuarioId): array
+    {
+        if ($usuarioId <= 0) {
+            return [];
+        }
+
+        $db = $this->resolveDb();
+
+        $sql = "SELECT citas.id, citas.fecha, citas.hora, citas.hora_inicio, citas.hora_fin,
+                       citas.duracion_total_minutos, citas.usuarioId, citas.profesionalId,
+                       profesionales.nombre AS profesional_nombre,
+                       citasservicios.id AS cita_servicio_id,
+                       citasservicios.servicioId AS servicio_id,
+                       COALESCE(citasservicios.nombre_servicio, servicios.nombre) AS servicio_nombre,
+                       COALESCE(citasservicios.precio_servicio, servicios.precio) AS servicio_precio,
+                       COALESCE(citasservicios.duracion_minutos, servicios.duracion_minutos) AS servicio_duracion
+                FROM citas
+                LEFT OUTER JOIN profesionales ON citas.profesionalId = profesionales.id
+                LEFT OUTER JOIN citasservicios ON citasservicios.citaId = citas.id
+                LEFT OUTER JOIN servicios ON servicios.id = citasservicios.servicioId
+                WHERE citas.usuarioId = ?
+                ORDER BY citas.fecha DESC, COALESCE(citas.hora_inicio, citas.hora) DESC, citas.id DESC, citasservicios.id ASC";
+
+        try {
+            $stmt = $db->prepare($sql);
+            if (!$stmt) {
+                throw new PersistenceException("Error al preparar consulta de citas del cliente: " . $db->error);
+            }
+
+            $stmt->bind_param('i', $usuarioId);
+            if (!$stmt->execute()) {
+                $err = $stmt->error;
+                $stmt->close();
+                throw new PersistenceException("Error al ejecutar consulta de citas del cliente: " . $err);
+            }
+
+            $resultado = $stmt->get_result();
+            if ($resultado === false) {
+                $err = $stmt->error;
+                $stmt->close();
+                throw new PersistenceException("Error al obtener citas del cliente: " . $err);
+            }
+
+            $agrupadas = [];
+            while ($fila = $resultado->fetch_assoc()) {
+                $citaId = (int)$fila['id'];
+                if (!isset($agrupadas[$citaId])) {
+                    $profId = ($fila['profesionalId'] !== null && ctype_digit((string)$fila['profesionalId']) && (int)$fila['profesionalId'] > 0)
+                        ? (int)$fila['profesionalId']
+                        : null;
+                    $horaNorm = HorarioProfesional::normalizarHora((string)($fila['hora'] ?? ''));
+                    $horaInicioNorm = ($fila['hora_inicio'] !== null && trim((string)$fila['hora_inicio']) !== '')
+                        ? HorarioProfesional::normalizarHora((string)$fila['hora_inicio'])
+                        : null;
+                    $horaFinNorm = ($fila['hora_fin'] !== null && trim((string)$fila['hora_fin']) !== '')
+                        ? HorarioProfesional::normalizarHora((string)$fila['hora_fin'])
+                        : null;
+                    $durTotal = ($fila['duracion_total_minutos'] !== null && ctype_digit((string)$fila['duracion_total_minutos']))
+                        ? (int)$fila['duracion_total_minutos']
+                        : null;
+
+                    $agrupadas[$citaId] = [
+                        'id' => $citaId,
+                        'usuarioId' => (int)$fila['usuarioId'],
+                        'fecha' => (string)$fila['fecha'],
+                        'hora' => $horaNorm !== '' ? $horaNorm : (string)$fila['hora'],
+                        'hora_inicio' => $horaInicioNorm !== '' ? $horaInicioNorm : null,
+                        'hora_fin' => $horaFinNorm !== '' ? $horaFinNorm : null,
+                        'duracion_total_minutos' => $durTotal,
+                        'profesionalId' => $profId,
+                        'profesional_nombre' => ($profId !== null && isset($fila['profesional_nombre']) && trim((string)$fila['profesional_nombre']) !== '')
+                            ? trim((string)$fila['profesional_nombre'])
+                            : null,
+                        'es_historica_sin_profesional' => ($profId === null),
+                        'servicios' => [],
+                        'total' => 0.0,
+                        'total_formateado' => '0.00',
+                    ];
+                }
+
+                if ($fila['cita_servicio_id'] !== null) {
+                    $precioNum = is_numeric($fila['servicio_precio'] ?? null) ? (float)$fila['servicio_precio'] : 0.0;
+                    $durServicio = ($fila['servicio_duracion'] !== null && ctype_digit((string)$fila['servicio_duracion']))
+                        ? (int)$fila['servicio_duracion']
+                        : null;
+
+                    $agrupadas[$citaId]['servicios'][] = [
+                        'id' => ($fila['servicio_id'] !== null && ctype_digit((string)$fila['servicio_id']))
+                            ? (int)$fila['servicio_id']
+                            : null,
+                        'nombre' => (string)($fila['servicio_nombre'] ?? 'Servicio histórico'),
+                        'precio' => number_format($precioNum, 2, '.', ''),
+                        'duracion_minutos' => $durServicio,
+                    ];
+
+                    $agrupadas[$citaId]['total'] = round($agrupadas[$citaId]['total'] + $precioNum, 2);
+                    $agrupadas[$citaId]['total_formateado'] = number_format($agrupadas[$citaId]['total'], 2, '.', '');
+                }
+            }
+
+            $resultado->free();
+            $stmt->close();
+
+            return array_values($agrupadas);
+        } catch (PersistenceException $e) {
+            error_log("[CitaRepository::findCitasClienteByUsuarioId] " . $e->getMessage());
+            throw $e;
+        } catch (\Throwable $e) {
+            error_log("[CitaRepository::findCitasClienteByUsuarioId] Excepción inesperada: " . $e->getMessage());
+            throw new PersistenceException("Fallo en la capa de persistencia al consultar las citas del cliente.", 0, $e);
+        }
+    }
 }
+
