@@ -210,3 +210,12 @@ Para reproducir la instalación, migraciones, pruebas unitarias e integrales en 
   .\scripts\reproducir_entrega1.ps1
   ```
 
+### Verificación de Resiliencia, Aislamiento y Preservación de Recursos
+Para verificar que los scripts manejan interrupciones y preservan recursos ajenos:
+```powershell
+.\tests\verificar_resiliencia_scripts.ps1
+```
+Este harness comprueba:
+1. **Fallo deliberado en preparación:** Finalización con código de salida no cero, limpieza de recursos temporales creados, restauración de `includes/.env` y preservación de contenedores y redes externas.
+2. **Preservación ante recursos ajenos:** Ejecución exitosa de la suite completa preservando contenedores y redes ajenas en ejecución, restaurando la configuración original en `includes/.env` al finalizar.
+

@@ -4,7 +4,8 @@
  * Script de espera activa para disponibilidad del servidor web de pruebas
  */
 
-$url = 'http://appsalon-web:3000/';
+$rawUrl = getenv('APP_URL') ?: ($_ENV['APP_URL'] ?? 'http://appsalon-web:3000');
+$url = rtrim($rawUrl, '/') . '/';
 $maxAttempts = 30;
 
 for ($i = 1; $i <= $maxAttempts; $i++) {

@@ -6,44 +6,93 @@ $ErrorActionPreference = "Continue"
 $RootDir = Split-Path -Parent $PSScriptRoot
 Set-Location $RootDir
 
+$RUN_ID = "$([System.DateTimeOffset]::UtcNow.ToUnixTimeSeconds())-$((Get-Random -Minimum 1000 -Maximum 9999))"
+$NetName = "appsalon-net-$RUN_ID"
+$DbContainer = "appsalon-db-$RUN_ID"
+$MailContainer = "appsalon-mail-$RUN_ID"
+$WebContainer = "appsalon-web-$RUN_ID"
+$DbSuffix = $RUN_ID -replace '-', '_'
+$DbTest = "appsalon_${DbSuffix}_test"
+$DbFunc = "appsalon_${DbSuffix}_func_test"
+
+$EnvFile = "includes/.env"
+$EnvExisted = Test-Path $EnvFile
+$EnvBackup = "includes/.env.bak.$RUN_ID"
+
 Write-Host "======================================================================" -ForegroundColor Cyan
 Write-Host "REPRODUCCION INTEGRAL DE PRUEBAS -- APPSALON ENTREGA 1 (POWERSHELL)" -ForegroundColor Cyan
 Write-Host "Directorio de trabajo: $RootDir" -ForegroundColor Cyan
+Write-Host "Identificador de ejecucion (RUN_ID): $RUN_ID" -ForegroundColor Cyan
+Write-Host "Red Docker aislada: $NetName" -ForegroundColor Cyan
 Write-Host "======================================================================" -ForegroundColor Cyan
 
-function Cleanup-Containers {
+function Cleanup-Resources {
     Write-Host ""
-    Write-Host "[LIMPIEZA FINAL] Deteniendo y eliminando contenedores temporales..." -ForegroundColor Yellow
-    docker rm -f appsalon-web appsalon-mail appsalon-test-db 2>&1 | Out-Null
-    docker network rm appsalon-net 2>&1 | Out-Null
+    Write-Host "[LIMPIEZA FINAL] Deteniendo y eliminando recursos exclusivos de esta ejecucion ($RUN_ID)..." -ForegroundColor Yellow
+    docker rm -f $WebContainer $MailContainer $DbContainer 2>&1 | Out-Null
+    docker network rm $NetName 2>&1 | Out-Null
+
+    # Restaurar o eliminar includes/.env segun correspondiese originalmente
+    if ($EnvExisted) {
+        if (Test-Path $EnvBackup) {
+            Write-Host " -> Restaurando includes/.env original..." -ForegroundColor Yellow
+            Move-Item -Path $EnvBackup -Destination $EnvFile -Force
+        }
+    } else {
+        if (Test-Path $EnvFile) {
+            Write-Host " -> Eliminando includes/.env temporal generado..." -ForegroundColor Yellow
+            Remove-Item -Path $EnvFile -Force
+        }
+    }
 }
 
-try {
-    # 1. Limpieza preventiva
-    Write-Host "[1/8] Limpiando contenedores y redes anteriores..." -ForegroundColor Cyan
-    docker rm -f appsalon-web appsalon-mail appsalon-test-db 2>&1 | Out-Null
-    docker network rm appsalon-net 2>&1 | Out-Null
+function Run-StepChecked {
+    param(
+        [string]$Description,
+        [scriptblock]$Action
+    )
+    Write-Host " -> $Description"
+    & $Action
+    $code = $LASTEXITCODE
+    if ($code -ne 0) {
+        throw "Fallo en paso '$Description' con codigo de salida: $code"
+    }
+}
 
-    # 2. Verificacion de Composer y npm
-    Write-Host "[2/8] Verificando dependencias de Composer y npm..." -ForegroundColor Cyan
-    if (-not (Test-Path "vendor/autoload.php")) {
-        Write-Host " -> Instalando dependencias Composer..."
+$scriptSuccess = $false
+$scriptExitCode = 0
+
+try {
+    # 1. Respaldo de configuracion preexistente
+    if ($EnvExisted) {
+        Write-Host "[1/7] Respaldando includes/.env preexistente en $EnvBackup..." -ForegroundColor Cyan
+        Copy-Item -Path $EnvFile -Destination $EnvBackup -Force
+    } else {
+        Write-Host "[1/7] Sin includes/.env preexistente; se eliminara al terminar la prueba..." -ForegroundColor Cyan
+    }
+
+    # 2. Instalacion estricta segun lockfiles y construccion de assets
+    Write-Host "[2/7] Instalando dependencias segun archivos de bloqueo y compilando assets..." -ForegroundColor Cyan
+    Run-StepChecked "Instalacion de dependencias Composer segun composer.lock" {
         docker run --rm -v "${PWD}:/app" -w /app composer:2 install --ignore-platform-reqs --no-interaction
     }
-    if (-not (Test-Path "public/build")) {
-        Write-Host " -> Construyendo assets npm..."
-        docker run --rm -v "${PWD}:/app" -w /app node:18 sh -c "npm install && npm run build"
+    Run-StepChecked "Instalacion de dependencias npm segun package-lock.json y compilacion de assets" {
+        docker run --rm -v "${PWD}:/app" -w /app node:18 sh -c "npm ci && npm run build"
     }
 
-    # 3. Red y MySQL 8
-    Write-Host "[3/8] Creando red Docker e iniciando MySQL 8..." -ForegroundColor Cyan
-    docker network create appsalon-net | Out-Null
-    docker run -d --name appsalon-test-db --network appsalon-net -p 3307:3306 -e MYSQL_ROOT_PASSWORD=root mysql:8.0 | Out-Null
+    # 3. Creacion de red y MySQL 8 exclusivo
+    Write-Host "[3/7] Creando red aislada $NetName e iniciando MySQL 8 ($DbContainer)..." -ForegroundColor Cyan
+    Run-StepChecked "Creacion de red Docker" {
+        docker network create $NetName | Out-Null
+    }
+    Run-StepChecked "Inicio de contenedor MySQL 8" {
+        docker run -d --name $DbContainer --network $NetName -e MYSQL_ROOT_PASSWORD=root mysql:8.0 | Out-Null
+    }
 
     Write-Host " -> Esperando disponibilidad de MySQL..."
     $ready = $false
     for ($i = 1; $i -le 60; $i++) {
-        docker exec appsalon-test-db mysqladmin ping -h 127.0.0.1 -u root -proot --silent 2>&1 | Out-Null
+        docker exec $DbContainer mysqladmin ping -h 127.0.0.1 -u root -proot --silent 2>&1 | Out-Null
         if ($LASTEXITCODE -eq 0) {
             $ready = $true
             Write-Host " -> MySQL 8 disponible tras ${i}s." -ForegroundColor Green
@@ -51,66 +100,83 @@ try {
         }
         Start-Sleep -Seconds 1
     }
-
     if (-not $ready) {
-        throw "Tiempo de espera agotado para disponibilidad de MySQL."
+        throw "Tiempo de espera agotado para disponibilidad de MySQL en $DbContainer."
     }
 
-    # 4. Imagen PHP
-    Write-Host "[4/8] Construyendo imagen de prueba de PHP 8.2..." -ForegroundColor Cyan
-    docker build -t appsalon-php-test -f Dockerfile.test . | Out-Null
+    # 4. Construccion de imagen PHP 8.2
+    Write-Host "[4/7] Construyendo imagen de prueba de PHP 8.2..." -ForegroundColor Cyan
+    Run-StepChecked "docker build appsalon-php-test" {
+        docker build -t appsalon-php-test -f Dockerfile.test . | Out-Null
+    }
 
-    # 5. Bases de datos
-    Write-Host "[5/8] Preparando bases de datos de pruebas (appsalon_test y appsalon_func_test)..." -ForegroundColor Cyan
-    docker exec appsalon-test-db mysql -uroot -proot -e "CREATE DATABASE IF NOT EXISTS appsalon_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" | Out-Null
-    Get-Content database/schema_base.sql -Raw | docker exec -i appsalon-test-db mysql -uroot -proot appsalon_test | Out-Null
-    docker run --rm --network appsalon-net -v "${PWD}:/app" -w /app -e DB_HOST=appsalon-test-db -e DB_USER=root -e DB_PASS=root -e DB_NAME=appsalon_test -e DB_PORT=3306 appsalon-php-test php database/migrador.php up | Out-Null
+    # 5. Preparacion y migracion independiente de bases de datos
+    Write-Host "[5/7] Preparando bases de datos ($DbTest y $DbFunc)..." -ForegroundColor Cyan
+    Run-StepChecked "Creacion de base $DbTest" {
+        docker exec $DbContainer mysql -uroot -proot -e "CREATE DATABASE IF NOT EXISTS $DbTest CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" | Out-Null
+    }
+    Run-StepChecked "Importacion de esquema base en $DbTest" {
+        Get-Content database/schema_base.sql -Raw | docker exec -i $DbContainer mysql -uroot -proot $DbTest | Out-Null
+    }
+    Run-StepChecked "Migraciones up en $DbTest" {
+        docker run --rm --network $NetName -v "${PWD}:/app" -w /app -e DB_HOST=$DbContainer -e DB_USER=root -e DB_PASS=root -e DB_NAME=$DbTest -e DB_PORT=3306 appsalon-php-test php database/migrador.php up | Out-Null
+    }
 
-    docker exec appsalon-test-db mysql -uroot -proot -e "CREATE DATABASE IF NOT EXISTS appsalon_func_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" | Out-Null
-    Get-Content database/schema_base.sql -Raw | docker exec -i appsalon-test-db mysql -uroot -proot appsalon_func_test | Out-Null
-    docker run --rm --network appsalon-net -v "${PWD}:/app" -w /app -e DB_HOST=appsalon-test-db -e DB_USER=root -e DB_PASS=root -e DB_NAME=appsalon_func_test -e DB_PORT=3306 appsalon-php-test php database/migrador.php up | Out-Null
+    Run-StepChecked "Creacion de base $DbFunc" {
+        docker exec $DbContainer mysql -uroot -proot -e "CREATE DATABASE IF NOT EXISTS $DbFunc CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" | Out-Null
+    }
+    Run-StepChecked "Importacion de esquema base en $DbFunc" {
+        Get-Content database/schema_base.sql -Raw | docker exec -i $DbContainer mysql -uroot -proot $DbFunc | Out-Null
+    }
+    Run-StepChecked "Migraciones up en $DbFunc" {
+        docker run --rm --network $NetName -v "${PWD}:/app" -w /app -e DB_HOST=$DbContainer -e DB_USER=root -e DB_PASS=root -e DB_NAME=$DbFunc -e DB_PORT=3306 appsalon-php-test php database/migrador.php up | Out-Null
+    }
+    Run-StepChecked "Semillero de servicios en $DbFunc" {
+        docker exec $DbContainer mysql -uroot -proot $DbFunc -e "INSERT INTO servicios (id, nombre, precio) VALUES (1, 'Corte de Cabello Hombre', 80.00), (2, 'Corte de Cabello Mujer', 120.00), (3, 'Corte de Barba', 60.00) ON DUPLICATE KEY UPDATE nombre=VALUES(nombre);" | Out-Null
+    }
 
-    docker exec appsalon-test-db mysql -uroot -proot appsalon_func_test -e "INSERT INTO servicios (id, nombre, precio) VALUES (1, 'Corte de Cabello Hombre', 80.00), (2, 'Corte de Cabello Mujer', 120.00), (3, 'Corte de Barba', 60.00) ON DUPLICATE KEY UPDATE nombre=VALUES(nombre);" | Out-Null
-
-    # 6. Configuracion y servicios
-    Write-Host "[6/8] Configurando includes/.env e iniciando appsalon-mail y appsalon-web..." -ForegroundColor Cyan
+    # 6. Configuracion temporal y servicios auxiliares
+    Write-Host "[6/7] Generando configuracion e iniciando $MailContainer y $WebContainer..." -ForegroundColor Cyan
     $envLines = @(
-        "DB_HOST=appsalon-test-db",
+        "DB_HOST=$DbContainer",
         "DB_PORT=3306",
         "DB_USER=root",
         "DB_PASS=root",
-        "DB_NAME=appsalon_func_test",
-        "EMAIL_HOST=appsalon-mail",
+        "DB_NAME=$DbFunc",
+        "EMAIL_HOST=$MailContainer",
         "EMAIL_PORT=2525",
         "EMAIL_USER=test",
         "EMAIL_PASSWORD=test",
         "EMAIL_FROM=cuentas@appsalon.com",
         "EMAIL_FROM_NAME=AppSalon.com",
-        "APP_URL=http://appsalon-web:3000"
+        "APP_URL=http://${WebContainer}:3000"
     )
-    $envLines | Set-Content -Path "includes/.env" -Encoding UTF8
+    $envLines | Set-Content -Path $EnvFile -Encoding UTF8
 
-    docker run -d --name appsalon-mail --network appsalon-net -v "${PWD}:/app" -w /app appsalon-php-test php tests/smtp_mock_server.php | Out-Null
-    docker run -d --name appsalon-web --network appsalon-net -p 3000:3000 -v "${PWD}:/app" -w /app appsalon-php-test php -S 0.0.0.0:3000 -t public | Out-Null
-
-    Write-Host " -> Esperando disponibilidad del servidor web (http://appsalon-web:3000)..."
-    docker run --rm --network appsalon-net -v "${PWD}:/app" -w /app appsalon-php-test php tests/wait_for_web.php
-    if ($LASTEXITCODE -ne 0) {
-        throw "El servidor web real no respondio en appsalon-web:3000."
+    Run-StepChecked "Inicio de receptor SMTP mock ($MailContainer)" {
+        docker run -d --name $MailContainer --network $NetName -v "${PWD}:/app" -w /app appsalon-php-test php tests/smtp_mock_server.php | Out-Null
+    }
+    Run-StepChecked "Inicio de servidor web ($WebContainer)" {
+        docker run -d --name $WebContainer --network $NetName -v "${PWD}:/app" -w /app appsalon-php-test php -S 0.0.0.0:3000 -t public | Out-Null
     }
 
-    # 7. PHPUnit
+    Write-Host " -> Esperando disponibilidad del servidor web (http://${WebContainer}:3000)..."
+    docker run --rm --network $NetName -v "${PWD}:/app" -w /app -e APP_URL="http://${WebContainer}:3000" appsalon-php-test php tests/wait_for_web.php
+    if ($LASTEXITCODE -ne 0) {
+        throw "El servidor web real no respondio en http://${WebContainer}:3000."
+    }
+
+    # 7. Ejecucion de suites de prueba
     Write-Host ""
-    Write-Host "[7/8] Ejecutando suite completa de PHPUnit..." -ForegroundColor Cyan
-    docker run --rm --network appsalon-net -v "${PWD}:/app" -w /app appsalon-php-test ./vendor/bin/phpunit --testdox
+    Write-Host "[7/7] Ejecutando suite completa de PHPUnit..." -ForegroundColor Cyan
+    docker run --rm --network $NetName -v "${PWD}:/app" -w /app -e DB_HOST=$DbContainer -e DB_USER=root -e DB_PASS=root -e DB_NAME=$DbTest -e DB_PORT=3306 appsalon-php-test ./vendor/bin/phpunit --testdox
     if ($LASTEXITCODE -ne 0) {
         throw "Fallo en la suite de PHPUnit (codigo de salida: $LASTEXITCODE)"
     }
 
-    # 8. Suite Funcional
     Write-Host ""
-    Write-Host "[8/8] Ejecutando suite de verificacion funcional HTTP..." -ForegroundColor Cyan
-    docker run --rm --network appsalon-net -v "${PWD}:/app" -w /app appsalon-php-test php tests/functional_test_suite.php
+    Write-Host "Ejecutando suite de verificacion funcional HTTP..." -ForegroundColor Cyan
+    docker run --rm --network $NetName -v "${PWD}:/app" -w /app -e APP_URL="http://${WebContainer}:3000" appsalon-php-test php tests/functional_test_suite.php
     if ($LASTEXITCODE -ne 0) {
         throw "Fallo en la suite funcional HTTP (codigo de salida: $LASTEXITCODE)"
     }
@@ -119,7 +185,17 @@ try {
     Write-Host "======================================================================" -ForegroundColor Green
     Write-Host "REPRODUCCION COMPLETADA EXITOSAMENTE (TODOS LOS TESTS APROBADOS)" -ForegroundColor Green
     Write-Host "======================================================================" -ForegroundColor Green
+    $scriptSuccess = $true
+}
+catch {
+    $scriptSuccess = $false
+    $scriptExitCode = if ($LASTEXITCODE -ne 0) { $LASTEXITCODE } else { 1 }
+    Write-Host ""
+    Write-Host "[ERROR EN REPRODUCCION] $($_.Exception.Message)" -ForegroundColor Red
 }
 finally {
-    Cleanup-Containers
+    Cleanup-Resources
+    if (-not $scriptSuccess) {
+        exit $scriptExitCode
+    }
 }

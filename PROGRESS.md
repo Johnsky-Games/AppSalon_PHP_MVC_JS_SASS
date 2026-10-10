@@ -76,6 +76,7 @@ Ejecución de extremo a extremo contra servidor PHP (`http://appsalon-web:3000`)
 | Migraciones Versionadas: Comparación Exhaustiva de Esquema y Datos | **Probado** | `MigrationTest::testActualizacionDesdeInstalacionPreviaPreservaDatosYGeneraMismoEsquemaQueFresh` (ejecutado por `migrador.php up`, omitiendo 001, aplicando `002_innodb_and_rate_limit_window.sql`, preservando 100% de datos de clientes, administradores, citas y servicios, e igualando 100% esquema fresh en columnas, nulabilidad, defaults, índices y motores InnoDB) |
 | Integridad del Historial de Migraciones y Manejo de Estado Parcial | **Probado** | `MigrationTest::testMigradorFallaConEstadoParcialCuandoInsercionEnHistorialFalla` (falla forzada por trigger en inserción de historial, salida con código 1, mensaje explicativo de estado parcial sin imprimir [OK]) |
 | Detección de Errores Intermedios y Salida no Cero en Migrador | **Probado** | `MigrationTest::testMigradorFallaConCodigoDistintoDeCeroAnteErrorSqlIntermedio`, `database/migrador.php` y `database/README.md` |
+| Aislamiento de Recursos Docker y Resiliencia de Scripts de Reproducción | **Probado** | `scripts/reproducir_entrega1.ps1`, `scripts/reproducir_entrega1.sh`, `tests/verificar_resiliencia_scripts.ps1` (Identificadores RFC únicos por ejecución, sin colisión de puertos de host, preservación verificada de contenedores y redes ajenos, respaldo y restauración atómica de `includes/.env` ante éxito y fallo deliberado, e instalación estricta desde lockfiles `composer.lock` y `package-lock.json`). |
 
 ---
 

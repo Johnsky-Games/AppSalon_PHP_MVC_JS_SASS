@@ -51,7 +51,7 @@ try {
     exit(1);
 }
 
-$baseUrl = 'http://appsalon-web:3000';
+$baseUrl = rtrim(getenv('APP_URL') ?: ($_ENV['APP_URL'] ?? 'http://appsalon-web:3000'), '/');
 $mailboxFile = __DIR__ . '/mailbox.json';
 
 echo "======================================================================\n";
@@ -61,8 +61,8 @@ echo "Base de datos verificada (SELECT DATABASE()): {$dbVerificada}\n";
 echo "Fecha/Hora: " . date('Y-m-d H:i:s') . "\n";
 echo "======================================================================\n\n";
 
-// Helper HTTP con cURL, CookieJar nativo, timeouts y manejo de errores
-function request(string $method, string $path, array $data = [], ?string $cookieJar = null, array $headers = []): array
+// Helper HTTP con cURL, CookieJar nativo, timeouts y manejo de errores sanitizado
+function request(string $method, string $path, array $data = [], ?string $cookieJar = null, array $headers = [], string $scenario = 'General'): array
 {
     global $baseUrl;
     $url = $baseUrl . $path;
@@ -100,14 +100,21 @@ function request(string $method, string $path, array $data = [], ?string $cookie
     curl_close($ch);
 
     if ($curlErrNo !== 0) {
-        fwrite(STDERR, "[ERROR cURL] Fallo al comunicar con {$url} (errno {$curlErrNo}): {$curlErrMsg}\n");
+        $cleanPath = parse_url($path, PHP_URL_PATH) ?: '/';
+        $cleanErrMsg = preg_replace('/https?:\/\/[^\s]+/i', '[URL_REDACTED]', (string)$curlErrMsg);
+        $cleanErrMsg = preg_replace('/[a-f0-9]{32,64}/i', '[TOKEN_REDACTED]', $cleanErrMsg);
+        $cleanErrMsg = preg_replace('/(token|token_hash|password)=[^&\s]+/i', '$1=[REDACTED]', $cleanErrMsg);
+
+        fwrite(STDERR, "[ERROR cURL] Escenario: {$scenario} | Ruta: {$cleanPath} | Error: {$curlErrNo} ({$cleanErrMsg})\n");
         return [
             'code' => 0,
             'headers' => '',
             'location' => null,
-            'body' => "cURL error: {$curlErrMsg}",
-            'error' => $curlErrMsg,
-            'errno' => $curlErrNo
+            'body' => "cURL error ({$curlErrNo}): {$cleanErrMsg}",
+            'error' => $cleanErrMsg,
+            'errno' => $curlErrNo,
+            'clean_path' => $cleanPath,
+            'scenario' => $scenario
         ];
     }
 
@@ -126,7 +133,9 @@ function request(string $method, string $path, array $data = [], ?string $cookie
         'location' => $location,
         'body' => $body,
         'error' => null,
-        'errno' => 0
+        'errno' => 0,
+        'clean_path' => parse_url($path, PHP_URL_PATH) ?: '/',
+        'scenario' => $scenario
     ];
 }
 
@@ -139,10 +148,10 @@ function extractCsrf(string $html): ?string
 }
 
 // 2. Comprobar disponibilidad inmediata del servidor web antes de iniciar pruebas
-$pingServidor = request('GET', '/');
+$pingServidor = request('GET', '/', [], null, [], 'Pre-flight Ping');
 if ($pingServidor['code'] === 0) {
-    fwrite(STDERR, "\n[ERROR CRÍTICO] El servidor web real no está disponible o no responde en {$baseUrl}.\n");
-    fwrite(STDERR, "Detalle del error: " . ($pingServidor['error'] ?? 'Conexión rechazada') . "\n");
+    fwrite(STDERR, "\n[ERROR CRÍTICO] El servidor web real no está disponible o no responde.\n");
+    fwrite(STDERR, "Escenario: Pre-flight Ping | Ruta: / | Detalle: " . ($pingServidor['error'] ?? 'Conexión rechazada') . "\n");
     fwrite(STDERR, "Asegúrese de haber iniciado el contenedor appsalon-web antes de ejecutar el runner.\n\n");
     exit(1);
 }
@@ -213,7 +222,8 @@ $ok1 = ($postRegistro['code'] === 302) &&
 echo "   Status: {$postRegistro['code']} | Redirect: {$postRegistro['location']}\n";
 echo "   BD Usuario ID: {$usuarioDb['id']} | confirmado: {$usuarioDb['confirmado']} | admin: {$usuarioDb['admin']}\n";
 echo "   Token en texto plano en BD: " . ($usuarioDb['token'] === null ? "NO (seguro, NULL)" : "SÍ (inseguro)") . "\n";
-echo "   Buzón: Correo recibido para {$emailConfirmacion['to']} (Token recibido: SÍ)\n";
+$destinatarioRecibido = $emailConfirmacion['to'] ?? '[NO_RECIBIDO]';
+echo "   Buzón: Correo recibido para {$destinatarioRecibido} (Token recibido: " . (!empty($tokenConfirmacion) ? "SÍ" : "NO") . ")\n";
 echo "   Verificación criptográfica: Hash SHA-256 coincide en BD = " . ($tokenHashCoincide ? "SÍ" : "NO") . "\n";
 echo "   Resultado: " . ($ok1 ? "EJECUTADO [EXITOSO]" : "FALLIDO") . "\n\n";
 
