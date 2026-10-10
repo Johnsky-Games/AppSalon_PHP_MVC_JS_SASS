@@ -7,6 +7,28 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
+FAIL_PREP=0
+FAIL_BACKUP=0
+FAIL_RESTORE=0
+
+for arg in "$@"; do
+    case "$arg" in
+        --simular-fallo-preparacion) FAIL_PREP=1 ;;
+        --simular-fallo-respaldo) FAIL_BACKUP=1 ;;
+        --simular-fallo-restauracion) FAIL_RESTORE=1 ;;
+    esac
+done
+
+if [ "${APPSALON_SIMULAR_FALLO:-}" = "preparacion" ]; then
+    FAIL_PREP=1
+fi
+if [ "${APPSALON_SIMULAR_FALLO:-}" = "respaldo" ]; then
+    FAIL_BACKUP=1
+fi
+if [ "${APPSALON_SIMULAR_FALLO:-}" = "restauracion" ]; then
+    FAIL_RESTORE=1
+fi
+
 RUN_ID="$(date +%s)-$$"
 NET_NAME="appsalon-net-${RUN_ID}"
 DB_CONTAINER="appsalon-db-${RUN_ID}"
@@ -19,9 +41,11 @@ DB_FUNC="appsalon_${DB_SUFFIX}_func_test"
 ENV_FILE="includes/.env"
 ENV_EXISTED=0
 ENV_BACKUP="includes/.env.bak.${RUN_ID}"
+ORIGINAL_HASH=""
 
 if [ -f "${ENV_FILE}" ]; then
     ENV_EXISTED=1
+    ORIGINAL_HASH="$(sha256sum "${ENV_FILE}" | awk '{print $1}')"
 fi
 
 echo "======================================================================"
@@ -38,9 +62,35 @@ cleanup() {
     docker network rm "${NET_NAME}" 2>/dev/null || true
 
     if [ "${ENV_EXISTED}" -eq 1 ]; then
-        if [ -f "${ENV_BACKUP}" ]; then
-            echo " -> Restaurando includes/.env original..."
-            mv -f "${ENV_BACKUP}" "${ENV_FILE}"
+        CURRENT_HASH=""
+        if [ -f "${ENV_FILE}" ]; then
+            CURRENT_HASH="$(sha256sum "${ENV_FILE}" | awk '{print $1}')"
+        fi
+
+        if [ "${FAIL_RESTORE}" -eq 0 ] && [ "${CURRENT_HASH}" = "${ORIGINAL_HASH}" ]; then
+            echo " -> includes/.env conserva su contenido original intacto."
+            rm -f "${ENV_BACKUP}" 2>/dev/null || true
+        elif [ -f "${ENV_BACKUP}" ]; then
+            echo " -> Restaurando includes/.env original desde ${ENV_BACKUP}..."
+            if [ "${FAIL_RESTORE}" -eq 1 ]; then
+                echo "[ERROR CRÍTICO] Fallo provocado deliberadamente al restaurar ${ENV_FILE}. El respaldo fue preservado en ${ENV_BACKUP}." >&2
+                exit 1
+            elif cp -f "${ENV_BACKUP}" "${ENV_FILE}"; then
+                RESTORED_HASH="$(sha256sum "${ENV_FILE}" | awk '{print $1}')"
+                if [ "${RESTORED_HASH}" = "${ORIGINAL_HASH}" ]; then
+                    rm -f "${ENV_BACKUP}"
+                    echo " -> includes/.env restaurado e integridad SHA-256 verificada byte a byte."
+                else
+                    echo "[ERROR CRÍTICO] La integridad de ${ENV_FILE} no coincide con el original. Respaldo conservado en ${ENV_BACKUP}." >&2
+                    exit 1
+                fi
+            else
+                echo "[ERROR CRÍTICO] Fallo al restaurar ${ENV_FILE}. El respaldo fue preservado en ${ENV_BACKUP}." >&2
+                exit 1
+            fi
+        else
+            echo "[ERROR CRÍTICO] No se encontró el archivo de respaldo ${ENV_BACKUP} y el archivo fue alterado." >&2
+            exit 1
         fi
     else
         if [ -f "${ENV_FILE}" ]; then
@@ -51,10 +101,23 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# 1. Respaldo de configuración preexistente
+# 1. Respaldo de configuración preexistente con comprobación estricta
 if [ "${ENV_EXISTED}" -eq 1 ]; then
     echo "[1/7] Respaldando includes/.env preexistente en ${ENV_BACKUP}..."
-    cp "${ENV_FILE}" "${ENV_BACKUP}"
+    if [ "${FAIL_BACKUP}" -eq 1 ]; then
+        echo "[ERROR] Fallo provocado deliberadamente al crear el respaldo de ${ENV_FILE} (simulación controlada)." >&2
+        exit 1
+    fi
+    cp "${ENV_FILE}" "${ENV_BACKUP}" || {
+        echo "[ERROR CRÍTICO] Fallo al crear el respaldo de ${ENV_FILE}. Operación cancelada antes de modificar el archivo." >&2
+        exit 1
+    }
+    BACKUP_HASH="$(sha256sum "${ENV_BACKUP}" | awk '{print $1}')"
+    if [ "${BACKUP_HASH}" != "${ORIGINAL_HASH}" ]; then
+        echo "[ERROR CRÍTICO] El hash del respaldo no coincide con el original. Cancelando antes de modificar ${ENV_FILE}." >&2
+        exit 1
+    fi
+    echo " -> Respaldo creado e integridad verificada (${BACKUP_HASH})."
 else
     echo "[1/7] Sin includes/.env preexistente; se eliminará al terminar la prueba..."
 fi
@@ -80,6 +143,7 @@ for i in $(seq 1 60); do
     if docker exec "${DB_CONTAINER}" mysqladmin ping -h 127.0.0.1 -u root -proot --silent >/dev/null 2>&1; then
         READY=1
         echo " -> MySQL 8 disponible tras ${i}s."
+        sleep 2
         break
     fi
     sleep 1
@@ -96,6 +160,10 @@ docker build -t appsalon-php-test -f Dockerfile.test .
 
 # 5. Preparación y migración independiente de bases de datos
 echo "[5/7] Preparando bases de datos (${DB_TEST} y ${DB_FUNC})..."
+if [ "${FAIL_PREP}" -eq 1 ]; then
+    echo "[ERROR] Fallo provocado deliberadamente en fase de preparación de bases de datos (simulación controlada)." >&2
+    exit 1
+fi
 
 docker exec "${DB_CONTAINER}" mysql -uroot -proot -e "CREATE DATABASE IF NOT EXISTS ${DB_TEST} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 docker exec -i "${DB_CONTAINER}" mysql -uroot -proot "${DB_TEST}" < database/schema_base.sql
