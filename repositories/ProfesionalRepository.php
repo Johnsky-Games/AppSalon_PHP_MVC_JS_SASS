@@ -520,6 +520,65 @@ class ProfesionalRepository
     }
 
     /**
+     * Obtiene todas las franjas laborales de un profesional para un día específico de la semana ISO-8601 (1..7),
+     * ordenadas por hora de inicio.
+     *
+     * @param int $profesionalId
+     * @param int $diaSemana 1 (Lunes) a 7 (Domingo)
+     * @return array<int, HorarioProfesional>
+     * @throws PersistenceException
+     */
+    public function findHorariosByProfesionalYDia(int $profesionalId, int $diaSemana): array
+    {
+        if ($profesionalId <= 0 || $diaSemana < 1 || $diaSemana > 7) {
+            return [];
+        }
+
+        $db = $this->resolveDb();
+
+        try {
+            $stmt = $db->prepare(
+                "SELECT id, profesionalId, dia_semana, hora_inicio, hora_fin
+                 FROM horarios_profesionales
+                 WHERE profesionalId = ? AND dia_semana = ?
+                 ORDER BY hora_inicio ASC, id ASC"
+            );
+            if (!$stmt) {
+                throw new PersistenceException("Error al preparar consulta de horarios por día: " . $db->error);
+            }
+
+            $stmt->bind_param('ii', $profesionalId, $diaSemana);
+            if (!$stmt->execute()) {
+                $err = $stmt->error;
+                $stmt->close();
+                throw new PersistenceException("Error al ejecutar consulta de horarios por día: " . $err);
+            }
+
+            $res = $stmt->get_result();
+            if ($res === false) {
+                $err = $stmt->error;
+                $stmt->close();
+                throw new PersistenceException("Error al obtener resultados de horarios por día: " . $err);
+            }
+
+            $horarios = [];
+            while ($fila = $res->fetch_assoc()) {
+                $horarios[] = new HorarioProfesional($fila);
+            }
+            $res->free();
+            $stmt->close();
+
+            return $horarios;
+        } catch (PersistenceException $e) {
+            error_log("[ProfesionalRepository::findHorariosByProfesionalYDia] " . $e->getMessage());
+            throw $e;
+        } catch (\Throwable $e) {
+            error_log("[ProfesionalRepository::findHorariosByProfesionalYDia] Excepción inesperada: " . $e->getMessage());
+            throw new PersistenceException("Fallo en la capa de persistencia al consultar horarios del día.", 0, $e);
+        }
+    }
+
+    /**
      * Reemplaza atómicamente todos los horarios semanales de un profesional.
      *
      * @param int $profesionalId
@@ -653,6 +712,65 @@ class ProfesionalRepository
         } catch (\Throwable $e) {
             error_log("[ProfesionalRepository::findDescansosByProfesional] Excepción inesperada: " . $e->getMessage());
             throw new PersistenceException("Fallo en la capa de persistencia al consultar descansos.", 0, $e);
+        }
+    }
+
+    /**
+     * Obtiene los descansos recurrentes de un profesional para un día específico de la semana ISO-8601 (1..7),
+     * ordenados por hora de inicio.
+     *
+     * @param int $profesionalId
+     * @param int $diaSemana 1 (Lunes) a 7 (Domingo)
+     * @return array<int, DescansoProfesional>
+     * @throws PersistenceException
+     */
+    public function findDescansosByProfesionalYDia(int $profesionalId, int $diaSemana): array
+    {
+        if ($profesionalId <= 0 || $diaSemana < 1 || $diaSemana > 7) {
+            return [];
+        }
+
+        $db = $this->resolveDb();
+
+        try {
+            $stmt = $db->prepare(
+                "SELECT id, profesionalId, dia_semana, hora_inicio, hora_fin, motivo
+                 FROM descansos_profesionales
+                 WHERE profesionalId = ? AND dia_semana = ?
+                 ORDER BY hora_inicio ASC, id ASC"
+            );
+            if (!$stmt) {
+                throw new PersistenceException("Error al preparar consulta de descansos por día: " . $db->error);
+            }
+
+            $stmt->bind_param('ii', $profesionalId, $diaSemana);
+            if (!$stmt->execute()) {
+                $err = $stmt->error;
+                $stmt->close();
+                throw new PersistenceException("Error al ejecutar consulta de descansos por día: " . $err);
+            }
+
+            $res = $stmt->get_result();
+            if ($res === false) {
+                $err = $stmt->error;
+                $stmt->close();
+                throw new PersistenceException("Error al obtener resultados de descansos por día: " . $err);
+            }
+
+            $descansos = [];
+            while ($fila = $res->fetch_assoc()) {
+                $descansos[] = new DescansoProfesional($fila);
+            }
+            $res->free();
+            $stmt->close();
+
+            return $descansos;
+        } catch (PersistenceException $e) {
+            error_log("[ProfesionalRepository::findDescansosByProfesionalYDia] " . $e->getMessage());
+            throw $e;
+        } catch (\Throwable $e) {
+            error_log("[ProfesionalRepository::findDescansosByProfesionalYDia] Excepción inesperada: " . $e->getMessage());
+            throw new PersistenceException("Fallo en la capa de persistencia al consultar descansos del día.", 0, $e);
         }
     }
 
@@ -806,6 +924,65 @@ class ProfesionalRepository
         } catch (\Throwable $e) {
             error_log("[ProfesionalRepository::findBloqueosByProfesional] Excepción inesperada: " . $e->getMessage());
             throw new PersistenceException("Fallo en la capa de persistencia al consultar bloqueos.", 0, $e);
+        }
+    }
+
+    /**
+     * Obtiene los bloqueos de agenda de un profesional aplicables a una fecha `AAAA-MM-DD`
+     * (`fecha_inicio <= ? AND fecha_fin >= ?`).
+     *
+     * @param int $profesionalId
+     * @param string $fecha
+     * @return array<int, BloqueoProfesional>
+     * @throws PersistenceException
+     */
+    public function findBloqueosByProfesionalEnFecha(int $profesionalId, string $fecha): array
+    {
+        if ($profesionalId <= 0 || trim($fecha) === '') {
+            return [];
+        }
+
+        $db = $this->resolveDb();
+
+        try {
+            $stmt = $db->prepare(
+                "SELECT id, profesionalId, fecha_inicio, fecha_fin, hora_inicio, hora_fin, motivo
+                 FROM bloqueos_profesionales
+                 WHERE profesionalId = ? AND fecha_inicio <= ? AND fecha_fin >= ?
+                 ORDER BY fecha_inicio ASC, hora_inicio ASC, id ASC"
+            );
+            if (!$stmt) {
+                throw new PersistenceException("Error al preparar consulta de bloqueos por fecha: " . $db->error);
+            }
+
+            $stmt->bind_param('iss', $profesionalId, $fecha, $fecha);
+            if (!$stmt->execute()) {
+                $err = $stmt->error;
+                $stmt->close();
+                throw new PersistenceException("Error al ejecutar consulta de bloqueos por fecha: " . $err);
+            }
+
+            $res = $stmt->get_result();
+            if ($res === false) {
+                $err = $stmt->error;
+                $stmt->close();
+                throw new PersistenceException("Error al obtener resultados de bloqueos por fecha: " . $err);
+            }
+
+            $bloqueos = [];
+            while ($fila = $res->fetch_assoc()) {
+                $bloqueos[] = new BloqueoProfesional($fila);
+            }
+            $res->free();
+            $stmt->close();
+
+            return $bloqueos;
+        } catch (PersistenceException $e) {
+            error_log("[ProfesionalRepository::findBloqueosByProfesionalEnFecha] " . $e->getMessage());
+            throw $e;
+        } catch (\Throwable $e) {
+            error_log("[ProfesionalRepository::findBloqueosByProfesionalEnFecha] Excepción inesperada: " . $e->getMessage());
+            throw new PersistenceException("Fallo en la capa de persistencia al consultar bloqueos en la fecha.", 0, $e);
         }
     }
 

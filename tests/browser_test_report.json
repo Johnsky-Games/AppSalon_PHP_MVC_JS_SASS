@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-10-10T18:59:39.831Z",
+  "timestamp": "2026-10-10T19:32:05.640Z",
   "navegador": "Chrome Headless (Puppeteer-Core)",
   "citaCreadaId": 1,
   "citaTemporalEliminadaId": 2,
@@ -46,7 +46,13 @@
       "id": "PRE-01",
       "name": "Login interactivo de cliente y redirección autorizada a /cita",
       "success": true,
-      "details": "URL: http://localhost:32781/cita"
+      "details": "URL: http://localhost:32783/cita"
+    },
+    {
+      "id": "DISP-01",
+      "name": "Consulta autenticada en GET /api/disponibilidad (intervalos [inicio, fin), servicios incompatibles y disponibilidad vacía)",
+      "success": true,
+      "details": "Duración catálogo 60 min respetada (17 intervalos en 2026-10-12); incompatibilidad 422 y disponibilidad vacía 200 verificadas."
     },
     {
       "id": "REC-01",

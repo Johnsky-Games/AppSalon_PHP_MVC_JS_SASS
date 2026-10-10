@@ -4,14 +4,17 @@ namespace Controllers;
 
 use Model\ActiveRecord;
 use Repositories\CitaRepository;
+use Repositories\ProfesionalRepository;
 use Repositories\ServicioRepository;
 use Services\CitaService;
+use Services\DisponibilidadService;
 use Services\ServicioService;
 
 class APIController
 {
     private static ?ServicioService $servicioService = null;
     private static ?CitaService $citaService = null;
+    private static ?DisponibilidadService $disponibilidadService = null;
 
     public static function setServicioService(?ServicioService $service): void
     {
@@ -21,6 +24,11 @@ class APIController
     public static function setCitaService(?CitaService $service): void
     {
         self::$citaService = $service;
+    }
+
+    public static function setDisponibilidadService(?DisponibilidadService $service): void
+    {
+        self::$disponibilidadService = $service;
     }
 
     private static function obtenerServicioService(): ServicioService
@@ -45,6 +53,19 @@ class APIController
         );
     }
 
+    private static function obtenerDisponibilidadService(): DisponibilidadService
+    {
+        if (self::$disponibilidadService !== null) {
+            return self::$disponibilidadService;
+        }
+
+        $db = ActiveRecord::getDB();
+        return new DisponibilidadService(
+            new ProfesionalRepository($db),
+            new ServicioRepository($db)
+        );
+    }
+
     public static function index()
     {
         header('Content-Type: application/json; charset=utf-8');
@@ -62,6 +83,57 @@ class APIController
 
         http_response_code(200);
         echo json_encode($resultado['servicios']);
+    }
+
+    /**
+     * Endpoint de lectura autenticado `GET /api/disponibilidad` (Fase 4A).
+     *
+     * Calcula los intervalos disponibles `[inicio, fin)` según la configuración de agenda del profesional
+     * en `America/Guayaquil` y la duración total del catálogo para los servicios seleccionados.
+     *
+     * Distingue:
+     * - No autenticado (`HTTP 401`, `status: 'unauthorized'`, `codigo: 'no_autenticado'`).
+     * - Solicitud inválida (`HTTP 422`, `status: 'invalid'`, `codigo: 'solicitud_invalida'`).
+     * - Profesional inexistente (`HTTP 404`, `status: 'professional_not_found'`, `codigo: 'profesional_no_encontrado'`).
+     * - Profesional inactivo (`HTTP 409`, `status: 'professional_inactive'`, `codigo: 'profesional_inactivo'`).
+     * - Servicios incompatibles (`HTTP 422`, `status: 'incompatible_services'`, `codigo: 'servicios_incompatibles'`).
+     * - Disponibilidad vacía (`HTTP 200`, `status: 'empty'`, `codigo: 'disponibilidad_vacia'`, `disponible: false`, `intervalos: []`).
+     * - Disponibilidad con intervalos (`HTTP 200`, `status: 'ok'`, `codigo: 'disponibilidad_encontrada'`, `disponible: true`, `intervalos: [...]`).
+     * - Fallo SQL (`HTTP 500`, `status: 'error'`, `codigo: 'error_persistencia'`).
+     */
+    public static function disponibilidad()
+    {
+        iniciar_sesion_segura();
+        header('Content-Type: application/json; charset=utf-8');
+
+        $idSesion = $_SESSION['id'] ?? null;
+        $esIdValido = is_int($idSesion)
+            ? $idSesion >= 1
+            : (is_string($idSesion) && ctype_digit(trim($idSesion)) && (int)trim($idSesion) >= 1);
+
+        if (!isset($_SESSION['login']) || $_SESSION['login'] !== true || !$esIdValido) {
+            http_response_code(401);
+            echo json_encode([
+                'resultado' => false,
+                'disponible' => false,
+                'status' => 'unauthorized',
+                'codigo' => 'no_autenticado',
+                'intervalos' => [],
+                'error' => 'No autenticado'
+            ]);
+            detener_ejecucion(401);
+            return;
+        }
+
+        $resultado = self::obtenerDisponibilidadService()->consultarDesdeParametros($_GET);
+        $httpCode = (int)($resultado['httpCode'] ?? 200);
+        unset($resultado['httpCode']);
+
+        http_response_code($httpCode);
+        echo json_encode($resultado);
+        if ($httpCode !== 200) {
+            detener_ejecucion($httpCode);
+        }
     }
 
     /**

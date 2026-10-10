@@ -41,6 +41,7 @@ $router->post('/api/eliminar', [ApiController::class, 'eliminar']);
 
 //API de citas
 $router->get('/api/servicios', [APIController::class, 'index']);
+$router->get('/api/disponibilidad', [APIController::class, 'disponibilidad']);
 $router->post('/api/citas', [APIController::class, 'guardar']);
 
 //CRUD de Servicios

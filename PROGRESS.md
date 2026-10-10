@@ -3,17 +3,87 @@
 Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerdo con la metodología de entregas auditables por **ChatGPT** (revisión estática de código) y ejecución/verificación por **Antigravity** (desarrollo y pruebas dinámicas automatizadas), sujeto a la aprobación final del **Propietario**.
 
 > **Roles y Criterios:**
-> - **Desarrollo y Pruebas Automatizadas (Antigravity):** Implementación de código y ejecución de la suite completa de pruebas unitarias e integrales (101 pruebas, 905 aserciones en PHPUnit), escenarios funcionales HTTP y suite E2E en navegador real Headless Chrome (`tests/verificar_navegador.ps1` y `tests/browser_e2e_test.js`).
+> - **Desarrollo y Pruebas Automatizadas (Antigravity):** Implementación de código y ejecución de la suite completa de pruebas unitarias e integrales (112 pruebas, 1112 aserciones en PHPUnit 10.5.66), escenarios funcionales HTTP y suite E2E en navegador real Headless Chrome (`tests/verificar_navegador.ps1` y `tests/browser_e2e_test.js`).
 > - **Revisión Estática Externa (ChatGPT):** Auditoría independiente de código de aplicación, arquitectura por capas, contratos transaccionales y revisión estática de scripts Bash.
 > - **Aprobación Final y Despliegue (Propietario):** Decisión formal sobre fusiones hacia `main` y despliegues en producción.
 
 ---
 
+## Fase 4A: Cálculo de Disponibilidad por Profesional
+
+- **Rama:** `feature/fase-4a-disponibilidad`
+- **Commit Base (Fase 3A):** `8ad121ea1b02c6ff51e0eb3891207e50bb383218` (corrección documental sobre `25c7e23e56cb28036d72f7e6feb17dad7492a39c`)
+- **Estado General de Fase 4A:** **Completada (Pendiente de Revisión Externa)**
+
+### 1. Diseño Arquitectónico y Reglas de Dominio (`Services\DisponibilidadService`)
+
+1. **Verificación de Profesional Activo y Compatibilidad de Servicios:**
+   - Exige que el profesional exista (`ProfesionalRepository::findById`) y tenga estado activo (`activo = 1`).
+   - Verifica que todos los servicios solicitados existan en el catálogo oficial (`servicios`) y que el profesional esté habilitado para realizar **todos** ellos (`profesionales_servicios`).
+2. **Cálculo de Duración Total Exclusivamente desde el Catálogo:**
+   - Obtiene `duracion_minutos` de cada entidad `Model\Servicio` mediante `ServicioRepository::findById($id)` y suma `$duracionTotalMinutos`.
+   - Ignora deliberadamente cualquier valor `duracion`, `duracion_minutos` o `duracion_total_minutos` enviado por el cliente en parámetros o estructuras de entrada.
+3. **Zona Horaria `America/Guayaquil` y Múltiples Franjas Laborales del Día:**
+   - Evalúa la fecha `AAAA-MM-DD` y construye los instantes de cada intervalo explícitamente en `new \DateTimeZone('America/Guayaquil')` (`DisponibilidadService::TIMEZONE`).
+   - Obtiene todas las franjas laborales (`horarios_profesionales`) del día de la semana ISO-8601 (`1 = Lunes` .. `7 = Domingo`) mediante `ProfesionalRepository::findHorariosByProfesionalYDia()`.
+   - Cada franja laboral se procesa de forma independiente sin fusionar turnos, garantizando que ningún intervalo atraviese huecos entre turnos ni abarque dos turnos distintos.
+4. **Exclusión de Descansos y Bloqueos Aplicables con Semántica `[inicio, fin)`:**
+   - Consulta los descansos del día (`findDescansosByProfesionalYDia`) y los bloqueos vigentes en la fecha (`findBloqueosByProfesionalEnFecha`, donde `fecha_inicio <= $fecha AND fecha_fin >= $fecha`).
+   - Los bloqueos de día completo (`hora_inicio IS NULL OR hora_fin IS NULL`) restan el intervalo `[00:00, 24:00)` (`[0, 1440)`).
+   - Los descansos y bloqueos parciales restan `[hora_inicio, hora_fin)` de cada turno laboral mediante aritmética de intervalos semiabiertos `[inicio, fin)`:
+     - Dos intervalos `[A, B)` y `[R_inicio, R_fin)` se solapan si y solo si `A < R_fin && R_inicio < B`.
+     - El remanente izquierdo `[A, R_inicio)` permite que una atención termine exactamente cuando comienza un descanso, bloqueo o fin de turno (`fin == R_inicio`).
+     - El remanente derecho `[R_fin, B)` permite que una atención comience exactamente cuando termina una restricción (`inicio == R_fin`).
+   - Solo se devuelven intervalos `[inicio, inicio + duracion_total_minutos)` contenidos íntegramente dentro de una misma ventana libre continua (`inicio + duracion_total_minutos <= ventana_fin`).
+5. **Configuración del Paso entre Horas de Inicio (`DEFAULT_PASO_MINUTOS = 15`):**
+   - **Supuesto técnico configurable:** Se define `DisponibilidadService::DEFAULT_PASO_MINUTOS = 15` (15 minutos) como valor inicial configurable (parametrizable por constructor, `setPasoMinutos()`, variable de entorno `AGENDA_PASO_MINUTOS` o query param `paso_minutos`), declarándolo explícitamente como supuesto técnico configurable y no como regla fija confirmada del negocio.
+6. **Frontera de Alcance con Fase 4B:**
+   - Esta entrega calcula disponibilidad según la configuración de agenda del profesional (`horarios_profesionales`, `descansos_profesionales`, `bloqueos_profesionales`).
+   - El endpoint no está conectado todavía al botón de reservar en `/cita`, ni presenta los intervalos como garantizados frente a reservas existentes o concurrentes (cuyo cruce y bloqueo transaccional corresponden a la **Fase 4B**).
+
+### 2. Contrato JSON del Endpoint Autenticado (`GET /api/disponibilidad`)
+
+- **Ruta y Método:** `GET /api/disponibilidad` (`Controllers\APIController::disponibilidad`)
+- **Autenticación:** Requiere sesión autenticada activa (`$_SESSION['login'] === true` e `id` entero positivo).
+- **Parámetros de Consulta (`Query String`):**
+  - `profesionalId` (o `profesional_id` / `profesional`): ID entero positivo del profesional.
+  - `fecha`: Fecha en formato `AAAA-MM-DD`.
+  - `servicios`: Lista CSV (`"1,2"`) o arreglo (`servicios[]=1&servicios[]=2`) de IDs enteros positivos de servicios.
+  - `paso_minutos` *(opcional)*: Entero positivo (`1..1440`) para sobrescribir el paso entre horas de inicio.
+
+| Caso / Estado | HTTP | `status` | `codigo` | `resultado` | `disponible` | Campos Principales |
+| :--- | :---: | :--- | :--- | :---: | :---: | :--- |
+| **No autenticado** | `401` | `unauthorized` | `no_autenticado` | `false` | `false` | `intervalos: []`, `error: "No autenticado"` |
+| **Solicitud inválida** (parámetros ausentes/malformados, fecha inválida o servicio inexistente) | `422` | `invalid` | `solicitud_invalida` | `false` | `false` | `intervalos: []`, `error: "..."` |
+| **Profesional inexistente** | `404` | `professional_not_found` | `profesional_no_encontrado` | `false` | `false` | `intervalos: []`, `error: "El profesional seleccionado no existe."` |
+| **Profesional inactivo** | `409` | `professional_inactive` | `profesional_inactivo` | `false` | `false` | `intervalos: []`, `error: "El profesional seleccionado se encuentra inactivo."` |
+| **Servicios incompatibles** | `422` | `incompatible_services` | `servicios_incompatibles` | `false` | `false` | `servicios_incompatibles: [id, ...]`, `intervalos: []`, `error: "..."` |
+| **Disponibilidad vacía** (día sin turnos, bloqueo completo o sin hueco suficiente) | `200` | `empty` | `disponibilidad_vacia` | `true` | `false` | `duracion_total_minutos`, `paso_minutos`, `zona_horaria`, `intervalos: []`, `aviso_alcance` |
+| **Disponibilidad encontrada** | `200` | `ok` | `disponibilidad_encontrada` | `true` | `true` | `duracion_total_minutos`, `paso_minutos`, `zona_horaria`, `intervalos: [{inicio, fin, hora_inicio, hora_fin, duracion_minutos}, ...]`, `aviso_alcance` |
+| **Fallo SQL (`PersistenceException`)** | `500` | `error` | `error_persistencia` | `false` | `false` | `intervalos: []`, `error: "No fue posible consultar la disponibilidad en este momento."` |
+
+### 3. Validación Ejecutada en Fase 4A (Antigravity)
+
+#### A. Suite Completa PHPUnit (Ejecutada en Docker PHP 8.2.34 + MySQL 8.0 Aislado)
+- **Versión efectiva:** `PHPUnit 10.5.66 by Sebastian Bergmann and contributors.` (`Runtime: PHP 8.2.34`, `Configuration: /app/phpunit.xml`).
+- **Comando ejecutado:**
+  `docker run --rm --network appsalon-phpunit-net -v "${PWD}:/app" -w /app -e DB_HOST=appsalon-phpunit-db -e DB_PORT=3306 -e DB_USER=root -e DB_PASS=root -e DB_NAME=appsalon_test appsalon-php-test php -d variables_order=EGPCS vendor/bin/phpunit`
+- **Resultado:** `OK (112 tests, 1112 assertions)` (`Time: 00:13.414, Memory: 14.00 MB`) — Código de salida `0`.
+- **Cobertura añadida en Fase 4A:**
+  - `Tests\Unit\DisponibilidadServiceTest`: configuración de `DEFAULT_PASO_MINUTOS = 15` y `America/Guayaquil`, rechazo de fechas y solicitudes inválidas, distinción entre profesional inexistente (`404`), inactivo (`409`) y servicios incompatibles (`422`), cálculo de duración total combinada desde el catálogo ignorando duraciones del cliente, múltiples franjas laborales sin cruzar huecos entre turnos, límites exactos `[inicio, fin)` con descansos y bloqueos parciales, disponibilidad vacía (`200`, `status: 'empty'`) por bloqueo de día completo o ventanas insuficientes, y manejo de fallos SQL (`500`).
+  - `Tests\Integration\DisponibilidadIntegrationTest`: pruebas integrales contra MySQL 8 real y `GET /api/disponibilidad` (`APIController::disponibilidad`) verificando autenticación (`401`), solicitud inválida (`422`), profesional inexistente (`404`), profesional inactivo (`409`), servicios incompatibles (`422`), múltiples franjas con duraciones combinadas, descansos y bloqueos parciales (`200`), disponibilidad vacía (`200`) y fallo SQL (`500`).
+
+#### B. Verificación E2E en Navegador con JavaScript Habilitado (`tests/verificar_navegador.ps1` + `tests/browser_e2e_test.js` + `tests/browser_test_report.json`)
+- **Comando ejecutado:** `powershell -ExecutionPolicy Bypass -File tests/verificar_navegador.ps1`
+- **Resultado (`RUN_ID: aa74e8481c6e4ea5a066d02cb5b03c19`):** 15 comprobaciones E2E superadas (`ADMIN-01` a `ADMIN-04`, `PROF-01`, `PROF-02`, `PRE-01`, `DISP-01`, `REC-01` a `REC-04`, `ADMIN-05`, `AUTH-01`, `REC-05`) + verificación de persistencia en MySQL — Código de salida `0`.
+
+---
+
 ## Fase 3A: Profesionales, Duración de Servicios y Configuración de Horarios
 
-- **Rama:** `feature/fase-3a-profesionales-horarios`
+- **Rama:** `feature/fase-3a-profesionales-horarios` (commit final `8ad121ea1b02c6ff51e0eb3891207e50bb383218` / código auditado `25c7e23e56cb28036d72f7e6feb17dad7492a39c`)
 - **Commit Base (Fase 2C):** `fe16c67211d5583e859fd6ec4eb8ba55b7c03983`
-- **Estado General de Fase 3A:** **Completada (Pendiente de Revisión Externa)**
+- **Estado General de Fase 3A:** **Completada y Revisada**
 
 ### 1. Diseño Arquitectónico y de Dominio Elegido para Fase 3A
 
@@ -180,8 +250,9 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 | **Fase 2A** | Separación de responsabilidades en módulo de catálogo de servicios (`Controller -> Service -> Repository`) | `Completada` |
 | **Fase 2B** | Separación de responsabilidades en el flujo de citas y reservas (`CitaRepository`, `CitaService`) | `Completada` |
 | **Fase 2C** | Separación de responsabilidades en usuarios y autenticación (`UsuarioRepository`, `AuthService`, desacoplamiento de `Usuario`) | `Completada` |
-| **Fase 3A** | Profesionales, servicios con duración, horarios, descansos y bloqueos | `Completada (En Revisión)` |
-| **Fase 4** | Disponibilidad real y prevención de reservas simultáneas | `Pendiente` |
+| **Fase 3A** | Profesionales, servicios con duración, horarios, descansos y bloqueos | `Completada` |
+| **Fase 4A** | Cálculo de disponibilidad por profesional según agenda (`DisponibilidadService`, `GET /api/disponibilidad`) | `Completada (En Revisión)` |
+| **Fase 4B** | Integración de disponibilidad con citas existentes, bloqueo transaccional y prevención de reservas simultáneas | `Pendiente` |
 | **Fase 5** | Interfaz accesible de reservas y panel administrativo | `Pendiente` |
 | **Fase 6** | Pagos (Stripe / Mercado Pago), notificaciones multicanal y reportes | `Pendiente` |
 

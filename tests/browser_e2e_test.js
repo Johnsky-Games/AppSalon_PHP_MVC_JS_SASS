@@ -545,6 +545,76 @@ async function runBrowserTests() {
         recordTest('PRE-01', 'Login interactivo de cliente y redirección autorizada a /cita', true, `URL: ${currentUrl}`);
 
         // ------------------------------------------------------------------
+        // FASE 4A - DISPONIBILIDAD: Endpoint autenticado GET /api/disponibilidad
+        // ------------------------------------------------------------------
+        console.log('\n>>> [FASE 4A - DISPONIBILIDAD] Consulta autenticada en GET /api/disponibilidad...');
+        const dispChecks = await page.evaluate(async (fechaValida, fechaSabado) => {
+            const rOk = await fetch(`/api/disponibilidad?profesionalId=1&fecha=${encodeURIComponent(fechaValida)}&servicios=1,2&duracion_minutos=5`, {
+                headers: { 'Accept': 'application/json' }
+            });
+            const bodyOk = await rOk.json();
+
+            const rEmpty = await fetch(`/api/disponibilidad?profesionalId=1&fecha=${encodeURIComponent(fechaSabado)}&servicios=1`, {
+                headers: { 'Accept': 'application/json' }
+            });
+            const bodyEmpty = await rEmpty.json();
+
+            return {
+                okStatus: rOk.status,
+                okBody: bodyOk,
+                emptyStatus: rEmpty.status,
+                emptyBody: bodyEmpty
+            };
+        }, validDate, weekendDate);
+
+        const activeCookies = await page.cookies();
+        const cookieHeader = activeCookies.map(c => `${c.name}=${c.value}`).join('; ');
+        const rIncomp = await fetch(`${BASE_URL}/api/disponibilidad?profesionalId=1&fecha=${encodeURIComponent(validDate)}&servicios=1,3`, {
+            headers: {
+                'Accept': 'application/json',
+                'Cookie': cookieHeader
+            }
+        });
+        const incompStatus = rIncomp.status;
+        const incompBody = await rIncomp.json();
+
+        const paresDispOk = Array.isArray(dispChecks.okBody.intervalos)
+            ? dispChecks.okBody.intervalos.map(i => `${i.inicio}-${i.fin}`)
+            : [];
+        if (
+            dispChecks.okStatus !== 200 ||
+            dispChecks.okBody.status !== 'ok' ||
+            dispChecks.okBody.duracion_total_minutos !== 60 ||
+            !paresDispOk.includes('12:00-13:00') ||
+            !paresDispOk.includes('14:00-15:00') ||
+            !paresDispOk.includes('17:00-18:00') ||
+            paresDispOk.some(p => p.startsWith('12:30-') || p.startsWith('14:30-') || p.startsWith('15:00-'))
+        ) {
+            throw new Error(`Respuesta inesperada en GET /api/disponibilidad (caso válido): ${JSON.stringify(dispChecks.okBody)}`);
+        }
+
+        if (
+            incompStatus !== 422 ||
+            incompBody.status !== 'incompatible_services' ||
+            incompBody.codigo !== 'servicios_incompatibles'
+        ) {
+            throw new Error(`Respuesta inesperada en GET /api/disponibilidad (servicios incompatibles): ${JSON.stringify(incompBody)}`);
+        }
+
+        if (
+            dispChecks.emptyStatus !== 200 ||
+            dispChecks.emptyBody.status !== 'empty' ||
+            dispChecks.emptyBody.codigo !== 'disponibilidad_vacia' ||
+            dispChecks.emptyBody.disponible !== false ||
+            (Array.isArray(dispChecks.emptyBody.intervalos) && dispChecks.emptyBody.intervalos.length !== 0)
+        ) {
+            throw new Error(`Respuesta inesperada en GET /api/disponibilidad (disponibilidad vacía): ${JSON.stringify(dispChecks.emptyBody)}`);
+        }
+
+        recordTest('DISP-01', 'Consulta autenticada en GET /api/disponibilidad (intervalos [inicio, fin), servicios incompatibles y disponibilidad vacía)', true,
+            `Duración catálogo 60 min respetada (${paresDispOk.length} intervalos en ${validDate}); incompatibilidad 422 y disponibilidad vacía 200 verificadas.`);
+
+        // ------------------------------------------------------------------
         // RECORRIDO 1: Carga de Servicios, Selección y Deselección Visual
         // ------------------------------------------------------------------
         console.log('\n>>> [RECORRIDO 1] Carga de servicios desde /api/servicios (incluyendo cambios CRUD), selección y deselección visual...');
