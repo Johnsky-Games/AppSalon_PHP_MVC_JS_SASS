@@ -7,7 +7,8 @@
 # 4. Fallo en restauracion: preserva exclusivamente el nuevo respaldo en disco, respeta respaldos previos y sale con codigo no cero
 # ==============================================================================
 param(
-    [switch]$SimularFalloRespaldoHarness
+    [switch]$SimularFalloRespaldoHarness,
+    [switch]$SimularFalloLimpiezaHarness
 )
 
 $ErrorActionPreference = "Stop"
@@ -46,15 +47,47 @@ function Register-HarnessNetwork([string]$name) {
 }
 
 function Cleanup-HarnessResources {
-    foreach ($c in $registeredContainers.ToArray()) {
-        docker rm -f $c 2>&1 | Out-Null
+    param(
+        [System.Collections.Generic.List[string]]$FailedResources = $null
+    )
+
+    if ($SimularFalloLimpiezaHarness -or ($env:APPSALON_HARNESS_SIMULAR_FALLO -eq "limpieza")) {
+        if ($null -ne $FailedResources) {
+            $FailedResources.Add("recurso-simulado-fallido-$HARNESS_ID")
+        }
+        Write-Host "[AVISO] Inyeccion controlada de fallo en limpieza de recursos Docker activada." -ForegroundColor Yellow
+        throw "Fallo provocado deliberadamente en la limpieza de recursos Docker (simulacion controlada)."
     }
-    $registeredContainers.Clear()
+
+    foreach ($c in $registeredContainers.ToArray()) {
+        try {
+            $out = docker rm -f $c 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "[ERROR LIMPIEZA] Fallo al eliminar contenedor $($c) (codigo $LASTEXITCODE): $out" -ForegroundColor Red
+                if ($null -ne $FailedResources) { $FailedResources.Add("container:$c") }
+            } else {
+                $registeredContainers.Remove($c) | Out-Null
+            }
+        } catch {
+            Write-Host "[ERROR LIMPIEZA] Excepcion al eliminar contenedor $($c): $($_.Exception.Message)" -ForegroundColor Red
+            if ($null -ne $FailedResources) { $FailedResources.Add("container:$c") }
+        }
+    }
 
     foreach ($n in $registeredNetworks.ToArray()) {
-        docker network rm $n 2>&1 | Out-Null
+        try {
+            $out = docker network rm $n 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "[ERROR LIMPIEZA] Fallo al eliminar red $($n) (codigo $LASTEXITCODE): $out" -ForegroundColor Red
+                if ($null -ne $FailedResources) { $FailedResources.Add("network:$n") }
+            } else {
+                $registeredNetworks.Remove($n) | Out-Null
+            }
+        } catch {
+            Write-Host "[ERROR LIMPIEZA] Excepcion al eliminar red $($n): $($_.Exception.Message)" -ForegroundColor Red
+            if ($null -ne $FailedResources) { $FailedResources.Add("network:$n") }
+        }
     }
-    $registeredNetworks.Clear()
 }
 
 # 1. Respaldo inicial estricto antes de modificar cualquier archivo o iniciar preparacion
@@ -379,43 +412,62 @@ APP_URL=http://appsalon-produccion.com:8080
 } finally {
     Write-Host ""
     Write-Host "[LIMPIEZA FINAL DEL ARNES] Restaurando estado y eliminando recursos propios ($HARNESS_ID)..." -ForegroundColor Cyan
-    Cleanup-HarnessResources
 
-    # Restaurar la configuracion original de forma estricta
-    if ($EnvExistedOriginally) {
-        if ($HarnessBackupValid -and (Test-Path $OriginalEnvBackup)) {
-            try {
-                Copy-Item -Path $OriginalEnvBackup -Destination $EnvFile -Force -ErrorAction Stop
-                $restoredHash = (Get-FileHash -Path $EnvFile -Algorithm SHA256 -ErrorAction Stop).Hash
-                if ($restoredHash -ne $OriginalInitialHash) {
-                    throw "Discrepancia de integridad SHA-256 en la restauracion final del arnes ($restoredHash vs $OriginalInitialHash)."
+    $cleanupFailedResources = [System.Collections.Generic.List[string]]::new()
+    try {
+        # 1. Tratamiento individual de limpieza de recursos Docker
+        try {
+            Cleanup-HarnessResources -FailedResources $cleanupFailedResources
+            if ($cleanupFailedResources.Count -gt 0) {
+                Write-Host "[ERROR EN LIMPIEZA DOCKER] Fallo al eliminar los siguientes recursos: $($cleanupFailedResources -join ', ')" -ForegroundColor Red
+                $harnessSuccess = $false
+                if ($harnessExitCode -eq 0) { $harnessExitCode = 1 }
+            }
+        } catch {
+            Write-Host "[ERROR EN LIMPIEZA DOCKER] Excepcion durante limpieza de recursos: $($_.Exception.Message)" -ForegroundColor Red
+            if ($null -ne $cleanupFailedResources -and $cleanupFailedResources.Count -gt 0) {
+                Write-Host "[ERROR EN LIMPIEZA DOCKER] Recursos identificados: $($cleanupFailedResources -join ', ')" -ForegroundColor Red
+            }
+            $harnessSuccess = $false
+            if ($harnessExitCode -eq 0) { $harnessExitCode = 1 }
+        }
+    } finally {
+        # 2. Restauracion estrictamente garantizada e independiente de includes/.env
+        if ($EnvExistedOriginally) {
+            if ($HarnessBackupValid -and (Test-Path $OriginalEnvBackup)) {
+                try {
+                    Copy-Item -Path $OriginalEnvBackup -Destination $EnvFile -Force -ErrorAction Stop
+                    $restoredHash = (Get-FileHash -Path $EnvFile -Algorithm SHA256 -ErrorAction Stop).Hash
+                    if ($restoredHash -ne $OriginalInitialHash) {
+                        throw "Discrepancia de integridad SHA-256 en la restauracion final del arnes ($restoredHash vs $OriginalInitialHash)."
+                    }
+                    # Eliminar el respaldo unicamente tras verificar la restauracion
+                    Remove-Item -Path $OriginalEnvBackup -Force -ErrorAction Stop
+                    Write-Host " -> includes/.env original restaurado con exito por el arnes (SHA-256 verificado)." -ForegroundColor Green
+                } catch {
+                    Write-Host "[ERROR CRITICO] Fallo en la restauracion final del arnes: $($_.Exception.Message)" -ForegroundColor Red
+                    Write-Host "El respaldo fue preservado en: $OriginalEnvBackup para recuperacion manual." -ForegroundColor Yellow
+                    $harnessSuccess = $false
+                    $harnessExitCode = 1
                 }
-                # Eliminar el respaldo unicamente tras verificar la restauracion
-                Remove-Item -Path $OriginalEnvBackup -Force -ErrorAction Stop
-                Write-Host " -> includes/.env original restaurado con exito por el arnes (SHA-256 verificado)." -ForegroundColor Green
-            } catch {
-                Write-Host "[ERROR CRITICO] Fallo en la restauracion final del arnes: $($_.Exception.Message)" -ForegroundColor Red
-                Write-Host "El respaldo fue preservado en: $OriginalEnvBackup para recuperacion manual." -ForegroundColor Yellow
+            } else {
+                Write-Host "[ERROR CRITICO] El arnes no cuenta con un respaldo verificado valido para restaurar." -ForegroundColor Red
                 $harnessSuccess = $false
                 $harnessExitCode = 1
             }
         } else {
-            Write-Host "[ERROR CRITICO] El arnes no cuenta con un respaldo verificado valido para restaurar." -ForegroundColor Red
-            $harnessSuccess = $false
-            $harnessExitCode = 1
-        }
-    } else {
-        if (Test-Path $EnvFile) {
-            try {
-                Remove-Item -Path $EnvFile -Force -ErrorAction Stop
-                if (Test-Path $EnvFile) {
-                    throw "El archivo temporal $($EnvFile) sigue existiendo tras intentar eliminarlo."
+            if (Test-Path $EnvFile) {
+                try {
+                    Remove-Item -Path $EnvFile -Force -ErrorAction Stop
+                    if (Test-Path $EnvFile) {
+                        throw "El archivo temporal $($EnvFile) sigue existiendo tras intentar eliminarlo."
+                    }
+                    Write-Host " -> includes/.env temporal generado por el arnes eliminado correctamente." -ForegroundColor Green
+                } catch {
+                    Write-Host "[ERROR CRITICO] No se pudo eliminar el archivo temporal $($EnvFile): $($_.Exception.Message)" -ForegroundColor Red
+                    $harnessSuccess = $false
+                    $harnessExitCode = 1
                 }
-                Write-Host " -> includes/.env temporal generado por el arnes eliminado correctamente." -ForegroundColor Green
-            } catch {
-                Write-Host "[ERROR CRITICO] No se pudo eliminar el archivo temporal $($EnvFile): $($_.Exception.Message)" -ForegroundColor Red
-                $harnessSuccess = $false
-                $harnessExitCode = 1
             }
         }
     }
