@@ -175,13 +175,18 @@ class APIController
                 return;
             }
 
-            if ($resultado['status'] === CitaService::STATUS_ERROR && es_peticion_json()) {
+            if ($resultado['status'] === CitaService::STATUS_ERROR) {
                 http_response_code(500);
-                header('Content-Type: application/json; charset=utf-8');
-                echo json_encode([
-                    'resultado' => false,
-                    'error' => $resultado['error'] ?? 'No fue posible eliminar la cita'
-                ]);
+                $mensajeError = $resultado['error'] ?? 'No fue posible eliminar la cita';
+                if (es_peticion_json()) {
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode([
+                        'resultado' => false,
+                        'error' => $mensajeError
+                    ]);
+                } else {
+                    echo "Error 500: " . s((string)$mensajeError);
+                }
                 detener_ejecucion(500);
                 return;
             }

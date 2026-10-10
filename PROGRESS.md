@@ -3,7 +3,7 @@
 Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerdo con la metodología de entregas auditables por **ChatGPT** (revisión estática de código) y ejecución/verificación por **Antigravity** (desarrollo y pruebas dinámicas automatizadas), sujeto a la aprobación final del **Propietario**.
 
 > **Roles y Criterios:**
-> - **Desarrollo y Pruebas Automatizadas (Antigravity):** Implementación de código y ejecución de la suite completa de pruebas unitarias e integrales (79 pruebas, 568 aserciones en PHPUnit), escenarios funcionales HTTP y suite E2E en navegador real Headless Chrome (`tests/verificar_navegador.ps1` y `tests/browser_e2e_test.js`).
+> - **Desarrollo y Pruebas Automatizadas (Antigravity):** Implementación de código y ejecución de la suite completa de pruebas unitarias e integrales (80 pruebas, 586 aserciones en PHPUnit), escenarios funcionales HTTP y suite E2E en navegador real Headless Chrome (`tests/verificar_navegador.ps1` y `tests/browser_e2e_test.js`).
 > - **Revisión Estática Externa (ChatGPT):** Auditoría independiente de código de aplicación, arquitectura por capas, contratos transaccionales y revisión estática de scripts Bash.
 > - **Aprobación Final y Despliegue (Propietario):** Decisión formal sobre fusiones hacia `main` y despliegues en producción.
 
@@ -39,17 +39,17 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
   - `STATUS_FORBIDDEN` (`403`): intento de eliminar una cita ajena sin rol de administrador (IDOR bloqueado).
   - `STATUS_INVALID` (`422` / redirección en formulario): formato o regla de negocio inválida en fecha, hora, identificadores o lista de servicios.
   - `STATUS_NOT_FOUND` (`404` / `422` en servicios de reserva): cita inexistente al eliminar o servicio inexistente al reservar.
-  - `STATUS_ERROR` (`500`): fallo SQL o de transacción; en `/admin` responde HTTP `500` y muestra alerta de error en `views/admin/index.php` sin confundirse con el mensaje `"No se registra citas para la fecha seleccionada"`.
+  - `STATUS_ERROR` (`500`): fallo SQL o de transacción. En `/admin` responde HTTP `500` y muestra alerta de error en `views/admin/index.php` sin confundirse con el mensaje `"No se registra citas para la fecha seleccionada"`. En `APIController::eliminar()` devuelve HTTP `500` tanto para peticiones JSON (`{"resultado":false,"error":"..."}`) como para peticiones HTML del formulario administrativo (`Error 500: No fue posible eliminar la cita debido a un error de base de datos.`, escapado con `s()` y deteniendo la ejecución antes de cualquier redirección `302`).
 - **Pendiente separado documentado (Conservación histórica de nombres y precios en `citasservicios`):**
   - Esta entrega corresponde exclusivamente a una extracción estructural a repositorios y servicios sin modificaciones de esquema. Actualmente la tabla `citasservicios` almacena únicamente `(id, citaId, servicioId)` y la consulta administrativa obtiene `servicios.nombre` y `servicios.precio` mediante `LEFT OUTER JOIN` sobre el catálogo vivo. La incorporación de columnas de instantánea histórica (*snapshot* de `nombre_servicio` y `precio_unitario` al momento de la reserva en `citasservicios`) queda documentada como pendiente separado para las siguientes fases de evolución del dominio, junto con profesionales, duraciones, disponibilidad real y pagos.
 
 ### 3. Validación Ejecutada en Fase 2B (Antigravity)
 
 #### A. Suite Completa PHPUnit (Ejecutada en Docker PHP 8.2 + MySQL 8.0 Aislado)
-- **Resultado:** `OK (79 tests, 568 assertions)` — Código de salida `0`.
+- **Resultado:** `OK (80 tests, 586 assertions)` — Código de salida `0`.
 - **Nuevas suites añadidas para Fase 2B:**
   - `Tests\Unit\CitaServiceTest` ([tests/Unit/CitaServiceTest.php](file:///tests/Unit/CitaServiceTest.php)): 5 pruebas unitarias verificando desacoplamiento de `Model\Cita`, `Model\CitaServicio`, `Model\AdminCita` y `Controllers\CitaController` respecto de `ActiveRecord`, protección de `id` y `usuarioId` en `Cita::sincronizarEditable()`, validación de identificadores, resolución de fechas administrativas con fallback seguro y validación de reglas de fecha, día laborable y horario sin consultar `$_SESSION`.
-  - `Tests\Integration\CitaModuloIntegrationTest` ([tests/Integration/CitaModuloIntegrationTest.php](file:///tests/Integration/CitaModuloIntegrationTest.php)): 9 pruebas de integración contra MySQL 8.0 real verificando:
+  - `Tests\Integration\CitaModuloIntegrationTest` ([tests/Integration/CitaModuloIntegrationTest.php](file:///tests/Integration/CitaModuloIntegrationTest.php)): 10 pruebas de integración contra MySQL 8.0 real verificando:
     1. Reserva atómica ignorando `usuarioId` e `id` manipulados en el payload y desduplicando servicios repetidos.
     2. Rechazo de servicios inexistentes sin insertar citas parciales.
     3. Rollback atómico en una única conexión ante fallo SQL real (trigger MySQL `SIGNAL SQLSTATE '45000'` en el segundo registro de `citasservicios`), revirtiendo tanto la fila de `citas` como el primer `citasservicio`.
@@ -59,6 +59,7 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
     7. Rollback transaccional en eliminación cuando falla el borrado de la cita principal en `citas`, restaurando los registros de `citasservicios` previamente eliminados en la transacción.
     8. Consulta administrativa por fecha en `AdminController::index` distinguiendo lista vacía (HTTP `200`) de fallo SQL (HTTP `500` con alerta de error).
     9. Exigencia de rol administrador en `AdminController::index`.
+    10. Respuesta HTTP `500` sin redirección `302` en `APIController::eliminar()` ante fallo de persistencia tanto en modalidad HTML (mensaje visible y escapado sin exponer detalles SQL internos) como en modalidad JSON, conservando la cita y sus servicios asociados tras el rollback y permitiendo su eliminación posterior cuando se restablece la persistencia.
 
 #### B. Verificación E2E en Navegador con JavaScript Habilitado (`tests/verificar_navegador.ps1` + `tests/browser_e2e_test.js`)
 - **Resultado:** 11 comprobaciones E2E superadas (`ADMIN-01` a `ADMIN-05`, `PRE-01`, `REC-01` a `REC-05`) + verificación de persistencia en MySQL — Código de salida `0`.

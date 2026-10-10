@@ -54,6 +54,7 @@ class CitaModuloIntegrationTest extends TestCase
         $_SERVER['HTTP_X_CSRF_TOKEN'] = null;
         $_SERVER['HTTP_REFERER'] = null;
         $_SERVER['HTTP_ACCEPT'] = null;
+        $_SERVER['CONTENT_TYPE'] = null;
         $_SERVER['REQUEST_METHOD'] = 'GET';
 
         APIController::setServicioService(null);
@@ -501,5 +502,115 @@ class CitaModuloIntegrationTest extends TestCase
             $this->assertSame(302, $e->getStatusCode());
         }
     }
+
+    public function testApiEliminarManejaFalloSqlEnModalidadesHtmlYJsonConRollbackSinRedireccion302(): void
+    {
+        $idAdmin = $this->crearUsuario('admin.elim@correo.com', '1', 'Admin', 'Elim');
+        $idCliente = $this->crearUsuario('cliente.elim.html@correo.com', '0', 'Pedro', 'Cliente');
+        $idServ1 = $this->crearServicio('Corte', '80.00');
+        $idServ2 = $this->crearServicio('Barba', '55.00');
+
+        $service = $this->construirCitaService();
+        $idCita = $service->reservar($idCliente, [
+            'fecha' => date('Y-m-d', strtotime('next Thursday')),
+            'hora' => '11:00',
+            'servicios' => "{$idServ1},{$idServ2}"
+        ])['id'];
+
+        $token = bin2hex(random_bytes(32));
+        $_SESSION = [
+            'login' => true,
+            'id' => $idAdmin,
+            'admin' => '1',
+            'csrf_token' => $token
+        ];
+        $_SERVER['REQUEST_METHOD'] = 'POST';
+        $_SERVER['HTTP_REFERER'] = '/admin';
+        $_POST = [
+            'csrf_token' => $token,
+            'id' => (string)$idCita
+        ];
+
+        // Provocar fallo SQL real en el segundo paso de la eliminación (tras borrar citasservicios, al borrar en citas)
+        self::$db->query("DROP TRIGGER IF EXISTS test_fail_delete_cita");
+        self::$db->query(
+            "CREATE TRIGGER test_fail_delete_cita BEFORE DELETE ON citas
+             FOR EACH ROW BEGIN
+                 SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Fallo SQL interno secreto en delete citas';
+             END"
+        );
+
+        try {
+            // 1. Petición HTML del formulario administrativo (no JSON)
+            $_SERVER['HTTP_ACCEPT'] = 'text/html,application/xhtml+xml';
+            $_SERVER['CONTENT_TYPE'] = 'application/x-www-form-urlencoded';
+
+            $salidaHtml = '';
+            try {
+                ob_start();
+                APIController::eliminar();
+                $this->fail('APIController::eliminar en petición HTML debe detener ejecución con 500 y no redirigir');
+            } catch (AppTerminationException $e) {
+                $this->assertSame(500, $e->getStatusCode(), 'En petición HTML ante fallo SQL debe terminar con 500, nunca 302');
+            } finally {
+                $salidaHtml = ob_get_clean();
+            }
+
+            $this->assertSame(500, http_response_code());
+            $this->assertStringContainsString('Error 500: No fue posible eliminar la cita debido a un error de base de datos.', $salidaHtml);
+            $this->assertStringNotContainsString('Fallo SQL interno secreto', $salidaHtml, 'No debe exponer detalles SQL internos');
+            $this->assertStringNotContainsString('SQLSTATE', $salidaHtml);
+
+            // Comprobar que la cita y sus servicios asociados se conservaron tras el rollback
+            $citaTrasFalloHtml = (new CitaRepository(self::$db))->findById($idCita);
+            $this->assertNotNull($citaTrasFalloHtml, 'La cita debe conservarse intacta tras el fallo en petición HTML');
+            $serviciosTrasFalloHtml = (int)self::$db->query("SELECT COUNT(*) AS total FROM citasservicios WHERE citaId = {$idCita}")->fetch_assoc()['total'];
+            $this->assertSame(2, $serviciosTrasFalloHtml, 'Los 2 servicios asociados deben haberse restaurado por rollback');
+
+            // 2. Petición JSON con el mismo fallo de persistencia
+            $_SERVER['HTTP_ACCEPT'] = 'application/json';
+            $salidaJson = '';
+            try {
+                ob_start();
+                APIController::eliminar();
+                $this->fail('APIController::eliminar en petición JSON debe detener ejecución con 500');
+            } catch (AppTerminationException $e) {
+                $this->assertSame(500, $e->getStatusCode());
+            } finally {
+                $salidaJson = ob_get_clean();
+            }
+
+            $this->assertSame(500, http_response_code());
+            $payloadJson = json_decode($salidaJson, true);
+            $this->assertIsArray($payloadJson);
+            $this->assertFalse($payloadJson['resultado']);
+            $this->assertSame('No fue posible eliminar la cita debido a un error de base de datos.', $payloadJson['error']);
+            $this->assertStringNotContainsString('Fallo SQL interno secreto', $salidaJson);
+
+            // La cita y sus servicios siguen intactos tras el segundo rollback
+            $this->assertNotNull((new CitaRepository(self::$db))->findById($idCita));
+            $serviciosTrasFalloJson = (int)self::$db->query("SELECT COUNT(*) AS total FROM citasservicios WHERE citaId = {$idCita}")->fetch_assoc()['total'];
+            $this->assertSame(2, $serviciosTrasFalloJson);
+        } finally {
+            self::$db->query("DROP TRIGGER IF EXISTS test_fail_delete_cita");
+        }
+
+        // 3. Eliminación exitosa una vez restablecida la persistencia (Petición HTML -> 302)
+        $_SERVER['HTTP_ACCEPT'] = 'text/html,application/xhtml+xml';
+        try {
+            ob_start();
+            APIController::eliminar();
+            $this->fail('La eliminación exitosa debe terminar con redirección 302');
+        } catch (AppTerminationException $e) {
+            $this->assertSame(302, $e->getStatusCode());
+        } finally {
+            ob_end_clean();
+        }
+
+        $this->assertNull((new CitaRepository(self::$db))->findById($idCita), 'La cita debe eliminarse cuando no hay fallo SQL');
+        $serviciosTrasExito = (int)self::$db->query("SELECT COUNT(*) AS total FROM citasservicios WHERE citaId = {$idCita}")->fetch_assoc()['total'];
+        $this->assertSame(0, $serviciosTrasExito);
+    }
 }
+
 
