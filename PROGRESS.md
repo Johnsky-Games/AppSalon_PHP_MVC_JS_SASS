@@ -3,94 +3,74 @@
 Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerdo con la metodología de entregas auditables por **ChatGPT** (revisión estática de código) y ejecución/verificación por **Antigravity** (desarrollo y pruebas dinámicas automatizadas), sujeto a la aprobación final del **Propietario**.
 
 > **Roles y Criterios:**
-> - **Desarrollo y Pruebas Automatizadas (Antigravity):** Implementación de código y ejecución de la suite completa de pruebas unitarias e integrales (52 pruebas, 360 aserciones en PHPUnit), 7 escenarios funcionales HTTP de extremo a extremo, y ejecución dinámica en Windows/PowerShell de scripts de reproducción y resiliencia (`scripts/reproducir_entrega1.ps1` y `tests/verificar_resiliencia_scripts.ps1`).
-> - **Revisión Estática Externa (ChatGPT):** Auditoría independiente de código de aplicación, contratos transaccionales, y revisión estática del script Bash (`scripts/reproducir_entrega1.sh`).
+> - **Desarrollo y Pruebas Automatizadas (Antigravity):** Implementación de código y ejecución de la suite completa de pruebas unitarias e integrales (65 pruebas, 469 aserciones en PHPUnit), escenarios funcionales HTTP y suite E2E en navegador real Headless Chrome (`tests/verificar_navegador.ps1` y `tests/browser_e2e_test.js`).
+> - **Revisión Estática Externa (ChatGPT):** Auditoría independiente de código de aplicación, arquitectura por capas, contratos transaccionales y revisión estática de scripts Bash.
 > - **Aprobación Final y Despliegue (Propietario):** Decisión formal sobre fusiones hacia `main` y despliegues en producción.
 
 ---
 
-## Entrega 1: Seguridad y Consistencia del Sistema Actual
+## Fase 2A: Separación de Responsabilidades en el Módulo de Catálogo de Servicios
 
-- **Rama:** `feature/seguridad-y-consistencia-inicial`
-- **Commit Base:** `e816154b96985c2773e4fb418bbbf3e92530cca3`
-- **Commit Final de Entrega 1:** `2e31ac2b489c411983ccb255888509f15e4e1c00`
-- **Revisión Estática de Código (ChatGPT):** Cerrada y aprobada (código de aplicación aprobado en `da7aa87`; corrección final de resiliencia aceptada en `2e31ac2`).
-- **Pruebas Automatizadas Ejecutadas Dinámicamente (Antigravity):** **Probado** (52 pruebas automatizadas, 360 aserciones, 0 fallos, 0 errores, 0 advertencias en entorno Docker PHP 8.2 + MySQL 8.0, incluyendo `FunctionalRunnerSecurityTest` que garantiza rechazo estricto de bases no autorizadas antes de modificar datos).
-- **Verificación Funcional HTTP (Antigravity):** **Ejecutado Dinámicamente** (7 de 7 escenarios probados de extremo a extremo contra servidor real `http://localhost:3000`, base de datos aislada `appsalon_func_test`, tokens sanitizados y receptor SMTP mock).
-- **Scripts de Reproducción:** PowerShell ejecutado y verificado dinámicamente; Bash revisado estáticamente.
-- **Comprobación Funcional en Navegador con JavaScript (UI Cliente):** **Ejecutado Dinámicamente** (Suite automatizada E2E en navegador real Headless Chrome con JavaScript habilitado vía [tests/verificar_navegador.ps1](file:///tests/verificar_navegador.ps1) y [tests/browser_e2e_test.js](file:///tests/browser_e2e_test.js); cubriendo login, carga de catálogo desde `/api/servicios`, selección y deselección visual `.seleccionado`, navegación de tres pasos y tabs con preservación de estado en cliente, validación interactiva de fechas y horarios, renderizado de resumen, envío asíncrono con token CSRF, alerta SweetAlert2, persistencia verificada en MySQL y 0 errores de consola o red).
-- **Documentación Completa:** Disponible en [GUIA_ENTREGA_1.md](file:///GUIA_ENTREGA_1.md) y [database/README.md](file:///database/README.md).
-- **Estado General de Entrega 1:** **Listo para Revisión Final del Propietario** (Pendiente de aprobación previa para merge a `main`).
+- **Rama:** `feature/fase-2-servicios-repositorios`
+- **Commit Base (`main`):** `bc1529bde644e1187be98332e3db912b80773cab`
+- **Estado General de Fase 2A:** **Completada y Lista para Auditoría**
 
-### Verificación Funcional HTTP en Servidor Real (Antigravity):
-Ejecución de extremo a extremo contra servidor PHP (`http://appsalon-web:3000`), base de datos aislada MySQL 8 (`appsalon_func_test`), validación previa de `SELECT DATABASE()`, timeouts de cURL y captura de tokens desde buzón SMTP de pruebas (`tests/smtp_mock_server.php` / `tests/functional_test_suite.php`). Evidencia sanitizada sin exposición de tokens.
+### 1. Arquitectura Implementada (`Controller` $\rightarrow$ `Service` $\rightarrow$ `Repository`)
 
-| Escenario Funcional | Estado | Petición y Respuesta HTTP | Evidencia Técnica en Base de Datos / Buzón |
-| :--- | :---: | :--- | :--- |
-| **1. Registro de Cuenta** | **Ejecutado** | `POST /crear-cuenta` $\rightarrow$ `302 /mensaje` | Fila creada en `usuarios` con `confirmado=0`, `admin=0`, `token=NULL` (sin texto plano), `token_hash` presente. Correo recibido en buzón y hash coincidente (token no expuesto). |
-| **2. Confirmación de Cuenta** | **Ejecutado** | `GET /confirmar-cuenta?token={tok}` $\rightarrow$ `200 OK` | `confirmado=1`, `token_hash=NULL`, `token_tipo=NULL` (consumo atómico verificado). Reintento con el mismo token consumido es rechazado como inválido. |
-| **3. Login y Rate Limiting** | **Ejecutado** | Intentos 1-5: `200`<br>Intento 6: `429 Too Many Requests`<br>Login válido: `302 /cita` | Ventana fija de 15m; intento 6 bloqueado con `Retry-After` dinámico (segundos restantes). Límite por IP mitiga ataques desde el mismo origen. Login válido regenera sesión y permite acceso a `/cita` (`200 OK`). |
-| **4. Recuperación de Contraseña** | **Ejecutado** | `POST /olvide` $\rightarrow$ `200 OK`<br>`POST /recuperar?token={tok}` $\rightarrow$ `302 /` | Correo de recuperación recibido en buzón con hash coincidente. Token consumido atómicamente (`token_hash=NULL`). Clave vieja rechazada (`200`); clave nueva permite login exitoso (`302`). |
-| **5. Reserva de Cita (API)** | **Ejecutado** | `POST /api/citas` $\rightarrow$ `200 OK` JSON | Cita persistida en `citas` con `usuarioId` forzado de sesión, fecha futura válida y hora `10:30:00`. Dos servicios vinculados en `citasservicios` bajo transacción atómica. |
-| **6. Eliminación Autorizada y Anti-IDOR** | **Ejecutado** | IDOR: `403 Forbidden`<br>Dueño: `302 /cita` | Intento de eliminación por un segundo cliente rechazado con 403 (cita permanece intacta en BD). Eliminación autorizada por el dueño borra cita y servicios en transacción. |
-| **7. Logout Seguro por POST con CSRF** | **Ejecutado** | `GET /logout`: `302` (sesión activa)<br>`POST /logout`: `302 /` (sesión destruida) | Petición posterior a `/cita` es rechazada con `302 /` al quedar destruida la sesión. |
+| Capa / Clase | Archivo | Responsabilidad Exclusiva |
+| :--- | :--- | :--- |
+| **Controlador HTTP** (`Controllers\ServicioController` y `Controllers\APIController::index`) | [controllers/ServicioController.php](file:///controllers/ServicioController.php)<br>[controllers/APIController.php](file:///controllers/APIController.php) | Gestión de transporte HTTP, sesión segura (`iniciar_sesion_segura`), autorización de rol (`isAdmin`), protección CSRF (`exigir_csrf`), códigos de estado HTTP (`200`, `302`, `422`, `500`), renderizado de vistas y redirecciones con `detener_ejecucion()`. Inyección sencilla mediante `setServicioService()`. |
+| **Servicio de Dominio** (`Services\ServicioService`) | [services/ServicioService.php](file:///services/ServicioService.php) | Validación estricta de tipos escalares, formato y rango conforme al esquema (`VARCHAR(60)`, `DECIMAL(6,2)`), protección contra asignación masiva de `id`, normalización de precios a 2 decimales y distinción explícita entre estados (`STATUS_OK`, `STATUS_INVALID`, `STATUS_NOT_FOUND`, `STATUS_ERROR`). |
+| **Repositorio de Persistencia** (`Repositories\ServicioRepository` y `Repositories\PersistenceException`) | [repositories/ServicioRepository.php](file:///repositories/ServicioRepository.php)<br>[repositories/PersistenceException.php](file:///repositories/PersistenceException.php) | Consultas y persistencia SQL sobre la tabla `servicios` mediante sentencias preparadas (`findAll`, `findById`, `create`, `update`, `delete`), detección de actualizaciones sin cambios (`affected_rows === 0` con registro existente) y lanzamiento explícito de `PersistenceException` ante fallos SQL o de conexión. |
+| **Entidad de Dominio** (`Model\Servicio`) | [models/Servicio.php](file:///models/Servicio.php) | Entidad desacoplada de `ActiveRecord`. Define `sincronizarEditable()` aceptando únicamente `nombre` y `precio` escalares e ignorando siempre `id`. Corrige el bug histórico `is_numeric(!$this->precio)` delegando en `ServicioService::validarDatos()`. |
 
----
+### 2. Reglas de Validación y Políticas Documentadas (Fase 2A)
 
-### Verificación en Navegador con JavaScript Habilitado (UI Cliente):
-Ejecución en navegador real Headless Chrome (`tests/browser_e2e_test.js`) contra servidor web real (`http://localhost:3000`) en base de datos aislada `appsalon_browser_test` controlada por el arnés [tests/verificar_navegador.ps1](file:///tests/verificar_navegador.ps1).
+- **Campos editables:** Únicamente `nombre` y `precio`. En creación, `id` es forzado a `null` antes de insertar; en actualización, `id` procede exclusivamente del identificador validado de la operación (`$_GET['id']`), ignorando cualquier `$_POST['id']`.
+- **Validación de `nombre`:** Escalar string obligatorio tras `trim()`, longitud máxima de 60 caracteres UTF-8 (`VARCHAR(60)`). Rechaza arreglos o tipos no escalares.
+- **Validación de `precio` y Política sobre Precio Cero:**
+  - **Política sobre precio cero:** En el catálogo comercial de AppSalon todo servicio reservable debe tener un costo estrictamente positivo (`precio > 0`, mínimo `0.01`). Los valores cero (`0`, `0.0`, `0.00`) y negativos son rechazados en la validación.
+  - **Formato y capacidad:** Acepta enteros o decimales positivos con hasta 2 decimales y valor máximo `9999.99` conforme a `DECIMAL(6,2)`. Rechaza notación científica (`1e2`), más de 2 decimales (`50.123`), textos no numéricos y valores $\ge 10000$.
+- **Distinción de estados y fallos SQL:**
+  - Catálogo vacío devuelve `STATUS_OK` con `[]`; fallo SQL lanza `PersistenceException` y devuelve `STATUS_ERROR` (HTTP `500` con alerta de error en vista o JSON de error en `/api/servicios`, sin confundirse con lista vacía ni redirigir como éxito).
+  - Actualización sin cambios (`affected_rows === 0` cuando los valores enviados son idénticos a los almacenados) verifica existencia del registro y retorna `STATUS_OK`, distinguiéndose de un registro inexistente (`STATUS_NOT_FOUND`).
+- **Conservación de historial:** `ServicioRepository::delete()` elimina únicamente la fila del catálogo en `servicios`, preservando intactos los registros históricos en `citas` y `citasservicios` sin borrados en cascada ni cambios de esquema.
+- **Compatibilidad mantenida:** `ActiveRecord` se conserva íntegro para los módulos aún no migrados (`Usuario`, `Cita`, `CitaServicio`, `AdminCita`). El endpoint `/api/servicios` mantiene intacto el contrato JSON consumido por `src/js/app.js`.
 
-| Recorrido en Navegador | Identificador | Estado | Resultado Esperado vs Observado | Evidencia Técnica y Sanitizada |
+### 3. Validación Ejecutada en Fase 2A (Antigravity)
+
+#### A. Suite Completa PHPUnit (Ejecutada en Docker PHP 8.2 + MySQL 8.0)
+- **Resultado:** `OK (65 tests, 469 assertions)` — 0 fallos, 0 errores.
+- **Nuevas suites añadidas:**
+  - `Tests\Unit\ServicioServiceTest` ([tests/Unit/ServicioServiceTest.php](file:///tests/Unit/ServicioServiceTest.php)): 6 pruebas unitarias verificando desacoplamiento de `ActiveRecord`, whitelist de `sincronizarEditable()` ignorando `id`, manejo de entradas no escalares, validación de IDs, límites `VARCHAR(60)` UTF-8, corrección de `is_numeric(!$this->precio)`, política de rechazo de precio cero/negativo y tope `9999.99` de `DECIMAL(6,2)`.
+  - `Tests\Integration\ServicioModuloIntegrationTest` ([tests/Integration/ServicioModuloIntegrationTest.php](file:///tests/Integration/ServicioModuloIntegrationTest.php)): 7 pruebas de integración contra MySQL 8.0 real verificando ciclo CRUD completo, bloqueo de intento de cambiar `id` por POST en crear y actualizar, actualización sin cambios (`STATUS_OK`), distinción entre registro inexistente (`STATUS_NOT_FOUND`) y entrada inválida (`STATUS_INVALID`), manejo de fallos SQL reales (conexión cerrada y triggers MySQL `SIGNAL SQLSTATE '45000'` en `INSERT`, `UPDATE`, `DELETE` respondiendo HTTP `500` sin redirigir como éxito ni confundirse con catálogo vacío), control de acceso `isAdmin` + rechazo de visitante/cliente + exigencia de CSRF, y preservación de datos históricos en `citas` y `citasservicios`.
+
+#### B. Verificación E2E en Navegador con JavaScript Habilitado (`tests/verificar_navegador.ps1` + `tests/browser_e2e_test.js`)
+
+| Recorrido en Navegador | Identificador | Estado | Resultado Esperado vs Observado | Evidencia Técnica |
 | :--- | :---: | :---: | :--- | :--- |
-| **Autenticación en UI de Login** | `PRE-01` | **Probado** | Formulario `email` y `password` autentica cliente ficticio `carlos@correo.com` y redirige a `/cita`. | URL final `http://localhost:3000/cita`, vista de reserva renderizada. |
-| **Carga de Servicios y Selección Visual** | `REC-01` | **Probado** | Petición asíncrona a `/api/servicios`, renderizado de catálogo de tarjetas; clic añade clase `.seleccionado`, segundo clic remueve clase `.seleccionado`. Selección múltiple preservada. | 3 servicios renderizados; toggle comprobado; IDs seleccionados: `[1, 3]`. |
-| **Navegación de Pasos y Preservación de Estado** | `REC-02` | **Probado** | Botones de paginación (`#siguiente`, `#anterior`) y pestañas (`.tabs button[data-paso]`) alternan vistas `#paso-1`, `#paso-2`, `#paso-3`. Nombre prellenado de sesión (`Carlos Mendoza`) y selección de servicios intacta al retroceder. | Navegación Paso 1 $\rightarrow$ Paso 2 $\rightarrow$ Paso 1 $\rightarrow$ Paso 2 superada; `.seleccionado` intacto. |
-| **Validación Interactiva de Fechas y Horas** | `REC-03` | **Probado** | Sábado futuro calculado dinámicamente genera alerta *"Fines de semana no permitidos"* y limpia input. Hora `08:30` genera alerta *"Hora no válida (10:00 a 18:00)"* y limpia input. Día laborable futuro calculado y hora `11:30` aceptadas. | Alertas dinámicas DOM desplegadas y auto-removidas; inputs retienen únicamente valores conformes a reglas de negocio. |
-| **Resumen, Envío Asíncrono y Persistencia en BD** | `REC-04` | **Probado** | Paso 3 renderiza datos formateados; clic en "Reservar Cita" despacha `POST /api/citas` con CSRF; responde `200 OK` JSON `{resultado: {resultado: true, id: 1}}`; SweetAlert2 despliega modal *"Cita Creada"*. | Modal `.swal2-popup` verificado en DOM; BD `appsalon_browser_test` registra `citas` (`id: 1`, fecha coincidente con día laborable calculado y compartido, `hora: 11:30:00`, `usuarioId: 1`) y 2 filas en `citasservicios`. |
-| **Monitorización de Consola y Red** | `REC-05` | **Probado** | Cero errores de consola de JavaScript (`console.error`) y cero peticiones de red fallidas (`requestfailed`). | Errores consola: 0, Peticiones fallidas: 0. Favicon vacío integrado en layout (`<link rel="icon" href="data:,">`) previene 404s en navegadores modernos. |
+| **Listado Administrativo de Servicios** | `ADMIN-01` | **Probado** | Login como `admin@appsalon.com`, navegación a `/servicios` y renderizado de catálogo inicial. | 3 servicios iniciales listados en DOM. |
+| **Validación y Creación de Servicio** | `ADMIN-02` | **Probado** | Envío inválido en `/servicios/crear` muestra alertas `.alerta.error` sin redirigir; envío válido crea servicio y redirige a `/servicios`. | Alertas de validación verificadas; `'Masaje Capilar Relax'` (`$95.50`) creado y listado. |
+| **Actualización de Servicio** | `ADMIN-03` | **Probado** | Edición en `/servicios/actualizar?id=4` actualiza nombre y precio y redirige a `/servicios`. | `'Masaje Capilar Relax'` actualizado a `'Masaje Capilar Premium'` (`$115.00`) en DOM y MySQL. |
+| **Eliminación de Servicio con CSRF** | `ADMIN-04` | **Probado** | Creación de servicio temporal y eliminación vía `POST /servicios/eliminar` con token CSRF remueve el servicio del catálogo. | `'Servicio Temporal Borrar'` eliminado de `/servicios` y ausente en MySQL. |
+| **Catálogo Actualizado en Reserva (`/cita`)** | `PRE-01` y `REC-01..05` | **Probado** | Login de cliente `carlos@correo.com`; `/api/servicios` carga los 4 servicios vigentes (incluyendo `'Masaje Capilar Premium'`), permite selección, validación de fecha/hora, reserva con SweetAlert2 y persistencia en BD con 0 errores de consola/red. | 4 servicios en `/cita`; reserva persistida en `citas` y `citasservicios`; 0 errores de consola y 0 fallos de red. |
 
 ---
 
-### Controles de Seguridad y Pruebas Automatizadas (PHPUnit):
-| :--- | :---: | :--- |
-| Whitelist en Registro (`sincronizarRegistro`) | **Probado** | `UsuarioSeguridadTest::testRegistroBloqueaAsignacionMasivaDePrivilegios`, `SecurityIntegrationTest::testRegistroEnBaseDeDatosForzaPrivilegiosEnCero` |
-| Reconstrucción de Sesión y Aislamiento de Roles (Admin -> Cliente) | **Probado** | `SecurityIntegrationTest::testTransicionDeRolAdminAClienteEnMismaSesionRevocaAccesoAdmin` |
-| Centralización de Sesiones Seguras (`iniciar_sesion_segura`) | **Probado** | Centralizado en todos los controladores (`CitaController`, `LoginController`, `AdminController`, `ServicioController`, `APIController`) |
-| Logout Seguro por Método POST con Token CSRF | **Probado** | `SecurityIntegrationTest::testLogoutExigePostConCsrfYDestruyeSesion`, formulario en `views/templates/barra.php` y ruta en `public/index.php` |
-| Autenticación e IDOR en Citas (`/api/citas`, `/api/eliminar`) | **Probado** | `ApiSeguridadTest::testVisitanteNoPuedeCrearCitasSinAutenticacion`, `ApiSeguridadTest::testClienteNoPuedeEliminarCitaDeOtroClienteIdor`, `ApiSeguridadTest::testClientePuedeEliminarSuPropiaCita`, `ApiSeguridadTest::testReservaValidaGuardaCitaConUsuarioDeSesion` |
-| Aislamiento Transaccional en Eliminación (`APIController::eliminar`) | **Probado** | `ApiSeguridadTest::testEliminarCitaExitosaNoEjecutaRollbackFalso` (aislamiento de redirección/terminación fuera del bloque try-catch transaccional) |
-| Terminación Unificada con `AppTerminationException` (Sin bypass de pruebas) | **Probado** | `includes/funciones.php`, manejado en `public/index.php` y verificado en suite completa sin `PHPUNIT_RUNNING` |
-| Protección contra Limpieza Destructiva en BD no autorizada | **Probado** | `tests/bootstrap.php` y `validar_base_datos_prueba()`, bloqueando bases que no terminen en `_test` |
-| Consultas Preparadas y Verificación Estricta de Errores SQL | **Probado** | `models/ActiveRecord.php` verifica `execute()` y `affected_rows` en `crear()`, `actualizar()`, `eliminar()`; `SecurityIntegrationTest::testEntradasMaliciosasSeProcesanComoDatosEnConsultasPreparadas` |
-| Eliminación de Texto Plano en Tokens y Supresión de Fallback Legacy | **Probado** | `Usuario::generarTokenSeguro()` almacena `null` en `token` y hash en `token_hash`; eliminado fallback en `buscarPorTokenSeguro()` |
-| Consumo Atómico de Tokens por Hash, Propósito y Expiración | **Probado** | `Usuario::confirmarCuentaPorToken()`, `Usuario::restablecerPasswordPorToken()`, `testTokenConfirmacionUsoUnicoYRechazoConcurrente`, `testTokenPropositoIncorrectoEsRechazado`, `testTokenSustituidoPorUnoNuevoInvalidaElAnterior`, `testExpiracionEntreLecturaYActualizacionRechazaConsumo` |
-| Emisión Atómica de Tokens Condicionada al Estado de Cuenta | **Probado** | `Usuario::generarYPersistirTokenRecuperacion()`, `Usuario::generarYPersistirTokenConfirmacion()`, `SecurityIntegrationTest::testEmisionTokenRecuperacionConcurrenteNoRevierteCambioDePassword`, `SecurityIntegrationTest::testEmisionTokenConfirmacionConcurrenteNoRevierteConfirmacion` |
-| Validación y Protección CSRF Global (Formularios y Fetch JS) | **Probado** | `CsrfTest` (8 casos de prueba cubriendo nulos, vacíos, arrays, cabeceras, POST y excepción 403) |
-| Rate Limiting Atómico en MySQL con Ventana Temporal y Código 429 | **Probado** | `classes/RateLimiter.php` con `INSERT ... ON DUPLICATE KEY UPDATE` serializado en InnoDB, `SecurityIntegrationTest::testRateLimiterVentanaYBloqueo429` |
-| Rate Limiter: Umbral Exacto Intento por Intento (`intentos >= ?`) | **Probado** | `SecurityIntegrationTest::testRateLimiterUmbralExactoIntentoPorIntento` (bloqueo exacto en intento 5, intentos 1-4 permitidos) |
-| Rate Limiter: Admisión Atómica Previa a Bcrypt (`admitirIntentoLogin`) | **Probado** | `LoginController::login()` reserva intento atómicamente antes de verificar credenciales costosas; limpieza en login exitoso |
-| Rate Limiter: Presupuesto Compartido de IP y Limpieza por Cuenta | **Probado** | `SecurityIntegrationTest::testLoginExitosoNoReiniciaPresupuestoIpAtaqueMultiplesCuentas` (login exitoso en cuenta de control no reinicia contador compartido de IP ante ataques intercalados) |
-| Rate Limiter: Concurrencia de Procesos CLI en Controlador con Señal, Verificación Observada y Timeout | **Probado** | `SecurityIntegrationTest::testRateLimiterProcesosSimultaneosSincronizadosFlujoRealLogin` (Ejecución directa del controlador `LoginController::login()` desde 10 subprocesos CLI de PHP independientes vía `proc_open` con sesiones y conexiones MySQL separadas —no prueba HTTP de servidor web—. Verificación previa de existencia, confirmación y hash del usuario; barrera sincronizada STDIN con señal READY; exactamente 5 admitidos con llamada real observada a `comprobarPasswordAndVerificado` y 5 rechazados con 429 con cero verificaciones de contraseña; tiempo límite de 10s y limpieza garantizada de subprocesos en bloque finally) |
-| Rate Limiter: Postura Fail-Secure ante Fallos SQL | **Probado** | `SecurityIntegrationTest::testRateLimiterManejoFalloSqlFailSecure` (retorna bloqueo ante conexión cerrada o fallo) |
-| Supresión de Generación de Tokens bajo Rate Limiting en `/olvide` | **Probado** | `SecurityIntegrationTest::testOlvideConRateLimitBloqueaSinGenerarNiPersistirToken` (detiene flujo antes de token/email ante 429) |
-| Control de Fallo en Persistencia Previa al Envío de Correo | **Probado** | `SecurityIntegrationTest::testOlvideNoIntentaEnviarCorreoSiFallaPersistenciaToken`, `SecurityIntegrationTest::testReenviarConfirmacionNoEnviaCorreoSiCuentaYaEstaConfirmada` |
-| Reenvío de Confirmación para Cuentas No Confirmadas (`/reenviar-confirmacion`) | **Probado** | `SecurityIntegrationTest::testReenviarConfirmacionGeneraTokenNuevoSoloParaCuentasNoConfirmadas`, vista `views/auth/reenviar-confirmacion.php` |
-| Correo Transaccional Desacoplado y Validación de Objeto PHPMailer | **Probado** | `classes/Email.php` despacha a `$this->email`, remitente configurable por `EMAIL_FROM`, `prepararMailer()` construye objeto real y se verifica destinatario, remitente, asunto y enlace con token en `EmailTest` |
-| Transacciones ACID Reales en Citas con Rollback Integral | **Probado** | `SecurityIntegrationTest::testFallaAlGuardarServiciosRevierteCitaCompletaEnFlujoRealApi` (falla provocada con trigger MySQL tras inserción de cita, revirtiendo cita completa) |
-| Validación Estricta de Tipos Escalares (Anti-Array Injection) | **Probado** | `ApiSeguridadTest::testLoginRechazaCargaNoEscalarTipoInvalido`, constructores y validaciones en `models/Usuario.php` |
-| Validación Servidor: Fechas (futuras sin fin de semana), Horas estrictas `HH:MM` y Desduplicación | **Probado** | `ApiSeguridadTest::testGuardarRechazaReservaMismoDiaOFechaPasada`, `testGuardarRechazaHorarioInvalidoPasadoLimite`, `testGuardarRechazaFormatoHoraConSegundos`, `testGuardarDesduplicaServiciosRepetidosPoliticaExplicita` |
-| Migraciones Versionadas: Comparación Exhaustiva de Esquema y Datos | **Probado** | `MigrationTest::testActualizacionDesdeInstalacionPreviaPreservaDatosYGeneraMismoEsquemaQueFresh` (ejecutado por `migrador.php up`, omitiendo 001, aplicando `002_innodb_and_rate_limit_window.sql`, preservando 100% de datos de clientes, administradores, citas y servicios, e igualando 100% esquema fresh en columnas, nulabilidad, defaults, índices y motores InnoDB) |
-| Integridad del Historial de Migraciones y Manejo de Estado Parcial | **Probado** | `MigrationTest::testMigradorFallaConEstadoParcialCuandoInsercionEnHistorialFalla` (falla forzada por trigger en inserción de historial, salida con código 1, mensaje explicativo de estado parcial sin imprimir [OK]) |
-| Detección de Errores Intermedios y Salida no Cero en Migrador | **Probado** | `MigrationTest::testMigradorFallaConCodigoDistintoDeCeroAnteErrorSqlIntermedio`, `database/migrador.php` y `database/README.md` |
-| Aislamiento de Recursos Docker y Resiliencia de Scripts de Reproducción | **Probado** | `scripts/reproducir_entrega1.ps1`, `scripts/reproducir_entrega1.sh`, `tests/verificar_resiliencia_scripts.ps1` (Identificadores RFC y GUIDs únicos por ejecución, sin colisión de puertos de host, protección estricta del `.env` original del arnés con respaldo GUID verificado y errores terminantes `Stop`, restauración independiente e incondicional de `includes/.env` en bloque `finally` interno ante fallos terminantes en limpieza Docker, tratamiento y registro individualizado de fallos por recurso en `Cleanup-HarnessResources` sin interrumpir la limpieza de los demás, cancelación previa ante fallo de respaldo preservando archivo intacto, fallo controlado de preparación cancelando y restaurando `.env` byte a byte con SHA-256 verificado, aislamiento con `.env` previo de credenciales ajenas demostrando que migraciones se ejecutan exclusivamente en bases aisladas de la ejecución, conservación intacta de respaldos preexistentes en disco ante fallo de restauración o limpieza, y fallo estricto no cero si no se puede eliminar el `.env` temporal generado). |
+## Entrega 1: Seguridad y Consistencia del Sistema Actual (Cerrada y Fusionada en `main`)
+
+- **Rama:** `feature/seguridad-y-consistencia-inicial` (fusionada en `main` en `bc1529bde644e1187be98332e3db912b80773cab`)
+- **Estado:** **Aprobada y Cerrada** (52 pruebas PHPUnit de Entrega 1 + 7 escenarios HTTP + 5 recorridos de navegador + resiliencia de scripts en PowerShell verificados; Bash revisado estáticamente).
 
 ---
 
-## Fases Posteriores (Pendientes de Inicio)
+## Estado Global de Fases del Proyecto
 
 | Fase | Alcance Principal | Estado |
 | :--- | :--- | :---: |
-| **Fase 2** | Migraciones y separación gradual de responsabilidades | `Pendiente` |
+| **Entrega 1** | Seguridad y consistencia inicial (Auth, CSRF, Rate Limiting, Tokens, Transacciones, Migraciones) | `Completada y en main` |
+| **Fase 2A** | Separación de responsabilidades en módulo de catálogo de servicios (`Controller -> Service -> Repository`) | `Completada (En Auditoría)` |
+| **Fase 2B** | Separación de responsabilidades en el flujo de citas y reservas | `Pendiente` |
 | **Fase 3** | Profesionales, servicios con duración, horarios, descansos y bloqueos | `Pendiente` |
 | **Fase 4** | Disponibilidad real y prevención de reservas simultáneas | `Pendiente` |
 | **Fase 5** | Interfaz accesible de reservas y panel administrativo | `Pendiente` |

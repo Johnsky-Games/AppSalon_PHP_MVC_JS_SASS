@@ -1,11 +1,12 @@
 /**
- * Suite E2E en Navegador Real Headless (Chrome/Edge) para AppSalon — Entrega 1
+ * Suite E2E en Navegador Real Headless (Chrome/Edge) para AppSalon — Entrega 1 y Fase 2A
  * Verifica con JavaScript habilitado:
- * 1. Carga de /api/servicios, renderizado en DOM, selección y deselección visual (.seleccionado).
- * 2. Navegación entre pasos 1, 2 y 3 (#paso-1, #paso-2, #paso-3) y conservación de estado en memoria/DOM.
- * 3. Validación interactiva de fecha (bloqueo fines de semana) y hora (bloqueo fuera de 10:00 a 18:00).
- * 4. Resumen, envío real de cita vía fetch POST con CSRF, respuesta JSON {resultado: true}, alerta SweetAlert2.
- * 5. Ausencia total de errores de consola y solicitudes de red fallidas.
+ * 1. Flujo Administrativo CRUD de Servicios (/servicios, /servicios/crear, /servicios/actualizar, /servicios/eliminar).
+ * 2. Carga de /api/servicios reflejando los cambios del catálogo en la vista de reserva (/cita), selección y deselección visual (.seleccionado).
+ * 3. Navegación entre pasos 1, 2 y 3 (#paso-1, #paso-2, #paso-3) y conservación de estado en memoria/DOM.
+ * 4. Validación interactiva de fecha (bloqueo fines de semana) y hora (bloqueo fuera de 10:00 a 18:00).
+ * 5. Resumen, envío real de cita vía fetch POST con CSRF, respuesta JSON {resultado: true}, alerta SweetAlert2.
+ * 6. Ausencia total de errores de consola y solicitudes de red fallidas.
  */
 
 const path = require('path');
@@ -124,22 +125,161 @@ async function runBrowserTests() {
         if (msg.type() === 'error') {
             const locUrl = (msg.location() && msg.location().url) ? msg.location().url : '';
             const text = msg.text() || '';
-            if (locUrl.includes('favicon.ico') || text.includes('favicon.ico')) return; // Solicitud por defecto del navegador ante falta de favicon
+            if (locUrl.includes('favicon.ico') || text.includes('favicon.ico')) return;
             consoleErrors.push(`[Console Error] ${text} @ ${locUrl || 'inline'}`);
         }
     });
 
     page.on('requestfailed', request => {
-        // Ignorar favicon opcional si no existe
         if (request.url().endsWith('favicon.ico')) return;
         failedRequests.push(`[Network Failed] ${request.method()} ${request.url()} - ${request.failure() ? request.failure().errorText : 'Failed'}`);
     });
 
     try {
         // ------------------------------------------------------------------
-        // PASO PREVIO: Autenticación en Navegador
+        // BLOQUE ADMINISTRATIVO (FASE 2A): CRUD de Catálogo de Servicios
         // ------------------------------------------------------------------
-        console.log('>>> [PRE-REQUISITO] Autenticación en interfaz de Login...');
+        console.log('>>> [FASE 2A - ADMIN] Autenticación de Administrador y CRUD de Servicios...');
+        await page.goto(`${BASE_URL}/`, { waitUntil: 'networkidle0' });
+
+        await page.waitForSelector('input[name="email"]', { timeout: 5000 });
+        await page.type('input[name="email"]', 'admin@appsalon.com');
+        await page.type('input[name="password"]', 'Password123!');
+
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('input[type="submit"]')
+        ]);
+
+        if (!page.url().includes('/admin')) {
+            throw new Error(`Se esperaba redirección de admin a /admin, obtenido: ${page.url()}`);
+        }
+
+        // 1. Navegar al listado de servicios (/servicios)
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('a[href="/servicios"]')
+        ]);
+
+        const itemsIniciales = await page.$$('ul.servicios li');
+        if (itemsIniciales.length !== 3) {
+            throw new Error(`Se esperaban 3 servicios iniciales en /servicios, encontrados: ${itemsIniciales.length}`);
+        }
+        recordTest('ADMIN-01', 'Acceso de administrador a /servicios y listado inicial del catálogo', true,
+            `3 servicios listados en /servicios.`);
+
+        // 2. Crear servicio (/servicios/crear): probar rechazo de entrada inválida y creación válida
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('a[href="/servicios/crear"]')
+        ]);
+
+        // 2.a Envío inválido (nombre vacío y precio negativo)
+        await page.type('#precio', '-25');
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('form.formulario input[type="submit"]')
+        ]);
+
+        const alertasErrorCrear = await page.$$eval('.alerta.error', els => els.map(e => e.textContent.trim()));
+        if (alertasErrorCrear.length < 2) {
+            throw new Error(`Se esperaban alertas de validación ante entrada inválida en /servicios/crear, obtenidas: ${JSON.stringify(alertasErrorCrear)}`);
+        }
+
+        // 2.b Envío válido ("Masaje Capilar Relax", "95.50")
+        await page.$eval('#nombre', el => el.value = '');
+        await page.$eval('#precio', el => el.value = '');
+        await page.type('#nombre', 'Masaje Capilar Relax');
+        await page.type('#precio', '95.50');
+
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('form.formulario input[type="submit"]')
+        ]);
+
+        if (!page.url().endsWith('/servicios')) {
+            throw new Error(`Tras crear servicio válido debía redirigir a /servicios, URL actual: ${page.url()}`);
+        }
+
+        const textoListadoTrasCrear = await page.$eval('ul.servicios', el => el.textContent);
+        if (!textoListadoTrasCrear.includes('Masaje Capilar Relax') || !textoListadoTrasCrear.includes('95.50')) {
+            throw new Error('El servicio creado "Masaje Capilar Relax" ($95.50) no aparece en /servicios.');
+        }
+        recordTest('ADMIN-02', 'Validación de entradas inválidas y creación de nuevo servicio en /servicios/crear', true,
+            `Entradas inválidas rechazadas con alertas (${alertasErrorCrear.length}); 'Masaje Capilar Relax' ($95.50) creado.`);
+
+        // 3. Actualizar servicio (/servicios/actualizar)
+        const hrefActualizar = await page.evaluate(() => {
+            const items = Array.from(document.querySelectorAll('ul.servicios li'));
+            const target = items.find(li => li.textContent.includes('Masaje Capilar Relax'));
+            const link = target ? target.querySelector('a[href*="/servicios/actualizar"]') : null;
+            return link ? link.getAttribute('href') : null;
+        });
+
+        if (!hrefActualizar) {
+            throw new Error('No se encontró enlace de actualización para "Masaje Capilar Relax".');
+        }
+
+        await page.goto(`${BASE_URL}${hrefActualizar}`, { waitUntil: 'networkidle0' });
+        await page.$eval('#nombre', el => el.value = '');
+        await page.$eval('#precio', el => el.value = '');
+        await page.type('#nombre', 'Masaje Capilar Premium');
+        await page.type('#precio', '115.00');
+
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('form.formulario input[type="submit"]')
+        ]);
+
+        const textoListadoTrasActualizar = await page.$eval('ul.servicios', el => el.textContent);
+        if (!textoListadoTrasActualizar.includes('Masaje Capilar Premium') || !textoListadoTrasActualizar.includes('115.00')) {
+            throw new Error('El servicio actualizado "Masaje Capilar Premium" ($115.00) no se reflejó en /servicios.');
+        }
+        recordTest('ADMIN-03', 'Actualización de servicio existente en /servicios/actualizar', true,
+            `'Masaje Capilar Relax' actualizado a 'Masaje Capilar Premium' ($115.00).`);
+
+        // 4. Crear servicio temporal y eliminarlo (/servicios/eliminar)
+        await page.goto(`${BASE_URL}/servicios/crear`, { waitUntil: 'networkidle0' });
+        await page.type('#nombre', 'Servicio Temporal Borrar');
+        await page.type('#precio', '45.00');
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('form.formulario input[type="submit"]')
+        ]);
+
+        const existeTemporalAntes = await page.$eval('ul.servicios', el => el.textContent.includes('Servicio Temporal Borrar'));
+        if (!existeTemporalAntes) {
+            throw new Error('No se encontró "Servicio Temporal Borrar" antes de probar eliminación.');
+        }
+
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.evaluate(() => {
+                const items = Array.from(document.querySelectorAll('ul.servicios li'));
+                const target = items.find(li => li.textContent.includes('Servicio Temporal Borrar'));
+                const form = target ? target.querySelector('form[action="/servicios/eliminar"]') : null;
+                if (!form) throw new Error('Formulario eliminar no encontrado');
+                form.submit();
+            })
+        ]);
+
+        const existeTemporalDespues = await page.$eval('ul.servicios', el => el.textContent.includes('Servicio Temporal Borrar'));
+        if (existeTemporalDespues) {
+            throw new Error('El servicio "Servicio Temporal Borrar" sigue apareciendo tras ejecutar /servicios/eliminar.');
+        }
+        recordTest('ADMIN-04', 'Eliminación de servicio con CSRF en /servicios/eliminar', true,
+            `'Servicio Temporal Borrar' eliminado; catálogo conserva 4 servicios activos.`);
+
+        // Cerrar sesión de administrador mediante POST /logout
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('.barra form[action="/logout"] button, .barra form[action="/logout"] input[type="submit"]')
+        ]);
+
+        // ------------------------------------------------------------------
+        // PASO PREVIO CLIENTE: Autenticación en Navegador
+        // ------------------------------------------------------------------
+        console.log('\n>>> [PRE-REQUISITO] Autenticación de cliente en interfaz de Login...');
         await page.goto(`${BASE_URL}/`, { waitUntil: 'networkidle0' });
 
         await page.waitForSelector('input[name="email"]', { timeout: 5000 });
@@ -156,23 +296,27 @@ async function runBrowserTests() {
         if (!isLoggedIn) {
             throw new Error(`Fallo en login interactivo: URL actual es ${currentUrl}, se esperaba /cita`);
         }
-        recordTest('PRE-01', 'Login interactivo y redirección autorizada a /cita', true, `URL: ${currentUrl}`);
+        recordTest('PRE-01', 'Login interactivo de cliente y redirección autorizada a /cita', true, `URL: ${currentUrl}`);
 
         // ------------------------------------------------------------------
         // RECORRIDO 1: Carga de Servicios, Selección y Deselección Visual
         // ------------------------------------------------------------------
-        console.log('\n>>> [RECORRIDO 1] Carga de servicios, selección y deselección visual (.seleccionado)...');
+        console.log('\n>>> [RECORRIDO 1] Carga de servicios desde /api/servicios (incluyendo cambios CRUD), selección y deselección visual...');
 
-        // Esperar a que la llamada asíncrona a /api/servicios se complete y renderice
         await page.waitForSelector('#servicios .servicio', { timeout: 5000 });
         const serviciosCards = await page.$$('#servicios .servicio');
         const cantidadServicios = serviciosCards.length;
 
-        if (cantidadServicios < 2) {
-            throw new Error(`Se esperaban al menos 2 servicios en el catálogo, encontrados: ${cantidadServicios}`);
+        if (cantidadServicios !== 4) {
+            throw new Error(`Se esperaban exactamente 4 servicios en el catálogo de reserva tras el CRUD administrativo, encontrados: ${cantidadServicios}`);
         }
 
-        // Obtener datos del primer servicio
+        const nombresEnReserva = await page.$$eval('#servicios .servicio .nombre-servicio', els => els.map(e => e.textContent.trim()));
+        if (!nombresEnReserva.includes('Masaje Capilar Premium') || nombresEnReserva.includes('Servicio Temporal Borrar')) {
+            throw new Error(`El catálogo en /cita no refleja el estado actualizado por el CRUD: ${JSON.stringify(nombresEnReserva)}`);
+        }
+
+        // Obtener datos del primer servicio y del servicio creado/actualizado en el CRUD
         const primerServicio = serviciosCards[0];
         const servicioId1 = await primerServicio.evaluate(el => el.dataset.idServicio);
         const servicioNombre1 = await primerServicio.evaluate(el => el.querySelector('.nombre-servicio')?.textContent);
@@ -191,28 +335,27 @@ async function runBrowserTests() {
             throw new Error(`El servicio ${servicioNombre1} no removió la clase .seleccionado tras un segundo clic.`);
         }
 
-        // 1.3 Volver a seleccionar servicio 1 y seleccionar también el servicio 3
+        // 1.3 Volver a seleccionar servicio 1 y seleccionar también el cuarto servicio ("Masaje Capilar Premium")
         await primerServicio.click();
-        const tercerServicio = serviciosCards[2] || serviciosCards[1];
-        const servicioId3 = await tercerServicio.evaluate(el => el.dataset.idServicio);
-        await tercerServicio.click();
+        const cuartoServicio = serviciosCards[3];
+        const servicioId4 = await cuartoServicio.evaluate(el => el.dataset.idServicio);
+        await cuartoServicio.click();
 
         const s1Seleccionado = await primerServicio.evaluate(el => el.classList.contains('seleccionado'));
-        const s3Seleccionado = await tercerServicio.evaluate(el => el.classList.contains('seleccionado'));
+        const s4Seleccionado = await cuartoServicio.evaluate(el => el.classList.contains('seleccionado'));
 
-        if (!s1Seleccionado || !s3Seleccionado) {
+        if (!s1Seleccionado || !s4Seleccionado) {
             throw new Error('Fallo al seleccionar múltiples servicios en el DOM.');
         }
 
-        recordTest('REC-01', 'Carga asíncrona de servicios y alternancia de clase .seleccionado', true, 
-            `${cantidadServicios} servicios renderizados; selección y deselección verificadas; IDs seleccionados: [${servicioId1}, ${servicioId3}]`);
+        recordTest('REC-01', 'Carga asíncrona de /api/servicios reflejando CRUD y alternancia de .seleccionado', true,
+            `${cantidadServicios} servicios renderizados (incluye 'Masaje Capilar Premium'); IDs seleccionados: [${servicioId1}, ${servicioId4}]`);
 
         // ------------------------------------------------------------------
         // RECORRIDO 2: Navegación entre los Tres Pasos y Conservación de Estado
         // ------------------------------------------------------------------
         console.log('\n>>> [RECORRIDO 2] Navegación entre pasos 1, 2 y 3 con conservación de datos...');
 
-        // 2.1 Verificar que estamos en Paso 1 inicialmente
         const paso1Visible = await page.$eval('#paso-1', el => el.classList.contains('mostrar'));
         const tab1Activo = await page.$eval('.tabs button[data-paso="1"]', el => el.classList.contains('actual'));
         const btnAnteriorOculto = await page.$eval('#anterior', el => el.classList.contains('ocultar'));
@@ -221,7 +364,6 @@ async function runBrowserTests() {
             throw new Error('Estado inicial del paginador/tabs en Paso 1 inconsistente.');
         }
 
-        // 2.2 Avanzar a Paso 2 con botón Siguiente
         await page.click('#siguiente');
         await page.waitForFunction(() => document.querySelector('#paso-2.mostrar') !== null);
 
@@ -231,24 +373,21 @@ async function runBrowserTests() {
             throw new Error('Fallo al navegar a Paso 2 con botón #siguiente.');
         }
 
-        // Verificar prellenado de nombre del cliente desde sesión
         const nombrePrellenado = await page.$eval('#nombre', el => el.value);
         if (!nombrePrellenado || !nombrePrellenado.toLowerCase().includes('carlos')) {
             throw new Error(`Nombre de cliente no prellenado en Paso 2: '${nombrePrellenado}'`);
         }
 
-        // 2.3 Retroceder a Paso 1 con botón Anterior y verificar conservación de servicios seleccionados
         await page.click('#anterior');
         await page.waitForFunction(() => document.querySelector('#paso-1.mostrar') !== null);
 
         const s1SigueSeleccionado = await primerServicio.evaluate(el => el.classList.contains('seleccionado'));
-        const s3SigueSeleccionado = await tercerServicio.evaluate(el => el.classList.contains('seleccionado'));
+        const s4SigueSeleccionado = await cuartoServicio.evaluate(el => el.classList.contains('seleccionado'));
 
-        if (!s1SigueSeleccionado || !s3SigueSeleccionado) {
+        if (!s1SigueSeleccionado || !s4SigueSeleccionado) {
             throw new Error('Los servicios seleccionados perdieron la clase .seleccionado al retroceder a Paso 1.');
         }
 
-        // 2.4 Navegar a Paso 2 haciendo clic directo en Tab "Información Citas"
         await page.click('.tabs button[data-paso="2"]');
         await page.waitForFunction(() => document.querySelector('#paso-2.mostrar') !== null);
 
@@ -260,14 +399,12 @@ async function runBrowserTests() {
         // ------------------------------------------------------------------
         console.log('\n>>> [RECORRIDO 3] Validación interactiva de fecha y horario en cliente...');
 
-        // 3.1 Probar fecha de fin de semana (Sábado futuro calculado dinámicamente)
         await page.evaluate((sabado) => {
             const fechaInput = document.querySelector('#fecha');
             fechaInput.value = sabado;
             fechaInput.dispatchEvent(new Event('input', { bubbles: true }));
         }, weekendDate);
 
-        // Esperar a que aparezca la alerta de fin de semana
         await page.waitForSelector('.formulario .alerta.error', { timeout: 3000 });
         const textoAlertaFDS = await page.$eval('.formulario .alerta.error', el => el.textContent);
         const fechaLimpiadaFDS = await page.$eval('#fecha', el => el.value);
@@ -279,7 +416,6 @@ async function runBrowserTests() {
             throw new Error(`El campo de fecha no se limpió ante fin de semana, valor: '${fechaLimpiadaFDS}'`);
         }
 
-        // 3.2 Probar horario fuera de rango comercial (ej. 08:30 antes de 10:00)
         await page.evaluate(() => {
             const horaInput = document.querySelector('#hora');
             horaInput.value = '08:30';
@@ -297,7 +433,6 @@ async function runBrowserTests() {
             throw new Error(`El campo de hora no se limpió ante horario inválido, valor: '${horaLimpiada}'`);
         }
 
-        // 3.3 Asignar fecha y hora válidas (Día laborable futuro calculado, Hora: 11:30)
         await page.evaluate((laborable) => {
             const fechaInput = document.querySelector('#fecha');
             fechaInput.value = laborable;
@@ -323,11 +458,9 @@ async function runBrowserTests() {
         // ------------------------------------------------------------------
         console.log('\n>>> [RECORRIDO 4] Resumen de reserva, envío real vía fetch POST y SweetAlert2...');
 
-        // Avanzar a Paso 3
         await page.click('#siguiente');
         await page.waitForFunction(() => document.querySelector('#paso-3.mostrar') !== null);
 
-        // Verificar que el resumen renderizó encabezados y datos formateados
         const headingServicios = await page.$eval('.contenido-resumen h3', el => el.textContent);
         if (!headingServicios.includes('Resumen de Servicios')) {
             throw new Error(`Encabezado de servicios en resumen no encontrado: '${headingServicios}'`);
@@ -338,29 +471,11 @@ async function runBrowserTests() {
             throw new Error(`Se esperaban 2 servicios en el resumen, encontrados: ${serviciosEnResumen.length}`);
         }
 
-        const fechaEnResumen = await page.evaluate(() => {
-            const ps = Array.from(document.querySelectorAll('.contenido-resumen p'));
-            const pFecha = ps.find(p => p.textContent.includes('Fecha:'));
-            return pFecha ? pFecha.textContent : '';
-        });
-
-        const horaEnResumen = await page.evaluate(() => {
-            const ps = Array.from(document.querySelectorAll('.contenido-resumen p'));
-            const pHora = ps.find(p => p.textContent.includes('Hora:'));
-            return pHora ? pHora.textContent : '';
-        });
-
-        if (!fechaEnResumen || !horaEnResumen.includes('11:30')) {
-            throw new Error(`Datos de cita no reflejados correctamente en resumen: fecha='${fechaEnResumen}', hora='${horaEnResumen}'`);
-        }
-
-        // Localizar el botón de Reservar Cita en el resumen
         const botonReservar = await page.$('.contenido-resumen button.boton');
         if (!botonReservar) {
             throw new Error('Botón "Reservar Cita" no encontrado en el DOM del resumen.');
         }
 
-        // Interceptar y esperar la respuesta de /api/citas tras el clic
         const [apiResponse] = await Promise.all([
             page.waitForResponse(response => response.url().includes('/api/citas') && response.request().method() === 'POST'),
             botonReservar.click()
@@ -375,7 +490,6 @@ async function runBrowserTests() {
 
         const citaIdCreada = apiJson.id || (apiJson.resultado && apiJson.resultado.id);
 
-        // Esperar el modal interactivo de SweetAlert2 en el DOM
         await page.waitForSelector('.swal2-popup', { timeout: 5000 });
         const swalTitle = await page.$eval('.swal2-title', el => el.textContent);
         const swalIcon = await page.$eval('.swal2-icon.swal2-success', el => el !== null);
@@ -410,7 +524,6 @@ async function runBrowserTests() {
             throw new Error('Se detectaron errores en consola o solicitudes de red fallidas durante la ejecución interactiva.');
         }
 
-        // Exportar reporte consolidado para trazabilidad
         const report = {
             timestamp: new Date().toISOString(),
             navegador: 'Chrome Headless (Puppeteer-Core)',

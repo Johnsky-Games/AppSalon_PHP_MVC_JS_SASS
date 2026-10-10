@@ -1,8 +1,8 @@
 # ==============================================================================
-# Verificador de Recorridos en Navegador Web (UI Cliente) - AppSalon Entrega 1
+# Verificador de Recorridos en Navegador Web (UI Admin + Cliente) - AppSalon
 # ==============================================================================
-# Prepara un entorno Docker aislado (red, MySQL 8, web en puerto 3000),
-# inicializa base de datos appsalon_browser_test, siembra usuario y servicios,
+# Prepara un entorno Docker aislado (red, MySQL 8, web en puerto dinamico libre),
+# inicializa base de datos appsalon_browser_test, siembra admin, cliente y servicios,
 # ejecuta la suite en navegador real headless (tests/browser_e2e_test.js),
 # comprueba persistencia en base de datos y garantiza restauracion estricta de .env.
 # ==============================================================================
@@ -25,7 +25,7 @@ $EnvExistedOriginally = Test-Path $EnvFile
 $OriginalInitialHash = $null
 
 Write-Host "======================================================================" -ForegroundColor Cyan
-Write-Host "VERIFICACION EN NAVEGADOR WEB (HEADLESS CHROME) - APPSALON ENTREGA 1" -ForegroundColor Cyan
+Write-Host "VERIFICACION EN NAVEGADOR WEB (HEADLESS CHROME) - APPSALON FASE 2A" -ForegroundColor Cyan
 Write-Host "Identificador de ejecucion (RUN_ID): $RUN_ID" -ForegroundColor Cyan
 Write-Host "Red Docker aislada: $NetName" -ForegroundColor Cyan
 Write-Host "Base de datos aislada: $DbName" -ForegroundColor Cyan
@@ -96,19 +96,29 @@ try {
     docker run --rm --network $NetName -v "${PWD}:/app" -w /app -e DB_HOST=$DbContainer -e DB_USER=root -e DB_PASS=root -e DB_NAME=$DbName -e DB_PORT=3306 appsalon-php-test php database/migrador.php up
     if ($LASTEXITCODE -ne 0) { throw "Fallo al aplicar migraciones en $DbName" }
 
-    # 4. Semillero de servicios y usuario de prueba
+    # 4. Semillero de servicios, usuario cliente y usuario administrador de prueba
     Write-Host ""
-    Write-Host "[3/6] Sembrando catalogo de servicios y usuario cliente de prueba..." -ForegroundColor Cyan
+    Write-Host "[3/6] Sembrando catalogo de servicios, cliente y administrador de prueba..." -ForegroundColor Cyan
     $passHash = '$2y$10$5fbKwtKYcyFUSgV5wgWyMuvoxmR97oZYrvbEScIEWoqMNRZMaSp8q'
-    $seedSql = "INSERT INTO servicios (id, nombre, precio) VALUES (1, 'Corte de Cabello Hombre', 80.00), (2, 'Corte de Cabello Mujer', 120.00), (3, 'Corte de Barba', 60.00) ON DUPLICATE KEY UPDATE nombre=VALUES(nombre); DELETE FROM usuarios WHERE email = 'carlos@correo.com'; INSERT INTO usuarios (id, nombre, apellido, email, password, telefono, admin, confirmado, token, token_hash) VALUES (1, 'Carlos', 'Mendoza', 'carlos@correo.com', '$passHash', '1234567890', 0, 1, NULL, NULL); DELETE FROM intentos_login WHERE identificador = 'carlos@correo.com';"
+    $seedSql = "INSERT INTO servicios (id, nombre, precio) VALUES (1, 'Corte de Cabello Hombre', 80.00), (2, 'Corte de Cabello Mujer', 120.00), (3, 'Corte de Barba', 60.00) ON DUPLICATE KEY UPDATE nombre=VALUES(nombre); DELETE FROM usuarios WHERE email IN ('carlos@correo.com', 'admin@appsalon.com'); INSERT INTO usuarios (id, nombre, apellido, email, password, telefono, admin, confirmado, token, token_hash) VALUES (1, 'Carlos', 'Mendoza', 'carlos@correo.com', '$passHash', '1234567890', 0, 1, NULL, NULL), (2, 'Admin', 'Salon', 'admin@appsalon.com', '$passHash', '0987654321', 1, 1, NULL, NULL); DELETE FROM intentos_login;"
 
-    $seedSql | docker exec -i $DbContainer mysql -uroot -proot $DbName 2>$null | Out-Null
+    $seedSql | docker exec -i $DbContainer mysql -uroot -proot --default-character-set=utf8mb4 $DbName 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Fallo al sembrar datos en $DbName" }
-    Write-Host " -> Catalogo y usuario cliente 'carlos@correo.com' sembrados con exito." -ForegroundColor Green
+    Write-Host " -> Catalogo, cliente 'carlos@correo.com' y admin 'admin@appsalon.com' sembrados con exito." -ForegroundColor Green
 
-    # 5. Generar configuracion temporal para el servidor web y servicios auxiliares
+    # 5. Generar configuracion temporal e iniciar servidor web en puerto dinamico libre (no colisiona con puerto 3000 local)
     Write-Host ""
-    Write-Host "[4/6] Configurando variables e iniciando servidor web en puerto 3000..." -ForegroundColor Cyan
+    Write-Host "[4/6] Configurando variables e iniciando servidor web aislado..." -ForegroundColor Cyan
+
+    docker run -d --name $MailContainer --network $NetName -v "${PWD}:/app" -w /app appsalon-php-test php tests/smtp_mock_server.php 2>&1 | Out-Null
+    docker run -d --name $WebContainer --network $NetName -p 0:3000 -v "${PWD}:/app" -w /app appsalon-php-test php -S 0.0.0.0:3000 -t public 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Fallo al iniciar contenedor web $WebContainer" }
+
+    $portMapping = docker port $WebContainer 3000/tcp
+    if (-not $portMapping) { throw "No se pudo obtener el puerto publicado de $WebContainer" }
+    $hostPort = ($portMapping | Select-Object -First 1) -replace '^.*:(\d+)$', '$1'
+    $appUrl = "http://localhost:$hostPort"
+
     $envLines = @(
         "DB_HOST=$DbContainer",
         "DB_PORT=3306",
@@ -121,28 +131,24 @@ try {
         "EMAIL_PASSWORD=test",
         "EMAIL_FROM=cuentas@appsalon.com",
         'EMAIL_FROM_NAME="AppSalon.com"',
-        "APP_URL=http://localhost:3000"
+        "APP_URL=$appUrl"
     )
     $envLines | Set-Content -Path $EnvFile -Encoding UTF8 -ErrorAction Stop
 
-    docker run -d --name $MailContainer --network $NetName -v "${PWD}:/app" -w /app appsalon-php-test php tests/smtp_mock_server.php 2>&1 | Out-Null
-    docker run -d --name $WebContainer --network $NetName -p 3000:3000 -v "${PWD}:/app" -w /app appsalon-php-test php -S 0.0.0.0:3000 -t public 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "Fallo al iniciar contenedor web $WebContainer en puerto 3000" }
-
-    Write-Host " -> Verificando disponibilidad de http://localhost:3000..."
+    Write-Host " -> Verificando disponibilidad de $appUrl..."
     $webReady = $false
     for ($w = 1; $w -le 30; $w++) {
         try {
-            $resp = Invoke-WebRequest -Uri "http://localhost:3000/" -UseBasicParsing -TimeoutSec 2 -ErrorAction SilentlyContinue
+            $resp = Invoke-WebRequest -Uri "$appUrl/" -UseBasicParsing -TimeoutSec 2 -ErrorAction SilentlyContinue
             if ($resp.StatusCode -eq 200) {
                 $webReady = $true
-                Write-Host " -> Servidor web respondiendo correctamente (HTTP 200) tras ${w}s." -ForegroundColor Green
+                Write-Host " -> Servidor web aislado respondiendo correctamente en $appUrl (HTTP 200) tras ${w}s." -ForegroundColor Green
                 break
             }
         } catch { }
         Start-Sleep -Seconds 1
     }
-    if (-not $webReady) { throw "Servidor web no respondio en http://localhost:3000 tras 30s" }
+    if (-not $webReady) { throw "Servidor web no respondio en $appUrl tras 30s" }
 
     # 6. Calcular fechas futuras dinámicas compartidas entre el runner y la comprobación MySQL
     Write-Host ""
@@ -171,6 +177,7 @@ try {
     Write-Host "    - Sábado (rechazo en cliente): $proximoSabado" -ForegroundColor Cyan
     Write-Host "    - Día laborable (reserva válida): $diaLaborable" -ForegroundColor Cyan
 
+    $env:APP_URL = $appUrl
     $env:TEST_REJECT_WEEKEND_DATE = $proximoSabado
     $env:TEST_VALID_BOOKING_DATE = $diaLaborable
 
@@ -182,12 +189,24 @@ try {
         throw "La suite en navegador web finalizó con error (código $nodeExitCode)."
     }
 
-    # 7. Validar persistencia real en base de datos de la cita generada por el navegador
+    # 7. Validar persistencia real en base de datos del CRUD de servicios y la cita generada por el navegador
     Write-Host ""
     Write-Host "[6/6] Verificando persistencia estricta en base de datos ($DbName)..." -ForegroundColor Cyan
+
+    $servicioEditado = docker exec $DbContainer mysql -uroot -proot --default-character-set=utf8mb4 -N -e "SELECT id, nombre, precio FROM servicios WHERE nombre = 'Masaje Capilar Premium';" $DbName 2>$null
+    if (-not $servicioEditado -or -not ($servicioEditado -match "115\.00")) {
+        throw "El servicio creado/actualizado 'Masaje Capilar Premium' (115.00) no se encontro en la base de datos."
+    }
+    Write-Host " -> Servicio CRUD verificado en BD: $servicioEditado" -ForegroundColor Green
+
+    $servicioEliminado = docker exec $DbContainer mysql -uroot -proot --default-character-set=utf8mb4 -N -e "SELECT COUNT(*) FROM servicios WHERE nombre = 'Servicio Temporal Borrar';" $DbName 2>$null
+    if ([int]$servicioEliminado -ne 0) {
+        throw "El servicio eliminado 'Servicio Temporal Borrar' aun existe en la base de datos."
+    }
+
     $querySql = "SELECT c.id, c.fecha, c.hora, c.usuarioId, COUNT(cs.id) AS total_servicios FROM citas c LEFT JOIN citasservicios cs ON c.id = cs.citaId WHERE c.usuarioId = 1 GROUP BY c.id ORDER BY c.id DESC LIMIT 1;"
     $dbOutput = docker exec $DbContainer mysql -uroot -proot -N -e "$querySql" $DbName 2>$null
-    Write-Host " -> Registro en base de datos (id | fecha | hora | usuarioId | servicios): $dbOutput"
+    Write-Host " -> Registro de cita en base de datos (id | fecha | hora | usuarioId | servicios): $dbOutput"
 
     if (-not $dbOutput) {
         throw "No se encontró ningún registro de cita persistido en la base de datos para el usuario 1."
@@ -250,9 +269,4 @@ try {
 if (-not $testSuccess) {
     exit $testExitCode
 }
-
-Write-Host ""
-Write-Host "======================================================================" -ForegroundColor Green
-Write-Host "VERIFICACION EN NAVEGADOR WEB SUPERADA CON EXITO AL 100%" -ForegroundColor Green
-Write-Host "======================================================================" -ForegroundColor Green
 exit 0

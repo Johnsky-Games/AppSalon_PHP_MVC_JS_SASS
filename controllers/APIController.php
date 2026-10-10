@@ -3,17 +3,46 @@
 namespace Controllers;
 
 use Model\Cita;
-use Model\Servicio;
 use Model\CitaServicio;
 use Model\ActiveRecord;
+use Repositories\ServicioRepository;
+use Services\ServicioService;
 
 class APIController
 {
+    private static ?ServicioService $servicioService = null;
+
+    public static function setServicioService(?ServicioService $service): void
+    {
+        self::$servicioService = $service;
+    }
+
+    private static function obtenerServicioService(): ServicioService
+    {
+        if (self::$servicioService !== null) {
+            return self::$servicioService;
+        }
+
+        return new ServicioService(new ServicioRepository(ActiveRecord::getDB()));
+    }
+
     public static function index()
     {
-        $servicios = Servicio::all();
         header('Content-Type: application/json; charset=utf-8');
-        echo json_encode($servicios);
+        $resultado = self::obtenerServicioService()->listar();
+
+        if ($resultado['status'] === ServicioService::STATUS_ERROR) {
+            http_response_code(500);
+            echo json_encode([
+                'resultado' => false,
+                'error' => 'No fue posible consultar el catálogo de servicios'
+            ]);
+            detener_ejecucion(500);
+            return;
+        }
+
+        http_response_code(200);
+        echo json_encode($resultado['servicios']);
     }
 
     /**
@@ -125,9 +154,17 @@ class APIController
         // Desduplicar servicios repetidos
         $idServicios = array_values(array_unique($idServicios));
 
-        // Comprobar existencia real de los servicios en la base de datos
+        // Comprobar existencia real de los servicios en la base de datos mediante ServicioService
+        $servicioService = self::obtenerServicioService();
         foreach ($idServicios as $idServicio) {
-            if (!Servicio::find($idServicio)) {
+            $consultaServicio = $servicioService->obtenerPorId($idServicio);
+            if ($consultaServicio['status'] === ServicioService::STATUS_ERROR) {
+                http_response_code(500);
+                echo json_encode(['resultado' => false, 'error' => 'Servicio de base de datos no disponible']);
+                detener_ejecucion(500);
+                return;
+            }
+            if ($consultaServicio['status'] !== ServicioService::STATUS_OK || !$consultaServicio['servicio']) {
                 http_response_code(422);
                 echo json_encode(['resultado' => false, 'error' => 'Uno o más servicios seleccionados no existen o no son válidos']);
                 detener_ejecucion(422);

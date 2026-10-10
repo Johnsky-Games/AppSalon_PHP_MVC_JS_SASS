@@ -9,6 +9,7 @@ use Model\Servicio;
 use Model\Cita;
 use Model\CitaServicio;
 use Controllers\APIController;
+use Repositories\ServicioRepository;
 use AppTerminationException;
 use mysqli;
 
@@ -202,8 +203,7 @@ class ApiSeguridadTest extends TestCase
             'nombre' => 'Corte Cabello',
             'precio' => '50.00'
         ]);
-        $resS = $servicio->guardar();
-        $idServicio = (int)$resS['id'];
+        $idServicio = (new ServicioRepository(self::$db))->create($servicio);
 
         // 2. Sesión activa para Usuario Real
         $_SESSION['login'] = true;
@@ -301,8 +301,7 @@ class ApiSeguridadTest extends TestCase
     public function testGuardarDesduplicaServiciosRepetidosPoliticaExplicita(): void
     {
         $servicio = new Servicio(['nombre' => 'Manicure', 'precio' => '30.00']);
-        $resS = $servicio->guardar();
-        $idS = (int)$resS['id'];
+        $idS = (new ServicioRepository(self::$db))->create($servicio);
 
         $_SESSION['login'] = true;
         $_SESSION['id'] = 1;
@@ -331,8 +330,7 @@ class ApiSeguridadTest extends TestCase
     public function testGuardarRechazaFormatoHoraConSegundos(): void
     {
         $servicio = new Servicio(['nombre' => 'Corte Varón', 'precio' => '50.00']);
-        $resS = $servicio->guardar();
-        $idS = (int)$resS['id'];
+        $idS = (new ServicioRepository(self::$db))->create($servicio);
 
         $_SESSION['login'] = true;
         $_SESSION['id'] = 1;
@@ -388,8 +386,7 @@ class ApiSeguridadTest extends TestCase
         $clienteId = (int)$resC['id'];
 
         $servicio = new Servicio(['nombre' => 'Barba', 'precio' => '40.00']);
-        $resS = $servicio->guardar();
-        $servicioId = (int)$resS['id'];
+        $servicioId = (new ServicioRepository(self::$db))->create($servicio);
 
         $cita = new Cita([
             'fecha' => date('Y-m-d', strtotime('next Thursday')),

@@ -234,8 +234,7 @@ class SecurityIntegrationTest extends TestCase
         $clienteId = (int)$resCliente['id'];
 
         $servicio = new Servicio(['nombre' => 'Tintura', 'precio' => '120.00']);
-        $resServicio = $servicio->guardar();
-        $servicioId = (int)$resServicio['id'];
+        $servicioId = (new \Repositories\ServicioRepository(self::$db))->create($servicio);
 
         // 2. Iniciar sesión como el cliente
         $_SESSION['login'] = true;
