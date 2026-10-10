@@ -67,8 +67,11 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 
 ### 3. Validación Ejecutada en Fase 3A (Antigravity)
 
-#### A. Suite Completa PHPUnit (Ejecutada en Docker PHP 8.2 + MySQL 8.0 Aislado)
-- **Resultado:** `OK (101 tests, 905 assertions)` — Código de salida `0`.
+#### A. Suite Completa PHPUnit (Ejecutada en Docker PHP 8.2.34 + MySQL 8.0 Aislado)
+- **Versión efectiva (según `composer.lock` / `composer.json` `^10.5`):** `PHPUnit 10.5.66 by Sebastian Bergmann and contributors.` (`Runtime: PHP 8.2.34`, `Configuration: /app/phpunit.xml`).
+- **Comando ejecutado:**
+  `docker run --rm --network appsalon-phpunit-net -v "${PWD}:/app" -w /app -e DB_HOST=appsalon-phpunit-db -e DB_PORT=3306 -e DB_USER=root -e DB_PASS=root -e DB_NAME=appsalon_test appsalon-php-test php -d variables_order=EGPCS vendor/bin/phpunit`
+- **Resultado:** `OK (101 tests, 905 assertions)` (`Time: 00:15.450, Memory: 12.00 MB`) — Código de salida `0`.
 - **Cobertura añadida en Fase 3A y corrección de auditoría:**
   - `Tests\Unit\ServicioServiceTest`: validación de `duracion_minutos` como entero positivo (`>= 1`), rechazo de `0`, negativos, decimales, vacíos o no escalares, y verificación del supuesto configurable `DEFAULT_DURACION_MINUTOS = 30`.
   - `Tests\Unit\ProfesionalAgendaServiceTest`: validación de profesionales y servicios asociados, intervalos horarios, múltiples franjas diarias, rechazo de entradas malformadas (`horarios` vacío/no array, `activo` inválido), desactivación explícita de todos los días (`activo = '0'`), rechazo de horarios invertidos y solapados, coherencia entre horarios y descansos, bloqueos por día completo e intervalo, y coherencia de zona horaria `America/Guayaquil` entre `ProfesionalService` y `CitaService`.
@@ -76,8 +79,27 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
   - `Tests\Integration\ServicioModuloIntegrationTest`: ciclo CRUD de servicios con `duracion_minutos` en MySQL real y vistas HTTP.
   - `Tests\Integration\ProfesionalAgendaIntegrationTest`: control de permisos `isAdmin()` y CSRF en todas las rutas de `/profesionales*`, rechazo con HTTP `422` y preservación íntegra de la base de datos ante acción desconocida, acción no escalar, `horarios` ausente, `horarios` escalar y `activo` inválido, conservación y renderizado de múltiples franjas por día y desactivación explícita de todos los días, ciclo completo con MySQL real, rollback transaccional con respuesta HTTP 500 ante fallos SQL y compatibilidad con el flujo actual de reservas.
 
-#### B. Verificación E2E en Navegador con JavaScript Habilitado (`tests/verificar_navegador.ps1` + `tests/browser_e2e_test.js`)
-- **Resultado:** 14 comprobaciones E2E superadas (`ADMIN-01` a `ADMIN-05`, `PROF-01`, `PROF-02`, `PRE-01`, `REC-01` a `REC-05`, `AUTH-01`) + verificación de persistencia en MySQL (`duracion_minutos=60`, profesional `Sofía Andrade` con servicios, horario tras añadir y retirar explícitamente la segunda franja en `PROF-02`, descanso y bloqueo, y cita de cliente) — Código de salida `0`.
+#### B. Verificación E2E en Navegador con JavaScript Habilitado (`tests/verificar_navegador.ps1` + `tests/browser_e2e_test.js` + `tests/browser_test_report.json`)
+- **Comando ejecutado:** `powershell -ExecutionPolicy Bypass -File tests/verificar_navegador.ps1` (servidor SMTP simulado aislado mediante `tests/smtp_mock_server.php`, sin uso de Mailpit).
+- **Resultado (`RUN_ID: 20c51cdf44484c8dadefbcdfebb9bd5b`, registrado en `tests/browser_test_report.json`):** 14 comprobaciones E2E superadas — Código de salida `0`:
+  - `ADMIN-01`: Acceso de administrador a `/servicios` y listado inicial del catálogo (`3 servicios listados en /servicios.`).
+  - `ADMIN-02`: Validación de entradas inválidas y creación de nuevo servicio con duración en `/servicios/crear` (`'Masaje Capilar Relax' ($95.50, 45 min) creado.`).
+  - `ADMIN-03`: Actualización de servicio existente y su duración en `/servicios/actualizar` (`'Masaje Capilar Relax' actualizado a 'Masaje Capilar Premium' ($115.00, 60 min).`).
+  - `ADMIN-04`: Eliminación de servicio con CSRF en `/servicios/eliminar` (`'Servicio Temporal Borrar' eliminado; catálogo conserva 4 servicios activos.`).
+  - `PROF-01`: Gestión de profesionales, servicios asociados, horarios, descansos, bloqueos y desactivación/reactivación (`'Sofía Andrade' creada con servicios, horario Lunes 09:00-18:00, descanso 13:00-14:00, bloqueo 2026-10-12 15:00-16:30 y ciclo Inactivo/Activo verificado.`).
+  - `PROF-02`: Carga de múltiples franjas del mismo día, guardado sin cambios verificado en MySQL y retirada explícita de franja individual (`Martes 08:00-12:00 y 14:00-18:00 preservados en MySQL al guardar sin cambios; retirada explícita eliminó solo 08:00-12:00 conservando 14:00-18:00.`).
+  - `PRE-01`: Login interactivo de cliente y redirección autorizada a `/cita`.
+  - `REC-01`: Carga asíncrona de `/api/servicios` reflejando CRUD y alternancia de `.seleccionado` (`4 servicios renderizados; IDs seleccionados: [1, 4]`).
+  - `REC-02`: Navegación fluida por paginador y tabs con preservación de estado en cliente (`nombre prellenado: 'Carlos Mendoza'`).
+  - `REC-03`: Validación interactiva de restricciones en fecha (no FDS, sábado probado `2026-10-17`) y horario (`10:00-18:00`), aceptando fecha `2026-10-12` y hora `11:30`.
+  - `REC-04`: Renderizado de resumen, envío asíncrono con CSRF, respuesta 200 JSON y alerta SweetAlert2 (`POST /api/citas exitoso (id: 1)`).
+  - `ADMIN-05`: Consulta administrativa por fecha en `/admin?fecha=2026-10-12` y eliminación de cita temporal ID 2 con CSRF en `/api/eliminar`, conservando cita principal ID 1 (`$195`).
+  - `AUTH-01`: Ciclo de autenticación y ciclo de vida de cuenta (`/logout`, `/crear-cuenta` con `smtp_mock_server.php`, rechazo de login no confirmado con mensaje unificado, `/reenviar-confirmacion` y `/olvide` sin enumeración).
+  - `REC-05`: Ausencia estricta de errores de consola (`0`) y peticiones de red fallidas (`0`).
+- **Verificación de persistencia en MySQL (`appsalon_browser_test`):**
+  - Servicio CRUD: `4 | Masaje Capilar Premium | 115.00 | 60`
+  - Profesional y agenda (`id | activo | servicios | horarios | descansos | bloqueos`): `1 | 1 | 2 | 2 | 1 | 1` (Lunes `09:00-18:00` y Martes `14:00-18:00` tras retirar `08:00-12:00` en `PROF-02`).
+  - Cita persistida (`id | fecha | hora | usuarioId | servicios`): `1 | 2026-10-12 | 11:30:00 | 1 | 2`.
 
 ---
 
