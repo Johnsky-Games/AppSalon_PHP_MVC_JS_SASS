@@ -44,6 +44,7 @@ class ServicioModuloIntegrationTest extends TestCase
         self::$db->query("DROP TRIGGER IF EXISTS test_fail_servicios_delete");
         self::$db->query("DELETE FROM citasservicios");
         self::$db->query("DELETE FROM citas");
+        self::$db->query("DELETE FROM profesionales_servicios");
         self::$db->query("DELETE FROM usuarios");
         self::$db->query("DELETE FROM servicios");
 
@@ -87,7 +88,7 @@ class ServicioModuloIntegrationTest extends TestCase
         return $csrf;
     }
 
-    public function testCicloCrudCompletoConMySqlReal(): void
+    public function testCicloCrudCompletoConMySqlRealIncluyendoDuracionEnMinutos(): void
     {
         $repo = new ServicioRepository(self::$db);
         $service = new ServicioService($repo);
@@ -98,10 +99,11 @@ class ServicioModuloIntegrationTest extends TestCase
         $this->assertTrue($inicial['resultado']);
         $this->assertSame([], $inicial['servicios']);
 
-        // 2. Crear servicio válido
+        // 2. Crear servicio válido con duración en minutos
         $creacion = $service->crear([
             'nombre' => 'Corte Clásico',
-            'precio' => '85.5'
+            'precio' => '85.5',
+            'duracion_minutos' => '45'
         ]);
         $this->assertSame(ServicioService::STATUS_OK, $creacion['status']);
         $this->assertTrue($creacion['resultado']);
@@ -109,6 +111,7 @@ class ServicioModuloIntegrationTest extends TestCase
         $this->assertIsInt($idCreado);
         $this->assertGreaterThan(0, $idCreado);
         $this->assertSame('85.50', $creacion['servicio']->precio);
+        $this->assertSame('45', $creacion['servicio']->duracion_minutos);
 
         // 3. Listar y obtener por ID
         $listado = $service->listar();
@@ -116,15 +119,18 @@ class ServicioModuloIntegrationTest extends TestCase
         $this->assertCount(1, $listado['servicios']);
         $this->assertSame('Corte Clásico', $listado['servicios'][0]->nombre);
         $this->assertSame('85.50', $listado['servicios'][0]->precio);
+        $this->assertSame('45', $listado['servicios'][0]->duracion_minutos);
 
         $obtenido = $service->obtenerPorId($idCreado);
         $this->assertSame(ServicioService::STATUS_OK, $obtenido['status']);
         $this->assertSame((string)$idCreado, $obtenido['servicio']->id);
+        $this->assertSame('45', $obtenido['servicio']->duracion_minutos);
 
-        // 4. Actualizar servicio con nuevos valores
+        // 4. Actualizar servicio con nuevos valores (incluyendo nueva duración)
         $actualizacion = $service->actualizar($idCreado, [
             'nombre' => 'Corte Clásico y Lavado',
-            'precio' => '110'
+            'precio' => '110',
+            'duracion_minutos' => '60'
         ]);
         $this->assertSame(ServicioService::STATUS_OK, $actualizacion['status']);
         $this->assertTrue($actualizacion['resultado']);
@@ -133,6 +139,7 @@ class ServicioModuloIntegrationTest extends TestCase
         $this->assertNotNull($verificado);
         $this->assertSame('Corte Clásico y Lavado', $verificado->nombre);
         $this->assertSame('110.00', $verificado->precio);
+        $this->assertSame('60', $verificado->duracion_minutos);
 
         // 5. Eliminar servicio
         $eliminacion = $service->eliminar($idCreado);
@@ -150,7 +157,8 @@ class ServicioModuloIntegrationTest extends TestCase
         $res1 = $service->crear([
             'id' => 500,
             'nombre' => 'Servicio Uno',
-            'precio' => '60.00'
+            'precio' => '60.00',
+            'duracion_minutos' => '30'
         ]);
         $this->assertSame(ServicioService::STATUS_OK, $res1['status']);
         $idUno = $res1['id'];
@@ -160,7 +168,8 @@ class ServicioModuloIntegrationTest extends TestCase
         // Crear servicio 2 (víctima que un atacante intentaría sobrescribir enviando $_POST['id'])
         $res2 = $service->crear([
             'nombre' => 'Servicio Dos Intacto',
-            'precio' => '200.00'
+            'precio' => '200.00',
+            'duracion_minutos' => '50'
         ]);
         $idDos = $res2['id'];
 
@@ -172,7 +181,8 @@ class ServicioModuloIntegrationTest extends TestCase
             'csrf_token' => $csrf,
             'id' => (string)$idDos,
             'nombre' => 'Servicio Uno Editado',
-            'precio' => '75.00'
+            'precio' => '75.00',
+            'duracion_minutos' => '40'
         ];
 
         $router = new Router();
@@ -188,8 +198,10 @@ class ServicioModuloIntegrationTest extends TestCase
         $s2 = $repo->findById($idDos);
         $this->assertSame('Servicio Uno Editado', $s1->nombre);
         $this->assertSame('75.00', $s1->precio);
+        $this->assertSame('40', $s1->duracion_minutos);
         $this->assertSame('Servicio Dos Intacto', $s2->nombre, 'El Servicio Dos no debe ser alterado por $_POST[id]');
         $this->assertSame('200.00', $s2->precio);
+        $this->assertSame('50', $s2->duracion_minutos);
     }
 
     public function testActualizacionSinCambiosEsExitosaYNoSeConfundeConInexistente(): void
@@ -199,14 +211,16 @@ class ServicioModuloIntegrationTest extends TestCase
 
         $creado = $service->crear([
             'nombre' => 'Peinado Especial',
-            'precio' => '150.00'
+            'precio' => '150.00',
+            'duracion_minutos' => '45'
         ]);
         $id = $creado['id'];
 
-        // Actualizar con exactamente el mismo nombre y precio (affected_rows === 0 en MySQL)
+        // Actualizar con exactamente el mismo nombre, precio y duración (affected_rows === 0 en MySQL)
         $sinCambios = $service->actualizar($id, [
             'nombre' => 'Peinado Especial',
-            'precio' => '150.00'
+            'precio' => '150.00',
+            'duracion_minutos' => '45'
         ]);
 
         $this->assertSame(
@@ -217,7 +231,7 @@ class ServicioModuloIntegrationTest extends TestCase
         $this->assertTrue($sinCambios['resultado']);
     }
 
-    public function testDistingueRegistroInexistenteDeEntradaInvalida(): void
+    public function testDistingueRegistroInexistenteDeEntradaInvalidaIncluyendoDuracionInvalida(): void
     {
         $repo = new ServicioRepository(self::$db);
         $service = new ServicioService($repo);
@@ -226,7 +240,7 @@ class ServicioModuloIntegrationTest extends TestCase
         $noExisteGet = $service->obtenerPorId(99999);
         $this->assertSame(ServicioService::STATUS_NOT_FOUND, $noExisteGet['status']);
 
-        $noExisteUpd = $service->actualizar(99999, ['nombre' => 'Test', 'precio' => '50.00']);
+        $noExisteUpd = $service->actualizar(99999, ['nombre' => 'Test', 'precio' => '50.00', 'duracion_minutos' => '30']);
         $this->assertSame(ServicioService::STATUS_NOT_FOUND, $noExisteUpd['status']);
 
         $noExisteDel = $service->eliminar(99999);
@@ -236,8 +250,8 @@ class ServicioModuloIntegrationTest extends TestCase
         $idInvalido = $service->obtenerPorId('id_invalido');
         $this->assertSame(ServicioService::STATUS_INVALID, $idInvalido['status']);
 
-        $creado = $service->crear(['nombre' => 'Base', 'precio' => '40.00']);
-        $datosInvalidos = $service->actualizar($creado['id'], ['nombre' => '', 'precio' => '-10']);
+        $creado = $service->crear(['nombre' => 'Base', 'precio' => '40.00', 'duracion_minutos' => '30']);
+        $datosInvalidos = $service->actualizar($creado['id'], ['nombre' => '', 'precio' => '-10', 'duracion_minutos' => '0']);
         $this->assertSame(ServicioService::STATUS_INVALID, $datosInvalidos['status']);
         $this->assertNotEmpty($datosInvalidos['alertas']['error']);
     }
@@ -289,7 +303,7 @@ class ServicioModuloIntegrationTest extends TestCase
         // 2. Fallos SQL reales en MySQL mediante triggers sobre crear, actualizar y eliminar
         $realRepo = new ServicioRepository(self::$db);
         $realService = new ServicioService($realRepo);
-        $idExistente = $realService->crear(['nombre' => 'Servicio Base', 'precio' => '70.00'])['id'];
+        $idExistente = $realService->crear(['nombre' => 'Servicio Base', 'precio' => '70.00', 'duracion_minutos' => '30'])['id'];
 
         self::$db->query(
             "CREATE TRIGGER test_fail_servicios_insert BEFORE INSERT ON servicios
@@ -313,7 +327,8 @@ class ServicioModuloIntegrationTest extends TestCase
         $_POST = [
             'csrf_token' => $csrf,
             'nombre' => 'Nuevo Fallido',
-            'precio' => '90.00'
+            'precio' => '90.00',
+            'duracion_minutos' => '30'
         ];
         ob_start();
         ServicioController::crear($router);
@@ -326,7 +341,8 @@ class ServicioModuloIntegrationTest extends TestCase
         $_POST = [
             'csrf_token' => $csrf,
             'nombre' => 'Actualizado Fallido',
-            'precio' => '95.00'
+            'precio' => '95.00',
+            'duracion_minutos' => '45'
         ];
         ob_start();
         ServicioController::actualizar($router);
@@ -399,7 +415,7 @@ class ServicioModuloIntegrationTest extends TestCase
         // 3. Administrador sin CSRF válido es rechazado con 403 en POST crear, actualizar y eliminar
         $this->autenticarAdmin();
         $_SERVER['REQUEST_METHOD'] = 'POST';
-        $_POST = ['csrf_token' => 'token_invalido', 'nombre' => 'Test', 'precio' => '50.00'];
+        $_POST = ['csrf_token' => 'token_invalido', 'nombre' => 'Test', 'precio' => '50.00', 'duracion_minutos' => '30'];
 
         ob_start();
         try {
@@ -423,7 +439,8 @@ class ServicioModuloIntegrationTest extends TestCase
         $service = new ServicioService(new ServicioRepository(self::$db));
         $idServicio = $service->crear([
             'nombre' => 'Servicio Histórico',
-            'precio' => '120.00'
+            'precio' => '120.00',
+            'duracion_minutos' => '35'
         ])['id'];
 
         $citaRepo = new CitaRepository(self::$db);
@@ -452,4 +469,3 @@ class ServicioModuloIntegrationTest extends TestCase
         $this->assertSame(1, $resRel->num_rows, 'El vínculo histórico en citasservicios debe conservarse sin borrado en cascada');
     }
 }
-

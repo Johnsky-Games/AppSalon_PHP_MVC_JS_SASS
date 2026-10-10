@@ -3,9 +3,68 @@
 Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerdo con la metodología de entregas auditables por **ChatGPT** (revisión estática de código) y ejecución/verificación por **Antigravity** (desarrollo y pruebas dinámicas automatizadas), sujeto a la aprobación final del **Propietario**.
 
 > **Roles y Criterios:**
-> - **Desarrollo y Pruebas Automatizadas (Antigravity):** Implementación de código y ejecución de la suite completa de pruebas unitarias e integrales (87 pruebas, 667 aserciones en PHPUnit), escenarios funcionales HTTP y suite E2E en navegador real Headless Chrome (`tests/verificar_navegador.ps1` y `tests/browser_e2e_test.js`).
+> - **Desarrollo y Pruebas Automatizadas (Antigravity):** Implementación de código y ejecución de la suite completa de pruebas unitarias e integrales (99 pruebas, 824 aserciones en PHPUnit), escenarios funcionales HTTP y suite E2E en navegador real Headless Chrome (`tests/verificar_navegador.ps1` y `tests/browser_e2e_test.js`).
 > - **Revisión Estática Externa (ChatGPT):** Auditoría independiente de código de aplicación, arquitectura por capas, contratos transaccionales y revisión estática de scripts Bash.
 > - **Aprobación Final y Despliegue (Propietario):** Decisión formal sobre fusiones hacia `main` y despliegues en producción.
+
+---
+
+## Fase 3A: Profesionales, Duración de Servicios y Configuración de Horarios
+
+- **Rama:** `feature/fase-3a-profesionales-horarios`
+- **Commit Base (Fase 2C):** `fe16c67211d5583e859fd6ec4eb8ba55b7c03983`
+- **Estado General de Fase 3A:** **Completada (Pendiente de Revisión Externa)**
+
+### 1. Diseño Arquitectónico y de Dominio Elegido para Fase 3A
+
+#### A. Esquema y Migraciones Versionadas (`database/migrations/003_profesionales_duracion_y_horarios.sql`)
+1. **Duración en `servicios` (`duracion_minutos`):**
+   - Se añade la columna `duracion_minutos INT NOT NULL DEFAULT 30 AFTER precio` en la tabla `servicios`.
+   - **Supuesto configurable sobre servicios existentes:** El valor inicial de `30` minutos (`ServicioService::DEFAULT_DURACION_MINUTOS = 30`) asignado en la migración a los servicios preexistentes se documenta explícitamente como un **supuesto técnico configurable** para mantener compatibilidad en bases con datos previos, y **no** como un dato confirmado del negocio. Cada servicio puede configurarse individualmente desde `/servicios/crear` y `/servicios/actualizar`.
+2. **Catálogo de Profesionales (`profesionales`):**
+   - Tabla InnoDB con `id INT AUTO_INCREMENT PRIMARY KEY`, `nombre VARCHAR(120) NOT NULL`, `activo TINYINT(1) NOT NULL DEFAULT 1` e índice `idx_profesionales_activo (activo)`.
+   - **Política de desactivación:** Se prefiere la desactivación lógica (`activo = 0`) mediante `POST /profesionales/estado` o edición en `/profesionales/actualizar` en lugar del borrado físico, conservando la integridad de las referencias históricas.
+3. **Relación Profesional–Servicio (`profesionales_servicios`):**
+   - Tabla puente InnoDB con `id INT AUTO_INCREMENT PRIMARY KEY`, `profesionalId INT NOT NULL`, `servicioId INT NOT NULL`, restricción única `uk_profesional_servicio (profesionalId, servicioId)` y claves foráneas hacia `profesionales(id)` y `servicios(id)`.
+4. **Horarios Semanales (`horarios_profesionales`):**
+   - Tabla InnoDB con `id`, `profesionalId`, `dia_semana TINYINT NOT NULL` (convención ISO-8601 `1 = Lunes` a `7 = Domingo`), `hora_inicio TIME NOT NULL` y `hora_fin TIME NOT NULL`.
+5. **Descansos Semanales (`descansos_profesionales`):**
+   - Tabla InnoDB con `id`, `profesionalId`, `dia_semana TINYINT NOT NULL` (`1..7`), `hora_inicio TIME NOT NULL`, `hora_fin TIME NOT NULL` y `motivo VARCHAR(120) NULL`.
+6. **Bloqueos por Fecha o Intervalo (`bloqueos_profesionales`):**
+   - Tabla InnoDB con `id`, `profesionalId`, `fecha_inicio DATE NOT NULL`, `fecha_fin DATE NOT NULL`, `hora_inicio TIME NULL` (nulo cuando el bloqueo es de día completo), `hora_fin TIME NULL` y `motivo VARCHAR(160) NULL`.
+
+#### B. Capas y Responsabilidades (`Controller` $\rightarrow$ `Service` $\rightarrow$ `Repository`)
+- **Entidades desacopladas de `ActiveRecord`:**
+  - `Model\Servicio`: incorpora `duracion_minutos` en `sincronizarEditable()` y `validar()`.
+  - `Model\Profesional`, `Model\HorarioProfesional`, `Model\DescansoProfesional`, `Model\BloqueoProfesional`: entidades de dominio puras sin herencia de `ActiveRecord` ni acceso SQL.
+- **Repositorios con sentencias preparadas y `PersistenceException`:**
+  - `Repositories\ServicioRepository`: extiende lecturas y escrituras preparadas para incluir `duracion_minutos`.
+  - `Repositories\ProfesionalRepository`: gestiona CRUD y estado de profesionales, sincronización transaccional de `profesionales_servicios`, reemplazo/alta/baja transaccional de `horarios_profesionales`, `descansos_profesionales` y `bloqueos_profesionales`.
+- **Servicios de Dominio:**
+  - `Services\ServicioService`: exige `duracion_minutos` como entero positivo (`>= 1`) en `validarDatos()`, `crear()` y `actualizar()`.
+  - `Services\ProfesionalService`:
+    - Valida identidad de profesional, `nombre` (`1..120` caracteres), estado `activo` (`0`/`1`) y existencia real de todos los `servicioId` asociados.
+    - Valida intervalos horarios (`HH:MM`, `hora_inicio < hora_fin`), rechaza horarios invertidos o de duración cero y previene solapamientos dentro del mismo día y profesional.
+    - Verifica coherencia entre horarios y descansos: todo descanso debe estar contenido dentro de una franja laboral activa del mismo día sin consumir la totalidad del turno ni solaparse con otro descanso; asimismo, impide guardar o eliminar horarios si dejarían descansos existentes fuera de turno.
+    - Valida bloqueos por fecha completa o por intervalo horario (`fecha_inicio <= fecha_fin`, `hora_inicio < hora_fin`, sin solapamiento con otros bloqueos del mismo profesional).
+    - **Zona horaria explícita `America/Guayaquil`:** Todas las reglas de fechas de agenda en `ProfesionalService` (`TIMEZONE = 'America/Guayaquil'`) y `CitaService` (`TIMEZONE = 'America/Guayaquil'`) operan explícitamente sobre `new \DateTimeZone('America/Guayaquil')` mediante `DateTimeImmutable`, garantizando coherencia entre el cálculo del día actual, el día de la semana y las validaciones de reservas y bloqueos sin desalinear los `DATETIME` UTC de tokens en MySQL.
+- **Controladores y Vistas:**
+  - `Controllers\ProfesionalController`: protege todas las acciones con `iniciar_sesion_segura()`, `isAdmin()` y `exigir_csrf()` en peticiones `POST`; distingue errores de validación, no encontrado (`302`) y fallos de persistencia (`500`).
+  - **Frontera de compatibilidad:** El flujo de reserva del cliente (`/cita`, `/api/servicios`, `/api/citas`) y la tabla `citas` mantienen su contrato actual sin añadir columnas obligatorias ni atribuir profesionales retrospectivamente.
+
+### 2. Validación Ejecutada en Fase 3A (Antigravity)
+
+#### A. Suite Completa PHPUnit (Ejecutada en Docker PHP 8.2 + MySQL 8.0 Aislado)
+- **Resultado:** `OK (99 tests, 824 assertions)` — Código de salida `0`.
+- **Cobertura añadida en Fase 3A:**
+  - `Tests\Unit\ServicioServiceTest`: validación de `duracion_minutos` como entero positivo (`>= 1`), rechazo de `0`, negativos, decimales, vacíos o no escalares, y verificación del supuesto configurable `DEFAULT_DURACION_MINUTOS = 30`.
+  - `Tests\Unit\ProfesionalAgendaServiceTest`: validación de profesionales y servicios asociados, intervalos horarios, rechazo de horarios invertidos y solapados, coherencia entre horarios y descansos, bloqueos por día completo e intervalo, y coherencia de zona horaria `America/Guayaquil` entre `ProfesionalService` y `CitaService`.
+  - `Tests\Integration\MigrationTest`: verificación de migración `003_profesionales_duracion_y_horarios` en instalaciones desde cero y con datos previos (`duracion_minutos = 30` y tablas `profesionales`, `profesionales_servicios`, `horarios_profesionales`, `descansos_profesionales`, `bloqueos_profesionales`).
+  - `Tests\Integration\ServicioModuloIntegrationTest`: ciclo CRUD de servicios con `duracion_minutos` en MySQL real y vistas HTTP.
+  - `Tests\Integration\ProfesionalAgendaIntegrationTest`: control de permisos `isAdmin()` y CSRF en todas las rutas de `/profesionales*`, ciclo completo con MySQL real (creación, edición de servicios asociados, horarios semanales, descansos, bloqueos, desactivación conservando agenda histórica), rollback transaccional con respuesta HTTP 500 ante fallos SQL y compatibilidad con el flujo actual de reservas.
+
+#### B. Verificación E2E en Navegador con JavaScript Habilitado (`tests/verificar_navegador.ps1` + `tests/browser_e2e_test.js`)
+- **Resultado:** 13 comprobaciones E2E superadas (`ADMIN-01` a `ADMIN-05`, `PROF-01`, `PRE-01`, `REC-01` a `REC-05`, `AUTH-01`) + verificación de persistencia en MySQL (`duracion_minutos=60`, profesional `Sofía Andrade` con servicios, horario, descanso y bloqueo, y cita de cliente) — Código de salida `0`.
 
 ---
 
@@ -13,7 +72,7 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 
 - **Rama:** `feature/fase-2c-usuarios-autenticacion`
 - **Commit Base (Fase 2B):** `b0295c1378be0d7bf816ffd32e090a8e9f114292`
-- **Estado General de Fase 2C:** **Completada y Lista para Auditoría**
+- **Estado General de Fase 2C:** **Completada y Revisada** (`fe16c67211d5583e859fd6ec4eb8ba55b7c03983`)
 
 ### 1. Arquitectura Implementada (`Controller` $\rightarrow$ `Service` $\rightarrow$ `Repository`)
 
@@ -49,15 +108,9 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 
 #### A. Suite Completa PHPUnit (Ejecutada en Docker PHP 8.2 + MySQL 8.0 Aislado)
 - **Resultado:** `OK (87 tests, 667 assertions)` — Código de salida `0`.
-- **Nuevas suites y adaptaciones en Fase 2C:**
-  - `Tests\Unit\UsuarioSeguridadTest` ([tests/Unit/UsuarioSeguridadTest.php](file:///tests/Unit/UsuarioSeguridadTest.php)): verifica que `Model\Usuario` está desacoplada de `ActiveRecord` (`is_subclass_of(Usuario::class, ActiveRecord::class) === false`), bloqueo de asignación masiva en `sincronizarRegistro()` y `sincronizar()`, y generación de tokens SHA-256 por propósito.
-  - `Tests\Unit\AuthServiceTest` ([tests/Unit/AuthServiceTest.php](file:///tests/Unit/AuthServiceTest.php)): pruebas unitarias en aislamiento (con doble en memoria `InMemoryUsuarioRepositoryStub`) comprobando que `AuthService` no lee superglobales (`$_POST`), bloquea *mass assignment*, envía correos solo tras persistir, cancela el envío de correo ante fallos de persistencia sin filtrar detalles SQL y distingue estados en confirmación y restablecimiento de contraseña.
-  - `Tests\Integration\UsuarioAuthIntegrationTest` ([tests/Integration/UsuarioAuthIntegrationTest.php](file:///tests/Integration/UsuarioAuthIntegrationTest.php)): pruebas de integración con MySQL 8.0 real cubriendo el ciclo completo (`registrar` $\rightarrow$ rechazo de login sin confirmar $\rightarrow$ `confirmarCuenta` $\rightarrow$ `login` $\rightarrow$ `solicitarRecuperacion` $\rightarrow$ `restablecerPassword` $\rightarrow$ `login` con nueva clave), triggers de fallo SQL en `INSERT`/`UPDATE` verificando HTTP `500` sin envío de correo ni exposición de mensajes SQL internos, y lanzamiento de `PersistenceException` en `UsuarioRepository` con conexión cerrada.
-  - Adaptación de `SecurityIntegrationTest`, `ApiSeguridadTest`, `ServicioModuloIntegrationTest` y `CitaModuloIntegrationTest` para operar con `UsuarioRepository`, manteniendo intactas todas las pruebas de concurrencia (10 subprocesos simultáneos en `concurrent_login_worker.php`), emisión/consumo atómico de tokens y presupuesto compartido de IP.
 
 #### B. Verificación E2E en Navegador con JavaScript Habilitado (`tests/verificar_navegador.ps1` + `tests/browser_e2e_test.js`)
 - **Resultado:** 12 comprobaciones E2E superadas (`ADMIN-01` a `ADMIN-05`, `PRE-01`, `REC-01` a `REC-05`, `AUTH-01`) + verificación de persistencia en MySQL — Código de salida `0`.
-- **Nuevo recorrido añadido en Fase 2C (`AUTH-01`):** Cierre de sesión con CSRF (`POST /logout`), registro de cuenta nueva en `/crear-cuenta` con redirección a `/mensaje`, rechazo de inicio de sesión antes de confirmar con mensaje unificado, solicitud en `/reenviar-confirmacion` y solicitud en `/olvide` verificando respuestas genéricas anti-enumeración y ausencia total de errores de consola o red.
 
 ---
 
@@ -91,8 +144,9 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 | **Entrega 1** | Seguridad y consistencia inicial (Auth, CSRF, Rate Limiting, Tokens, Transacciones, Migraciones) | `Completada y en main` |
 | **Fase 2A** | Separación de responsabilidades en módulo de catálogo de servicios (`Controller -> Service -> Repository`) | `Completada` |
 | **Fase 2B** | Separación de responsabilidades en el flujo de citas y reservas (`CitaRepository`, `CitaService`) | `Completada` |
-| **Fase 2C** | Separación de responsabilidades en usuarios y autenticación (`UsuarioRepository`, `AuthService`, desacoplamiento de `Usuario`) | `Completada (En Auditoría)` |
-| **Fase 3** | Profesionales, servicios con duración, horarios, descansos y bloqueos | `Pendiente` |
+| **Fase 2C** | Separación de responsabilidades en usuarios y autenticación (`UsuarioRepository`, `AuthService`, desacoplamiento de `Usuario`) | `Completada` |
+| **Fase 3A** | Profesionales, servicios con duración, horarios, descansos y bloqueos | `Completada (En Revisión)` |
 | **Fase 4** | Disponibilidad real y prevención de reservas simultáneas | `Pendiente` |
 | **Fase 5** | Interfaz accesible de reservas y panel administrativo | `Pendiente` |
 | **Fase 6** | Pagos (Stripe / Mercado Pago), notificaciones multicanal y reportes | `Pendiente` |
+

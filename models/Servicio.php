@@ -14,6 +14,7 @@ class Servicio
     public $id;
     public $nombre;
     public $precio;
+    public $duracion_minutos;
 
     public function __construct($args = [])
     {
@@ -37,10 +38,20 @@ class Servicio
         $this->precio = isset($args['precio']) && (is_string($args['precio']) || is_int($args['precio']) || is_float($args['precio']))
             ? (string)$args['precio']
             : '';
+
+        if (array_key_exists('duracion_minutos', $args)) {
+            $rawDuracion = $args['duracion_minutos'];
+            $this->duracion_minutos = (is_string($rawDuracion) || is_int($rawDuracion) || is_float($rawDuracion))
+                ? trim((string)$rawDuracion)
+                : '';
+        } else {
+            // Valor inicial por defecto configurable (no un dato confirmado del negocio)
+            $this->duracion_minutos = (string)ServicioService::DEFAULT_DURACION_MINUTOS;
+        }
     }
 
     /**
-     * Sincroniza exclusivamente los campos editables permitidos (`nombre` y `precio`)
+     * Sincroniza exclusivamente los campos editables permitidos (`nombre`, `precio` y `duracion_minutos`)
      * a partir de entradas escalares. Ignora `id` y cualquier otro atributo para impedir
      * asignación masiva de identificadores.
      */
@@ -54,6 +65,13 @@ class Servicio
             $rawPrecio = $datos['precio'];
             $this->precio = (is_string($rawPrecio) || is_int($rawPrecio) || is_float($rawPrecio))
                 ? trim((string)$rawPrecio)
+                : '';
+        }
+
+        if (array_key_exists('duracion_minutos', $datos)) {
+            $rawDuracion = $datos['duracion_minutos'];
+            $this->duracion_minutos = (is_string($rawDuracion) || is_int($rawDuracion) || is_float($rawDuracion))
+                ? trim((string)$rawDuracion)
                 : '';
         }
     }
@@ -76,7 +94,8 @@ class Servicio
     {
         return ServicioService::validarDatos([
             'nombre' => $this->nombre,
-            'precio' => $this->precio
+            'precio' => $this->precio,
+            'duracion_minutos' => $this->duracion_minutos
         ]);
     }
 }

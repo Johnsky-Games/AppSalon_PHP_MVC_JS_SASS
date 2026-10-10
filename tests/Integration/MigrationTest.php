@@ -119,6 +119,8 @@ class MigrationTest extends TestCase
         $this->assertStringContainsString('[-] Migración ya aplicada: 001_security_hardening', $resUpgrade['stdout']);
         $this->assertStringContainsString('[+] Aplicando migración: 002_innodb_and_rate_limit_window', $resUpgrade['stdout']);
         $this->assertStringContainsString('[OK] Migración 002_innodb_and_rate_limit_window aplicada exitosamente.', $resUpgrade['stdout']);
+        $this->assertStringContainsString('[+] Aplicando migración: 003_profesionales_duracion_y_horarios', $resUpgrade['stdout']);
+        $this->assertStringContainsString('[OK] Migración 003_profesionales_duracion_y_horarios aplicada exitosamente.', $resUpgrade['stdout']);
 
         // 4. Demostrar preservación íntegra de los datos existentes completos
         $resUsuario = $upgradeDb->query("SELECT * FROM usuarios WHERE id = {$clienteId}")->fetch_assoc();
@@ -145,10 +147,12 @@ class MigrationTest extends TestCase
         $resS1 = $upgradeDb->query("SELECT * FROM servicios WHERE id = {$servicio1Id}")->fetch_assoc();
         $this->assertSame('Corte de Cabello Premium', $resS1['nombre']);
         $this->assertEquals(150.00, (float)$resS1['precio']);
+        $this->assertSame(30, (int)$resS1['duracion_minutos']);
 
         $resS2 = $upgradeDb->query("SELECT * FROM servicios WHERE id = {$servicio2Id}")->fetch_assoc();
         $this->assertSame('Tratamiento Capilar', $resS2['nombre']);
         $this->assertEquals(250.00, (float)$resS2['precio']);
+        $this->assertSame(30, (int)$resS2['duracion_minutos']);
 
         $resCitas = $upgradeDb->query("SELECT * FROM citas WHERE id = {$citaId}")->fetch_assoc();
         $this->assertSame('2026-11-15', $resCitas['fecha']);
@@ -174,9 +178,22 @@ class MigrationTest extends TestCase
         $this->assertSame(0, $resFresh['exitCode'], 'El migrador debe terminar con código 0 en fresh');
         $this->assertStringContainsString('[+] Aplicando migración: 001_security_hardening', $resFresh['stdout']);
         $this->assertStringContainsString('[+] Aplicando migración: 002_innodb_and_rate_limit_window', $resFresh['stdout']);
+        $this->assertStringContainsString('[+] Aplicando migración: 003_profesionales_duracion_y_horarios', $resFresh['stdout']);
 
         // 6. Comparar esquemas exactos entre ambas instalaciones: columnas, tipos, nulabilidad, defaults, índices y motores
-        $tablas = ['usuarios', 'servicios', 'citas', 'citasservicios', 'intentos_login', 'migraciones'];
+        $tablas = [
+            'usuarios',
+            'servicios',
+            'citas',
+            'citasservicios',
+            'intentos_login',
+            'migraciones',
+            'profesionales',
+            'profesionales_servicios',
+            'horarios_profesionales',
+            'descansos_profesionales',
+            'bloqueos_profesionales'
+        ];
         foreach ($tablas as $tabla) {
             $colsUpgrade = [];
             $resColsU = $upgradeDb->query("SHOW FULL COLUMNS FROM {$tabla}");

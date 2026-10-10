@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-10-10T16:33:35.488Z",
+  "timestamp": "2026-10-10T17:55:02.002Z",
   "navegador": "Chrome Headless (Puppeteer-Core)",
   "citaCreadaId": 1,
   "citaTemporalEliminadaId": 2,
@@ -14,15 +14,15 @@
     },
     {
       "id": "ADMIN-02",
-      "name": "Validación de entradas inválidas y creación de nuevo servicio en /servicios/crear",
+      "name": "Validación de entradas inválidas y creación de nuevo servicio con duración en /servicios/crear",
       "success": true,
-      "details": "Entradas inválidas rechazadas con alertas (2); 'Masaje Capilar Relax' ($95.50) creado."
+      "details": "Entradas inválidas rechazadas con alertas (3); 'Masaje Capilar Relax' ($95.50, 45 min) creado."
     },
     {
       "id": "ADMIN-03",
-      "name": "Actualización de servicio existente en /servicios/actualizar",
+      "name": "Actualización de servicio existente y su duración en /servicios/actualizar",
       "success": true,
-      "details": "'Masaje Capilar Relax' actualizado a 'Masaje Capilar Premium' ($115.00)."
+      "details": "'Masaje Capilar Relax' actualizado a 'Masaje Capilar Premium' ($115.00, 60 min)."
     },
     {
       "id": "ADMIN-04",
@@ -31,10 +31,16 @@
       "details": "'Servicio Temporal Borrar' eliminado; catálogo conserva 4 servicios activos."
     },
     {
+      "id": "PROF-01",
+      "name": "Gestión de profesionales, servicios asociados, horarios, descansos, bloqueos y desactivación/reactivación",
+      "success": true,
+      "details": "'Sofía Andrade' creada con servicios, horario Lunes 09:00-18:00, descanso 13:00-14:00, bloqueo 2026-10-12 15:00-16:30 y ciclo Inactivo/Activo verificado."
+    },
+    {
       "id": "PRE-01",
       "name": "Login interactivo de cliente y redirección autorizada a /cita",
       "success": true,
-      "details": "URL: http://localhost:32776/cita"
+      "details": "URL: http://localhost:32780/cita"
     },
     {
       "id": "REC-01",

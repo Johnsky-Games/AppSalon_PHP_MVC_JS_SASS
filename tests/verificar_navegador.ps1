@@ -193,16 +193,26 @@ try {
     Write-Host ""
     Write-Host "[6/6] Verificando persistencia estricta en base de datos ($DbName)..." -ForegroundColor Cyan
 
-    $servicioEditado = docker exec $DbContainer mysql -uroot -proot --default-character-set=utf8mb4 -N -e "SELECT id, nombre, precio FROM servicios WHERE nombre = 'Masaje Capilar Premium';" $DbName 2>$null
-    if (-not $servicioEditado -or -not ($servicioEditado -match "115\.00")) {
-        throw "El servicio creado/actualizado 'Masaje Capilar Premium' (115.00) no se encontro en la base de datos."
+    $servicioEditado = docker exec $DbContainer mysql -uroot -proot --default-character-set=utf8mb4 -N -e "SELECT id, nombre, precio, duracion_minutos FROM servicios WHERE nombre = 'Masaje Capilar Premium';" $DbName 2>$null
+    if (-not $servicioEditado -or -not ($servicioEditado -match "115\.00") -or -not ($servicioEditado -match "\b60\b")) {
+        throw "El servicio creado/actualizado 'Masaje Capilar Premium' (115.00, 60 min) no se encontro en la base de datos: $servicioEditado"
     }
-    Write-Host " -> Servicio CRUD verificado en BD: $servicioEditado" -ForegroundColor Green
+    Write-Host " -> Servicio CRUD verificado en BD (incluyendo duracion_minutos=60): $servicioEditado" -ForegroundColor Green
 
     $servicioEliminado = docker exec $DbContainer mysql -uroot -proot --default-character-set=utf8mb4 -N -e "SELECT COUNT(*) FROM servicios WHERE nombre = 'Servicio Temporal Borrar';" $DbName 2>$null
     if ([int]$servicioEliminado -ne 0) {
         throw "El servicio eliminado 'Servicio Temporal Borrar' aun existe en la base de datos."
     }
+
+    $profCheck = docker exec $DbContainer mysql -uroot -proot --default-character-set=utf8mb4 -N -e "SELECT p.id, p.activo, (SELECT COUNT(*) FROM profesionales_servicios ps WHERE ps.profesionalId = p.id), (SELECT COUNT(*) FROM horarios_profesionales hp WHERE hp.profesionalId = p.id), (SELECT COUNT(*) FROM descansos_profesionales dp WHERE dp.profesionalId = p.id), (SELECT COUNT(*) FROM bloqueos_profesionales bp WHERE bp.profesionalId = p.id) FROM profesionales p WHERE p.id = 1 AND p.nombre LIKE 'Sof%Andrade';" $DbName 2>$null
+    if (-not $profCheck) {
+        throw "La profesional 'Sofia Andrade' y su agenda no se encontraron en la base de datos."
+    }
+    $profCols = -split $profCheck
+    if ($profCols[1] -ne "1" -or [int]$profCols[2] -ne 2 -or [int]$profCols[3] -ne 1 -or [int]$profCols[4] -ne 1 -or [int]$profCols[5] -ne 1) {
+        throw "Inconsistencia en agenda de profesional persistida en BD: $profCheck"
+    }
+    Write-Host " -> Profesional y agenda verificados en BD (id | activo | servicios | horarios | descansos | bloqueos): $profCheck" -ForegroundColor Green
 
     $querySql = "SELECT c.id, c.fecha, c.hora, c.usuarioId, COUNT(cs.id) AS total_servicios FROM citas c LEFT JOIN citasservicios cs ON c.id = cs.citaId WHERE c.usuarioId = 1 GROUP BY c.id ORDER BY c.id DESC LIMIT 1;"
     $dbOutput = docker exec $DbContainer mysql -uroot -proot -N -e "$querySql" $DbName 2>$null

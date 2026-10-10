@@ -6,6 +6,7 @@ use Controllers\AdminController;
 use Controllers\CitaController;
 use Controllers\LoginController;
 use Controllers\APIController;
+use Controllers\ProfesionalController;
 use Controllers\ServicioController;
 use MVC\Router;
 
@@ -49,6 +50,20 @@ $router->post('/servicios/crear', [ServicioController::class, 'crear']);
 $router->get('/servicios/actualizar', [ServicioController::class, 'actualizar']);
 $router->post('/servicios/actualizar', [ServicioController::class, 'actualizar']);
 $router->post('/servicios/eliminar', [ServicioController::class, 'eliminar']);
+
+//Administración de Profesionales y Configuración de Horarios
+$router->get('/profesionales', [ProfesionalController::class, 'index']);
+$router->get('/profesionales/crear', [ProfesionalController::class, 'crear']);
+$router->post('/profesionales/crear', [ProfesionalController::class, 'crear']);
+$router->get('/profesionales/actualizar', [ProfesionalController::class, 'actualizar']);
+$router->post('/profesionales/actualizar', [ProfesionalController::class, 'actualizar']);
+$router->post('/profesionales/estado', [ProfesionalController::class, 'cambiarEstado']);
+$router->get('/profesionales/horarios', [ProfesionalController::class, 'horarios']);
+$router->post('/profesionales/horarios', [ProfesionalController::class, 'horarios']);
+$router->post('/profesionales/descansos/crear', [ProfesionalController::class, 'crearDescanso']);
+$router->post('/profesionales/descansos/eliminar', [ProfesionalController::class, 'eliminarDescanso']);
+$router->post('/profesionales/bloqueos/crear', [ProfesionalController::class, 'crearBloqueo']);
+$router->post('/profesionales/bloqueos/eliminar', [ProfesionalController::class, 'eliminarBloqueo']);
 
 // Comprueba y valida las rutas, que existan y les asigna las funciones del Controlador
 try {

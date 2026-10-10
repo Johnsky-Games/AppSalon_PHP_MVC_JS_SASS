@@ -16,6 +16,7 @@ include __DIR__ . '/../templates/alertas.php';
         <p>Precio: <span> $
                 <?php echo s($servicio->precio); ?>
             </span></p>
+        <p>Duración: <span><?php echo s($servicio->duracion_minutos); ?> min</span></p>
 
         <div class="acciones">
             <a class="boton" href="/servicios/actualizar?id=<?php echo s($servicio->id); ?>">Actualizar</a>

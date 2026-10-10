@@ -174,7 +174,14 @@ async function runBrowserTests() {
             page.click('a[href="/servicios/crear"]')
         ]);
 
-        // 2.a Envío inválido (nombre vacío y precio negativo)
+        // 2.a Comprobar validación en formulario HTML (min="1" step="1") y en backend (nombre vacío, precio negativo y duración 0)
+        await page.$eval('#duracion_minutos', el => el.value = '0');
+        const duracionValidaEnForm = await page.$eval('#duracion_minutos', el => el.checkValidity());
+        if (duracionValidaEnForm !== false) {
+            throw new Error('El campo #duracion_minutos en el formulario debía rechazar 0 mediante validación HTML (min="1").');
+        }
+
+        await page.$eval('form.formulario', form => form.noValidate = true);
         await page.type('#precio', '-25');
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'networkidle0' }),
@@ -182,15 +189,17 @@ async function runBrowserTests() {
         ]);
 
         const alertasErrorCrear = await page.$$eval('.alerta.error', els => els.map(e => e.textContent.trim()));
-        if (alertasErrorCrear.length < 2) {
-            throw new Error(`Se esperaban alertas de validación ante entrada inválida en /servicios/crear, obtenidas: ${JSON.stringify(alertasErrorCrear)}`);
+        if (alertasErrorCrear.length < 3) {
+            throw new Error(`Se esperaban al menos 3 alertas de validación ante entrada inválida en /servicios/crear, obtenidas: ${JSON.stringify(alertasErrorCrear)}`);
         }
 
-        // 2.b Envío válido ("Masaje Capilar Relax", "95.50")
+        // 2.b Envío válido ("Masaje Capilar Relax", "95.50", duración "45" min)
         await page.$eval('#nombre', el => el.value = '');
         await page.$eval('#precio', el => el.value = '');
+        await page.$eval('#duracion_minutos', el => el.value = '');
         await page.type('#nombre', 'Masaje Capilar Relax');
         await page.type('#precio', '95.50');
+        await page.type('#duracion_minutos', '45');
 
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'networkidle0' }),
@@ -202,11 +211,11 @@ async function runBrowserTests() {
         }
 
         const textoListadoTrasCrear = await page.$eval('ul.servicios', el => el.textContent);
-        if (!textoListadoTrasCrear.includes('Masaje Capilar Relax') || !textoListadoTrasCrear.includes('95.50')) {
-            throw new Error('El servicio creado "Masaje Capilar Relax" ($95.50) no aparece en /servicios.');
+        if (!textoListadoTrasCrear.includes('Masaje Capilar Relax') || !textoListadoTrasCrear.includes('95.50') || !textoListadoTrasCrear.includes('45 min')) {
+            throw new Error('El servicio creado "Masaje Capilar Relax" ($95.50, 45 min) no aparece en /servicios.');
         }
-        recordTest('ADMIN-02', 'Validación de entradas inválidas y creación de nuevo servicio en /servicios/crear', true,
-            `Entradas inválidas rechazadas con alertas (${alertasErrorCrear.length}); 'Masaje Capilar Relax' ($95.50) creado.`);
+        recordTest('ADMIN-02', 'Validación de entradas inválidas y creación de nuevo servicio con duración en /servicios/crear', true,
+            `Entradas inválidas rechazadas con alertas (${alertasErrorCrear.length}); 'Masaje Capilar Relax' ($95.50, 45 min) creado.`);
 
         // 3. Actualizar servicio (/servicios/actualizar)
         const hrefActualizar = await page.evaluate(() => {
@@ -223,8 +232,10 @@ async function runBrowserTests() {
         await page.goto(`${BASE_URL}${hrefActualizar}`, { waitUntil: 'networkidle0' });
         await page.$eval('#nombre', el => el.value = '');
         await page.$eval('#precio', el => el.value = '');
+        await page.$eval('#duracion_minutos', el => el.value = '');
         await page.type('#nombre', 'Masaje Capilar Premium');
         await page.type('#precio', '115.00');
+        await page.type('#duracion_minutos', '60');
 
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'networkidle0' }),
@@ -232,11 +243,11 @@ async function runBrowserTests() {
         ]);
 
         const textoListadoTrasActualizar = await page.$eval('ul.servicios', el => el.textContent);
-        if (!textoListadoTrasActualizar.includes('Masaje Capilar Premium') || !textoListadoTrasActualizar.includes('115.00')) {
-            throw new Error('El servicio actualizado "Masaje Capilar Premium" ($115.00) no se reflejó en /servicios.');
+        if (!textoListadoTrasActualizar.includes('Masaje Capilar Premium') || !textoListadoTrasActualizar.includes('115.00') || !textoListadoTrasActualizar.includes('60 min')) {
+            throw new Error('El servicio actualizado "Masaje Capilar Premium" ($115.00, 60 min) no se reflejó en /servicios.');
         }
-        recordTest('ADMIN-03', 'Actualización de servicio existente en /servicios/actualizar', true,
-            `'Masaje Capilar Relax' actualizado a 'Masaje Capilar Premium' ($115.00).`);
+        recordTest('ADMIN-03', 'Actualización de servicio existente y su duración en /servicios/actualizar', true,
+            `'Masaje Capilar Relax' actualizado a 'Masaje Capilar Premium' ($115.00, 60 min).`);
 
         // 4. Crear servicio temporal y eliminarlo (/servicios/eliminar)
         await page.goto(`${BASE_URL}/servicios/crear`, { waitUntil: 'networkidle0' });
@@ -269,6 +280,124 @@ async function runBrowserTests() {
         }
         recordTest('ADMIN-04', 'Eliminación de servicio con CSRF en /servicios/eliminar', true,
             `'Servicio Temporal Borrar' eliminado; catálogo conserva 4 servicios activos.`);
+
+        // 5. Administración de Profesionales y Configuración de Horarios (Fase 3A)
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('a[href="/profesionales"]')
+        ]);
+
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('a[href="/profesionales/crear"]')
+        ]);
+
+        await page.type('#nombre', 'Sofía Andrade');
+        await page.evaluate(() => {
+            const checks = document.querySelectorAll('input[name="servicios[]"]');
+            if (checks.length >= 2) {
+                checks[0].checked = true;
+                checks[1].checked = true;
+            }
+        });
+
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('form.formulario input[type="submit"]')
+        ]);
+
+        if (!page.url().endsWith('/profesionales')) {
+            throw new Error(`Tras crear profesional debía redirigir a /profesionales, URL actual: ${page.url()}`);
+        }
+
+        const textoProfesionales = await page.$eval('ul.profesionales-lista', el => el.textContent);
+        if (!textoProfesionales.includes('Sofía Andrade') || !textoProfesionales.includes('Activo')) {
+            throw new Error('La profesional creada "Sofía Andrade" no aparece activa en /profesionales.');
+        }
+
+        // Ir a Horarios y Agenda de Sofía Andrade
+        const hrefHorarios = await page.$eval('ul.profesionales-lista a[href*="/profesionales/horarios"]', el => el.getAttribute('href'));
+        await page.goto(`${BASE_URL}${hrefHorarios}`, { waitUntil: 'networkidle0' });
+
+        // Probar rechazo de horario invertido en Lunes (18:00 a 09:00)
+        await page.evaluate(() => {
+            document.querySelector('#horario_activo_1').checked = true;
+            document.querySelector('#horario_inicio_1').value = '18:00';
+            document.querySelector('#horario_fin_1').value = '09:00';
+        });
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('#form-horarios-semanales input[type="submit"]')
+        ]);
+        const alertaHorarioInvertido = await page.$eval('.alerta.error', el => el.textContent.trim());
+        if (!alertaHorarioInvertido.includes('estrictamente anterior')) {
+            throw new Error(`Se esperaba alerta de horario invertido, obtenido: ${alertaHorarioInvertido}`);
+        }
+
+        // Configurar horario válido en Lunes (09:00 a 18:00)
+        await page.evaluate(() => {
+            document.querySelector('#horario_activo_1').checked = true;
+            document.querySelector('#horario_inicio_1').value = '09:00';
+            document.querySelector('#horario_fin_1').value = '18:00';
+        });
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('#form-horarios-semanales input[type="submit"]')
+        ]);
+
+        // Añadir descanso en Lunes (13:00 a 14:00)
+        await page.select('#descanso_dia_semana', '1');
+        await page.evaluate(() => {
+            document.querySelector('#descanso_hora_inicio').value = '13:00';
+            document.querySelector('#descanso_hora_fin').value = '14:00';
+            document.querySelector('#descanso_motivo').value = 'Almuerzo';
+        });
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('#form-crear-descanso input[type="submit"]')
+        ]);
+
+        // Añadir bloqueo por intervalo en fecha futura válida
+        await page.evaluate((fechaBlk) => {
+            document.querySelector('#bloqueo_fecha_inicio').value = fechaBlk;
+            document.querySelector('#bloqueo_fecha_fin').value = fechaBlk;
+            document.querySelector('#bloqueo_hora_inicio').value = '15:00';
+            document.querySelector('#bloqueo_hora_fin').value = '16:30';
+            document.querySelector('#bloqueo_motivo').value = 'Capacitación';
+        }, validDate);
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('#form-crear-bloqueo input[type="submit"]')
+        ]);
+
+        const textoDescansos = await page.$eval('ul.descansos-lista', el => el.textContent);
+        const textoBloqueos = await page.$eval('ul.bloqueos-lista', el => el.textContent);
+        if (!textoDescansos.includes('13:00 - 14:00') || !textoBloqueos.includes('15:00 - 16:30')) {
+            throw new Error('El descanso o bloqueo configurado no se reflejó en la vista de agenda del profesional.');
+        }
+
+        // Volver a /profesionales y probar desactivación y reactivación con CSRF
+        await page.goto(`${BASE_URL}/profesionales`, { waitUntil: 'networkidle0' });
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('ul.profesionales-lista form[action="/profesionales/estado"] input[type="submit"]')
+        ]);
+        const estadoTrasDesactivar = await page.$eval('ul.profesionales-lista', el => el.textContent);
+        if (!estadoTrasDesactivar.includes('Inactivo')) {
+            throw new Error('El profesional no cambió a estado Inactivo tras enviar /profesionales/estado.');
+        }
+
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('ul.profesionales-lista form[action="/profesionales/estado"] input[type="submit"]')
+        ]);
+        const estadoTrasReactivar = await page.$eval('ul.profesionales-lista', el => el.textContent);
+        if (!estadoTrasReactivar.includes('Activo')) {
+            throw new Error('El profesional no volvió a estado Activo tras reactivar en /profesionales/estado.');
+        }
+
+        recordTest('PROF-01', 'Gestión de profesionales, servicios asociados, horarios, descansos, bloqueos y desactivación/reactivación', true,
+            `'Sofía Andrade' creada con servicios, horario Lunes 09:00-18:00, descanso 13:00-14:00, bloqueo ${validDate} 15:00-16:30 y ciclo Inactivo/Activo verificado.`);
 
         // Cerrar sesión de administrador mediante POST /logout
         await Promise.all([

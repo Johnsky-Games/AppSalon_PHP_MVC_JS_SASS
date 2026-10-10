@@ -5,6 +5,7 @@ namespace Repositories;
 use Model\ActiveRecord;
 use Model\Servicio;
 use mysqli;
+use Services\ServicioService;
 
 /**
  * Repositorio para consultas y persistencia del catálogo de servicios (`servicios`).
@@ -48,7 +49,7 @@ class ServicioRepository
         $db = $this->resolveDb();
 
         try {
-            $stmt = $db->prepare("SELECT id, nombre, precio FROM servicios");
+            $stmt = $db->prepare("SELECT id, nombre, precio, duracion_minutos FROM servicios");
             if (!$stmt) {
                 throw new PersistenceException("Error al preparar consulta de servicios: " . $db->error);
             }
@@ -100,7 +101,7 @@ class ServicioRepository
         $db = $this->resolveDb();
 
         try {
-            $stmt = $db->prepare("SELECT id, nombre, precio FROM servicios WHERE id = ? LIMIT 1");
+            $stmt = $db->prepare("SELECT id, nombre, precio, duracion_minutos FROM servicios WHERE id = ? LIMIT 1");
             if (!$stmt) {
                 throw new PersistenceException("Error al preparar búsqueda de servicio: " . $db->error);
             }
@@ -140,7 +141,7 @@ class ServicioRepository
     /**
      * Inserta un nuevo servicio en la base de datos.
      *
-     * @param Servicio $servicio Entidad con nombre y precio validados.
+     * @param Servicio $servicio Entidad con nombre, precio y duracion_minutos validados.
      * @return int ID autogenerado por MySQL.
      * @throws PersistenceException Si la preparación o inserción falla.
      */
@@ -149,14 +150,23 @@ class ServicioRepository
         $db = $this->resolveDb();
 
         try {
-            $stmt = $db->prepare("INSERT INTO servicios (nombre, precio) VALUES (?, ?)");
+            $stmt = $db->prepare("INSERT INTO servicios (nombre, precio, duracion_minutos) VALUES (?, ?, ?)");
             if (!$stmt) {
                 throw new PersistenceException("Error al preparar inserción de servicio: " . $db->error);
             }
 
             $nombre = (string)$servicio->nombre;
             $precio = (string)$servicio->precio;
-            $stmt->bind_param('ss', $nombre, $precio);
+            $duracion = filter_var(
+                $servicio->duracion_minutos,
+                FILTER_VALIDATE_INT,
+                ['options' => ['min_range' => 1, 'max_range' => 2147483647]]
+            );
+            if ($duracion === false) {
+                $duracion = ServicioService::DEFAULT_DURACION_MINUTOS;
+            }
+
+            $stmt->bind_param('ssi', $nombre, $precio, $duracion);
 
             if (!$stmt->execute()) {
                 $err = $stmt->error;
@@ -173,6 +183,7 @@ class ServicioRepository
             }
 
             $servicio->id = (string)$insertId;
+            $servicio->duracion_minutos = (string)$duracion;
             return $insertId;
         } catch (PersistenceException $e) {
             error_log("[ServicioRepository::create] " . $e->getMessage());
@@ -184,7 +195,7 @@ class ServicioRepository
     }
 
     /**
-     * Actualiza nombre y precio de un servicio existente identificado por su ID validado.
+     * Actualiza nombre, precio y duracion_minutos de un servicio existente identificado por su ID validado.
      *
      * Distingue:
      * - Fallo SQL: lanza PersistenceException.
@@ -192,7 +203,7 @@ class ServicioRepository
      * - Actualización sin cambios (affected_rows === 0 y el registro existe): retorna true.
      * - Registro inexistente (affected_rows === 0 y el registro no existe): retorna false.
      *
-     * @param Servicio $servicio Entidad con id, nombre y precio validados.
+     * @param Servicio $servicio Entidad con id, nombre, precio y duracion_minutos validados.
      * @return bool True si el registro existe y quedó actualizado, false si el registro no existe.
      * @throws PersistenceException Si ocurre un fallo SQL.
      */
@@ -203,17 +214,26 @@ class ServicioRepository
             return false;
         }
 
+        $duracion = filter_var(
+            $servicio->duracion_minutos,
+            FILTER_VALIDATE_INT,
+            ['options' => ['min_range' => 1, 'max_range' => 2147483647]]
+        );
+        if ($duracion === false) {
+            return false;
+        }
+
         $db = $this->resolveDb();
 
         try {
-            $stmt = $db->prepare("UPDATE servicios SET nombre = ?, precio = ? WHERE id = ? LIMIT 1");
+            $stmt = $db->prepare("UPDATE servicios SET nombre = ?, precio = ?, duracion_minutos = ? WHERE id = ? LIMIT 1");
             if (!$stmt) {
                 throw new PersistenceException("Error al preparar actualización de servicio: " . $db->error);
             }
 
             $nombre = (string)$servicio->nombre;
             $precio = (string)$servicio->precio;
-            $stmt->bind_param('ssi', $nombre, $precio, $id);
+            $stmt->bind_param('ssii', $nombre, $precio, $duracion, $id);
 
             if (!$stmt->execute()) {
                 $err = $stmt->error;

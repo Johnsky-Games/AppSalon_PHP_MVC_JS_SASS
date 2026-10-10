@@ -46,7 +46,8 @@ class ServicioController
     {
         $nombreOk = !isset($datos['nombre']) || is_string($datos['nombre']);
         $precioOk = !isset($datos['precio']) || is_string($datos['precio']) || is_int($datos['precio']) || is_float($datos['precio']);
-        return $nombreOk && $precioOk;
+        $duracionOk = !isset($datos['duracion_minutos']) || is_string($datos['duracion_minutos']) || is_int($datos['duracion_minutos']);
+        return $nombreOk && $precioOk && $duracionOk;
     }
 
     public static function index(Router $router)

@@ -8,3 +8,8 @@
     <input type="number" name="precio" id="precio" placeholder="Precio del Servicio" step="0.01"
         value="<?php echo s($servicio->precio); ?>">
 </div>
+<div class="campo">
+    <label for="duracion_minutos">Duración (Minutos)</label>
+    <input type="number" name="duracion_minutos" id="duracion_minutos" placeholder="Duración en minutos (ej. 30)" min="1" step="1"
+        value="<?php echo s($servicio->duracion_minutos); ?>">
+</div>

@@ -25,16 +25,58 @@ class CitaService
     public const STATUS_UNAUTHORIZED = 'unauthorized';
     public const STATUS_ERROR = 'error';
 
+    public const TIMEZONE = 'America/Guayaquil';
+
     private CitaRepository $citaRepository;
     private ServicioRepository $servicioRepository;
+    private ?\DateTimeImmutable $ahoraReferencia;
 
     public function __construct(
         ?CitaRepository $citaRepository = null,
-        ?ServicioRepository $servicioRepository = null
+        ?ServicioRepository $servicioRepository = null,
+        ?\DateTimeImmutable $ahoraReferencia = null
     ) {
         $this->citaRepository = $citaRepository ?? new CitaRepository();
         // Compartir la misma conexión del repositorio de citas cuando no se inyecta ServicioRepository aparte
         $this->servicioRepository = $servicioRepository ?? new ServicioRepository($this->citaRepository->getDb());
+        $this->ahoraReferencia = $ahoraReferencia;
+    }
+
+    /**
+     * Retorna la zona horaria oficial de la agenda (`America/Guayaquil`).
+     */
+    public function obtenerZonaHoraria(): \DateTimeZone
+    {
+        return new \DateTimeZone(self::TIMEZONE);
+    }
+
+    /**
+     * Retorna el instante actual evaluado en la zona horaria `America/Guayaquil`.
+     */
+    public function obtenerAhora(): \DateTimeImmutable
+    {
+        $tz = $this->obtenerZonaHoraria();
+        if ($this->ahoraReferencia !== null) {
+            return $this->ahoraReferencia->setTimezone($tz);
+        }
+        return new \DateTimeImmutable('now', $tz);
+    }
+
+    /**
+     * Calcula el día de la semana ISO-8601 (`1 = Lunes` ... `7 = Domingo`) para una fecha `AAAA-MM-DD`
+     * evaluada explícitamente en `America/Guayaquil`.
+     */
+    public function obtenerDiaSemanaIso(string $fecha): ?int
+    {
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $fecha) !== 1) {
+            return null;
+        }
+        $partes = explode('-', $fecha);
+        if (!checkdate((int)$partes[1], (int)$partes[2], (int)$partes[0])) {
+            return null;
+        }
+        $dt = \DateTimeImmutable::createFromFormat('!Y-m-d', $fecha, $this->obtenerZonaHoraria());
+        return $dt ? (int)$dt->format('N') : null;
     }
 
     /**
@@ -108,8 +150,8 @@ class CitaService
             ];
         }
 
-        // 2. Validar que la fecha sea estrictamente futura (mínimo mañana)
-        $fechaHoy = date('Y-m-d');
+        // 2. Validar que la fecha sea estrictamente futura (mínimo mañana) en zona horaria America/Guayaquil
+        $fechaHoy = $this->obtenerAhora()->format('Y-m-d');
         if ($fecha <= $fechaHoy) {
             return [
                 'status' => self::STATUS_INVALID,
@@ -119,9 +161,9 @@ class CitaService
             ];
         }
 
-        // 3. Validar exclusión de fines de semana (0 = Domingo, 6 = Sábado)
-        $diaSemana = (int)date('w', strtotime($fecha));
-        if (in_array($diaSemana, [0, 6], true)) {
+        // 3. Validar exclusión de fines de semana en America/Guayaquil (ISO-8601: 6 = Sábado, 7 = Domingo)
+        $diaSemanaIso = $this->obtenerDiaSemanaIso($fecha);
+        if (in_array($diaSemanaIso, [6, 7], true)) {
             return [
                 'status' => self::STATUS_INVALID,
                 'httpCode' => 422,
@@ -331,7 +373,7 @@ class CitaService
      */
     public function resolverFechaConsultaAdmin($fechaRaw = null): array
     {
-        $hoy = date('Y-m-d');
+        $hoy = $this->obtenerAhora()->format('Y-m-d');
         if ($fechaRaw === null || $fechaRaw === '') {
             return ['fecha' => $hoy, 'fechaValida' => true, 'esValida' => true];
         }

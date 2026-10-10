@@ -13,6 +13,12 @@ use Repositories\ServicioRepository;
  * Todo servicio del catálogo comercial debe tener un precio estrictamente positivo
  * (mínimo 0.01 y máximo 9999.99 conforme a la columna DECIMAL(6,2) en MySQL).
  * Los valores cero (0, 0.0, 0.00) y negativos son rechazados en la validación.
+ *
+ * Política sobre duración en minutos:
+ * Todo servicio debe tener una duración expresada como entero positivo (`>= 1` minuto).
+ * El valor `DEFAULT_DURACION_MINUTOS = 30` constituye un supuesto técnico configurable
+ * para registros preexistentes en migraciones o inicialización de formularios, y no un
+ * dato confirmado del negocio.
  */
 class ServicioService
 {
@@ -24,6 +30,12 @@ class ServicioService
     public const MAX_NOMBRE_LENGTH = 60;
     public const MIN_PRECIO_CENTAVOS = 1;       // 0.01
     public const MAX_PRECIO_CENTAVOS = 999999;  // 9999.99
+
+    /**
+     * Supuesto configurable para servicios preexistentes o valor inicial de formulario.
+     * No representa un dato confirmado del negocio; cada servicio es configurable por el administrador.
+     */
+    public const DEFAULT_DURACION_MINUTOS = 30;
 
     private ServicioRepository $repository;
 
@@ -69,8 +81,9 @@ class ServicioService
      * - `nombre`: escalar string no vacío, longitud máxima 60 caracteres UTF-8 (`VARCHAR(60)`).
      * - `precio`: escalar numérico/decimal con hasta 2 decimales, estrictamente mayor a 0
      *   (política de rechazo de precio cero y negativos) y máximo 9999.99 (`DECIMAL(6,2)`).
+     * - `duracion_minutos`: escalar entero estrictamente positivo (`>= 1` y `<= 2147483647`).
      *
-     * @param array $datos Datos de entrada (únicamente se consideran `nombre` y `precio`).
+     * @param array $datos Datos de entrada (únicamente se consideran `nombre`, `precio` y `duracion_minutos`).
      * @return array Estructura de alertas `['error' => [...]]` o arreglo vacío `[]` si es válido.
      */
     public static function validarDatos(array $datos): array
@@ -125,6 +138,31 @@ class ServicioService
             }
         }
 
+        // 3. Validación de `duracion_minutos` (entero positivo obligatorio)
+        $rawDuracion = $datos['duracion_minutos'] ?? '';
+        if (!is_string($rawDuracion) && !is_int($rawDuracion)) {
+            $errores[] = 'La duración del servicio tiene un formato inválido';
+        } else {
+            $duracionStr = trim((string)$rawDuracion);
+            if ($duracionStr === '') {
+                $errores[] = 'La Duración del Servicio es Obligatoria';
+            } elseif (preg_match('/^-\d+$/', $duracionStr) === 1 || preg_match('/^0+$/', $duracionStr) === 1) {
+                $errores[] = 'La duración del servicio debe ser un número entero positivo mayor a 0';
+            } elseif (!ctype_digit($duracionStr)) {
+                $errores[] = 'La duración del servicio debe ser un número entero positivo en minutos';
+            } else {
+                $valDuracion = filter_var($duracionStr, FILTER_VALIDATE_INT, [
+                    'options' => [
+                        'min_range' => 1,
+                        'max_range' => 2147483647
+                    ]
+                ]);
+                if ($valDuracion === false) {
+                    $errores[] = 'La duración del servicio debe ser un número entero positivo válido';
+                }
+            }
+        }
+
         if (empty($errores)) {
             return [];
         }
@@ -141,6 +179,14 @@ class ServicioService
         $enteros = (int)$partes[0];
         $decimales = str_pad($partes[1] ?? '0', 2, '0', STR_PAD_RIGHT);
         return sprintf('%d.%s', $enteros, $decimales);
+    }
+
+    /**
+     * Normaliza una duración ya validada a representación entera en cadena.
+     */
+    public static function normalizarDuracion($duracionRaw): string
+    {
+        return (string)(int)trim((string)$duracionRaw);
     }
 
     /**
@@ -220,7 +266,7 @@ class ServicioService
     }
 
     /**
-     * Valida y crea un nuevo servicio aceptando únicamente `nombre` y `precio`.
+     * Valida y crea un nuevo servicio aceptando únicamente `nombre`, `precio` y `duracion_minutos`.
      * Ignora cualquier `id` enviado en `$datos`.
      */
     public function crear(array $datos): array
@@ -242,6 +288,7 @@ class ServicioService
 
         $servicio->nombre = trim((string)$datos['nombre']);
         $servicio->precio = self::normalizarPrecio((string)$datos['precio']);
+        $servicio->duracion_minutos = self::normalizarDuracion($datos['duracion_minutos']);
 
         try {
             $insertId = $this->repository->create($servicio);
@@ -312,7 +359,7 @@ class ServicioService
             ];
         }
 
-        // Aplicar únicamente campos editables (`nombre` y `precio`), preservando el ID validado
+        // Aplicar únicamente campos editables (`nombre`, `precio` y `duracion_minutos`), preservando el ID validado
         $existente->sincronizarEditable($datos);
         $existente->id = (string)$id;
 
@@ -328,6 +375,7 @@ class ServicioService
 
         $existente->nombre = trim((string)$datos['nombre']);
         $existente->precio = self::normalizarPrecio((string)$datos['precio']);
+        $existente->duracion_minutos = self::normalizarDuracion($datos['duracion_minutos']);
         $existente->id = (string)$id;
 
         try {
