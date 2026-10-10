@@ -59,7 +59,7 @@ Cada fase del proyecto se ejecuta bajo la coordinación de tres roles con respon
 - Envíos idempotentes con bloqueo transaccional `FOR UPDATE` (`registrarOAdquirirParaEnvio`) y cola de reintentos seguros con *backoff* exponencial (`procesarPendientesYReintentos`), descartando recordatorios pendientes si la cita fue cancelada.
 - Aislamiento estricto de fallos SMTP post-commit en `CitaService` (`reservar`, `reservarConProfesional`, `eliminar`) para que un error de correo nunca revierta una reserva o cancelación confirmada en base de datos.
 - Configuración segura de enlaces (`Email::resolverAppUrl`) y remitentes (`Email::resolverRemitente`, `Email::sanearTextoCabecera`); pruebas automatizadas con transporte sustituible y buzón SMTP mock (`tests/smtp_mock_server.php`).
-- Verificada por el Desarrollador con `PHPUnit 10.5.66` (`OK (152 tests, 1714 assertions)`, exit `0`) y suite E2E en navegador (`RUN_ID: 5ab1f43eeac3445996985fe29d36978d`, 17 comprobaciones `[OK]` incluyendo `NOTIF-01`, `0` errores de consola, `0` peticiones fallidas, exit `0`).
+- Verificada por el Desarrollador con `PHPUnit 10.5.66` (`OK (152 tests, 1714 assertions)`, exit `0`) y suite E2E en navegador (`RUN_ID: 2ecae295c89d4fc789f2491b65cd3ee5`, 17 comprobaciones `[OK]` incluyendo `NOTIF-01`, `0` errores de consola, `0` peticiones fallidas, exit `0`).
 
 ### Fase 6B — Reportes Administrativos
 - Reportes de reservas por rango de fechas, profesional y servicio.

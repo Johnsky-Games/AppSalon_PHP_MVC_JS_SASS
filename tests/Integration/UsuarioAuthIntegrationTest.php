@@ -38,6 +38,7 @@ class UsuarioAuthIntegrationTest extends TestCase
 
         self::$db->query("DROP TRIGGER IF EXISTS test_fail_usuarios_insert");
         self::$db->query("DROP TRIGGER IF EXISTS test_fail_usuarios_update");
+        self::$db->query("DELETE FROM notificaciones_citas");
         self::$db->query("DELETE FROM citasservicios");
         self::$db->query("DELETE FROM citas");
         self::$db->query("DELETE FROM usuarios");

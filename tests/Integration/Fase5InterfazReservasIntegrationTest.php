@@ -65,6 +65,7 @@ class Fase5InterfazReservasIntegrationTest extends TestCase
         CitaService::setExigirProfesional(null);
 
         self::$db->query('SET FOREIGN_KEY_CHECKS = 0');
+        self::$db->query('TRUNCATE TABLE notificaciones_citas');
         self::$db->query('TRUNCATE TABLE citasservicios');
         self::$db->query('TRUNCATE TABLE citas');
         self::$db->query('TRUNCATE TABLE bloqueos_profesionales');

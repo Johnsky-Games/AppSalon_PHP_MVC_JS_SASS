@@ -38,6 +38,7 @@ class DisponibilidadIntegrationTest extends TestCase
     {
         validar_base_datos_prueba(self::$db);
 
+        self::$db->query("DELETE FROM notificaciones_citas");
         self::$db->query("DELETE FROM citasservicios");
         self::$db->query("DELETE FROM citas");
         self::$db->query("DELETE FROM bloqueos_profesionales");

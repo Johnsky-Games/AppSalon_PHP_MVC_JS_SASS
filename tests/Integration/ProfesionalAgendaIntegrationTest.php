@@ -41,6 +41,7 @@ class ProfesionalAgendaIntegrationTest extends TestCase
 
         $this->limpiarTriggers();
 
+        self::$db->query("DELETE FROM notificaciones_citas");
         self::$db->query("DELETE FROM citasservicios");
         self::$db->query("DELETE FROM citas");
         self::$db->query("DELETE FROM bloqueos_profesionales");

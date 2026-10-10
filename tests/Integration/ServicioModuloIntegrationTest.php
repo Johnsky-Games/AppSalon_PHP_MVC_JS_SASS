@@ -42,6 +42,7 @@ class ServicioModuloIntegrationTest extends TestCase
         self::$db->query("DROP TRIGGER IF EXISTS test_fail_servicios_insert");
         self::$db->query("DROP TRIGGER IF EXISTS test_fail_servicios_update");
         self::$db->query("DROP TRIGGER IF EXISTS test_fail_servicios_delete");
+        self::$db->query("DELETE FROM notificaciones_citas");
         self::$db->query("DELETE FROM citasservicios");
         self::$db->query("DELETE FROM citas");
         self::$db->query("DELETE FROM profesionales_servicios");

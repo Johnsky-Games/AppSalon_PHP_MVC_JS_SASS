@@ -1249,6 +1249,7 @@ class CitaRepository
         $consulta .= " LEFT OUTER JOIN citasservicios ON citasservicios.citaId = citas.id ";
         $consulta .= " LEFT OUTER JOIN servicios ON servicios.id = citasservicios.servicioId ";
         $consulta .= " WHERE fecha = ? ";
+        $consulta .= " ORDER BY citas.id ASC, citasservicios.id ASC ";
 
         try {
             $stmt = $db->prepare($consulta);

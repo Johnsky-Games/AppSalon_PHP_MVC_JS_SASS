@@ -24,7 +24,7 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
      - `cita_referencia_id INT NOT NULL` (conserva permanentemente el ID original de la cita aunque la fila en `citas` sea eliminada al cancelar)
      - `usuario_id INT NULL DEFAULT NULL` (FK `fk_notificaciones_usuario` hacia `usuarios(id)` con `ON DELETE SET NULL ON UPDATE CASCADE`)
      - `tipo VARCHAR(30) NOT NULL` (`'confirmacion'`, `'cancelacion'`, `'recordatorio'`)
-     - `clave_idempotencia VARCHAR(120) NOT NULL` con restricción única `UNIQUE KEY uq_notificaciones_clave_idempotencia (clave_idempotencia)` (p. ej. `cita:42:confirmacion`, `cita:42:cancelacion`, `cita:42:recordatorio:24h`)
+     - `clave_idempotencia VARCHAR(120) NOT NULL` con restricción única `UNIQUE KEY uq_notificaciones_clave_idempotencia (clave_idempotencia)` (p. ej. `cita:42:confirmacion`, `cita:42:cancelacion`, `cita:42:recordatorio:2026-11-16_11:30`)
      - `destinatario_email VARCHAR(60) NOT NULL`, `destinatario_nombre VARCHAR(120) NOT NULL`, `asunto VARCHAR(180) NOT NULL`, `payload_json JSON NULL DEFAULT NULL`
      - `estado VARCHAR(20) NOT NULL DEFAULT 'pendiente'` (`'pendiente'`, `'enviando'`, `'enviado'`, `'fallido'`)
      - `intentos INT NOT NULL DEFAULT 0`, `max_intentos INT NOT NULL DEFAULT 3`, `ultimo_error VARCHAR(255) NULL DEFAULT NULL`, `enviado_at DATETIME NULL DEFAULT NULL`, `proximo_intento_at DATETIME NULL DEFAULT NULL`, `created_at` y `updated_at`.
@@ -54,7 +54,7 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
    - **Escapado HTML completo:** `NotificacionCitaService::construirContenidoHtml()` escapa todos los campos dinámicos (nombre del cliente, profesional, fecha, horario, nombres de servicios, precios y enlace `/cita`) con `htmlspecialchars(..., ENT_QUOTES, 'UTF-8')`.
    - **Recordatorios configurables en `America/Guayaquil` (`procesarRecordatorios`):**
      - Ventana configurable mediante argumento `$horasAnticipacion` o variable de entorno `NOTIFICACIONES_RECORDATORIO_HORAS` (`1..720`, por defecto `24` horas).
-     - Evalúa el rango `[ahora, ahora + N horas]` en zona horaria explícita `America/Guayaquil`, filtra citas futuras cuya fecha/hora de inicio cae dentro de la ventana y despacha como máximo un recordatorio por cita y ventana (`cita:{id}:recordatorio:{horas}h`).
+     - Evalúa el rango `[ahora, ahora + N horas]` en zona horaria explícita `America/Guayaquil`, filtra citas futuras cuya fecha/hora de inicio cae dentro de la ventana y despacha como máximo un recordatorio por cita y horario programado (`cita:{id}:recordatorio:{fecha}_{hora}`).
    - **Cola de reintentos con *backoff* exponencial (`procesarPendientesYReintentos`):**
      - Reconstruye el correo a partir del `payload_json` persistido (lo que permite reintentar tanto confirmaciones/recordatorios de citas activas como cancelaciones cuya fila en `citas` ya no existe) y aplica backoff progresivo (`5 min`, `15 min`, `45 min`, hasta `120 min`).
 
@@ -77,13 +77,18 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
      schtasks /Create /SC MINUTE /MO 15 /TN "AppSalon_ProcesarNotificaciones" /TR "docker exec appsalon-web php /var/www/html/scripts/procesar_notificaciones.php --json" /F
      ```
 
-### 2. Validación Ejecutada en Fase 6A (Desarrollador)
+### 2. Validación Ejecutada en Fase 6A (Desarrollador — Ronda 2 tras Correcciones de Auditoría Ronda 1)
+
+- **Correcciones aplicadas en Ronda 2 (sobre `0aa1e11d9328aa5558d43d50b5483a492850ce7f`):**
+  1. **Orden determinista en `CitaRepository::findAdminCitasByFecha(string $fecha)` (`repositories/CitaRepository.php`):** Se añadió `ORDER BY citas.id ASC, citasservicios.id ASC` al final de la consulta SQL para garantizar que el orden de las citas y de sus servicios asociados (`citasservicios`) sea siempre determinista incluso cuando un servicio haya sido eliminado del catálogo (`citasservicios.servicioId = NULL` por `ON DELETE SET NULL`), preservando tanto la aserción de `ReservaConcurrenciaIntegrationTest::testInmutabilidadHistoricaAnteCambioOEliminacionPosteriorDelServicioEnCatalogo` como la agrupación secuencial por `$idCita !== $cita->id` en `views/admin/index.php`.
+  2. **Limpieza explícita de `notificaciones_citas` en `setUp()` de las suites de integración:** Se añadió `DELETE FROM notificaciones_citas` (o `TRUNCATE TABLE notificaciones_citas` en `Fase5InterfazReservasIntegrationTest`) en `setUp()` de todas las pruebas de integración que limpian `citas` (`ReservaConcurrenciaIntegrationTest`, `Fase5InterfazReservasIntegrationTest`, `CitaModuloIntegrationTest`, `ApiSeguridadTest`, `DisponibilidadIntegrationTest`, `ProfesionalAgendaIntegrationTest`, `SecurityIntegrationTest`, `ServicioModuloIntegrationTest` y `UsuarioAuthIntegrationTest`), evitando que registros huérfanos con `cita_id = NULL` mantengan ocupada `clave_idempotencia` entre pruebas.
+  3. **Alineación documental del formato de `clave_idempotencia` de recordatorios:** Se actualizó la documentación para reflejar el formato real generado por `NotificacionCitaService::generarClaveRecordatorio()`: `cita:{id}:recordatorio:{fecha}_{hora}` (ej. `cita:42:recordatorio:2026-11-16_11:30`).
 
 #### A. Suite Completa PHPUnit (Ejecutada en Docker PHP 8.2.34 + MySQL 8.0 Aislado)
 - **Versión efectiva:** `PHPUnit 10.5.66 by Sebastian Bergmann and contributors.` (`Runtime: PHP 8.2.34`, `Configuration: /app/phpunit.xml`).
 - **Comando ejecutado:**
-  `docker run --rm --name appsalon-web-phpunit-f6a --network appsalon-net-phpunit-f6a -v "${PWD}:/app" -w /app -e APP_ENV=testing -e DB_HOST=appsalon-db-phpunit-f6a -e DB_PORT=3306 -e DB_USER=root -e DB_PASS=root -e DB_NAME=appsalon_f6a_test appsalon-php-test php -d variables_order=EGPCS vendor/bin/phpunit --colors=never`
-- **Resultado:** `OK (152 tests, 1714 assertions)` (`Time: 00:27.858, Memory: 16.00 MB`) — Código de salida `0`.
+  `docker run --rm --name appsalon-web-phpunit-f6a-r2 --network appsalon-net-phpunit-f6a-r2 -v "${PWD}:/app" -w /app -e APP_ENV=testing -e DB_HOST=appsalon-db-phpunit-f6a-r2 -e DB_PORT=3306 -e DB_USER=root -e DB_PASS=root -e DB_NAME=appsalon_f6a_test appsalon-php-test php -d variables_order=EGPCS vendor/bin/phpunit --colors=never`
+- **Resultado:** `OK (152 tests, 1714 assertions)` (`Time: 00:26.485, Memory: 16.00 MB`) — Código de salida `0`.
 - **Cobertura añadida en Fase 6A:**
   - `Tests\Integration\MigrationTest`: actualización a 5 migraciones e incorporación de `testMigracion005NotificacionesCitasUpIdempotenciaSetNullYRollback()`, comprobando la creación de `notificaciones_citas`, su índice único `uq_notificaciones_clave_idempotencia`, el comportamiento `ON DELETE SET NULL` al borrar una cita conservando `cita_referencia_id` y el rollback limpio.
   - `Tests\Unit\NotificacionCitaServiceTest`: validación de `Email::resolverAppUrl()` (bloqueo de `javascript:`, `data:`, CRLF, credenciales y comillas con fallback seguro), `Email::resolverRemitente()` y prevención de *header injection*, entidad `NotificacionCita`, escapado HTML (`XSS`) e inclusión de detalles completos en `construirContenidoHtml()`, idempotencia unitaria, cálculo de ventana de recordatorios en `America/Guayaquil` y *backoff* exponencial.
@@ -95,7 +100,7 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 
 #### B. Verificación E2E en Navegador con JavaScript Habilitado (`tests/verificar_navegador.ps1` + `tests/browser_e2e_test.js` + `tests/browser_test_report.json`)
 - **Comando ejecutado:** `powershell -ExecutionPolicy Bypass -File tests/verificar_navegador.ps1`
-- **Resultado Desarrollador (`RUN_ID: 5ab1f43eeac3445996985fe29d36978d`):** 17 comprobaciones E2E superadas (`ADMIN-01` a `ADMIN-04`, `PROF-01`, `PROF-02`, `PRE-01`, `DISP-01`, `REC-01` a `REC-04`, `RES-01`, `ADMIN-05`, `AUTH-01`, `NOTIF-01`, `REC-05`) con `0` errores de consola, `0` peticiones fallidas, verificación en buzón SMTP mock (`tests/mailbox.json`) de los correos de confirmación y cancelación de citas (`NOTIF-01`) y verificación en MySQL de `notificaciones_citas` (`3` confirmaciones enviadas y `2` cancelaciones enviadas con historial preservado) — Código de salida `0`.
+- **Resultado Desarrollador (`RUN_ID: 2ecae295c89d4fc789f2491b65cd3ee5`):** 17 comprobaciones E2E superadas (`ADMIN-01` a `ADMIN-04`, `PROF-01`, `PROF-02`, `PRE-01`, `DISP-01`, `REC-01` a `REC-04`, `RES-01`, `ADMIN-05`, `AUTH-01`, `NOTIF-01`, `REC-05`) con `0` errores de consola, `0` peticiones fallidas, verificación en buzón SMTP mock (`tests/mailbox.json`) de los correos de confirmación y cancelación de citas (`NOTIF-01`) y verificación en MySQL de `notificaciones_citas` (`3` confirmaciones enviadas y `2` cancelaciones enviadas con historial preservado) — Código de salida `0`.
 
 ---
 
