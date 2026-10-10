@@ -183,6 +183,16 @@ class DisponibilidadService
     }
 
     /**
+     * Valida que la duración de un servicio en el catálogo sea un entero positivo válido
+     * conforme al dominio de `ServicioService` (`1` a `2147483647`).
+     * Rechaza valores corruptos (cero, negativos, decimales o no enteros).
+     */
+    public function validarDuracionCatalogo($duracionRaw): ?int
+    {
+        return $this->validarId($duracionRaw);
+    }
+
+    /**
      * Extrae y valida la lista de identificadores de servicios solicitados.
      * Ignora deliberadamente cualquier propiedad `duracion` o `duracion_minutos` enviada por el cliente.
      *
@@ -464,16 +474,12 @@ class DisponibilidadService
                     );
                 }
 
-                $duracionCatalogo = filter_var(
-                    $servicio->duracion_minutos,
-                    FILTER_VALIDATE_INT,
-                    ['options' => ['min_range' => 1, 'max_range' => 1440]]
-                );
-                if ($duracionCatalogo === false) {
+                $duracionCatalogo = $this->validarDuracionCatalogo($servicio->duracion_minutos);
+                if ($duracionCatalogo === null) {
                     throw new PersistenceException("Duración inválida en catálogo para el servicio ID {$sid}.");
                 }
 
-                $duracionTotalMinutos += (int)$duracionCatalogo;
+                $duracionTotalMinutos += $duracionCatalogo;
             }
 
             // Verificar que el profesional activo pueda realizar TODOS los servicios solicitados

@@ -366,4 +366,126 @@ class DisponibilidadServiceTest extends TestCase
         $this->assertFalse($res['disponible']);
         $this->assertStringNotContainsString('SQL secret error', $res['error']);
     }
+
+    public function testServicioValidoDe1500MinutosDevuelveHttp200DisponibilidadVaciaYDuracion1500(): void
+    {
+        $profRepo = $this->createMock(ProfesionalRepository::class);
+        $profRepo->method('findById')->willReturn($this->crearProfesionalActivo([10]));
+        $profRepo->method('findHorariosByProfesionalYDia')->willReturn([
+            new HorarioProfesional([
+                'id' => 1,
+                'profesionalId' => 1,
+                'dia_semana' => 1,
+                'hora_inicio' => '08:00',
+                'hora_fin' => '20:00'
+            ])
+        ]);
+        $profRepo->method('findDescansosByProfesionalYDia')->willReturn([]);
+        $profRepo->method('findBloqueosByProfesionalEnFecha')->willReturn([]);
+
+        $servicio1500 = new Servicio([
+            'id' => 10,
+            'nombre' => 'Tratamiento Integral Extendido',
+            'precio' => '250.00',
+            'duracion_minutos' => 1500
+        ]);
+
+        $servRepo = $this->createMock(ServicioRepository::class);
+        $servRepo->method('findById')->with(10)->willReturn($servicio1500);
+
+        $service = new DisponibilidadService($profRepo, $servRepo);
+        $res = $service->consultar(1, '2026-10-12', [10]);
+
+        $this->assertSame(DisponibilidadService::STATUS_EMPTY, $res['status']);
+        $this->assertSame(DisponibilidadService::CODIGO_DISPONIBILIDAD_VACIA, $res['codigo']);
+        $this->assertSame(200, $res['httpCode']);
+        $this->assertTrue($res['resultado']);
+        $this->assertFalse($res['disponible']);
+        $this->assertSame(1500, $res['duracion_total_minutos']);
+        $this->assertSame([], $res['intervalos']);
+    }
+
+    public function testVariosServiciosCuyaSumaSuperaUnaJornadaDevuelvenHttp200YListaVacia(): void
+    {
+        $profRepo = $this->createMock(ProfesionalRepository::class);
+        $profRepo->method('findById')->willReturn($this->crearProfesionalActivo([10, 11]));
+        $profRepo->method('findHorariosByProfesionalYDia')->willReturn([
+            new HorarioProfesional([
+                'id' => 1,
+                'profesionalId' => 1,
+                'dia_semana' => 1,
+                'hora_inicio' => '09:00',
+                'hora_fin' => '18:00'
+            ])
+        ]);
+        $profRepo->method('findDescansosByProfesionalYDia')->willReturn([]);
+        $profRepo->method('findBloqueosByProfesionalEnFecha')->willReturn([]);
+
+        // Dos servicios válidos de 800 min cada uno (suma 1600 > 1440 y > jornada de 540 min)
+        $catalogo = [
+            10 => new Servicio(['id' => 10, 'nombre' => 'Paquete Capilar A', 'precio' => '120.00', 'duracion_minutos' => 800]),
+            11 => new Servicio(['id' => 11, 'nombre' => 'Paquete Capilar B', 'precio' => '140.00', 'duracion_minutos' => 800]),
+        ];
+
+        $servRepo = $this->createMock(ServicioRepository::class);
+        $servRepo->method('findById')->willReturnCallback(fn(int $id) => $catalogo[$id] ?? null);
+
+        $service = new DisponibilidadService($profRepo, $servRepo);
+        $res = $service->consultar(1, '2026-10-12', [10, 11]);
+
+        $this->assertSame(DisponibilidadService::STATUS_EMPTY, $res['status']);
+        $this->assertSame(DisponibilidadService::CODIGO_DISPONIBILIDAD_VACIA, $res['codigo']);
+        $this->assertSame(200, $res['httpCode']);
+        $this->assertTrue($res['resultado']);
+        $this->assertFalse($res['disponible']);
+        $this->assertSame(1600, $res['duracion_total_minutos']);
+        $this->assertSame([], $res['intervalos']);
+    }
+
+    /**
+     * @dataProvider proveedorDuracionesCorruptasCatalogo
+     */
+    public function testDuracionCorruptaEnCatalogoDevuelveStatusErrorHttp500($duracionCorrupta): void
+    {
+        $profRepo = $this->createMock(ProfesionalRepository::class);
+        $profRepo->method('findById')->willReturn($this->crearProfesionalActivo([1]));
+
+        $servicioCorrupto = new Servicio([
+            'id' => 1,
+            'nombre' => 'Servicio Corrupto',
+            'precio' => '25.00',
+            'duracion_minutos' => 30
+        ]);
+        $servicioCorrupto->duracion_minutos = $duracionCorrupta;
+
+        $servRepo = $this->createMock(ServicioRepository::class);
+        $servRepo->method('findById')->with(1)->willReturn($servicioCorrupto);
+
+        $service = new DisponibilidadService($profRepo, $servRepo);
+        $res = $service->consultar(1, '2026-10-12', [1]);
+
+        $this->assertSame(DisponibilidadService::STATUS_ERROR, $res['status']);
+        $this->assertSame(DisponibilidadService::CODIGO_ERROR_PERSISTENCIA, $res['codigo']);
+        $this->assertSame(500, $res['httpCode']);
+        $this->assertFalse($res['resultado']);
+        $this->assertFalse($res['disponible']);
+        $this->assertSame([], $res['intervalos']);
+    }
+
+    public static function proveedorDuracionesCorruptasCatalogo(): array
+    {
+        return [
+            'duracion_cero_int' => [0],
+            'duracion_cero_string' => ['0'],
+            'duracion_negativa_int' => [-30],
+            'duracion_negativa_string' => ['-15'],
+            'duracion_no_entera_decimal' => ['30.5'],
+            'duracion_no_entera_float' => [45.5],
+            'duracion_no_numerica' => ['abc'],
+            'duracion_vacia' => [''],
+            'duracion_nula' => [null],
+        ];
+    }
 }
+
+

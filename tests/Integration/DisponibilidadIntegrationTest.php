@@ -322,4 +322,94 @@ class DisponibilidadIntegrationTest extends TestCase
         $this->assertSame(DisponibilidadService::CODIGO_ERROR_PERSISTENCIA, $res['json']['codigo']);
         $this->assertStringNotContainsString('confidencial', $res['json']['error']);
     }
+
+    public function testRegresionDuracionesValidasQueSuperanJornadaYDuracionCorrupta(): void
+    {
+        $this->autenticarCliente();
+
+        $servRepo = new ServicioRepository(self::$db);
+        $profRepo = new ProfesionalRepository(self::$db);
+
+        // Crear un servicio válido de 1500 minutos y dos servicios válidos cuya suma supera una jornada
+        $s1500 = new Servicio(['nombre' => 'Servicio Extendido 1500', 'precio' => '250.00', 'duracion_minutos' => 1500]);
+        $idS1500 = $servRepo->create($s1500);
+        $this->assertGreaterThan(0, $idS1500);
+
+        $sJornadaA = new Servicio(['nombre' => 'Sesión Larga A', 'precio' => '120.00', 'duracion_minutos' => 600]);
+        $idSJornadaA = $servRepo->create($sJornadaA);
+        $this->assertGreaterThan(0, $idSJornadaA);
+
+        $sJornadaB = new Servicio(['nombre' => 'Sesión Larga B', 'precio' => '140.00', 'duracion_minutos' => 900]);
+        $idSJornadaB = $servRepo->create($sJornadaB);
+        $this->assertGreaterThan(0, $idSJornadaB);
+
+        // Profesional activo asociado a estos servicios con jornada de lunes 08:00 a 18:00 (600 min)
+        $prof = new Profesional([
+            'nombre' => 'Elena Duraciones',
+            'activo' => 1
+        ]);
+        $idProf = $profRepo->createWithServicios($prof, [$idS1500, $idSJornadaA, $idSJornadaB]);
+        $this->assertGreaterThan(0, $idProf);
+
+        $profRepo->replaceHorarios($idProf, [
+            new HorarioProfesional([
+                'dia_semana' => 1,
+                'hora_inicio' => '08:00',
+                'hora_fin' => '18:00'
+            ])
+        ]);
+
+        // 1. Servicio válido de 1500 minutos asociado a profesional activo con horario -> HTTP 200, lista vacía y duración 1500
+        $res1500 = $this->ejecutarEndpointDisponibilidad([
+            'profesionalId' => (string)$idProf,
+            'fecha' => '2026-10-12',
+            'servicios' => (string)$idS1500
+        ]);
+
+        $this->assertSame(200, $res1500['httpCode']);
+        $this->assertTrue($res1500['json']['resultado']);
+        $this->assertFalse($res1500['json']['disponible']);
+        $this->assertSame(DisponibilidadService::STATUS_EMPTY, $res1500['json']['status']);
+        $this->assertSame(DisponibilidadService::CODIGO_DISPONIBILIDAD_VACIA, $res1500['json']['codigo']);
+        $this->assertSame(1500, $res1500['json']['duracion_total_minutos']);
+        $this->assertSame([], $res1500['json']['intervalos']);
+
+        // 2. Varios servicios cuya suma supera una jornada (600 + 900 = 1500 min > jornada de 600 min) -> HTTP 200 y lista vacía
+        $resSuma = $this->ejecutarEndpointDisponibilidad([
+            'profesionalId' => (string)$idProf,
+            'fecha' => '2026-10-12',
+            'servicios' => $idSJornadaA . ',' . $idSJornadaB
+        ]);
+
+        $this->assertSame(200, $resSuma['httpCode']);
+        $this->assertTrue($resSuma['json']['resultado']);
+        $this->assertFalse($resSuma['json']['disponible']);
+        $this->assertSame(DisponibilidadService::STATUS_EMPTY, $resSuma['json']['status']);
+        $this->assertSame(DisponibilidadService::CODIGO_DISPONIBILIDAD_VACIA, $resSuma['json']['codigo']);
+        $this->assertSame(1500, $resSuma['json']['duracion_total_minutos']);
+        $this->assertSame([], $resSuma['json']['intervalos']);
+
+        // 3. Duración corrupta en base/catálogo (cero o negativa) -> conserva manejo de error HTTP 500
+        foreach ([0, -45] as $valorCorrupto) {
+            $stmt = self::$db->prepare("UPDATE servicios SET duracion_minutos = ? WHERE id = ?");
+            $stmt->bind_param('ii', $valorCorrupto, $idS1500);
+            $this->assertTrue($stmt->execute());
+            $stmt->close();
+
+            $resCorrupta = $this->ejecutarEndpointDisponibilidad([
+                'profesionalId' => (string)$idProf,
+                'fecha' => '2026-10-12',
+                'servicios' => (string)$idS1500
+            ]);
+
+            $this->assertSame(500, $resCorrupta['httpCode']);
+            $this->assertFalse($resCorrupta['json']['resultado']);
+            $this->assertFalse($resCorrupta['json']['disponible']);
+            $this->assertSame(DisponibilidadService::STATUS_ERROR, $resCorrupta['json']['status']);
+            $this->assertSame(DisponibilidadService::CODIGO_ERROR_PERSISTENCIA, $resCorrupta['json']['codigo']);
+            $this->assertSame([], $resCorrupta['json']['intervalos']);
+        }
+    }
 }
+
+
