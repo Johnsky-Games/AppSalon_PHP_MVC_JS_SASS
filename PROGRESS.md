@@ -24,7 +24,8 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 - **Migración `007_citas_estado_cancelacion.sql` y rollback:** Columnas `estado`, `cancelado_por`, `cancelado_at`, `motivo_cancelacion` con índices `idx_citas_estado` e `idx_citas_prof_fecha_estado`.
 - **Cancelación Lógica Idempotente:** `CitaRepository::cancelarCitaLogica()` libera disponibilidad manteniendo filas en `citas`, `citasservicios` y `pagos`. Prohíbe cancelar citas pasadas (HTTP 422).
 - **Protección de Agenda y Transacciones InnoDB:** Modificaciones en `horarios`, `descansos` o `bloqueos` mediante `replaceHorarios()`, `createDescanso()` y `createBloqueo()` adquieren bloqueos pesimistas y rechazan (HTTP 422) cualquier alteración que colisione con citas confirmadas futuras.
-- **Pruebas:** `tests/Integration/CitaCancelacionAgendaIntegrationTest.php` (6 tests, 58 aserciones, salida 0).
+- **Concurrencia Real Multiproceso:** Implementación de prueba concurrente multiproceso con `proc_open` y barrera de sincronización `READY`/`GO` (`test_concurrencia_reserva_y_modificacion_agenda_bloqueo_pesimista`) demostrando resolución serializada determinista.
+- **Pruebas:** `tests/Integration/CitaCancelacionAgendaIntegrationTest.php` (6 tests, 60 aserciones, salida 0).
 
 #### Especialista 2: Seguridad HTTP y Frontend
 - **Erradicación de XSS:** Eliminación total de `.innerHTML` inseguro en `src/js/app.js` y `public/build/js/app.js`. Reemplazado por nodos DOM estructurados (`document.createElement`, `document.createTextNode` y `.textContent`).
@@ -34,33 +35,35 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 #### Especialista 3: Pagos, Autorización e Idempotencia (Fase 6C)
 - **Huella de Idempotencia y Protección Cross-Tenant:** `Pago::coincideConOperacion()` valida `usuario_id`, `cita_id` y `monto`. Si la clave de idempotencia existe para otra operación, responde HTTP 409 sin filtrar datos ajenos.
 - **Estado Terminal Reembolsado:** Una vez en `reembolsado`, webhooks tardíos no pueden revertirlo. Rechazo de reembolsos parciales (HTTP 422).
+- **Estado Agregado de Cita en Reembolsos:** En `PagoService::reembolsarPago()`, si una cita tiene múltiples cobros y uno es reembolsado, la cita preserva su estado `'pagado'` mientras existan otros cobros completados.
+- **Secuencia Completa K1/K2:** Prueba integral de la secuencia: K1 falla -> K2 inicia -> éxito tardío K1 -> éxito K2 -> reembolso de K1 -> verificación de estado pagado con K2 -> reembolso final de K2.
 - **Orden Uniforme de Bloqueo:** Siempre `citas` (`FOR UPDATE`) primero, luego `pagos` (`FOR UPDATE`), previniendo interbloqueos (deadlocks).
 - **Protección de Producción:** Bloqueo de `MockPaymentGateway` y secretos por defecto cuando `APP_ENV=production`.
-- **Pruebas:** `tests/Integration/PagoIdempotenciaSeguridadIntegrationTest.php` (5 tests, 56 aserciones, salida 0).
+- **Pruebas:** `tests/Integration/PagoIdempotenciaSeguridadIntegrationTest.php` (6 tests, 75 aserciones, salida 0).
 
 #### Especialista 4: Notificaciones y Recuperación de Workers (Fase 6A)
 - **Migración `008_notificaciones_outbox_lease.sql` y rollback:** Columnas `worker_token`, `lease_expires_at` con índice `idx_notificaciones_lease`.
-- **Arrendamiento Atómico de Workers (Worker Lease):** Adquisición mediante `adquirirParaEnvio()`, recuperación de workers atascados tras expiración de lease, exclusión de workers zombis con token caduco.
-- **Descarte de Notificaciones Obsoletas:** Citas canceladas y recordatorios transcurridos se descartan automáticamente sin despachar correos.
-- **Documentación:** `docs/NOTIFICACIONES_WORKER.md`.
-- **Pruebas:** `tests/Integration/NotificacionesWorkerIntegrationTest.php` (5 tests, 19 aserciones, salida 0).
+- **Límites Atómicos de Workers:** Cláusulas atómicas en SQL `WHERE intentos < max_intentos` y `(proximo_intento_at IS NULL OR proximo_intento_at <= NOW())` en `adquirirParaEnvio()` y `buscarCandidatasParaReintento()`.
+- **Payload Canónico en Outbox:** El despacho de correos en `NotificacionCitaService::registrarYDespachar()` toma como fuente de verdad inmutable el evento persistido en el outbox (`notificaciones_citas`).
+- **Outbox en Flujo Clásico:** Inserción atómica del evento de confirmación en la misma transacción y conexión antes del commit tanto en `crearReservaConProfesionalAtomica` como en `crearReservaAtomica`.
+- **Pruebas:** `tests/Integration/NotificacionesWorkerIntegrationTest.php` (7 tests, 27 aserciones, salida 0) y `tests/Integration/Fase6ANotificacionesIntegrationTest.php` (4 tests, 106 aserciones, salida 0).
 
 #### Especialista 5: Reportes e Historial Financiero (Fase 6B)
-- **Persistencia Contable Desacoplada:** Consultas financieras alimentadas directamente desde la tabla `pagos`, garantizando persistencia inmutable de pagos incluso si las citas fueron canceladas o los servicios fueron eliminados del catálogo.
+- **Persistencia Contable Desacoplada y Bitemporalidad:** Migración `009_pagos_reembolsos_fecha.sql` con `reembolsado_at` y soporte de periodos con neto negativo cuando los reembolsos del mes superan la recaudación bruta.
 - **Distinción Cita vs Cobro:** Filtro explícito `criterio_fecha = 'servicio'` (fecha operativa de agenda) vs `criterio_fecha = 'cobro'` (fecha contable de recaudación).
 - **Controladores y Vistas:** `AdminReporteController` (`/admin/reportes`, `/admin/reportes/exportar`), `views/admin/reportes.php`, exportación CSV con snapshots históricos inmutables.
 - **Pruebas:** `tests/Integration/ReportesFinancierosIntegrationTest.php` (4 tests, 62 aserciones, salida 0).
 
 #### Especialista 6: Docker, Respaldos, Restauración y CI
-- **Front Controller y Apache:** `public/.htaccess` con mod_rewrite seguro (`RewriteRule ^ index.php [QSA,L]`). `Dockerfile` y `docker/apache.conf` con `DocumentRoot /var/www/html/public`, `AllowOverride All` y extensión `mbstring`.
-- **Integridad Criptográfica de Respaldos:** `scripts/backup_db.php` genera manifiesto estructurado con hash SHA-256. `scripts/restore_db.php` valida pre-restauración el hash SHA-256, marcadores de inicio/EOF y utiliza base de staging para restauraciones atómicas.
-- **Integración Continua:** `.github/workflows/ci.yml` con Composer, npm, PHPUnit con orden aleatorio (`--order-by=random`) y prueba de integridad de respaldos.
-- **Pruebas:** `tests/Integration/BackupRestoreIntegridadIntegrationTest.php` (4 tests, 42 aserciones, salida 0) y `tests/Integration/MigrationTest.php` (7 tests, 171 aserciones, salida 0).
+- **Contrato Estricto Backup/Restore:** Carga y validación exhaustiva de manifiesto (`.manifest.json`), incluyendo lista de tablas indexadas o asociativas, conteo de filas por tabla (`filas_por_tabla`), `total_filas` y versión de esquema, aún cuando se utilice `--hash`.
+- **Preservación Destino Post-Staging:** Demostración con prueba de fallo forzado exclusivamente en fase post-staging (`DATABASE() NOT LIKE '%_stg_%'`) donde la base destino y sus datos previos se restauran intactos desde el resguardo `_bck_`.
+- **Stack Oficial Apache y CI:** `tests/verificar_navegador.ps1` arranca con la imagen oficial Apache (`appsalon-web-test`) en el puerto 80 del contenedor. `.github/workflows/ci.yml` incluye el paso de arranque y verificación de Apache oficial contra MySQL.
+- **Pruebas:** `tests/Integration/BackupRestoreIntegridadIntegrationTest.php` (5 tests, 50 aserciones, salida 0) y `tests/Integration/MigrationTest.php` (7 tests, 171 aserciones, salida 0).
 
 ### 1. Evidencia de Ejecución de Suites Automatizadas
-- **PHPUnit 10.5.66 en contenedor aislado (`appsalon-test-int-db`, PHP 8.2.34):**
+- **PHPUnit 10.5.66 en contenedor aislado (`appsalon-db-test-coord`, PHP 8.2.34 + MySQL 8.0):**
   - **Comando:** `vendor/bin/phpunit --do-not-cache-result --colors=never`
-  - **Resultado:** `OK (203 tests, 2530 assertions)` — Código de salida `0`.
+  - **Resultado:** `OK (209 tests, 2587 assertions)` — Código de salida `0`.
 - **Suite de Navegador Real Headless Chrome (`tests/verificar_navegador.ps1`):**
   - **Comando:** `powershell -ExecutionPolicy Bypass -File tests/verificar_navegador.ps1`
   - **Resultado:** 19/19 comprobaciones `[OK]`, `0` errores de consola, `0` solicitudes de red fallidas, verificación de persistencia en MySQL — Código de salida `0`.

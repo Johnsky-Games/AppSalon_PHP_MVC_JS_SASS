@@ -444,6 +444,29 @@ class CitaRepository
                 $this->createCitaServicio($citaServicio, $db);
             }
 
+            // Registrar evento Outbox en la misma conexión y transacción antes del commit
+            $notifRepo = new NotificacionCitaRepository($db);
+            $ahoraUtc = gmdate('Y-m-d H:i:s');
+            $claveConfirmacion = "cita:{$idCita}:confirmacion";
+            $snapshotParaOutbox = $notifRepo->obtenerSnapshotCompletoCitaEnConexion($idCita, $db);
+            if ($snapshotParaOutbox !== null) {
+                $emailCliente = trim((string)($snapshotParaOutbox['cliente_email'] ?? ''));
+                $nombreCliente = trim((string)($snapshotParaOutbox['cliente_nombre'] ?? 'Cliente AppSalon'));
+                $asunto = "Confirmación de tu cita #{$idCita} en AppSalon";
+
+                $notifRepo->registrarEventoOutboxEnConexion([
+                    'cita_id' => $idCita,
+                    'cita_referencia_id' => $idCita,
+                    'usuario_id' => isset($cita->usuarioId) && (int)$cita->usuarioId > 0 ? (int)$cita->usuarioId : null,
+                    'tipo' => NotificacionCita::TIPO_CONFIRMACION,
+                    'clave_idempotencia' => $claveConfirmacion,
+                    'destinatario_email' => $emailCliente,
+                    'destinatario_nombre' => $nombreCliente,
+                    'asunto' => $asunto,
+                    'payload_json' => $snapshotParaOutbox,
+                ], $ahoraUtc, $db);
+            }
+
             if (!$db->commit()) {
                 throw new PersistenceException("Fallo al confirmar la transacción de la reserva.");
             }

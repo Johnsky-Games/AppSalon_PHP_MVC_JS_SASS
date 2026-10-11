@@ -305,11 +305,17 @@ class ApiSeguridadTest extends TestCase
 
     public function testGuardarDesduplicaServiciosRepetidosPoliticaExplicita(): void
     {
+        $usuario = new Usuario([
+            'nombre' => 'Cliente', 'apellido' => 'Deduplicacion', 'email' => 'dedup@correo.com',
+            'password' => '123456', 'telefono' => '5555555555', 'confirmado' => '1'
+        ]);
+        $idUsuario = (new UsuarioRepository(self::$db))->create($usuario);
+
         $servicio = new Servicio(['nombre' => 'Manicure', 'precio' => '30.00']);
         $idS = (new ServicioRepository(self::$db))->create($servicio);
 
         $_SESSION['login'] = true;
-        $_SESSION['id'] = 1;
+        $_SESSION['id'] = $idUsuario;
         $token = bin2hex(random_bytes(32));
         $_SESSION['csrf_token'] = $token;
         $_POST['csrf_token'] = $token;

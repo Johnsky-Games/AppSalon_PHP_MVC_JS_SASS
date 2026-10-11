@@ -108,15 +108,35 @@ try {
 
     # 5. Generar configuracion temporal e iniciar servidor web en puerto dinamico libre (no colisiona con puerto 3000 local)
     Write-Host ""
-    Write-Host "[4/6] Configurando variables e iniciando servidor web aislado..." -ForegroundColor Cyan
+    Write-Host "[4/6] Configurando variables e iniciando servidor web oficial Apache aislado..." -ForegroundColor Cyan
 
     docker run -d --name $MailContainer --network $NetName -v "${PWD}:/app" -w /app appsalon-php-test php tests/smtp_mock_server.php 2>&1 | Out-Null
-    docker run -d --name $WebContainer --network $NetName -p 0:3000 -v "${PWD}:/app" -w /app appsalon-php-test php -S 0.0.0.0:3000 -t public 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "Fallo al iniciar contenedor web $WebContainer" }
 
-    $portMapping = docker port $WebContainer 3000/tcp
-    if (-not $portMapping) { throw "No se pudo obtener el puerto publicado de $WebContainer" }
-    $hostPort = ($portMapping | Select-Object -First 1) -replace '^.*:(\d+)$', '$1'
+    $webStarted = $false
+    $hasApacheImg = (docker images -q appsalon-web-test:latest) -or (docker images -q appsalon-web:latest)
+    if ($hasApacheImg) {
+        $apacheImg = if (docker images -q appsalon-web-test:latest) { "appsalon-web-test:latest" } else { "appsalon-web:latest" }
+        Write-Host " -> Iniciando servidor web con imagen oficial Apache ($apacheImg)..." -ForegroundColor Cyan
+        docker run -d --name $WebContainer --network $NetName -p 0:80 -v "${PWD}:/var/www/html" -w /var/www/html $apacheImg 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            $portMapping = docker port $WebContainer 80/tcp
+            if ($portMapping) {
+                $hostPort = ($portMapping | Select-Object -First 1) -replace '^.*:(\d+)$', '$1'
+                $webStarted = $true
+            }
+        }
+    }
+
+    if (-not $webStarted) {
+        docker rm -f $WebContainer 2>$null | Out-Null
+        Write-Host " -> Iniciando servidor web con php -S en appsalon-php-test..." -ForegroundColor Cyan
+        docker run -d --name $WebContainer --network $NetName -p 0:3000 -v "${PWD}:/app" -w /app appsalon-php-test php -S 0.0.0.0:3000 -t public 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Fallo al iniciar contenedor web $WebContainer" }
+        $portMapping = docker port $WebContainer 3000/tcp
+        if (-not $portMapping) { throw "No se pudo obtener el puerto publicado de $WebContainer" }
+        $hostPort = ($portMapping | Select-Object -First 1) -replace '^.*:(\d+)$', '$1'
+    }
+
     $appUrl = "http://localhost:$hostPort"
 
     $envLines = @(

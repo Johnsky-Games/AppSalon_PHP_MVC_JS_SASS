@@ -533,4 +533,35 @@ class Fase6ANotificacionesIntegrationTest extends TestCase
         $this->assertNotNull($notifRec15);
         $this->assertSame(NotificacionCita::ESTADO_ENVIADO, $notifRec15->estado);
     }
+
+    /**
+     * Prueba de Outbox en Flujo Clásico:
+     * Comprueba que CitaRepository::crearReservaAtomica inserte el evento en outbox
+     * dentro de la misma transacción antes del commit.
+     */
+    public function testFlujoClasicoDeReservaRegistraEventoOutboxEnMismaTransaccion(): void
+    {
+        $usuarioId = $this->crearUsuarioCliente('Clasico', 'Usuario', 'clasico_outbox@test.com');
+        $servicioId = $this->crearServicioCatalogo('Corte Clasico Outbox', '25.00', 30);
+
+        $cita = new \Model\Cita([
+            'fecha' => '2026-11-10',
+            'hora' => '10:00:00',
+            'usuarioId' => $usuarioId,
+            'estado' => 'confirmada',
+        ]);
+
+        $citaRepo = new CitaRepository(self::$db);
+        $notifRepo = new NotificacionCitaRepository(self::$db);
+
+        $idCitaCreada = $citaRepo->crearReservaAtomica($cita, [$servicioId]);
+        $this->assertGreaterThan(0, $idCitaCreada);
+
+        // Verificar que el evento de confirmación en outbox fue insertado
+        $eventoOutbox = $notifRepo->findByClaveIdempotencia("cita:{$idCitaCreada}:confirmacion");
+        $this->assertNotNull($eventoOutbox, 'El flujo clásico debe registrar atómicamente el evento outbox en la transacción');
+        $this->assertSame(NotificacionCita::TIPO_CONFIRMACION, $eventoOutbox->tipo);
+        $this->assertSame('clasico_outbox@test.com', $eventoOutbox->destinatario_email);
+        $this->assertSame(NotificacionCita::ESTADO_PENDIENTE, $eventoOutbox->estado);
+    }
 }

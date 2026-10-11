@@ -834,6 +834,8 @@ class NotificacionCitaRepository
                     intentos = intentos + 1,
                     updated_at = NOW()
                 WHERE id = ?
+                  AND intentos < max_intentos
+                  AND (proximo_intento_at IS NULL OR proximo_intento_at <= NOW())
                   AND (
                       estado IN ('pendiente', 'reintentando', 'fallido')
                       OR (estado = 'enviando' AND (lease_expires_at IS NULL OR lease_expires_at < NOW()))
@@ -1070,6 +1072,7 @@ class NotificacionCitaRepository
                     AND (proximo_intento_at IS NULL OR proximo_intento_at <= ?)
                 ) OR (
                     estado = 'enviando'
+                    AND intentos < max_intentos
                     AND lease_expires_at IS NOT NULL
                     AND lease_expires_at <= ?
                 )

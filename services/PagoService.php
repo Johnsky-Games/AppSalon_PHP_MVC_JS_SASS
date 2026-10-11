@@ -812,7 +812,13 @@ class PagoService
             );
 
             if ($pago->cita_id !== null) {
-                $this->pagoRepository->actualizarEstadoPagoCita($pago->cita_id, 'reembolsado');
+                // Solo marcar la cita como reembolsada si no existen otros pagos que sigan activos/completados
+                $otrosCompletados = $this->pagoRepository->findCompletadoPorCitaId((int)$pago->cita_id, true);
+                if ($otrosCompletados === null || (int)$otrosCompletados->id === (int)$pago->id) {
+                    $this->pagoRepository->actualizarEstadoPagoCita($pago->cita_id, 'reembolsado');
+                } else {
+                    $this->pagoRepository->actualizarEstadoPagoCita($pago->cita_id, 'pagado');
+                }
             }
 
             $pagoActualizado = $this->pagoRepository->findById((int)$pago->id) ?? $pago;
