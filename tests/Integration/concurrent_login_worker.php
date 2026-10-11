@@ -52,8 +52,10 @@ $_POST['email'] = $emailTarget;
 $_POST['password'] = 'clave_invalida_concurrente';
 
 // Señal explícita de que este trabajador terminó su inicialización y está listo
-echo "READY\n";
-flush();
+// STDOUT enviaría las cabeceras antes de que LoginController establezca HTTP 429.
+// Mantener la coordinación separada de la respuesta HTTP que se comprueba.
+fwrite(STDERR, "READY\n");
+fflush(STDERR);
 
 // Barrera de sincronización: esperar señal de inicio por STDIN
 $senal = fgets(STDIN);

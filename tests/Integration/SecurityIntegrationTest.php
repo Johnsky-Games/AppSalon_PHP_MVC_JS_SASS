@@ -593,7 +593,7 @@ class SecurityIntegrationTest extends TestCase
             while ((microtime(true) - $inicioEsperaReady) < $timeoutSegundos) {
                 for ($i = 0; $i < $numProcesos; $i++) {
                     if (!$listos[$i]) {
-                        $line = fgets($pipes[$i][1]);
+                        $line = fgets($pipes[$i][2]);
                         if ($line !== false && trim($line) === 'READY') {
                             $listos[$i] = true;
                         }

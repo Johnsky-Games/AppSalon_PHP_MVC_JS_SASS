@@ -77,6 +77,9 @@ class Fase5InterfazReservasIntegrationTest extends TestCase
         self::$db->query('TRUNCATE TABLE usuarios');
         self::$db->query('SET FOREIGN_KEY_CHECKS = 1');
 
+        // Otra prueba puede haber destruido la sesión. Iniciarla antes de
+        // asignar los datos evita que el controlador sobrescriba el fixture.
+        iniciar_sesion_segura();
         $_SESSION = [];
         $_POST = [];
         $_GET = [];
