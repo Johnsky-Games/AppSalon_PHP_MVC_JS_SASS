@@ -15,6 +15,8 @@ Este directorio contiene las migraciones versionadas y scripts de soporte para l
   - `004_reservas_profesional_ocupacion_historico.sql` / `004_reservas_profesional_ocupacion_historico_rollback.sql`: Columnas `hora_inicio`, `hora_fin`, `duracion_total_minutos`, `profesionalId` en `citas` (`idx_citas_prof_fecha_intervalo`, `fk_citas_profesional` `ON DELETE RESTRICT`) y columnas de snapshot histórico (`nombre_servicio`, `precio_servicio`, `duracion_minutos`) en `citasservicios`.
   - `005_notificaciones_citas.sql` / `005_notificaciones_citas_rollback.sql`: Tabla `notificaciones_citas` con `uq_notificaciones_clave_idempotencia`, `idx_notificaciones_estado_proximo`, `idx_notificaciones_cita_ref_tipo`, `fk_notificaciones_cita` (`ON DELETE SET NULL`) y `fk_notificaciones_usuario` (`ON DELETE SET NULL`).
   - `006_base_pagos.sql` / `006_base_pagos_rollback.sql`: Columna `estado_pago` e índice `idx_citas_estado_pago` en `citas`, y tabla `pagos` con `uq_pagos_referencia`, `uq_pagos_transaccion_externa`, `uq_pagos_idempotency_key`, `idx_pagos_cita_ref_estado`, `fk_pagos_cita` (`ON DELETE SET NULL`) y `fk_pagos_usuario` (`ON DELETE SET NULL`).
+  - `007_citas_estado_cancelacion.sql` / `007_citas_estado_cancelacion_rollback.sql`: Columnas `estado` (`confirmada`, `cancelada`), `cancelado_por`, `cancelado_at`, `motivo_cancelacion` en `citas`, con índices `idx_citas_estado` e `idx_citas_prof_fecha_estado` para cancelación lógica trazable y optimización de agenda.
+  - `008_notificaciones_outbox_lease.sql` / `008_notificaciones_outbox_lease_rollback.sql`: Columnas `worker_token` y `lease_expires_at` en `notificaciones_citas` con índice `idx_notificaciones_lease` para soporte de arrendamientos de worker y recuperación resiliente de outbox.
 
 ---
 

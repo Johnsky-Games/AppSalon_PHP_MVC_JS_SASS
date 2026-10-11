@@ -6,15 +6,21 @@ declare(strict_types=1);
  * Script CLI de Respaldo Consistente de Base de Datos MySQL — AppSalon
  *
  * Uso:
- *   php scripts/backup_db.php [--db=<nombre_bd>] [--output=<ruta_archivo.sql|.sql.gz>] [--gzip]
+ *   php scripts/backup_db.php [--db=<nombre_bd>] [--output=<ruta_archivo.sql|.sql.gz>] [--gzip] [--manifest=<ruta>] [--no-manifest]
  *
- * Características:
+ * Características y Objetos Incluidos:
  * - Ejecutable exclusivamente desde CLI (`php_sapi_name() === 'cli'`).
- * - Utiliza un snapshot transaccional consistente (`REPEATABLE READ` + `START TRANSACTION WITH CONSISTENT SNAPSHOT`)
- *   sobre tablas InnoDB sin bloquear lecturas concurrentes.
- * - Exporta DDL exacto (`SHOW CREATE TABLE`) y datos (`INSERT INTO`) escapados en `utf8mb4` sin requerir
- *   binarios externos del sistema operativo (`mysqldump`), funcionando en cualquier contenedor PHP 8.2.
- * - Soporta compresión GZIP nativa (`.sql.gz` o `--gzip`) y registra hash SHA-256 de verificación.
+ * - Incluye todas las tablas del esquema migrado (esquema base + migraciones 001 a 008, 13 tablas en total):
+ *   `bloqueos_profesionales`, `citas`, `citasservicios`, `descansos_profesionales`, `horarios_profesionales`,
+ *   `intentos_login`, `migraciones`, `notificaciones_citas`, `pagos`, `profesionales`, `profesionales_servicios`,
+ *   `servicios`, `usuarios`.
+ * - Esquemas DDL completos (`DROP TABLE IF EXISTS`, `CREATE TABLE`).
+ * - Inserciones de datos (`INSERT INTO`) escapadas en juego de caracteres `utf8mb4`.
+ * - Snapshot transaccional consistente InnoDB (`REPEATABLE READ` + `START TRANSACTION WITH CONSISTENT SNAPSHOT`)
+ *   sin bloquear lecturas concurrentes ni requerir binarios externos como `mysqldump`.
+ * - Soporta compresión GZIP nativa (`.sql.gz` o `--gzip`).
+ * - Genera un manifiesto verificable adyacente (`.manifest.json`) con fecha ISO 8601, timezone `America/Guayaquil`,
+ *   conteo de tablas, desglose de filas por tabla, versión de esquema y hashes criptográficos SHA-256.
  */
 
 if (php_sapi_name() !== 'cli') {
@@ -30,9 +36,9 @@ require_once __DIR__ . '/../vendor/autoload.php';
 $dotenv = Dotenv::createImmutable(__DIR__ . '/../includes');
 $dotenv->safeLoad();
 
-$opciones = getopt('', ['db::', 'output::', 'gzip', 'help']);
+$opciones = getopt('', ['db::', 'output::', 'gzip', 'manifest::', 'no-manifest', 'help']);
 if (isset($opciones['help'])) {
-    echo "Uso: php scripts/backup_db.php [--db=<nombre_bd>] [--output=<ruta_salida>] [--gzip]\n";
+    echo "Uso: php scripts/backup_db.php [--db=<nombre_bd>] [--output=<ruta_salida>] [--gzip] [--manifest=<ruta>] [--no-manifest]\n";
     exit(0);
 }
 
@@ -69,6 +75,13 @@ if (!is_dir($directorioSalida)) {
     }
 }
 
+$rutaManifiesto = null;
+if (!isset($opciones['no-manifest'])) {
+    $rutaManifiesto = isset($opciones['manifest']) && is_string($opciones['manifest']) && trim($opciones['manifest']) !== ''
+        ? trim($opciones['manifest'])
+        : ($rutaSalida . '.manifest.json');
+}
+
 mysqli_report(MYSQLI_REPORT_OFF);
 $mysqli = @mysqli_connect($dbHost, $dbUser, $dbPass, $dbName, $dbPort);
 if (!$mysqli) {
@@ -87,6 +100,20 @@ try {
     $mysqli->query("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ");
     $mysqli->query("START TRANSACTION WITH CONSISTENT SNAPSHOT");
 
+    // Detectar version del esquema a partir de la tabla migraciones
+    $schemaVersion = '008';
+    $resMig = $mysqli->query("SHOW TABLES LIKE 'migraciones'");
+    if ($resMig && $resMig->num_rows > 0) {
+        $resMig->free();
+        $resUltimaMig = $mysqli->query("SELECT migracion FROM migraciones ORDER BY id DESC LIMIT 1");
+        if ($resUltimaMig && $rowMig = $resUltimaMig->fetch_assoc()) {
+            $schemaVersion = (string)($rowMig['migracion'] ?? '008');
+            $resUltimaMig->free();
+        }
+    } elseif ($resMig) {
+        $resMig->free();
+    }
+
     $resTablas = $mysqli->query("SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'");
     if (!$resTablas) {
         throw new RuntimeException('Fallo al listar tablas de la base de datos: ' . $mysqli->error);
@@ -104,6 +131,7 @@ try {
     $lineas[] = "-- AppSalon SQL Backup (Snapshot Consistente InnoDB)";
     $lineas[] = "-- Base de datos origen: `" . $dbName . "`";
     $lineas[] = "-- Fecha de generación (America/Guayaquil): " . $ahora->format('Y-m-d H:i:sP');
+    $lineas[] = "-- Versión de esquema detectada: " . $schemaVersion;
     $lineas[] = "-- Total de tablas: " . count($tablas);
     $lineas[] = "-- ============================================================================";
     $lineas[] = "";
@@ -115,6 +143,7 @@ try {
     $lineas[] = "";
 
     $totalFilasRespaldadas = 0;
+    $filasPorTabla = [];
 
     foreach ($tablas as $tabla) {
         $tablaEsc = str_replace('`', '``', $tabla);
@@ -166,6 +195,7 @@ try {
             $totalFilasRespaldadas++;
         }
         $resDatos->free();
+        $filasPorTabla[$tabla] = $filasTabla;
 
         if ($filasTabla > 0) {
             $lineas[] = "";
@@ -201,14 +231,51 @@ try {
         throw new RuntimeException("No fue posible finalizar el archivo de respaldo en: {$rutaSalida}");
     }
 
+    $sha256Archivo = hash('sha256', $contenidoEscribir);
+
+    // Generar manifiesto JSON verificable si esta habilitado
+    if ($rutaManifiesto !== null) {
+        $manifiesto = [
+            'version' => '1.0',
+            'fecha' => $ahora->format('c'),
+            'timezone' => 'America/Guayaquil',
+            'database' => $dbName,
+            'archivo' => basename($rutaSalida),
+            'tamano_bytes' => strlen($contenidoEscribir),
+            'sha256' => $sha256Archivo,
+            'sha256_sql' => $sha256Sql,
+            'comprimido_gzip' => $usarGzip,
+            'total_tablas' => count($tablas),
+            'total_filas' => $totalFilasRespaldadas,
+            'schema_version' => $schemaVersion,
+            'tablas' => $tablas,
+            'filas_por_tabla' => $filasPorTabla,
+        ];
+
+        $jsonManifiesto = json_encode($manifiesto, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if ($jsonManifiesto === false) {
+            throw new RuntimeException('Fallo al codificar el manifiesto de respaldo a JSON.');
+        }
+
+        $manifiestoTmp = $rutaManifiesto . '.tmp.' . getmypid();
+        if (@file_put_contents($manifiestoTmp, $jsonManifiesto . "\n", LOCK_EX) === false) {
+            throw new RuntimeException("No fue posible escribir el archivo de manifiesto en: {$rutaManifiesto}");
+        }
+        if (!@rename($manifiestoTmp, $rutaManifiesto)) {
+            @unlink($manifiestoTmp);
+            throw new RuntimeException("No fue posible finalizar el archivo de manifiesto en: {$rutaManifiesto}");
+        }
+    }
+
     echo sprintf(
-        "[OK] Respaldo completado: bd=%s | tablas=%d | filas=%d | archivo=%s | bytes=%d | sha256=%s\n",
+        "[OK] Respaldo completado: bd=%s | tablas=%d | filas=%d | archivo=%s | bytes=%d | sha256=%s%s\n",
         $dbName,
         count($tablas),
         $totalFilasRespaldadas,
         $rutaSalida,
         strlen($contenidoEscribir),
-        $sha256Sql
+        $sha256Archivo,
+        $rutaManifiesto !== null ? " | manifiesto={$rutaManifiesto}" : ""
     );
     exit(0);
 } catch (Throwable $e) {

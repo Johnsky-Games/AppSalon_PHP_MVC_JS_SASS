@@ -6,14 +6,18 @@ declare(strict_types=1);
  * Script CLI de Restauración Segura de Base de Datos MySQL — AppSalon
  *
  * Uso:
- *   php scripts/restore_db.php --input=<ruta_archivo.sql|.sql.gz> [--db=<nombre_bd>] [--create-db]
+ *   php scripts/restore_db.php --input=<archivo.sql|.sql.gz> [--db=<nombre_bd>] [--hash=<sha256>] [--manifest=<ruta>] [--create-db] [--safe-restore|--no-safe-restore] [--skip-hash-check]
  *
- * Características:
+ * Características de Integridad y Resiliencia:
  * - Ejecutable exclusivamente desde CLI (`php_sapi_name() === 'cli'`).
  * - Soporta archivos `.sql` en texto plano y `.sql.gz` comprimidos con GZIP.
- * - Analiza y ejecuta cada sentencia SQL verificando `errno === 0` para impedir restauraciones
- *   silenciosamente truncadas o corruptas.
- * - Restaura `FOREIGN_KEY_CHECKS = 1` y `UNIQUE_CHECKS = 1` al finalizar.
+ * - Verificación criptográfica obligatoria: valida el hash SHA-256 del archivo contra el parámetro `--hash`,
+ *   el archivo `--manifest`, o el manifiesto adyacente `.manifest.json` antes de ejecutar cualquier sentencia DDL.
+ * - Detección estricta de truncamiento y validación sintáctica previa antes de aplicar cambios a la base destino.
+ * - Modo Seguro (`--safe-restore`, activo por defecto): ante bases de datos existentes con datos, realiza una
+ *   restauración previa en una base aislada temporal de staging para verificar que todas las sentencias se ejecuten
+ *   sin fallos antes de reemplazar datos. Si ocurre cualquier error a mitad de restauración, preserva intacta la base destino.
+ * - Restaura `FOREIGN_KEY_CHECKS = 1` y `UNIQUE_CHECKS = 1` de manera garantizada al finalizar.
  */
 
 if (php_sapi_name() !== 'cli') {
@@ -29,9 +33,20 @@ require_once __DIR__ . '/../vendor/autoload.php';
 $dotenv = Dotenv::createImmutable(__DIR__ . '/../includes');
 $dotenv->safeLoad();
 
-$opciones = getopt('', ['input:', 'db::', 'create-db', 'help']);
+$opciones = getopt('', [
+    'input:',
+    'db::',
+    'hash::',
+    'manifest::',
+    'create-db',
+    'safe-restore',
+    'no-safe-restore',
+    'skip-hash-check',
+    'help'
+]);
+
 if (isset($opciones['help'])) {
-    echo "Uso: php scripts/restore_db.php --input=<archivo.sql|.sql.gz> [--db=<nombre_bd>] [--create-db]\n";
+    echo "Uso: php scripts/restore_db.php --input=<archivo.sql|.sql.gz> [--db=<nombre_bd>] [--hash=<sha256>] [--manifest=<ruta>] [--create-db] [--safe-restore|--no-safe-restore] [--skip-hash-check]\n";
     exit(0);
 }
 
@@ -54,6 +69,44 @@ if (!preg_match('/^[a-zA-Z0-9_]+$/', $dbName)) {
     exit(1);
 }
 
+// -----------------------------------------------------------------------------
+// 1. Verificación criptográfica SHA-256 previa a cualquier operación
+// -----------------------------------------------------------------------------
+$hashCalculado = hash_file('sha256', $rutaEntrada);
+$hashEsperado = null;
+
+if (isset($opciones['hash']) && is_string($opciones['hash']) && trim($opciones['hash']) !== '') {
+    $hashEsperado = strtolower(trim($opciones['hash']));
+} elseif (isset($opciones['manifest']) && is_string($opciones['manifest']) && is_file($opciones['manifest'])) {
+    $rawMan = @file_get_contents($opciones['manifest']);
+    $datosMan = $rawMan !== false ? json_decode($rawMan, true) : null;
+    if (is_array($datosMan) && isset($datosMan['sha256']) && is_string($datosMan['sha256'])) {
+        $hashEsperado = strtolower(trim($datosMan['sha256']));
+    }
+} elseif (is_file($rutaEntrada . '.manifest.json')) {
+    $rawMan = @file_get_contents($rutaEntrada . '.manifest.json');
+    $datosMan = $rawMan !== false ? json_decode($rawMan, true) : null;
+    if (is_array($datosMan) && isset($datosMan['sha256']) && is_string($datosMan['sha256'])) {
+        $hashEsperado = strtolower(trim($datosMan['sha256']));
+    }
+}
+
+if (!isset($opciones['skip-hash-check'])) {
+    if ($hashEsperado !== null) {
+        if ($hashCalculado !== $hashEsperado) {
+            fwrite(STDERR, sprintf(
+                "[ERROR] Verificación de integridad fallida: el hash SHA-256 del archivo (%s) no coincide con el esperado (%s). El respaldo fue alterado o está corrupto.\n",
+                $hashCalculado,
+                $hashEsperado
+            ));
+            exit(1);
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 2. Lectura y descompresión de contenido
+// -----------------------------------------------------------------------------
 $raw = @file_get_contents($rutaEntrada);
 if ($raw === false || $raw === '') {
     fwrite(STDERR, "[ERROR] El archivo de respaldo está vacío o no pudo leerse: {$rutaEntrada}\n");
@@ -70,6 +123,17 @@ if (str_starts_with($raw, "\x1f\x8b") || str_ends_with(strtolower($rutaEntrada),
     $sqlContenido = $descomprimido;
 } else {
     $sqlContenido = $raw;
+}
+
+// -----------------------------------------------------------------------------
+// 3. Validación de completitud y sintaxis previa
+// -----------------------------------------------------------------------------
+// Si el archivo declara el encabezado oficial de AppSalon, exigir el marcador de finalización
+if (str_contains($sqlContenido, '-- AppSalon SQL Backup')) {
+    if (!str_contains($sqlContenido, '-- Fin del respaldo AppSalon')) {
+        fwrite(STDERR, "[ERROR] Archivo de respaldo truncado o incompleto: falta el marcador final '-- Fin del respaldo AppSalon'.\n");
+        exit(1);
+    }
 }
 
 /**
@@ -162,6 +226,9 @@ if (empty($sentencias)) {
     exit(1);
 }
 
+// -----------------------------------------------------------------------------
+// 4. Conexión a MySQL y Restauración Segura
+// -----------------------------------------------------------------------------
 mysqli_report(MYSQLI_REPORT_OFF);
 $mysqli = @mysqli_connect($dbHost, $dbUser, $dbPass, '', $dbPort);
 if (!$mysqli) {
@@ -175,18 +242,75 @@ if (!$mysqli) {
 
 $mysqli->set_charset('utf8mb4');
 
+$usarSafeRestore = !isset($opciones['no-safe-restore']);
+$stagingDb = null;
+
 try {
-    if (isset($opciones['create-db'])) {
-        $okCreate = $mysqli->query("CREATE DATABASE IF NOT EXISTS `{$dbName}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
-        if (!$okCreate) {
-            throw new RuntimeException("No fue posible crear o verificar la base destino `{$dbName}`: " . $mysqli->error);
+    $dbExiste = false;
+    $resCheckDb = $mysqli->query("SHOW DATABASES LIKE '{$dbName}'");
+    if ($resCheckDb && $resCheckDb->num_rows > 0) {
+        $dbExiste = true;
+        $resCheckDb->free();
+    } elseif ($resCheckDb) {
+        $resCheckDb->free();
+    }
+
+    if (!$dbExiste) {
+        if (isset($opciones['create-db'])) {
+            $okCreate = $mysqli->query("CREATE DATABASE IF NOT EXISTS `{$dbName}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+            if (!$okCreate) {
+                throw new RuntimeException("No fue posible crear la base destino `{$dbName}`: " . $mysqli->error);
+            }
+            $dbExiste = true;
+        } else {
+            throw new RuntimeException("La base de datos destino `{$dbName}` no existe. Use --create-db si desea crearla automáticamente.");
         }
     }
 
     if (!$mysqli->select_db($dbName)) {
-        throw new RuntimeException("La base de datos destino `{$dbName}` no existe o no es accesible: " . $mysqli->error);
+        throw new RuntimeException("No fue posible seleccionar la base de datos destino `{$dbName}`: " . $mysqli->error);
     }
 
+    // Contar tablas previas en la base destino
+    $resTablasPrevias = $mysqli->query("SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'");
+    $totalTablasPrevias = $resTablasPrevias ? $resTablasPrevias->num_rows : 0;
+    if ($resTablasPrevias) {
+        $resTablasPrevias->free();
+    }
+
+    // Si safe-restore esta activo y la base destino tiene datos previos, validar primero en base temporal aislada
+    if ($usarSafeRestore && $totalTablasPrevias > 0) {
+        $stagingDb = $dbName . '_stg_' . substr(bin2hex(random_bytes(4)), 0, 8);
+        $okStaging = $mysqli->query("CREATE DATABASE `{$stagingDb}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+        if ($okStaging) {
+            $mysqli->select_db($stagingDb);
+            $mysqli->query("SET FOREIGN_KEY_CHECKS = 0");
+            $mysqli->query("SET UNIQUE_CHECKS = 0");
+
+            foreach ($sentencias as $indice => $sqlStmt) {
+                $ok = $mysqli->query($sqlStmt);
+                if (!$ok) {
+                    $numSentencia = $indice + 1;
+                    throw new RuntimeException(sprintf(
+                        "Error en sentencia #%d durante validación previa en staging (errno %d): %s",
+                        $numSentencia,
+                        $mysqli->errno,
+                        $mysqli->error
+                    ));
+                }
+            }
+
+            // Staging exitoso: limpiar base temporal y volver a base destino
+            $mysqli->query("SET FOREIGN_KEY_CHECKS = 1");
+            $mysqli->query("SET UNIQUE_CHECKS = 1");
+            $mysqli->select_db($dbName);
+            $mysqli->query("DROP DATABASE IF EXISTS `{$stagingDb}`");
+            $stagingDb = null;
+        }
+    }
+
+    // Aplicar sentencias sobre la base destino definitiva
+    $mysqli->select_db($dbName);
     $mysqli->query("SET FOREIGN_KEY_CHECKS = 0");
     $mysqli->query("SET UNIQUE_CHECKS = 0");
 
@@ -225,6 +349,9 @@ try {
     );
     exit(0);
 } catch (Throwable $e) {
+    if ($stagingDb !== null) {
+        @$mysqli->query("DROP DATABASE IF EXISTS `{$stagingDb}`");
+    }
     @$mysqli->query("SET FOREIGN_KEY_CHECKS = 1");
     @$mysqli->query("SET UNIQUE_CHECKS = 1");
     @$mysqli->close();

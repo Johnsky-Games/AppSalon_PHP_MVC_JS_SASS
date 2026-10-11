@@ -14,28 +14,56 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 - **Rama Base / Cierre Revocado:** `feature/cierre-tecnico` en `d4124f27abcb46fb947f158cf4a44d04d481e6eb` (cierre revocado por auditoría externa).
 - **Rama de Integración Activa:** `feature/correcciones-auditoria-integral`
 - **Código Auditado Externamente:** `f33076c304e766239b1bfc13d9dde1927d749827`
-- **Estado General:** **REAPERTURA POR AUDITORÍA EXTERNA — Ejecución Multidisciplinar y Correcciones Obligatorias en Curso**
-- **Matriz de Negocio:** Documentada en `docs/MATRIZ_ACEPTACION_NEGOCIO.md` con trazabilidad de requisitos, reglas, pruebas y decisiones pendientes del propietario.
+- **Cierre Documental Revocado:** `d4124f27abcb46fb947f158cf4a44d04d481e6eb`
+- **Estado General:** **RESOLUCIÓN Y VERIFICACIÓN COMPLETA DE HALLAZGOS DE AUDITORÍA EXTERNA — 6 Especialidades Integradas y Verificadas**
+- **Matriz de Negocio:** Documentada en `docs/MATRIZ_ACEPTACION_NEGOCIO.md` con trazabilidad de requisitos, reglas, pruebas y decisiones del negocio.
 
-### 0. Entrega Especialista 1: Reservas, Estados de Citas y Agenda (Fase 4B)
-- **Migración de Esquema (`007_citas_estado_cancelacion.sql` y rollback):**
-  - Incorpora en tabla `citas`: `estado` (`ENUM('confirmada', 'cancelada') DEFAULT 'confirmada'`), `cancelado_por` (`ENUM('cliente', 'admin') NULL`), `cancelado_at` (`DATETIME NULL`), `motivo_cancelacion` (`VARCHAR(255) NULL`).
-  - Índices agregados: `idx_citas_estado (estado)` e `idx_citas_prof_fecha_estado (profesionalId, fecha, estado)`.
-- **Modelos y Entidades (`models/Cita.php`, `models/AdminCita.php`):**
-  - Mapeo completo de columnas de cancelación y estado, con inicialización coherente y getters/setters tipados.
-- **Capa de Persistencia (`repositories/CitaRepository.php`, `repositories/ProfesionalRepository.php`):**
-  - `CitaRepository::cancelarCitaLogica()` implementado con transacción InnoDB atómica, bloqueo pesimista `FOR UPDATE`, idempotencia garantizada (200), y preservación íntegra de filas en `citas`, `citasservicios` y `pagos`.
-  - Filtro estricto `estado = 'confirmada'` en consultas de ocupación (`findOcupacionByProfesionalEnFecha` y `cargarCitasProfesionalEnFechaForUpdate`), liberando el cupo automáticamente en agenda ante cancelaciones.
-  - `ProfesionalRepository`: `findCitasConfirmadasFuturasForUpdate()` y `findCitasConfirmadasEnRangoForUpdate()` para serialización con `FOR UPDATE`.
-  - Validación de colisiones contra citas confirmadas en `replaceHorarios()`, `createDescanso()` y `createBloqueo()`, lanzando `PersistenceException` con código 422 si se intenta modificar la agenda dejando citas confirmadas fuera o solapadas.
-- **Capa de Servicios y Controladores (`services/CitaService.php`, `services/ProfesionalService.php`, `controllers/ProfesionalController.php`, `controllers/APIController.php`):**
-  - `CitaService`: La política de servidor (`RESERVA_EXIGIR_PROFESIONAL=1`) no puede ser eludida por `modo_reserva=clasico` o `legacy` (rechazo 422 con código `profesional_requerido`). Validación de citas pasadas en cancelación con código 422 (`cita_pasada`).
-  - `ProfesionalService`: Mapeo de excepciones transaccionales de colisión hacia `STATUS_INVALID` (`colision_citas_confirmadas`, HTTP 422). Aliases `guardarHorarios()`, `guardarDescanso()` y `guardarBloqueo()`.
-  - `ProfesionalController`: Manejo de respuestas 422 para peticiones JSON y renderizado de alertas en formularios HTML.
-  - `APIController`: Enrutamiento transparente a cancelación lógica manteniendo compatibilidad hacia atrás en `/api/eliminar`.
-- **Verificación Automatizada:**
-  - Suite de integración `tests/Integration/CitaCancelacionAgendaIntegrationTest.php`: 6/6 tests superados (58 aserciones).
-  - Suite E2E de navegador real Chrome Headless (`tests/verificar_navegador.ps1`): Superada al 100% (cero errores en consola, cero peticiones fallidas).
+### 0. Consolidación de Correcciones de Especialistas
+
+#### Especialista 1: Reservas, Estados de Citas y Agenda (Fase 4B)
+- **Migración `007_citas_estado_cancelacion.sql` y rollback:** Columnas `estado`, `cancelado_por`, `cancelado_at`, `motivo_cancelacion` con índices `idx_citas_estado` e `idx_citas_prof_fecha_estado`.
+- **Cancelación Lógica Idempotente:** `CitaRepository::cancelarCitaLogica()` libera disponibilidad manteniendo filas en `citas`, `citasservicios` y `pagos`. Prohíbe cancelar citas pasadas (HTTP 422).
+- **Protección de Agenda y Transacciones InnoDB:** Modificaciones en `horarios`, `descansos` o `bloqueos` mediante `replaceHorarios()`, `createDescanso()` y `createBloqueo()` adquieren bloqueos pesimistas y rechazan (HTTP 422) cualquier alteración que colisione con citas confirmadas futuras.
+- **Pruebas:** `tests/Integration/CitaCancelacionAgendaIntegrationTest.php` (6 tests, 58 aserciones, salida 0).
+
+#### Especialista 2: Seguridad HTTP y Frontend
+- **Erradicación de XSS:** Eliminación total de `.innerHTML` inseguro en `src/js/app.js` y `public/build/js/app.js`. Reemplazado por nodos DOM estructurados (`document.createElement`, `document.createTextNode` y `.textContent`).
+- **Sanitización de Salida:** Verificación estricta de que datos de usuario y catálogo se representen como texto plano.
+- **Pruebas:** `tests/Integration/SeguridadFrontendIntegrationTest.php` (5 tests, 229 aserciones, salida 0).
+
+#### Especialista 3: Pagos, Autorización e Idempotencia (Fase 6C)
+- **Huella de Idempotencia y Protección Cross-Tenant:** `Pago::coincideConOperacion()` valida `usuario_id`, `cita_id` y `monto`. Si la clave de idempotencia existe para otra operación, responde HTTP 409 sin filtrar datos ajenos.
+- **Estado Terminal Reembolsado:** Una vez en `reembolsado`, webhooks tardíos no pueden revertirlo. Rechazo de reembolsos parciales (HTTP 422).
+- **Orden Uniforme de Bloqueo:** Siempre `citas` (`FOR UPDATE`) primero, luego `pagos` (`FOR UPDATE`), previniendo interbloqueos (deadlocks).
+- **Protección de Producción:** Bloqueo de `MockPaymentGateway` y secretos por defecto cuando `APP_ENV=production`.
+- **Pruebas:** `tests/Integration/PagoIdempotenciaSeguridadIntegrationTest.php` (5 tests, 56 aserciones, salida 0).
+
+#### Especialista 4: Notificaciones y Recuperación de Workers (Fase 6A)
+- **Migración `008_notificaciones_outbox_lease.sql` y rollback:** Columnas `worker_token`, `lease_expires_at` con índice `idx_notificaciones_lease`.
+- **Arrendamiento Atómico de Workers (Worker Lease):** Adquisición mediante `adquirirParaEnvio()`, recuperación de workers atascados tras expiración de lease, exclusión de workers zombis con token caduco.
+- **Descarte de Notificaciones Obsoletas:** Citas canceladas y recordatorios transcurridos se descartan automáticamente sin despachar correos.
+- **Documentación:** `docs/NOTIFICACIONES_WORKER.md`.
+- **Pruebas:** `tests/Integration/NotificacionesWorkerIntegrationTest.php` (5 tests, 19 aserciones, salida 0).
+
+#### Especialista 5: Reportes e Historial Financiero (Fase 6B)
+- **Persistencia Contable Desacoplada:** Consultas financieras alimentadas directamente desde la tabla `pagos`, garantizando persistencia inmutable de pagos incluso si las citas fueron canceladas o los servicios fueron eliminados del catálogo.
+- **Distinción Cita vs Cobro:** Filtro explícito `criterio_fecha = 'servicio'` (fecha operativa de agenda) vs `criterio_fecha = 'cobro'` (fecha contable de recaudación).
+- **Controladores y Vistas:** `AdminReporteController` (`/admin/reportes`, `/admin/reportes/exportar`), `views/admin/reportes.php`, exportación CSV con snapshots históricos inmutables.
+- **Pruebas:** `tests/Integration/ReportesFinancierosIntegrationTest.php` (4 tests, 62 aserciones, salida 0).
+
+#### Especialista 6: Docker, Respaldos, Restauración y CI
+- **Front Controller y Apache:** `public/.htaccess` con mod_rewrite seguro (`RewriteRule ^ index.php [QSA,L]`). `Dockerfile` y `docker/apache.conf` con `DocumentRoot /var/www/html/public`, `AllowOverride All` y extensión `mbstring`.
+- **Integridad Criptográfica de Respaldos:** `scripts/backup_db.php` genera manifiesto estructurado con hash SHA-256. `scripts/restore_db.php` valida pre-restauración el hash SHA-256, marcadores de inicio/EOF y utiliza base de staging para restauraciones atómicas.
+- **Integración Continua:** `.github/workflows/ci.yml` con Composer, npm, PHPUnit con orden aleatorio (`--order-by=random`) y prueba de integridad de respaldos.
+- **Pruebas:** `tests/Integration/BackupRestoreIntegridadIntegrationTest.php` (4 tests, 42 aserciones, salida 0) y `tests/Integration/MigrationTest.php` (7 tests, 171 aserciones, salida 0).
+
+### 1. Evidencia de Ejecución de Suites Automatizadas
+- **PHPUnit 10.5.66 en contenedor aislado (`appsalon-test-int-db`, PHP 8.2.34):**
+  - **Comando:** `vendor/bin/phpunit --do-not-cache-result --colors=never`
+  - **Resultado:** `OK (203 tests, 2526 assertions)` — Código de salida `0`.
+- **Suite de Navegador Real Headless Chrome (`tests/verificar_navegador.ps1`):**
+  - **Comando:** `powershell -ExecutionPolicy Bypass -File tests/verificar_navegador.ps1`
+  - **Resultado:** 19/19 comprobaciones `[OK]`, `0` errores de consola, `0` solicitudes de red fallidas, verificación de persistencia en MySQL — Código de salida `0`.
 
 ### 1. Alcance Consolidado del Cierre Técnico
 

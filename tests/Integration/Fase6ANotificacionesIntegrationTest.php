@@ -481,7 +481,7 @@ class Fase6ANotificacionesIntegrationTest extends TestCase
         $scriptPath = __DIR__ . '/../../scripts/procesar_notificaciones.php';
         $ahoraStr = $domingoPrevio->format('Y-m-d H:i:s');
         $cmd = sprintf(
-            'php %s --horas=36 --ahora=%s --json',
+            'php %s --horas=36 --ahora=%s --json --simular-envio',
             escapeshellarg($scriptPath),
             escapeshellarg($ahoraStr)
         );
@@ -497,8 +497,8 @@ class Fase6ANotificacionesIntegrationTest extends TestCase
             'DB_PASS' => self::$pass,
             'DB_NAME' => self::$dbName,
             'DB_PORT' => (string)self::$port,
+            'EMAIL_HOST' => '',
         ]);
-        unset($env['EMAIL_HOST']);
 
         $proc = proc_open($cmd, $descriptorSpec, $pipes, null, $env);
         $this->assertIsResource($proc);
@@ -514,8 +514,8 @@ class Fase6ANotificacionesIntegrationTest extends TestCase
         $this->assertIsArray($salidaJson);
         $this->assertSame('ok', $salidaJson['status']);
         $this->assertSame(36, $salidaJson['recordatorios']['ventana_horas']);
-        $this->assertSame(2, $salidaJson['recordatorios']['en_ventana']);
-        $this->assertSame(1, $salidaJson['recordatorios']['enviados'], 'Solo la cita de las 15:00 debe enviarse como nueva en la ventana de 36h');
+        $this->assertSame(2, $salidaJson['recordatorios']['en_ventana'], 'en_ventana check: ' . $stdout);
+        $this->assertSame(1, $salidaJson['recordatorios']['enviados'], 'Solo la cita de las 15:00 debe enviarse como nueva en la ventana de 36h. STDOUT: ' . $stdout);
         $this->assertSame(1, $salidaJson['recordatorios']['ya_enviados'], 'La cita de las 09:30 debe contarse como ya enviada');
 
         // Verificar que la cita cancelada jamás recibió recordatorio

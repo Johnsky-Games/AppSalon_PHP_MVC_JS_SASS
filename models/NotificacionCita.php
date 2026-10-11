@@ -18,6 +18,9 @@ class NotificacionCita
     public const ESTADO_ENVIANDO = 'enviando';
     public const ESTADO_ENVIADO = 'enviado';
     public const ESTADO_FALLIDO = 'fallido';
+    public const ESTADO_REINTENTANDO = 'reintentando';
+    public const ESTADO_DESCARTADA = 'descartada';
+    public const ESTADO_CANCELADA = 'cancelada';
 
     public const DEFAULT_MAX_INTENTOS = 3;
 
@@ -37,6 +40,8 @@ class NotificacionCita
     public ?string $ultimo_error = null;
     public ?string $enviado_at = null;
     public ?string $proximo_intento_at = null;
+    public ?string $worker_token = null;
+    public ?string $lease_expires_at = null;
     public ?string $created_at = null;
     public ?string $updated_at = null;
 
@@ -84,6 +89,12 @@ class NotificacionCita
             : null;
         $this->proximo_intento_at = isset($args['proximo_intento_at']) && is_scalar($args['proximo_intento_at']) && trim((string)$args['proximo_intento_at']) !== ''
             ? trim((string)$args['proximo_intento_at'])
+            : null;
+        $this->worker_token = isset($args['worker_token']) && is_scalar($args['worker_token']) && trim((string)$args['worker_token']) !== ''
+            ? trim((string)$args['worker_token'])
+            : null;
+        $this->lease_expires_at = isset($args['lease_expires_at']) && is_scalar($args['lease_expires_at']) && trim((string)$args['lease_expires_at']) !== ''
+            ? trim((string)$args['lease_expires_at'])
             : null;
         $this->created_at = isset($args['created_at']) && is_scalar($args['created_at']) && trim((string)$args['created_at']) !== ''
             ? trim((string)$args['created_at'])

@@ -427,9 +427,29 @@ class NotificacionCitaService
      *
      * @return array<string, mixed>
      */
-    public function procesarPendientesYReintentos(int $limite = 50): array
-    {
+    /**
+     * Procesa la cola de notificaciones pendientes y reintentos con arrendamiento exclusivo (worker lease).
+     *
+     * Reglas obligatorias:
+     * - Si la cita asociada se encuentra en estado 'cancelada', descarta confirmaciones y recordatorios pendientes.
+     * - Si la notificación es un recordatorio y la fecha/hora de la cita ya transcurrió en America/Guayaquil,
+     *   descarta el envío con `ultimo_error = 'Recordatorio descartado por cita ya transcurrida'`.
+     * - Recupera tareas atascadas en `enviando` cuyo `lease_expires_at` haya vencido.
+     * - Excluye a workers lentos u obsoletos impidiendo sobrescritura de registros enviados por un nuevo worker.
+     *
+     * @param int $limite
+     * @param string|null $workerToken
+     * @param int $duracionLeaseSegundos
+     * @return array<string, mixed>
+     */
+    public function procesarPendientesYReintentos(
+        int $limite = 50,
+        ?string $workerToken = null,
+        int $duracionLeaseSegundos = 300
+    ): array {
         $ahoraUtc = $this->obtenerAhoraUtc()->format('Y-m-d H:i:s');
+        $ahoraLocal = $this->obtenerAhora();
+        $tzGuayaquil = $this->obtenerZonaHoraria();
 
         try {
             $candidatas = $this->notificacionRepository->buscarCandidatasParaReintento($ahoraUtc, $limite);
@@ -456,43 +476,89 @@ class NotificacionCitaService
                 continue;
             }
 
+            // Consultar la cita asociada para verificar su estado en base de datos
+            $citaRefId = (int)$candidata->cita_referencia_id;
+            $cita = null;
             try {
-                $adquisicion = $this->notificacionRepository->adquirirCandidataParaReintento($idNotif, $ahoraUtc);
+                $cita = $this->citaRepository->findById($citaRefId);
+            } catch (\Throwable $e) {
+                error_log("[NotificacionCitaService::procesarPendientesYReintentos] Error al consultar cita {$citaRefId}: " . $e->getMessage());
+            }
+
+            // Regla 4.B: Si la cita asociada está cancelada (o eliminada), descartar confirmaciones y recordatorios
+            $citaCancelada = ($cita !== null && $cita->estado === 'cancelada')
+                || ($candidata->cita_id === null && $candidata->tipo === NotificacionCita::TIPO_RECORDATORIO);
+            if ($citaCancelada && in_array($candidata->tipo, [NotificacionCita::TIPO_CONFIRMACION, NotificacionCita::TIPO_RECORDATORIO], true)) {
+                $motivoCancelacion = $candidata->tipo === NotificacionCita::TIPO_RECORDATORIO
+                    ? 'Recordatorio descartado: la cita asociada está cancelada'
+                    : 'Confirmación descartada: la cita asociada está cancelada';
+                $this->notificacionRepository->descartarNotificacion($idNotif, $motivoCancelacion, null, NotificacionCita::ESTADO_DESCARTADA);
+                $omitidos++;
+                $detalles[] = [
+                    'id' => $idNotif,
+                    'clave_idempotencia' => $candidata->clave_idempotencia,
+                    'resultado' => 'cita_cancelada',
+                ];
+                continue;
+            }
+
+            // Regla 4.A: Si es recordatorio y la fecha/hora de la cita ya pasó en America/Guayaquil, descartar
+            if ($candidata->tipo === NotificacionCita::TIPO_RECORDATORIO) {
+                $payload = $candidata->obtenerPayload();
+                $fechaCita = $cita !== null ? (string)$cita->fecha : (string)($payload['fecha'] ?? '');
+                $horaCita = $cita !== null ? (string)(!empty($cita->hora_inicio) ? $cita->hora_inicio : $cita->hora) : (string)($payload['hora_inicio'] ?? ($payload['hora'] ?? ''));
+                $horaCorta = substr(trim($horaCita), 0, 5);
+
+                if ($fechaCita !== '' && $horaCorta !== '') {
+                    $instanteCita = \DateTimeImmutable::createFromFormat('!Y-m-d H:i', "{$fechaCita} {$horaCorta}", $tzGuayaquil);
+                    if ($instanteCita && $instanteCita <= $ahoraLocal) {
+                        $this->notificacionRepository->descartarNotificacion($idNotif, 'Recordatorio descartado por cita ya transcurrida', null, NotificacionCita::ESTADO_DESCARTADA);
+                        $omitidos++;
+                        $detalles[] = [
+                            'id' => $idNotif,
+                            'clave_idempotencia' => $candidata->clave_idempotencia,
+                            'resultado' => 'recordatorio_vencido',
+                        ];
+                        continue;
+                    }
+                }
+            }
+
+            // Adquisición atómica bajo arrendamiento exclusivo (worker lease token)
+            $workerTokenActual = $workerToken ?? $this->generarWorkerToken();
+            try {
+                $adquirido = $this->notificacionRepository->adquirirParaEnvio($idNotif, $workerTokenActual, $duracionLeaseSegundos);
             } catch (PersistenceException $e) {
                 $fallidos++;
                 continue;
             }
 
-            $accion = $adquisicion['accion'] ?? 'omitir';
-            /** @var NotificacionCita|null $notifAdquirida */
-            $notifAdquirida = $adquisicion['notificacion'] ?? null;
-
-            if ($accion !== 'enviar' || $notifAdquirida === null) {
+            if (!$adquirido) {
                 $omitidos++;
                 $detalles[] = [
                     'id' => $idNotif,
                     'clave_idempotencia' => $candidata->clave_idempotencia,
-                    'resultado' => $accion,
+                    'resultado' => 'omitir',
                 ];
                 continue;
             }
 
             $procesadas++;
-            $payload = $notifAdquirida->obtenerPayload();
-            $mensaje = $this->construirContenidoHtml($notifAdquirida->tipo, $payload, $notifAdquirida->asunto);
+            $payload = $candidata->obtenerPayload();
+            $mensaje = $this->construirContenidoHtml($candidata->tipo, $payload, $candidata->asunto);
 
             $despacho = Email::despacharNotificacionCita(
-                $notifAdquirida->tipo,
-                $notifAdquirida->destinatario_email,
-                $notifAdquirida->destinatario_nombre,
+                $candidata->tipo,
+                $candidata->destinatario_email,
+                $candidata->destinatario_nombre,
                 $mensaje['asunto'],
                 $mensaje['html'],
                 [
-                    'cita_id' => $notifAdquirida->cita_referencia_id,
-                    'clave_idempotencia' => $notifAdquirida->clave_idempotencia,
+                    'cita_id' => $candidata->cita_referencia_id,
+                    'clave_idempotencia' => $candidata->clave_idempotencia,
                     'enlace' => $mensaje['enlace'],
                     'reintento' => true,
-                    'intento_numero' => $notifAdquirida->intentos,
+                    'intento_numero' => $candidata->intentos + 1,
                 ],
                 $this->transport
             );
@@ -500,18 +566,25 @@ class NotificacionCitaService
             $instanteFinUtc = $this->obtenerAhoraUtc()->format('Y-m-d H:i:s');
 
             if ($despacho['exito']) {
+                $this->notificacionRepository->marcarComoEnviado($idNotif, $workerTokenActual);
                 $this->notificacionRepository->marcarEnviado($idNotif, $instanteFinUtc);
                 $enviados++;
                 $detalles[] = [
                     'id' => $idNotif,
-                    'clave_idempotencia' => $notifAdquirida->clave_idempotencia,
+                    'clave_idempotencia' => $candidata->clave_idempotencia,
                     'resultado' => 'enviado',
-                    'intentos' => $notifAdquirida->intentos,
+                    'intentos' => $candidata->intentos + 1,
                 ];
             } else {
                 $proximoUtc = $this->calcularProximoIntentoUtc(
-                    $notifAdquirida->intentos,
-                    $notifAdquirida->max_intentos
+                    $candidata->intentos + 1,
+                    $candidata->max_intentos
+                );
+                $this->notificacionRepository->marcarComoFallido(
+                    $idNotif,
+                    $workerTokenActual,
+                    (string)($despacho['error'] ?? 'Fallo en reintento SMTP.'),
+                    $proximoUtc
                 );
                 $this->notificacionRepository->marcarFallido(
                     $idNotif,
@@ -522,9 +595,9 @@ class NotificacionCitaService
                 $fallidos++;
                 $detalles[] = [
                     'id' => $idNotif,
-                    'clave_idempotencia' => $notifAdquirida->clave_idempotencia,
+                    'clave_idempotencia' => $candidata->clave_idempotencia,
                     'resultado' => 'fallido',
-                    'intentos' => $notifAdquirida->intentos,
+                    'intentos' => $candidata->intentos + 1,
                     'error' => $despacho['error'],
                 ];
             }
@@ -681,6 +754,75 @@ class NotificacionCitaService
      * @param bool $citaExisteEnBd
      * @return array<string, mixed>
      */
+    /**
+     * Adquiere una notificación para envío bajo arrendamiento de worker delegando al repositorio.
+     */
+    public function adquirirParaEnvio(int $id, string $workerToken, int $duracionLeaseSegundos = 300): bool
+    {
+        return $this->notificacionRepository->adquirirParaEnvio($id, $workerToken, $duracionLeaseSegundos);
+    }
+
+    /**
+     * Marca una notificación como enviada validando el token del worker activo.
+     */
+    public function marcarComoEnviado(int $id, string $workerToken): bool
+    {
+        return $this->notificacionRepository->marcarComoEnviado($id, $workerToken);
+    }
+
+    /**
+     * Marca una notificación como fallida con worker token.
+     */
+    public function marcarComoFallido(
+        int $id,
+        string $workerToken,
+        string $mensajeError,
+        ?string $proximoIntentoAt = null
+    ): bool {
+        return $this->notificacionRepository->marcarComoFallido($id, $workerToken, $mensajeError, $proximoIntentoAt);
+    }
+
+    /**
+     * Descarta una notificación obsoleta marcándola como 'descartada' o 'cancelada'.
+     */
+    public function descartarNotificacion(
+        int $id,
+        string $motivo,
+        ?string $workerToken = null,
+        string $nuevoEstado = NotificacionCita::ESTADO_DESCARTADA
+    ): bool {
+        return $this->notificacionRepository->descartarNotificacion($id, $motivo, $workerToken, $nuevoEstado);
+    }
+
+    /**
+     * Registra un evento de notificación durable en la base de datos (patrón Outbox).
+     *
+     * @param array<string, mixed> $datos
+     * @return NotificacionCita
+     */
+    public function registrarEventoOutbox(array $datos): NotificacionCita
+    {
+        $ahoraUtc = $this->obtenerAhoraUtc()->format('Y-m-d H:i:s');
+        return $this->notificacionRepository->registrarEventoOutbox($datos, $ahoraUtc);
+    }
+
+    /**
+     * Genera un identificador único para el arrendamiento de worker.
+     */
+    public function generarWorkerToken(): string
+    {
+        return 'worker_' . bin2hex(random_bytes(16));
+    }
+
+    /**
+     * Ejecuta el flujo transaccional de idempotencia + despacho SMTP + actualización de estado final.
+     *
+     * @param string $tipo
+     * @param string $claveIdempotencia
+     * @param array<string, mixed> $snapshot
+     * @param bool $citaExisteEnBd
+     * @return array<string, mixed>
+     */
     private function registrarYDespachar(
         string $tipo,
         string $claveIdempotencia,
@@ -696,6 +838,7 @@ class NotificacionCitaService
 
         $mensaje = $this->construirContenidoHtml($tipo, $snapshot);
         $ahoraUtc = $this->obtenerAhoraUtc()->format('Y-m-d H:i:s');
+        $workerToken = $this->generarWorkerToken();
 
         $adquisicion = $this->notificacionRepository->registrarOAdquirirParaEnvio([
             'cita_id' => $citaExisteEnBd ? $citaId : null,
@@ -708,6 +851,8 @@ class NotificacionCitaService
             'asunto' => $mensaje['asunto'],
             'payload_json' => $snapshot,
             'max_intentos' => NotificacionCita::DEFAULT_MAX_INTENTOS,
+            'worker_token' => $workerToken,
+            'lease_segundos' => 300,
         ], $ahoraUtc, false);
 
         $accion = $adquisicion['accion'];
@@ -756,6 +901,7 @@ class NotificacionCitaService
         $instanteFinUtc = $this->obtenerAhoraUtc()->format('Y-m-d H:i:s');
 
         if ($despacho['exito']) {
+            $this->notificacionRepository->marcarComoEnviado((int)$notificacion->id, $workerToken);
             $this->notificacionRepository->marcarEnviado((int)$notificacion->id, $instanteFinUtc);
             return [
                 'status' => self::STATUS_OK,
@@ -773,6 +919,12 @@ class NotificacionCitaService
         );
         $errorTexto = (string)($despacho['error'] ?? 'Fallo en despacho SMTP.');
 
+        $this->notificacionRepository->marcarComoFallido(
+            (int)$notificacion->id,
+            $workerToken,
+            $errorTexto,
+            $proximoUtc
+        );
         $this->notificacionRepository->marcarFallido(
             (int)$notificacion->id,
             $errorTexto,

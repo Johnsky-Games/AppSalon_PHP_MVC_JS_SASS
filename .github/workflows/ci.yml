@@ -12,7 +12,7 @@ on:
 
 jobs:
   tests:
-    name: PHP 8.2 + MySQL 8.0 (Migraciones, Linter, PHPUnit y Backup/Restore)
+    name: PHP 8.2 + MySQL 8.0 (Migraciones, Frontend, Linter, PHPUnit y Backup/Restore)
     runs-on: ubuntu-latest
 
     services:
@@ -52,25 +52,37 @@ jobs:
           ini-values: variables_order=EGPCS
           coverage: none
 
+      - name: Configurar Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
       - name: Instalar dependencias de Composer
         run: composer install --prefer-dist --no-progress --no-interaction
+
+      - name: Instalar dependencias de NPM y compilar frontend
+        run: |
+          npm ci
+          npm run build
 
       - name: Verificar sintaxis PHP (php -l)
         run: |
           find Router.php classes controllers database includes interfaces models public repositories scripts services tests views -name "*.php" -print0 | xargs -0 -n1 php -l
 
-      - name: Cargar esquema base y aplicar migraciones (001 a 006)
+      - name: Cargar esquema base y aplicar migraciones incrementales (001 a 008)
         run: |
           mysql -h 127.0.0.1 -P 3306 -uroot -proot appsalon_ci_test < database/schema_base.sql
           php database/migrador.php up
           php database/migrador.php status
 
-      - name: Ejecutar suite completa de PHPUnit
-        run: php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --colors=never
+      - name: Ejecutar suite completa de PHPUnit (sin caché y orden aleatorio)
+        run: php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --order-by=random --colors=never
 
-      - name: Verificar scripts CLI de respaldo y restauración
+      - name: Verificar ciclo completo de respaldo y restauración con validación SHA-256
         run: |
           php scripts/backup_db.php --db=appsalon_ci_test --output=/tmp/appsalon_ci_backup.sql.gz --gzip
+          test -f /tmp/appsalon_ci_backup.sql.gz.manifest.json
+          BACKUP_HASH=$(sha256sum /tmp/appsalon_ci_backup.sql.gz | awk '{print $1}')
           mysql -h 127.0.0.1 -P 3306 -uroot -proot -e "CREATE DATABASE IF NOT EXISTS appsalon_ci_restore_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-          php scripts/restore_db.php --db=appsalon_ci_restore_test --input=/tmp/appsalon_ci_backup.sql.gz
-          rm -f /tmp/appsalon_ci_backup.sql.gz
+          php scripts/restore_db.php --db=appsalon_ci_restore_test --input=/tmp/appsalon_ci_backup.sql.gz --hash=$BACKUP_HASH
+          rm -f /tmp/appsalon_ci_backup.sql.gz /tmp/appsalon_ci_backup.sql.gz.manifest.json

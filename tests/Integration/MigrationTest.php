@@ -540,4 +540,109 @@ class MigrationTest extends TestCase
             self::$db->query("DROP DATABASE IF EXISTS appsalon_mig006_test");
         }
     }
+
+    /**
+     * Verifica que la migración 007 (`007_citas_estado_cancelacion`) se aplique,
+     * permita el uso de los nuevos campos de estado y trazabilidad, y revierta limpiamente.
+     */
+    public function testMigracion007CitasEstadoCancelacionUpYRollback(): void
+    {
+        self::$db->query("DROP DATABASE IF EXISTS appsalon_mig007_test");
+        self::$db->query("CREATE DATABASE appsalon_mig007_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+
+        $db007 = new mysqli(self::$host, self::$user, self::$pass, 'appsalon_mig007_test', self::$port);
+        $db007->set_charset('utf8mb4');
+
+        try {
+            $schemaBase = file_get_contents(__DIR__ . '/../../database/schema_base.sql');
+            $db007->multi_query($schemaBase);
+            while ($db007->more_results() && $db007->next_result()) {
+                if ($res = $db007->store_result()) {
+                    $res->free();
+                }
+            }
+
+            // Aplicar todas las migraciones hasta 007
+            $resUp = $this->ejecutarMigrador('up', 'appsalon_mig007_test');
+            $this->assertSame(0, $resUp['exitCode']);
+            $this->assertStringContainsString('[+] Aplicando migración: 007_citas_estado_cancelacion', $resUp['stdout']);
+
+            // Verificar columnas de citas
+            $checkEstado = $db007->query("SHOW COLUMNS FROM citas LIKE 'estado'")->fetch_assoc();
+            $this->assertNotNull($checkEstado, 'Columna estado debe existir en citas tras 007');
+
+            $checkCanceladoPor = $db007->query("SHOW COLUMNS FROM citas LIKE 'cancelado_por'")->fetch_assoc();
+            $this->assertNotNull($checkCanceladoPor, 'Columna cancelado_por debe existir en citas tras 007');
+
+            $checkCanceladoAt = $db007->query("SHOW COLUMNS FROM citas LIKE 'cancelado_at'")->fetch_assoc();
+            $this->assertNotNull($checkCanceladoAt, 'Columna cancelado_at debe existir en citas tras 007');
+
+            $checkMotivo = $db007->query("SHOW COLUMNS FROM citas LIKE 'motivo_cancelacion'")->fetch_assoc();
+            $this->assertNotNull($checkMotivo, 'Columna motivo_cancelacion debe existir en citas tras 007');
+
+            // Rollback de 007
+            $rollbackSql = file_get_contents(__DIR__ . '/../../database/migrations/007_citas_estado_cancelacion_rollback.sql');
+            $db007->multi_query($rollbackSql);
+            while ($db007->more_results() && $db007->next_result()) {
+                if ($res = $db007->store_result()) {
+                    $res->free();
+                }
+            }
+
+            $checkCol = $db007->query("SHOW COLUMNS FROM citas LIKE 'estado'");
+            $this->assertSame(0, $checkCol->num_rows, 'Rollback de 007 debe eliminar la columna estado');
+        } finally {
+            $db007->close();
+            self::$db->query("DROP DATABASE IF EXISTS appsalon_mig007_test");
+        }
+    }
+
+    /**
+     * Verifica que la migración 008 (`008_notificaciones_outbox_lease`) se aplique,
+     * incorpore worker_token y lease_expires_at, y revierta limpiamente.
+     */
+    public function testMigracion008NotificacionesOutboxLeaseUpYRollback(): void
+    {
+        self::$db->query("DROP DATABASE IF EXISTS appsalon_mig008_test");
+        self::$db->query("CREATE DATABASE appsalon_mig008_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+
+        $db008 = new mysqli(self::$host, self::$user, self::$pass, 'appsalon_mig008_test', self::$port);
+        $db008->set_charset('utf8mb4');
+
+        try {
+            $schemaBase = file_get_contents(__DIR__ . '/../../database/schema_base.sql');
+            $db008->multi_query($schemaBase);
+            while ($db008->more_results() && $db008->next_result()) {
+                if ($res = $db008->store_result()) {
+                    $res->free();
+                }
+            }
+
+            // Aplicar todas las migraciones hasta 008
+            $resUp = $this->ejecutarMigrador('up', 'appsalon_mig008_test');
+            $this->assertSame(0, $resUp['exitCode']);
+            $this->assertStringContainsString('[+] Aplicando migración: 008_notificaciones_outbox_lease', $resUp['stdout']);
+
+            $checkToken = $db008->query("SHOW COLUMNS FROM notificaciones_citas LIKE 'worker_token'")->fetch_assoc();
+            $this->assertNotNull($checkToken, 'Columna worker_token debe existir tras 008');
+
+            $checkLease = $db008->query("SHOW COLUMNS FROM notificaciones_citas LIKE 'lease_expires_at'")->fetch_assoc();
+            $this->assertNotNull($checkLease, 'Columna lease_expires_at debe existir tras 008');
+
+            // Rollback de 008
+            $rollbackSql = file_get_contents(__DIR__ . '/../../database/migrations/008_notificaciones_outbox_lease_rollback.sql');
+            $db008->multi_query($rollbackSql);
+            while ($db008->more_results() && $db008->next_result()) {
+                if ($res = $db008->store_result()) {
+                    $res->free();
+                }
+            }
+
+            $checkCol = $db008->query("SHOW COLUMNS FROM notificaciones_citas LIKE 'worker_token'");
+            $this->assertSame(0, $checkCol->num_rows, 'Rollback de 008 debe eliminar worker_token');
+        } finally {
+            $db008->close();
+            self::$db->query("DROP DATABASE IF EXISTS appsalon_mig008_test");
+        }
+    }
 }

@@ -32,8 +32,15 @@ $opciones = getopt('', [
     'limite:',
     'ahora:',
     'json',
+    'simular-envio',
     'help',
 ]);
+
+if (array_key_exists('simular-envio', $opciones)) {
+    \Classes\Email::setTransport(static function () {
+        return true;
+    });
+}
 
 if (isset($opciones['help'])) {
     echo "Uso: php scripts/procesar_notificaciones.php [opciones]\n";

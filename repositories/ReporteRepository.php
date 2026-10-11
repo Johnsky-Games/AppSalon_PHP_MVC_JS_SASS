@@ -347,6 +347,7 @@ class ReporteRepository
      * @param string $fechaFin Fecha final `YYYY-MM-DD`.
      * @param string|null $filtroProfesional `null` (todos), `'sin_profesional'` (`profesionalId IS NULL`) o ID entero en string.
      * @param int|null $servicioId ID entero positivo de servicio para filtrar citas que incluyan dicho servicio.
+     * @param string $criterioFecha 'servicio' (por fecha de cita) o 'cobro' (por fecha de cobro del pago asociado).
      * @return array<int, array<string, mixed>>
      * @throws PersistenceException
      */
@@ -354,7 +355,8 @@ class ReporteRepository
         string $fechaInicio,
         string $fechaFin,
         ?string $filtroProfesional = null,
-        ?int $servicioId = null
+        ?int $servicioId = null,
+        string $criterioFecha = 'servicio'
     ): array {
         $db = $this->resolveDb();
 
@@ -367,6 +369,7 @@ class ReporteRepository
                     c.duracion_total_minutos AS cita_duracion_total_minutos,
                     c.usuarioId AS usuario_id,
                     c.profesionalId AS profesional_id,
+                    c.estado AS cita_estado,
                     CASE
                         WHEN c.estado_pago IN ('pagado', 'completado')
                              OR EXISTS (
@@ -401,18 +404,35 @@ class ReporteRepository
                     cs.id AS citasservicio_id,
                     cs.servicioId AS servicio_id,
                     s.id AS servicio_catalogo_id,
-                    COALESCE(cs.nombre_servicio, s.nombre) AS servicio_nombre,
-                    COALESCE(cs.precio_servicio, s.precio) AS servicio_precio,
-                    COALESCE(cs.duracion_minutos, s.duracion_minutos) AS servicio_duracion_minutos
+                    COALESCE(cs.nombre_servicio, s.nombre, 'Servicio eliminado') AS servicio_nombre,
+                    COALESCE(cs.precio_servicio, s.precio, 0.00) AS servicio_precio,
+                    COALESCE(cs.duracion_minutos, s.duracion_minutos, 0) AS servicio_duracion_minutos
                 FROM citas c
                 LEFT JOIN profesionales p ON p.id = c.profesionalId
                 LEFT JOIN usuarios u ON u.id = c.usuarioId
                 LEFT JOIN citasservicios cs ON cs.citaId = c.id
                 LEFT JOIN servicios s ON s.id = cs.servicioId
-                WHERE c.fecha >= ? AND c.fecha <= ?";
+                WHERE ";
 
-        $tipos = 'ss';
-        $params = [$fechaInicio, $fechaFin];
+        $tipos = '';
+        $params = [];
+
+        if ($criterioFecha === 'cobro') {
+            $sql .= "EXISTS (
+                        SELECT 1 FROM pagos pg_cf
+                        WHERE (pg_cf.cita_id = c.id OR pg_cf.cita_referencia_id = c.id)
+                          AND DATE(COALESCE(pg_cf.pagado_at, pg_cf.created_at)) >= ?
+                          AND DATE(COALESCE(pg_cf.pagado_at, pg_cf.created_at)) <= ?
+                    )";
+            $tipos .= 'ss';
+            $params[] = $fechaInicio;
+            $params[] = $fechaFin;
+        } else {
+            $sql .= "c.fecha >= ? AND c.fecha <= ?";
+            $tipos .= 'ss';
+            $params[] = $fechaInicio;
+            $params[] = $fechaFin;
+        }
 
         if ($filtroProfesional === 'sin_profesional') {
             $sql .= " AND c.profesionalId IS NULL";
@@ -440,7 +460,9 @@ class ReporteRepository
                 throw new PersistenceException('Error al preparar consulta de reservas para reportes: ' . $db->error);
             }
 
-            $stmt->bind_param($tipos, ...$params);
+            if (!empty($params)) {
+                $stmt->bind_param($tipos, ...$params);
+            }
 
             if (!$stmt->execute()) {
                 $err = $stmt->error;
@@ -467,6 +489,152 @@ class ReporteRepository
         } catch (\Throwable $e) {
             error_log('[ReporteRepository::obtenerFilasReservasEnRango] Excepción inesperada: ' . $e->getMessage());
             throw new PersistenceException('Error inesperado al consultar reservas para reportes.', 0, $e);
+        }
+    }
+
+    /**
+     * Consulta los movimientos financieros (cobros confirmados y reembolsos)
+     * estructurados directamente a partir de la tabla durable `pagos`:
+     * FROM pagos pg LEFT JOIN citas c ON (c.id = pg.cita_id OR c.id = pg.cita_referencia_id) LEFT JOIN ...
+     *
+     * Garantiza persistencia contable inmutable independientemente de si la cita
+     * fue cancelada o eliminada, o si sus servicios fueron modificados o eliminados del catálogo.
+     *
+     * @param string $fechaInicio Fecha inicial `YYYY-MM-DD`.
+     * @param string $fechaFin Fecha final `YYYY-MM-DD`.
+     * @param string $criterioFecha 'servicio' (por fecha de cita) o 'cobro' (por fecha de cobro).
+     * @param string|null $filtroProfesional null, 'sin_profesional' o ID de profesional.
+     * @param int|null $servicioId ID de servicio en catálogo.
+     * @return array<int, array<string, mixed>>
+     * @throws PersistenceException
+     */
+    public function obtenerMovimientosFinancierosEnRango(
+        string $fechaInicio,
+        string $fechaFin,
+        string $criterioFecha = 'servicio',
+        ?string $filtroProfesional = null,
+        ?int $servicioId = null
+    ): array {
+        $db = $this->resolveDb();
+
+        $sql = "SELECT
+                    pg.id AS pago_id,
+                    pg.cita_id,
+                    pg.cita_referencia_id,
+                    pg.usuario_id,
+                    pg.referencia_pago,
+                    pg.proveedor,
+                    pg.transaccion_externa_id,
+                    pg.monto AS pago_monto,
+                    pg.moneda AS pago_moneda,
+                    pg.estado AS pago_estado,
+                    pg.metodo_pago,
+                    pg.idempotency_key,
+                    pg.pagado_at,
+                    pg.created_at AS pago_created_at,
+                    pg.updated_at AS pago_updated_at,
+                    COALESCE(pg.pagado_at, pg.created_at) AS fecha_cobro,
+                    c.id AS cita_id_join,
+                    c.fecha AS cita_fecha,
+                    c.hora AS cita_hora,
+                    c.hora_inicio AS cita_hora_inicio,
+                    c.hora_fin AS cita_hora_fin,
+                    c.duracion_total_minutos AS cita_duracion_total_minutos,
+                    c.estado AS cita_estado,
+                    c.profesionalId AS profesional_id,
+                    p.nombre AS profesional_nombre,
+                    p.activo AS profesional_activo,
+                    COALESCE(u.nombre, 'Cliente') AS cliente_nombre,
+                    COALESCE(u.apellido, '') AS cliente_apellido,
+                    u.email AS cliente_email,
+                    u.telefono AS cliente_telefono,
+                    cs.id AS citasservicio_id,
+                    cs.servicioId AS servicio_id,
+                    s.id AS servicio_catalogo_id,
+                    COALESCE(cs.nombre_servicio, s.nombre, 'Servicio eliminado') AS servicio_nombre,
+                    COALESCE(cs.precio_servicio, s.precio, 0.00) AS servicio_precio,
+                    COALESCE(cs.duracion_minutos, s.duracion_minutos, 0) AS servicio_duracion_minutos
+                FROM pagos pg
+                LEFT JOIN citas c ON (c.id = pg.cita_id OR c.id = pg.cita_referencia_id)
+                LEFT JOIN profesionales p ON p.id = c.profesionalId
+                LEFT JOIN usuarios u ON u.id = COALESCE(pg.usuario_id, c.usuarioId)
+                LEFT JOIN citasservicios cs ON cs.citaId = COALESCE(c.id, pg.cita_referencia_id)
+                LEFT JOIN servicios s ON s.id = cs.servicioId
+                WHERE ";
+
+        $tipos = '';
+        $params = [];
+
+        if ($criterioFecha === 'cobro') {
+            $sql .= "DATE(COALESCE(pg.pagado_at, pg.created_at)) >= ? AND DATE(COALESCE(pg.pagado_at, pg.created_at)) <= ?";
+            $tipos .= 'ss';
+            $params[] = $fechaInicio;
+            $params[] = $fechaFin;
+        } else {
+            // Por fecha de servicio de la cita (con fallback a fecha de cobro si la cita fue eliminada físicamente)
+            $sql .= "( (c.fecha >= ? AND c.fecha <= ?) OR (c.id IS NULL AND DATE(COALESCE(pg.pagado_at, pg.created_at)) >= ? AND DATE(COALESCE(pg.pagado_at, pg.created_at)) <= ?) )";
+            $tipos .= 'ssss';
+            $params[] = $fechaInicio;
+            $params[] = $fechaFin;
+            $params[] = $fechaInicio;
+            $params[] = $fechaFin;
+        }
+
+        if ($filtroProfesional === 'sin_profesional') {
+            $sql .= " AND (c.profesionalId IS NULL)";
+        } elseif ($filtroProfesional !== null && ctype_digit($filtroProfesional) && (int)$filtroProfesional > 0) {
+            $sql .= " AND c.profesionalId = ?";
+            $tipos .= 'i';
+            $params[] = (int)$filtroProfesional;
+        }
+
+        if ($servicioId !== null && $servicioId > 0) {
+            $sql .= " AND EXISTS (
+                        SELECT 1
+                        FROM citasservicios cs_f
+                        WHERE cs_f.citaId = COALESCE(c.id, pg.cita_referencia_id) AND cs_f.servicioId = ?
+                      )";
+            $tipos .= 'i';
+            $params[] = $servicioId;
+        }
+
+        $sql .= " ORDER BY COALESCE(pg.pagado_at, pg.created_at) DESC, pg.id DESC, cs.id ASC";
+
+        try {
+            $stmt = $db->prepare($sql);
+            if (!$stmt) {
+                throw new PersistenceException('Error al preparar consulta de movimientos financieros: ' . $db->error);
+            }
+
+            if (!empty($params)) {
+                $stmt->bind_param($tipos, ...$params);
+            }
+
+            if (!$stmt->execute()) {
+                $err = $stmt->error;
+                $stmt->close();
+                throw new PersistenceException('Error al ejecutar consulta de movimientos financieros: ' . $err);
+            }
+
+            $res = $stmt->get_result();
+            if ($res === false) {
+                $err = $stmt->error;
+                $stmt->close();
+                throw new PersistenceException('Error al obtener movimientos financieros para reportes: ' . $err);
+            }
+
+            $filas = [];
+            while ($fila = $res->fetch_assoc()) {
+                $filas[] = $fila;
+            }
+            $stmt->close();
+
+            return $filas;
+        } catch (PersistenceException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            error_log('[ReporteRepository::obtenerMovimientosFinancierosEnRango] Excepción inesperada: ' . $e->getMessage());
+            throw new PersistenceException('Error inesperado al consultar movimientos financieros para reportes.', 0, $e);
         }
     }
 }

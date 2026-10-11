@@ -29,6 +29,9 @@ class ReporteService
     public const TIMEZONE = 'America/Guayaquil';
     public const MAX_DIAS_RANGO = 366;
 
+    public const CRITERIO_FECHA_SERVICIO = 'servicio';
+    public const CRITERIO_FECHA_COBRO = 'cobro';
+
     public const ESTADO_PAGO_PENDIENTE = 'pendiente';
     public const ESTADO_PAGO_PAGADO = 'pagado';
     public const ESTADO_PAGO_REEMBOLSADO = 'reembolsado';
@@ -259,11 +262,27 @@ class ReporteService
             }
         }
 
+        // Filtro de criterio de fecha: 'servicio' (predeterminado) o 'cobro'
+        $criterioRaw = $parametros['criterio_fecha'] ?? $parametros['tipo_fecha'] ?? null;
+        $criterioFecha = self::CRITERIO_FECHA_SERVICIO;
+
+        if ($criterioRaw !== null && trim((string)$criterioRaw) !== '') {
+            $criterioStr = strtolower(trim((string)$criterioRaw));
+            if ($criterioStr === 'cobro' || $criterioStr === 'pago') {
+                $criterioFecha = self::CRITERIO_FECHA_COBRO;
+            } elseif ($criterioStr === 'servicio' || $criterioStr === 'cita') {
+                $criterioFecha = self::CRITERIO_FECHA_SERVICIO;
+            } else {
+                $errores[] = "El criterio de fecha seleccionado no es válido. Debe ser 'servicio' o 'cobro'.";
+            }
+        }
+
         return [
             'valido' => empty($errores),
             'errores' => $errores,
             'fecha_inicio' => $inicioValido ? $fechaInicio : $rangoDefault['fecha_inicio'],
             'fecha_fin' => $finValido ? $fechaFin : $rangoDefault['fecha_fin'],
+            'criterio_fecha' => $criterioFecha,
             'profesional_filtro' => $profesionalFiltro,
             'profesional_id_int' => $profesionalIdInt,
             'servicio_id' => $servicioId,
@@ -455,6 +474,7 @@ class ReporteService
 
             $fechaInicio = $validacion['fecha_inicio'];
             $fechaFin = $validacion['fecha_fin'];
+            $criterioFecha = $validacion['criterio_fecha'] ?? self::CRITERIO_FECHA_SERVICIO;
             $filtroProfesional = $validacion['profesional_filtro'];
             $profesionalIdInt = $validacion['profesional_id_int'];
             $servicioIdFiltro = $validacion['servicio_id'];
@@ -463,8 +483,19 @@ class ReporteService
                 $fechaInicio,
                 $fechaFin,
                 $filtroProfesional,
-                $servicioIdFiltro
+                $servicioIdFiltro,
+                $criterioFecha
             );
+
+            $filasPagos = method_exists($this->reporteRepository, 'obtenerMovimientosFinancierosEnRango')
+                ? $this->reporteRepository->obtenerMovimientosFinancierosEnRango(
+                    $fechaInicio,
+                    $fechaFin,
+                    $criterioFecha,
+                    $filtroProfesional,
+                    $servicioIdFiltro
+                )
+                : [];
 
             $horarios = $this->reporteRepository->obtenerHorariosProfesionales($profesionalIdInt);
             $descansos = $this->reporteRepository->obtenerDescansosProfesionales($profesionalIdInt);
@@ -475,6 +506,7 @@ class ReporteService
                 $profesionalesCatalogo,
                 $serviciosCatalogo,
                 $filas,
+                $filasPagos,
                 $horarios,
                 $descansos,
                 $bloqueos
@@ -498,6 +530,7 @@ class ReporteService
      * @param array<int, array<string, mixed>> $profesionalesCatalogo
      * @param array<int, array<string, mixed>> $serviciosCatalogo
      * @param array<int, array<string, mixed>> $filas
+     * @param array<int, array<string, mixed>> $filasPagos
      * @param array<int, array<string, mixed>> $horarios
      * @param array<int, array<string, mixed>> $descansos
      * @param array<int, array<string, mixed>> $bloqueos
@@ -508,17 +541,139 @@ class ReporteService
         array $profesionalesCatalogo,
         array $serviciosCatalogo,
         array $filas,
+        array $filasPagos,
         array $horarios,
         array $descansos,
         array $bloqueos
     ): array {
         $fechaInicio = (string)$validacion['fecha_inicio'];
         $fechaFin = (string)$validacion['fecha_fin'];
+        $criterioFecha = (string)($validacion['criterio_fecha'] ?? self::CRITERIO_FECHA_SERVICIO);
         $filtroProfesional = $validacion['profesional_filtro'];
         $profesionalIdInt = $validacion['profesional_id_int'];
         $servicioIdFiltro = $validacion['servicio_id'];
 
-        // 1. Agrupar filas por cita_id preservando el orden determinista
+        // 1. Procesar movimientos financieros directamente desde la tabla duradera `pagos`
+        $movimientosFinancieros = [];
+        $cobrosConfirmadosTotal = 0.00;
+        $cobrosConfirmadosReales = 0.00;
+        $cobrosConfirmadosSimulados = 0.00;
+        $reembolsosTotal = 0.00;
+        $reembolsosReales = 0.00;
+        $reembolsosSimulados = 0.00;
+        $pagosPorProf = [];
+
+        if (!empty($filasPagos)) {
+            foreach ($filasPagos as $filaP) {
+                $pId = (int)($filaP['pago_id'] ?? 0);
+                if ($pId <= 0) {
+                    continue;
+                }
+
+                if (!isset($movimientosFinancieros[$pId])) {
+                    $prov = trim((string)($filaP['proveedor'] ?? 'mock')) ?: 'mock';
+                    $esSimulado = ($prov === 'mock');
+                    $montoP = isset($filaP['pago_monto']) && is_numeric($filaP['pago_monto'])
+                        ? round(max(0.0, (float)$filaP['pago_monto']), 2)
+                        : 0.00;
+                    $estadoP = strtolower(trim((string)($filaP['pago_estado'] ?? 'pendiente')));
+
+                    $nombreCli = trim(((string)($filaP['cliente_nombre'] ?? '')) . ' ' . ((string)($filaP['cliente_apellido'] ?? '')));
+                    if ($nombreCli === '') {
+                        $nombreCli = 'Cliente';
+                    }
+
+                    $pProfId = $filaP['profesional_id'] !== null && $filaP['profesional_id'] !== ''
+                        ? (int)$filaP['profesional_id']
+                        : null;
+
+                    $movimientosFinancieros[$pId] = [
+                        'id' => $pId,
+                        'pago_id' => $pId,
+                        'cita_id' => $filaP['cita_id'] !== null ? (int)$filaP['cita_id'] : null,
+                        'cita_referencia_id' => (int)($filaP['cita_referencia_id'] ?? 0),
+                        'referencia_pago' => (string)($filaP['referencia_pago'] ?? ''),
+                        'proveedor' => $prov,
+                        'es_simulado' => $esSimulado,
+                        'monto' => $montoP,
+                        'moneda' => (string)($filaP['pago_moneda'] ?? 'USD'),
+                        'estado' => $estadoP,
+                        'metodo_pago' => $filaP['metodo_pago'] !== null ? (string)$filaP['metodo_pago'] : null,
+                        'fecha_cobro' => (string)($filaP['fecha_cobro'] ?? ''),
+                        'pagado_at' => $filaP['pagado_at'] !== null ? (string)$filaP['pagado_at'] : null,
+                        'created_at' => (string)($filaP['pago_created_at'] ?? ''),
+                        'cita_fecha' => $filaP['cita_fecha'] !== null ? (string)$filaP['cita_fecha'] : null,
+                        'cita_hora' => $filaP['cita_hora'] !== null ? (string)$filaP['cita_hora'] : null,
+                        'cita_estado' => (string)($filaP['cita_estado'] ?? 'confirmada'),
+                        'profesional_id' => $pProfId,
+                        'profesional_nombre' => $pProfId !== null
+                            ? ((string)($filaP['profesional_nombre'] ?? ('Profesional #' . $pProfId)))
+                            : 'Sin profesional asignado',
+                        'cliente' => $nombreCli,
+                        'cliente_email' => (string)($filaP['cliente_email'] ?? ''),
+                        'cliente_telefono' => (string)($filaP['cliente_telefono'] ?? ''),
+                        'servicios' => [],
+                    ];
+
+                    if ($estadoP === 'completado') {
+                        $cobrosConfirmadosTotal = round($cobrosConfirmadosTotal + $montoP, 2);
+                        if ($esSimulado) {
+                            $cobrosConfirmadosSimulados = round($cobrosConfirmadosSimulados + $montoP, 2);
+                        } else {
+                            $cobrosConfirmadosReales = round($cobrosConfirmadosReales + $montoP, 2);
+                        }
+                        if ($pProfId !== null) {
+                            $pagosPorProf[$pProfId]['cobros_confirmados'] = round(
+                                ($pagosPorProf[$pProfId]['cobros_confirmados'] ?? 0.00) + $montoP,
+                                2
+                            );
+                        }
+                    } elseif ($estadoP === 'reembolsado') {
+                        $reembolsosTotal = round($reembolsosTotal + $montoP, 2);
+                        if ($esSimulado) {
+                            $reembolsosSimulados = round($reembolsosSimulados + $montoP, 2);
+                        } else {
+                            $reembolsosReales = round($reembolsosReales + $montoP, 2);
+                        }
+                        if ($pProfId !== null) {
+                            $pagosPorProf[$pProfId]['reembolsos'] = round(
+                                ($pagosPorProf[$pProfId]['reembolsos'] ?? 0.00) + $montoP,
+                                2
+                            );
+                        }
+                    }
+                }
+
+                $csId = $filaP['citasservicio_id'] ?? null;
+                if ($csId !== null) {
+                    $servNombre = trim((string)($filaP['servicio_nombre'] ?? ''));
+                    if ($servNombre === '') {
+                        $servNombre = 'Servicio eliminado';
+                    }
+                    $servPrecio = isset($filaP['servicio_precio']) && is_numeric($filaP['servicio_precio'])
+                        ? round(max(0.0, (float)$filaP['servicio_precio']), 2)
+                        : 0.00;
+                    $servDur = isset($filaP['servicio_duracion_minutos']) && is_numeric($filaP['servicio_duracion_minutos'])
+                        ? max(0, (int)$filaP['servicio_duracion_minutos'])
+                        : 0;
+
+                    $movimientosFinancieros[$pId]['servicios'][] = [
+                        'citasservicio_id' => (int)$csId,
+                        'servicio_id' => $filaP['servicio_id'] !== null ? (int)$filaP['servicio_id'] : null,
+                        'nombre' => $servNombre,
+                        'precio' => $servPrecio,
+                        'duracion_minutos' => $servDur,
+                        'es_eliminado_catalogo' => ($filaP['servicio_catalogo_id'] === null),
+                    ];
+                }
+            }
+        }
+
+        $netoCobradoTotal = round(max(0.0, $cobrosConfirmadosTotal - $reembolsosTotal), 2);
+        $netoCobradoReal = round(max(0.0, $cobrosConfirmadosReales - $reembolsosReales), 2);
+        $netoCobradoSimulado = round(max(0.0, $cobrosConfirmadosSimulados - $reembolsosSimulados), 2);
+
+        // 2. Agrupar filas operativas de citas y servicios
         $citasAgrupadas = [];
         foreach ($filas as $fila) {
             $citaId = (int)($fila['cita_id'] ?? 0);
@@ -536,6 +691,9 @@ class ReporteService
                 if ($nombreCliente === '') {
                     $nombreCliente = 'Cliente histórico';
                 }
+
+                $estadoCita = strtolower(trim((string)($fila['cita_estado'] ?? 'confirmada')));
+                $esCancelada = ($estadoCita === 'cancelada');
 
                 $citasAgrupadas[$citaId] = [
                     'id' => $citaId,
@@ -555,6 +713,8 @@ class ReporteService
                         ? ((string)($fila['profesional_nombre'] ?? ('Profesional #' . $profId)))
                         : 'Sin profesional asignado (cita histórica)',
                     'es_historica_sin_profesional' => $profId === null,
+                    'cita_estado' => $estadoCita,
+                    'es_cancelada' => $esCancelada,
                     'estado_pago_raw' => $fila['estado_pago'] ?? null,
                     'monto_pagado_raw' => $fila['monto_pagado'] ?? null,
                     'servicios' => [],
@@ -568,7 +728,7 @@ class ReporteService
                     : null;
                 $servNombre = trim((string)($fila['servicio_nombre'] ?? ''));
                 if ($servNombre === '') {
-                    $servNombre = 'Servicio histórico (eliminado del catálogo)';
+                    $servNombre = 'Servicio eliminado';
                 }
                 $servPrecio = isset($fila['servicio_precio']) && is_numeric($fila['servicio_precio'])
                     ? round(max(0.0, (float)$fila['servicio_precio']), 2)
@@ -591,7 +751,7 @@ class ReporteService
             }
         }
 
-        // 2. Calcular totales por cita, desglose por servicio y acumuladores por profesional
+        // 3. Calcular totales operacionales por cita, desglose por servicio y acumuladores por profesional
         $reservasDetalle = [];
         $mapaServicios = [];
         $ocupacionPorProf = [];
@@ -605,10 +765,19 @@ class ReporteService
 
         $importeReservadoTotal = 0.00;
         $importeBrutoCitasTotal = 0.00;
-        $ingresoPagadoTotal = 0.00;
+        $ingresoPagadoLegacyTotal = 0.00;
         $totalServiciosReservados = 0;
+        $totalCitasActivas = 0;
+        $totalCitasCanceladas = 0;
 
         foreach ($citasAgrupadas as $cita) {
+            $esCancelada = !empty($cita['es_cancelada']);
+            if ($esCancelada) {
+                $totalCitasCanceladas++;
+            } else {
+                $totalCitasActivas++;
+            }
+
             $importeTotalCita = 0.00;
             $subtotalServicioFiltrado = 0.00;
             $sumaDuracionServiciosCita = 0;
@@ -625,7 +794,9 @@ class ReporteService
                 if ($coincideFiltroServicio) {
                     $subtotalServicioFiltrado += $precioSrv;
                     $sumaDuracionServicioFiltrado += $durSrv;
-                    $totalServiciosReservados++;
+                    if (!$esCancelada) {
+                        $totalServiciosReservados++;
+                    }
                 }
 
                 $durTexto = $durSrv > 0 ? " ({$durSrv} min)" : '';
@@ -636,7 +807,7 @@ class ReporteService
             $subtotalServicioFiltrado = round($subtotalServicioFiltrado, 2);
             $importeAtribuible = $servicioIdFiltro !== null ? $subtotalServicioFiltrado : $importeTotalCita;
 
-            // Determinar duración de la cita: COALESCE(citas.duracion_total_minutos, diff(hora_inicio, hora_fin), suma servicios)
+            // Determinar duración de la cita
             $duracionCitaMinutos = 0;
             if ($cita['cita_duracion_total_minutos'] !== null && $cita['cita_duracion_total_minutos'] > 0) {
                 $duracionCitaMinutos = (int)$cita['cita_duracion_total_minutos'];
@@ -663,38 +834,40 @@ class ReporteService
 
             $ingresoPagadoCita = $infoPago['ingreso_pagado'];
 
-            // Actualizar desglose por servicio
-            foreach ($cita['servicios'] as $srv) {
-                if ($servicioIdFiltro !== null && $srv['servicio_id'] !== $servicioIdFiltro) {
-                    continue;
-                }
-                $claveSrv = $srv['servicio_id'] !== null
-                    ? 'id:' . $srv['servicio_id']
-                    : 'hist:' . mb_strtolower($srv['nombre'], 'UTF-8');
+            // Actualizar desglose por servicio (solo para citas activas para métricas operativas)
+            if (!$esCancelada) {
+                foreach ($cita['servicios'] as $srv) {
+                    if ($servicioIdFiltro !== null && $srv['servicio_id'] !== $servicioIdFiltro) {
+                        continue;
+                    }
+                    $claveSrv = $srv['servicio_id'] !== null
+                        ? 'id:' . $srv['servicio_id']
+                        : 'hist:' . mb_strtolower($srv['nombre'], 'UTF-8');
 
-                if (!isset($mapaServicios[$claveSrv])) {
-                    $mapaServicios[$claveSrv] = [
-                        'servicio_id' => $srv['servicio_id'],
-                        'servicio_nombre' => $srv['nombre'],
-                        'es_eliminado_catalogo' => $srv['es_eliminado_catalogo'],
-                        'total_reservas' => 0,
-                        'minutos_reservados' => 0,
-                        'importe_reservado' => 0.00,
-                        'ingreso_pagado' => 0.00,
-                    ];
-                }
+                    if (!isset($mapaServicios[$claveSrv])) {
+                        $mapaServicios[$claveSrv] = [
+                            'servicio_id' => $srv['servicio_id'],
+                            'servicio_nombre' => $srv['nombre'],
+                            'es_eliminado_catalogo' => $srv['es_eliminado_catalogo'],
+                            'total_reservas' => 0,
+                            'minutos_reservados' => 0,
+                            'importe_reservado' => 0.00,
+                            'ingreso_pagado' => 0.00,
+                        ];
+                    }
 
-                $mapaServicios[$claveSrv]['total_reservas']++;
-                $mapaServicios[$claveSrv]['minutos_reservados'] += (int)$srv['duracion_minutos'];
-                $mapaServicios[$claveSrv]['importe_reservado'] = round(
-                    $mapaServicios[$claveSrv]['importe_reservado'] + (float)$srv['precio'],
-                    2
-                );
-                if ($infoPago['estado_pago'] === self::ESTADO_PAGO_PAGADO) {
-                    $mapaServicios[$claveSrv]['ingreso_pagado'] = round(
-                        $mapaServicios[$claveSrv]['ingreso_pagado'] + (float)$srv['precio'],
+                    $mapaServicios[$claveSrv]['total_reservas']++;
+                    $mapaServicios[$claveSrv]['minutos_reservados'] += (int)$srv['duracion_minutos'];
+                    $mapaServicios[$claveSrv]['importe_reservado'] = round(
+                        $mapaServicios[$claveSrv]['importe_reservado'] + (float)$srv['precio'],
                         2
                     );
+                    if ($infoPago['estado_pago'] === self::ESTADO_PAGO_PAGADO) {
+                        $mapaServicios[$claveSrv]['ingreso_pagado'] = round(
+                            $mapaServicios[$claveSrv]['ingreso_pagado'] + (float)$srv['precio'],
+                            2
+                        );
+                    }
                 }
             }
 
@@ -708,53 +881,56 @@ class ReporteService
             $horarioTexto = $hFinCorta !== null ? "{$hInicioCorta} - {$hFinCorta}" : $hInicioCorta;
 
             $profId = $cita['profesional_id'];
-            if ($profId !== null) {
-                if (!isset($ocupacionPorProf[$profId])) {
-                    $ocupacionPorProf[$profId] = [
-                        'profesional_nombre' => $cita['profesional_nombre'],
-                        'total_citas' => 0,
-                        'minutos_ocupados' => 0,
-                        'minutos_servicio_filtrado' => 0,
-                        'importe_reservado' => 0.00,
-                        'importe_total_citas' => 0.00,
-                        'ingreso_pagado' => 0.00,
-                    ];
+            if (!$esCancelada) {
+                if ($profId !== null) {
+                    if (!isset($ocupacionPorProf[$profId])) {
+                        $ocupacionPorProf[$profId] = [
+                            'profesional_nombre' => $cita['profesional_nombre'],
+                            'total_citas' => 0,
+                            'minutos_ocupados' => 0,
+                            'minutos_servicio_filtrado' => 0,
+                            'importe_reservado' => 0.00,
+                            'importe_total_citas' => 0.00,
+                            'ingreso_pagado' => 0.00,
+                        ];
+                    }
+                    $ocupacionPorProf[$profId]['total_citas']++;
+                    $ocupacionPorProf[$profId]['minutos_ocupados'] += $duracionCitaMinutos;
+                    $ocupacionPorProf[$profId]['minutos_servicio_filtrado'] += $sumaDuracionServicioFiltrado;
+                    $ocupacionPorProf[$profId]['importe_reservado'] = round(
+                        $ocupacionPorProf[$profId]['importe_reservado'] + $importeAtribuible,
+                        2
+                    );
+                    $ocupacionPorProf[$profId]['importe_total_citas'] = round(
+                        $ocupacionPorProf[$profId]['importe_total_citas'] + $importeTotalCita,
+                        2
+                    );
+                    $ocupacionPorProf[$profId]['ingreso_pagado'] = round(
+                        $ocupacionPorProf[$profId]['ingreso_pagado'] + $ingresoPagadoCita,
+                        2
+                    );
+                } else {
+                    $acumuladorHistoricasSinProf['total_citas']++;
+                    $acumuladorHistoricasSinProf['minutos_ocupados'] += $duracionCitaMinutos;
+                    $acumuladorHistoricasSinProf['importe_reservado'] = round(
+                        $acumuladorHistoricasSinProf['importe_reservado'] + $importeAtribuible,
+                        2
+                    );
+                    $acumuladorHistoricasSinProf['importe_total_citas'] = round(
+                        $acumuladorHistoricasSinProf['importe_total_citas'] + $importeTotalCita,
+                        2
+                    );
+                    $acumuladorHistoricasSinProf['ingreso_pagado'] = round(
+                        $acumuladorHistoricasSinProf['ingreso_pagado'] + $ingresoPagadoCita,
+                        2
+                    );
                 }
-                $ocupacionPorProf[$profId]['total_citas']++;
-                $ocupacionPorProf[$profId]['minutos_ocupados'] += $duracionCitaMinutos;
-                $ocupacionPorProf[$profId]['minutos_servicio_filtrado'] += $sumaDuracionServicioFiltrado;
-                $ocupacionPorProf[$profId]['importe_reservado'] = round(
-                    $ocupacionPorProf[$profId]['importe_reservado'] + $importeAtribuible,
-                    2
-                );
-                $ocupacionPorProf[$profId]['importe_total_citas'] = round(
-                    $ocupacionPorProf[$profId]['importe_total_citas'] + $importeTotalCita,
-                    2
-                );
-                $ocupacionPorProf[$profId]['ingreso_pagado'] = round(
-                    $ocupacionPorProf[$profId]['ingreso_pagado'] + $ingresoPagadoCita,
-                    2
-                );
-            } else {
-                $acumuladorHistoricasSinProf['total_citas']++;
-                $acumuladorHistoricasSinProf['minutos_ocupados'] += $duracionCitaMinutos;
-                $acumuladorHistoricasSinProf['importe_reservado'] = round(
-                    $acumuladorHistoricasSinProf['importe_reservado'] + $importeAtribuible,
-                    2
-                );
-                $acumuladorHistoricasSinProf['importe_total_citas'] = round(
-                    $acumuladorHistoricasSinProf['importe_total_citas'] + $importeTotalCita,
-                    2
-                );
-                $acumuladorHistoricasSinProf['ingreso_pagado'] = round(
-                    $acumuladorHistoricasSinProf['ingreso_pagado'] + $ingresoPagadoCita,
-                    2
-                );
+
+                $importeReservadoTotal = round($importeReservadoTotal + $importeAtribuible, 2);
+                $importeBrutoCitasTotal = round($importeBrutoCitasTotal + $importeTotalCita, 2);
             }
 
-            $importeReservadoTotal = round($importeReservadoTotal + $importeAtribuible, 2);
-            $importeBrutoCitasTotal = round($importeBrutoCitasTotal + $importeTotalCita, 2);
-            $ingresoPagadoTotal = round($ingresoPagadoTotal + $ingresoPagadoCita, 2);
+            $ingresoPagadoLegacyTotal = round($ingresoPagadoLegacyTotal + $ingresoPagadoCita, 2);
 
             $reservasDetalle[] = [
                 'id' => $cita['id'],
@@ -769,6 +945,9 @@ class ReporteService
                 'profesional_id' => $profId,
                 'profesional_nombre' => $cita['profesional_nombre'],
                 'es_historica_sin_profesional' => $cita['es_historica_sin_profesional'],
+                'cita_estado' => $cita['cita_estado'],
+                'es_cancelada' => $esCancelada,
+                'etiqueta_estado_cita' => $esCancelada ? 'Cancelada' : 'Confirmada',
                 'servicios' => $cita['servicios'],
                 'servicios_resumen' => implode(', ', $serviciosTextoPartes),
                 'duracion_total_minutos' => $duracionCitaMinutos,
@@ -782,7 +961,21 @@ class ReporteService
             ];
         }
 
-        // 3. Calcular minutos disponibles y porcentaje de ocupación por profesional
+        // Si tenemos movimientos financieros duraderos desde pagos, prevalecen con exactitud contable
+        // (salvo cuando hay un filtro específico de servicio en el que el cobro total del pago excede los servicios filtrados)
+        if (!empty($movimientosFinancieros)) {
+            if ($servicioIdFiltro !== null) {
+                $ingresoPagadoFinal = $ingresoPagadoLegacyTotal;
+            } else {
+                $ingresoPagadoFinal = $cobrosConfirmadosTotal;
+            }
+        } else {
+            $ingresoPagadoFinal = $ingresoPagadoLegacyTotal;
+            $cobrosConfirmadosTotal = $ingresoPagadoLegacyTotal;
+            $netoCobradoTotal = $ingresoPagadoLegacyTotal;
+        }
+
+        // 4. Calcular minutos disponibles y porcentaje de ocupación por profesional
         $profesionalesParaOcupacion = [];
         if ($filtroProfesional !== 'sin_profesional') {
             foreach ($profesionalesCatalogo as $profCat) {
@@ -791,7 +984,6 @@ class ReporteService
                 }
                 $profesionalesParaOcupacion[(int)$profCat['id']] = $profCat;
             }
-            // Si alguna cita referencia un profesional no listado, asegurarlo
             foreach ($ocupacionPorProf as $pId => $infoOcup) {
                 if (!isset($profesionalesParaOcupacion[$pId])) {
                     $profesionalesParaOcupacion[$pId] = [
@@ -835,6 +1027,10 @@ class ReporteService
             $minutosOcupadosGlobalConProf += $minOcup;
             $minutosDisponiblesGlobalConProf += $minDisp;
 
+            $cobrosProf = $pagosPorProf[$profId]['cobros_confirmados'] ?? (float)$datosOcup['ingreso_pagado'];
+            $reembolsosProf = $pagosPorProf[$profId]['reembolsos'] ?? 0.00;
+            $netoProf = round(max(0.0, $cobrosProf - $reembolsosProf), 2);
+
             $resumenProfesionales[] = [
                 'profesional_id' => $profId,
                 'profesional_nombre' => (string)$profInfo['nombre'],
@@ -853,7 +1049,9 @@ class ReporteService
                     : number_format($porcentaje, 2, '.', '') . '%',
                 'importe_reservado' => round((float)$datosOcup['importe_reservado'], 2),
                 'importe_total_citas' => round((float)$datosOcup['importe_total_citas'], 2),
-                'ingreso_pagado' => round((float)$datosOcup['ingreso_pagado'], 2),
+                'ingreso_pagado' => round($cobrosProf, 2),
+                'reembolsos' => round($reembolsosProf, 2),
+                'neto_cobrado' => round($netoProf, 2),
             ];
         }
 
@@ -876,10 +1074,11 @@ class ReporteService
                 'importe_reservado' => round((float)$acumuladorHistoricasSinProf['importe_reservado'], 2),
                 'importe_total_citas' => round((float)$acumuladorHistoricasSinProf['importe_total_citas'], 2),
                 'ingreso_pagado' => round((float)$acumuladorHistoricasSinProf['ingreso_pagado'], 2),
+                'reembolsos' => 0.00,
+                'neto_cobrado' => round((float)$acumuladorHistoricasSinProf['ingreso_pagado'], 2),
             ];
         }
 
-        // Ordenar resumen de servicios por importe reservado descendente y nombre ascendente
         $resumenServicios = array_values($mapaServicios);
         usort($resumenServicios, static function (array $a, array $b): int {
             $cmpImporte = $b['importe_reservado'] <=> $a['importe_reservado'];
@@ -893,8 +1092,8 @@ class ReporteService
             ? round(($minutosOcupadosGlobalConProf / $minutosDisponiblesGlobalConProf) * 100, 2)
             : 0.00;
 
-        $totalCitas = count($reservasDetalle);
-        $status = $totalCitas > 0 ? self::STATUS_OK : self::STATUS_EMPTY;
+        $totalCitasTotal = count($reservasDetalle);
+        $status = ($totalCitasTotal > 0 || !empty($movimientosFinancieros)) ? self::STATUS_OK : self::STATUS_EMPTY;
 
         return [
             'status' => $status,
@@ -903,6 +1102,7 @@ class ReporteService
             'filtros' => [
                 'fecha_inicio' => $fechaInicio,
                 'fecha_fin' => $fechaFin,
+                'criterio_fecha' => $criterioFecha,
                 'profesional_id' => $filtroProfesional ?? '',
                 'servicio_id' => $servicioIdFiltro !== null ? (string)$servicioIdFiltro : '',
                 'dias_rango' => $validacion['dias_rango'],
@@ -913,8 +1113,10 @@ class ReporteService
                 'servicios' => $serviciosCatalogo,
             ],
             'resumen_global' => [
-                'total_citas' => $totalCitas,
-                'total_citas_con_profesional' => $totalCitas - (int)$acumuladorHistoricasSinProf['total_citas'],
+                'total_citas' => $totalCitasActivas,
+                'total_citas_activas' => $totalCitasActivas,
+                'total_citas_canceladas' => $totalCitasCanceladas,
+                'total_citas_con_profesional' => $totalCitasActivas - (int)$acumuladorHistoricasSinProf['total_citas'],
                 'total_citas_historicas_sin_profesional' => (int)$acumuladorHistoricasSinProf['total_citas'],
                 'total_servicios_reservados' => $totalServiciosReservados,
                 'minutos_ocupados_profesionales' => $minutosOcupadosGlobalConProf,
@@ -925,12 +1127,22 @@ class ReporteService
                 'sin_turno_disponible_global' => $minutosDisponiblesGlobalConProf <= 0,
                 'importe_reservado_total' => $importeReservadoTotal,
                 'importe_bruto_citas_filtradas' => $importeBrutoCitasTotal,
-                'ingreso_pagado_total' => $ingresoPagadoTotal,
-                'saldo_pendiente_cobro_total' => round(max(0.0, $importeReservadoTotal - $ingresoPagadoTotal), 2),
-                'nota_pagos' => 'Importe reservado corresponde al valor histórico comprometido en citas activas; ingreso pagado refleja únicamente cobros confirmados ($0.00 mientras el pago esté pendiente).',
+                'ingreso_pagado_total' => $ingresoPagadoFinal,
+                'saldo_pendiente_cobro_total' => round(max(0.0, $importeReservadoTotal - $ingresoPagadoFinal), 2),
+                'cobros_confirmados_total' => $cobrosConfirmadosTotal,
+                'cobros_confirmados_reales' => $cobrosConfirmadosReales,
+                'cobros_confirmados_simulados' => $cobrosConfirmadosSimulados,
+                'reembolsos_total' => $reembolsosTotal,
+                'reembolsos_reales' => $reembolsosReales,
+                'reembolsos_simulados' => $reembolsosSimulados,
+                'neto_cobrado_total' => $netoCobradoTotal,
+                'neto_cobrado_real' => $netoCobradoReal,
+                'neto_cobrado_simulado' => $netoCobradoSimulado,
+                'nota_pagos' => 'Importe reservado corresponde al valor histórico comprometido en citas activas; cobros confirmados y reembolsos provienen de la tabla de pagos independientemente del estado de la cita ($0.00 mientras el pago esté pendiente).',
             ],
             'resumen_profesionales' => $resumenProfesionales,
             'resumen_servicios' => $resumenServicios,
+            'movimientos_financieros' => array_values($movimientosFinancieros),
             'reservas' => $reservasDetalle,
         ];
     }
@@ -959,12 +1171,13 @@ class ReporteService
             'http_code' => $httpCode,
             'alertas' => $alertas,
             'filtros' => [
-                'fecha_inicio' => (string)$validacion['fecha_inicio'],
-                'fecha_fin' => (string)$validacion['fecha_fin'],
+                'fecha_inicio' => (string)($validacion['fecha_inicio'] ?? ''),
+                'fecha_fin' => (string)($validacion['fecha_fin'] ?? ''),
+                'criterio_fecha' => (string)($validacion['criterio_fecha'] ?? self::CRITERIO_FECHA_SERVICIO),
                 'profesional_id' => (string)($validacion['profesional_filtro'] ?? ''),
-                'servicio_id' => $validacion['servicio_id'] !== null ? (string)$validacion['servicio_id'] : '',
+                'servicio_id' => ($validacion['servicio_id'] ?? null) !== null ? (string)$validacion['servicio_id'] : '',
                 'dias_rango' => (int)($validacion['dias_rango'] ?? 0),
-                'tiene_filtro_servicio' => $validacion['servicio_id'] !== null,
+                'tiene_filtro_servicio' => ($validacion['servicio_id'] ?? null) !== null,
             ],
             'catalogos' => [
                 'profesionales' => $profesionalesCatalogo,
@@ -972,6 +1185,8 @@ class ReporteService
             ],
             'resumen_global' => [
                 'total_citas' => 0,
+                'total_citas_activas' => 0,
+                'total_citas_canceladas' => 0,
                 'total_citas_con_profesional' => 0,
                 'total_citas_historicas_sin_profesional' => 0,
                 'total_servicios_reservados' => 0,
@@ -985,10 +1200,20 @@ class ReporteService
                 'importe_bruto_citas_filtradas' => 0.00,
                 'ingreso_pagado_total' => 0.00,
                 'saldo_pendiente_cobro_total' => 0.00,
+                'cobros_confirmados_total' => 0.00,
+                'cobros_confirmados_reales' => 0.00,
+                'cobros_confirmados_simulados' => 0.00,
+                'reembolsos_total' => 0.00,
+                'reembolsos_reales' => 0.00,
+                'reembolsos_simulados' => 0.00,
+                'neto_cobrado_total' => 0.00,
+                'neto_cobrado_real' => 0.00,
+                'neto_cobrado_simulado' => 0.00,
                 'nota_pagos' => 'Importe reservado corresponde al valor histórico comprometido en citas activas; ingreso pagado refleja únicamente cobros confirmados ($0.00 mientras el pago esté pendiente).',
             ],
             'resumen_profesionales' => [],
             'resumen_servicios' => [],
+            'movimientos_financieros' => [],
             'reservas' => [],
         ];
     }
@@ -1033,7 +1258,8 @@ class ReporteService
 
     /**
      * Genera el contenido CSV seguro del reporte administrativo con codificación UTF-8 (BOM incluido),
-     * desglosando Resumen General, Ocupación por Profesional, Desglose por Servicio y Detalle de Reservas.
+     * desglosando Resumen General, Ocupación por Profesional, Desglose por Servicio, Movimientos Financieros
+     * y Detalle de Reservas con snapshots históricos inmutables.
      *
      * @param array<string, mixed> $reporte Estructura devuelta por `consultarReporte()`.
      * @return string Contenido CSV listo para descarga.
@@ -1061,32 +1287,44 @@ class ReporteService
         $escribirFila([
             'Fecha Inicio',
             'Fecha Fin',
+            'Criterio Fecha',
             'Filtro Profesional',
             'Filtro Servicio',
-            'Total Citas',
+            'Total Citas Activas',
+            'Total Citas Canceladas',
             'Minutos Ocupados',
             'Minutos Disponibles Turno',
             'Ocupacion Global (%)',
             'Importe Reservado Total (USD)',
             'Ingreso Pagado Total (USD)',
+            'Cobros Confirmados Total (USD)',
+            'Reembolsos Total (USD)',
+            'Neto Cobrado Total (USD)',
+            'Cobros Simulados Mock (USD)',
             'Saldo Pendiente de Cobro (USD)',
         ]);
         $escribirFila([
             (string)($filtros['fecha_inicio'] ?? ''),
             (string)($filtros['fecha_fin'] ?? ''),
-            (string)($filtros['profesional_id'] !== '' ? $filtros['profesional_id'] : 'Todos'),
-            (string)($filtros['servicio_id'] !== '' ? $filtros['servicio_id'] : 'Todos'),
+            (string)($filtros['criterio_fecha'] ?? 'servicio'),
+            (string)(($filtros['profesional_id'] ?? '') !== '' ? $filtros['profesional_id'] : 'Todos'),
+            (string)(($filtros['servicio_id'] ?? '') !== '' ? $filtros['servicio_id'] : 'Todos'),
             (int)($global['total_citas'] ?? 0),
+            (int)($global['total_citas_canceladas'] ?? 0),
             (int)($global['minutos_ocupados_profesionales'] ?? 0),
             (int)($global['minutos_disponibles_profesionales'] ?? 0),
             number_format((float)($global['porcentaje_ocupacion_global'] ?? 0), 2, '.', ''),
             number_format((float)($global['importe_reservado_total'] ?? 0), 2, '.', ''),
             number_format((float)($global['ingreso_pagado_total'] ?? 0), 2, '.', ''),
+            number_format((float)($global['cobros_confirmados_total'] ?? 0), 2, '.', ''),
+            number_format((float)($global['reembolsos_total'] ?? 0), 2, '.', ''),
+            number_format((float)($global['neto_cobrado_total'] ?? 0), 2, '.', ''),
+            number_format((float)($global['cobros_confirmados_simulados'] ?? 0), 2, '.', ''),
             number_format((float)($global['saldo_pendiente_cobro_total'] ?? 0), 2, '.', ''),
         ]);
         $escribirFila([]);
 
-        // 2. Ocupación por Profesional
+        // 2. Ocupación e Importes por Profesional
         $escribirFila(['OCUPACION E IMPORTES POR PROFESIONAL']);
         $escribirFila([
             'Profesional ID',
@@ -1100,6 +1338,8 @@ class ReporteService
             'Ocupacion (%)',
             'Importe Reservado (USD)',
             'Ingreso Pagado (USD)',
+            'Reembolsos (USD)',
+            'Neto Cobrado (USD)',
         ]);
         foreach ($reporte['resumen_profesionales'] ?? [] as $prof) {
             $escribirFila([
@@ -1116,11 +1356,13 @@ class ReporteService
                 number_format((float)($prof['porcentaje_ocupacion'] ?? 0), 2, '.', ''),
                 number_format((float)($prof['importe_reservado'] ?? 0), 2, '.', ''),
                 number_format((float)($prof['ingreso_pagado'] ?? 0), 2, '.', ''),
+                number_format((float)($prof['reembolsos'] ?? 0), 2, '.', ''),
+                number_format((float)($prof['neto_cobrado'] ?? 0), 2, '.', ''),
             ]);
         }
         $escribirFila([]);
 
-        // 3. Desglose por Servicio (Snapshot Histórico)
+        // 3. Desglose por Servicio (Snapshot Histórico Inmutable)
         $escribirFila(['DESGLOSE POR SERVICIO (DATOS HISTORICOS DE RESERVA)']);
         $escribirFila([
             'Servicio ID',
@@ -1132,7 +1374,7 @@ class ReporteService
         ]);
         foreach ($reporte['resumen_servicios'] ?? [] as $srv) {
             $escribirFila([
-                $srv['servicio_id'] !== null ? (string)$srv['servicio_id'] : 'ELIMINADO_CATALOGO',
+                (!empty($srv['es_eliminado_catalogo']) || $srv['servicio_id'] === null) ? 'ELIMINADO_CATALOGO' : (string)$srv['servicio_id'],
                 (string)($srv['servicio_nombre'] ?? ''),
                 (int)($srv['total_reservas'] ?? 0),
                 (int)($srv['minutos_reservados'] ?? 0),
@@ -1142,7 +1384,49 @@ class ReporteService
         }
         $escribirFila([]);
 
-        // 4. Detalle de Reservas
+        // 4. Movimientos Financieros (Desacoplados desde la tabla `pagos`)
+        if (!empty($reporte['movimientos_financieros'])) {
+            $escribirFila(['MOVIMIENTOS FINANCIEROS (HISTORIAL DE COBROS Y REEMBOLSOS)']);
+            $escribirFila([
+                'Pago ID',
+                'Referencia Pago',
+                'Proveedor',
+                'Es Simulado',
+                'Monto (USD)',
+                'Estado Pago',
+                'Fecha Cobro',
+                'Cita Referencia ID',
+                'Estado Cita',
+                'Fecha Servicio',
+                'Profesional',
+                'Cliente',
+                'Servicios Historicos',
+            ]);
+            foreach ($reporte['movimientos_financieros'] as $mov) {
+                $servTexto = [];
+                foreach ($mov['servicios'] ?? [] as $sItem) {
+                    $servTexto[] = sprintf('%s ($%s)', $sItem['nombre'], number_format((float)$sItem['precio'], 2, '.', ''));
+                }
+                $escribirFila([
+                    (int)($mov['pago_id'] ?? 0),
+                    (string)($mov['referencia_pago'] ?? ''),
+                    (string)($mov['proveedor'] ?? ''),
+                    !empty($mov['es_simulado']) ? 'SI (Mock)' : 'NO (Real)',
+                    number_format((float)($mov['monto'] ?? 0), 2, '.', ''),
+                    (string)($mov['estado'] ?? ''),
+                    (string)($mov['fecha_cobro'] ?? ''),
+                    (int)($mov['cita_referencia_id'] ?? 0),
+                    (string)($mov['cita_estado'] ?? ''),
+                    (string)($mov['cita_fecha'] ?? ''),
+                    (string)($mov['profesional_nombre'] ?? ''),
+                    (string)($mov['cliente'] ?? ''),
+                    implode(', ', $servTexto),
+                ]);
+            }
+            $escribirFila([]);
+        }
+
+        // 5. Listado Detallado de Reservas
         $escribirFila(['LISTADO DETALLADO DE RESERVAS']);
         $escribirFila([
             'Cita ID',
@@ -1151,6 +1435,7 @@ class ReporteService
             'Cliente',
             'Email Cliente',
             'Profesional',
+            'Estado Cita',
             'Servicios (Snapshot Historico)',
             'Duracion Cita (min)',
             'Importe Total Cita (USD)',
@@ -1166,6 +1451,7 @@ class ReporteService
                 (string)($res['cliente'] ?? ''),
                 (string)($res['cliente_email'] ?? ''),
                 (string)($res['profesional_nombre'] ?? ''),
+                (string)($res['etiqueta_estado_cita'] ?? 'Confirmada'),
                 (string)($res['servicios_resumen'] ?? ''),
                 (int)($res['duracion_total_minutos'] ?? 0),
                 number_format((float)($res['importe_total_cita'] ?? 0), 2, '.', ''),

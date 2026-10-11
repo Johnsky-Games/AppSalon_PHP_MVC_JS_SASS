@@ -239,12 +239,15 @@ class NotificacionCitaRepository
                 }
 
                 if ($notificacion->estado === NotificacionCita::ESTADO_ENVIANDO) {
-                    $db->commit();
-                    $inTransaction = false;
-                    return [
-                        'accion' => 'en_progreso',
-                        'notificacion' => $notificacion
-                    ];
+                    $leaseActivo = $notificacion->lease_expires_at !== null && $notificacion->lease_expires_at > $ahoraUtc;
+                    if ($leaseActivo) {
+                        $db->commit();
+                        $inTransaction = false;
+                        return [
+                            'accion' => 'en_progreso',
+                            'notificacion' => $notificacion
+                        ];
+                    }
                 }
 
                 if ($notificacion->intentos >= $notificacion->max_intentos) {
@@ -271,17 +274,25 @@ class NotificacionCitaRepository
 
                 $nuevosIntentos = $notificacion->intentos + 1;
                 $estadoEnviando = NotificacionCita::ESTADO_ENVIANDO;
+                $workerToken = trim((string)($datos['worker_token'] ?? ''));
+                if ($workerToken === '') {
+                    $workerToken = 'worker_' . bin2hex(random_bytes(16));
+                }
+                $duracionLease = isset($datos['lease_segundos']) && (int)$datos['lease_segundos'] >= 1
+                    ? (int)$datos['lease_segundos']
+                    : 300;
 
                 $stmtUpd = $db->prepare(
                     "UPDATE notificaciones_citas
-                     SET estado = ?, intentos = ?, updated_at = ?
+                     SET estado = ?, intentos = ?, worker_token = ?,
+                         lease_expires_at = DATE_ADD(NOW(), INTERVAL ? SECOND), updated_at = ?
                      WHERE id = ?"
                 );
                 if (!$stmtUpd) {
                     throw new PersistenceException("Error al preparar adquisición de notificación existente: " . $db->error);
                 }
                 $idNotif = (int)$notificacion->id;
-                $stmtUpd->bind_param('sisi', $estadoEnviando, $nuevosIntentos, $ahoraUtc, $idNotif);
+                $stmtUpd->bind_param('sisisi', $estadoEnviando, $nuevosIntentos, $workerToken, $duracionLease, $ahoraUtc, $idNotif);
                 if (!$stmtUpd->execute()) {
                     $err = $stmtUpd->error;
                     $stmtUpd->close();
@@ -296,6 +307,7 @@ class NotificacionCitaRepository
 
                 $notificacion->estado = $estadoEnviando;
                 $notificacion->intentos = $nuevosIntentos;
+                $notificacion->worker_token = $workerToken;
                 $notificacion->updated_at = $ahoraUtc;
 
                 return [
@@ -333,20 +345,27 @@ class NotificacionCitaRepository
             $maxIntentos = isset($datos['max_intentos']) && (int)$datos['max_intentos'] >= 1
                 ? (int)$datos['max_intentos']
                 : NotificacionCita::DEFAULT_MAX_INTENTOS;
+            $workerTokenInicial = trim((string)($datos['worker_token'] ?? ''));
+            if ($workerTokenInicial === '') {
+                $workerTokenInicial = 'worker_' . bin2hex(random_bytes(16));
+            }
+            $duracionLeaseInicial = isset($datos['lease_segundos']) && (int)$datos['lease_segundos'] >= 1
+                ? (int)$datos['lease_segundos']
+                : 300;
 
             $sqlIns = "INSERT INTO notificaciones_citas
                 (cita_id, cita_referencia_id, usuario_id, tipo, clave_idempotencia,
                  destinatario_email, destinatario_nombre, asunto, payload_json,
                  estado, intentos, max_intentos, ultimo_error, enviado_at, proximo_intento_at,
-                 created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)";
+                 worker_token, lease_expires_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, DATE_ADD(NOW(), INTERVAL ? SECOND), ?, ?)";
 
             $stmtIns = $db->prepare($sqlIns);
             if (!$stmtIns) {
                 throw new PersistenceException("Error al preparar inserción de notificación: " . $db->error);
             }
             $stmtIns->bind_param(
-                'iiisssssssiiss',
+                'iiisssssssiisiss',
                 $citaId,
                 $citaRefId,
                 $usuarioId,
@@ -359,6 +378,8 @@ class NotificacionCitaRepository
                 $estadoInicial,
                 $intentosInicial,
                 $maxIntentos,
+                $workerTokenInicial,
+                $duracionLeaseInicial,
                 $ahoraUtc,
                 $ahoraUtc
             );
@@ -495,9 +516,410 @@ class NotificacionCitaRepository
     }
 
     /**
-     * Busca notificaciones en estado `'pendiente'` o `'fallido'` cuyos intentos sean menores que `max_intentos`
-     * y cuyo `proximo_intento_at` sea nulo o haya vencido (`<= $ahoraUtc`).
+     * Registra un evento de notificación de forma durable en el Outbox (`estado = 'pendiente'`),
+     * garantizando idempotencia por `clave_idempotencia`.
      *
+     * @param array<string, mixed> $datos
+     * @param string $ahoraUtc
+     * @return NotificacionCita
+     * @throws PersistenceException
+     */
+    public function registrarEventoOutbox(array $datos, string $ahoraUtc): NotificacionCita
+    {
+        $db = $this->resolveDb();
+        $inTransaction = false;
+
+        $claveIdempotencia = trim((string)($datos['clave_idempotencia'] ?? ''));
+        if ($claveIdempotencia === '') {
+            throw new PersistenceException("La clave de idempotencia es obligatoria para registrar una notificación en Outbox.");
+        }
+
+        try {
+            if (!$db->begin_transaction()) {
+                throw new PersistenceException("No se pudo iniciar la transacción para evento outbox.");
+            }
+            $inTransaction = true;
+
+            $stmtLock = $db->prepare("SELECT * FROM notificaciones_citas WHERE clave_idempotencia = ? LIMIT 1 FOR UPDATE");
+            if (!$stmtLock) {
+                throw new PersistenceException("Error al preparar bloqueo por clave de idempotencia: " . $db->error);
+            }
+            $stmtLock->bind_param('s', $claveIdempotencia);
+            if (!$stmtLock->execute()) {
+                $err = $stmtLock->error;
+                $stmtLock->close();
+                throw new PersistenceException("Error al ejecutar bloqueo por clave de idempotencia: " . $err);
+            }
+            $resLock = $stmtLock->get_result();
+            if ($resLock === false) {
+                $err = $stmtLock->error;
+                $stmtLock->close();
+                throw new PersistenceException("Error al leer fila bloqueada por clave de idempotencia: " . $err);
+            }
+            $existente = $resLock->fetch_assoc();
+            $resLock->free();
+            $stmtLock->close();
+
+            if ($existente) {
+                $db->commit();
+                $inTransaction = false;
+                return new NotificacionCita($existente);
+            }
+
+            $citaId = isset($datos['cita_id']) && $datos['cita_id'] !== null && (int)$datos['cita_id'] > 0
+                ? (int)$datos['cita_id']
+                : null;
+            $citaRefId = isset($datos['cita_referencia_id']) && (int)$datos['cita_referencia_id'] > 0
+                ? (int)$datos['cita_referencia_id']
+                : ($citaId ?? 0);
+            $usuarioId = isset($datos['usuario_id']) && $datos['usuario_id'] !== null && (int)$datos['usuario_id'] > 0
+                ? (int)$datos['usuario_id']
+                : null;
+            $tipo = trim((string)($datos['tipo'] ?? NotificacionCita::TIPO_CONFIRMACION));
+            $destEmail = mb_substr(trim((string)($datos['destinatario_email'] ?? '')), 0, 60, 'UTF-8');
+            $destNombre = mb_substr(trim((string)($datos['destinatario_nombre'] ?? '')), 0, 120, 'UTF-8');
+            $asunto = mb_substr(trim((string)($datos['asunto'] ?? '')), 0, 180, 'UTF-8');
+
+            $payloadRaw = $datos['payload_json'] ?? null;
+            if (is_array($payloadRaw)) {
+                $payloadJson = json_encode($payloadRaw, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: null;
+            } elseif (is_string($payloadRaw) && trim($payloadRaw) !== '') {
+                $payloadJson = $payloadRaw;
+            } else {
+                $payloadJson = null;
+            }
+
+            $estadoInicial = NotificacionCita::ESTADO_PENDIENTE;
+            $intentosInicial = 0;
+            $maxIntentos = isset($datos['max_intentos']) && (int)$datos['max_intentos'] >= 1
+                ? (int)$datos['max_intentos']
+                : NotificacionCita::DEFAULT_MAX_INTENTOS;
+
+            $sqlIns = "INSERT INTO notificaciones_citas
+                (cita_id, cita_referencia_id, usuario_id, tipo, clave_idempotencia,
+                 destinatario_email, destinatario_nombre, asunto, payload_json,
+                 estado, intentos, max_intentos, ultimo_error, enviado_at, proximo_intento_at,
+                 worker_token, lease_expires_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)";
+
+            $stmtIns = $db->prepare($sqlIns);
+            if (!$stmtIns) {
+                throw new PersistenceException("Error al preparar inserción en outbox: " . $db->error);
+            }
+            $stmtIns->bind_param(
+                'iiisssssssiiss',
+                $citaId,
+                $citaRefId,
+                $usuarioId,
+                $tipo,
+                $claveIdempotencia,
+                $destEmail,
+                $destNombre,
+                $asunto,
+                $payloadJson,
+                $estadoInicial,
+                $intentosInicial,
+                $maxIntentos,
+                $ahoraUtc,
+                $ahoraUtc
+            );
+            if (!$stmtIns->execute()) {
+                $err = $stmtIns->error;
+                $stmtIns->close();
+                throw new PersistenceException("Error al ejecutar inserción en outbox: " . $err);
+            }
+            $nuevoId = (int)$stmtIns->insert_id;
+            $stmtIns->close();
+
+            if (!$db->commit()) {
+                throw new PersistenceException("Error al confirmar inserción en outbox.");
+            }
+            $inTransaction = false;
+
+            return new NotificacionCita([
+                'id' => $nuevoId,
+                'cita_id' => $citaId,
+                'cita_referencia_id' => $citaRefId,
+                'usuario_id' => $usuarioId,
+                'tipo' => $tipo,
+                'clave_idempotencia' => $claveIdempotencia,
+                'destinatario_email' => $destEmail,
+                'destinatario_nombre' => $destNombre,
+                'asunto' => $asunto,
+                'payload_json' => $payloadJson,
+                'estado' => $estadoInicial,
+                'intentos' => $intentosInicial,
+                'max_intentos' => $maxIntentos,
+                'worker_token' => null,
+                'lease_expires_at' => null,
+                'created_at' => $ahoraUtc,
+                'updated_at' => $ahoraUtc,
+            ]);
+        } catch (\Throwable $e) {
+            if ($inTransaction) {
+                try {
+                    $db->rollback();
+                } catch (\Throwable $rbErr) {
+                    error_log("[NotificacionCitaRepository::registrarEventoOutbox] Error en rollback: " . $rbErr->getMessage());
+                }
+            }
+            if ($e instanceof PersistenceException) {
+                throw $e;
+            }
+            throw new PersistenceException("Fallo al registrar evento outbox: " . $e->getMessage(), 0, $e);
+        }
+    }
+
+    /**
+     * Adquiere de forma atómica una notificación para envío mediante arrendamiento exclusivo (worker lease).
+     *
+     * Actualiza atómicamente `estado = 'enviando'`, `worker_token = $workerToken`,
+     * `lease_expires_at = NOW() + INTERVAL $duracionLeaseSegundos SECOND`, `intentos = intentos + 1`
+     * SOLO si `estado IN ('pendiente', 'reintentando', 'fallido')` O (`estado = 'enviando' AND lease_expires_at < NOW()`).
+     *
+     * @param int $id
+     * @param string $workerToken
+     * @param int $duracionLeaseSegundos
+     * @return bool
+     * @throws PersistenceException
+     */
+    public function adquirirParaEnvio(int $id, string $workerToken, int $duracionLeaseSegundos = 300): bool
+    {
+        if ($id <= 0 || trim($workerToken) === '') {
+            return false;
+        }
+
+        $db = $this->resolveDb();
+        $duracion = max(1, $duracionLeaseSegundos);
+        $estadoEnviando = NotificacionCita::ESTADO_ENVIANDO;
+
+        $sql = "UPDATE notificaciones_citas
+                SET estado = ?,
+                    worker_token = ?,
+                    lease_expires_at = DATE_ADD(NOW(), INTERVAL ? SECOND),
+                    intentos = intentos + 1,
+                    updated_at = NOW()
+                WHERE id = ?
+                  AND (
+                      estado IN ('pendiente', 'reintentando', 'fallido')
+                      OR (estado = 'enviando' AND (lease_expires_at IS NULL OR lease_expires_at < NOW()))
+                  )";
+
+        try {
+            $stmt = $db->prepare($sql);
+            if (!$stmt) {
+                throw new PersistenceException("Error al preparar adquisición para envío con lease: " . $db->error);
+            }
+            $stmt->bind_param('ssii', $estadoEnviando, $workerToken, $duracion, $id);
+            if (!$stmt->execute()) {
+                $err = $stmt->error;
+                $stmt->close();
+                throw new PersistenceException("Error al ejecutar adquisición para envío con lease: " . $err);
+            }
+            $afectadas = $stmt->affected_rows;
+            $stmt->close();
+
+            return $afectadas > 0;
+        } catch (PersistenceException $e) {
+            error_log("[NotificacionCitaRepository::adquirirParaEnvio] " . $e->getMessage());
+            throw $e;
+        } catch (\Throwable $e) {
+            error_log("[NotificacionCitaRepository::adquirirParaEnvio] Excepción inesperada: " . $e->getMessage());
+            throw new PersistenceException("Fallo al adquirir notificación con lease.", 0, $e);
+        }
+    }
+
+    /**
+     * Marca una notificación como enviada exitosamente (`estado = 'enviado'`) SOLO si el worker_token
+     * coincide con el arrendamiento activo.
+     *
+     * Si otro worker adquirió la notificación tras expirar el lease, el worker antiguo es rechazado
+     * (retorna false) y no puede sobrescribir el registro.
+     *
+     * @param int $id
+     * @param string $workerToken
+     * @return bool
+     * @throws PersistenceException
+     */
+    public function marcarComoEnviado(int $id, string $workerToken): bool
+    {
+        if ($id <= 0 || trim($workerToken) === '') {
+            return false;
+        }
+
+        $db = $this->resolveDb();
+        $estadoEnviado = NotificacionCita::ESTADO_ENVIADO;
+        $sql = "UPDATE notificaciones_citas
+                SET estado = ?,
+                    enviado_at = NOW(),
+                    worker_token = NULL,
+                    lease_expires_at = NULL,
+                    ultimo_error = NULL,
+                    proximo_intento_at = NULL,
+                    updated_at = NOW()
+                WHERE id = ? AND worker_token = ?";
+
+        try {
+            $stmt = $db->prepare($sql);
+            if (!$stmt) {
+                throw new PersistenceException("Error al preparar marcado como enviado con worker token: " . $db->error);
+            }
+            $stmt->bind_param('sis', $estadoEnviado, $id, $workerToken);
+            if (!$stmt->execute()) {
+                $err = $stmt->error;
+                $stmt->close();
+                throw new PersistenceException("Error al ejecutar marcado como enviado con worker token: " . $err);
+            }
+            $afectadas = $stmt->affected_rows;
+            $stmt->close();
+
+            return $afectadas > 0;
+        } catch (PersistenceException $e) {
+            error_log("[NotificacionCitaRepository::marcarComoEnviado] " . $e->getMessage());
+            throw $e;
+        } catch (\Throwable $e) {
+            error_log("[NotificacionCitaRepository::marcarComoEnviado] Excepción inesperada: " . $e->getMessage());
+            throw new PersistenceException("Fallo al marcar notificación como enviada.", 0, $e);
+        }
+    }
+
+    /**
+     * Marca una notificación como fallida o reintentando liberando el arrendamiento (`lease_expires_at = NULL`),
+     * SOLO si el worker_token coincide con el poseedor actual.
+     *
+     * @param int $id
+     * @param string $workerToken
+     * @param string $mensajeError
+     * @param string|null $proximoIntentoAt
+     * @return bool
+     * @throws PersistenceException
+     */
+    public function marcarComoFallido(
+        int $id,
+        string $workerToken,
+        string $mensajeError,
+        ?string $proximoIntentoAt = null
+    ): bool {
+        if ($id <= 0 || trim($workerToken) === '') {
+            return false;
+        }
+
+        $db = $this->resolveDb();
+        $estado = NotificacionCita::ESTADO_FALLIDO;
+        $errorTruncado = mb_substr(trim($mensajeError), 0, 250, 'UTF-8');
+
+        $sql = "UPDATE notificaciones_citas
+                SET estado = ?,
+                    ultimo_error = ?,
+                    proximo_intento_at = ?,
+                    lease_expires_at = NULL,
+                    updated_at = NOW()
+                WHERE id = ? AND worker_token = ?";
+
+        try {
+            $stmt = $db->prepare($sql);
+            if (!$stmt) {
+                throw new PersistenceException("Error al preparar marcado de fallido con worker token: " . $db->error);
+            }
+            $stmt->bind_param('sssis', $estado, $errorTruncado, $proximoIntentoAt, $id, $workerToken);
+            if (!$stmt->execute()) {
+                $err = $stmt->error;
+                $stmt->close();
+                throw new PersistenceException("Error al ejecutar marcado de fallido con worker token: " . $err);
+            }
+            $afectadas = $stmt->affected_rows;
+            $stmt->close();
+
+            return $afectadas > 0;
+        } catch (PersistenceException $e) {
+            error_log("[NotificacionCitaRepository::marcarComoFallido] " . $e->getMessage());
+            throw $e;
+        } catch (\Throwable $e) {
+            error_log("[NotificacionCitaRepository::marcarComoFallido] Excepción inesperada: " . $e->getMessage());
+            throw new PersistenceException("Fallo al marcar notificación como fallida.", 0, $e);
+        }
+    }
+
+    /**
+     * Descarta una notificación obsoleta marcándola como `descartada` o `cancelada`,
+     * liberando cualquier arrendamiento activo e impidiendo futuros reintentos.
+     *
+     * @param int $id
+     * @param string $motivo
+     * @param string|null $workerToken
+     * @param string $nuevoEstado
+     * @return bool
+     * @throws PersistenceException
+     */
+    public function descartarNotificacion(
+        int $id,
+        string $motivo,
+        ?string $workerToken = null,
+        string $nuevoEstado = NotificacionCita::ESTADO_DESCARTADA
+    ): bool {
+        if ($id <= 0) {
+            return false;
+        }
+
+        $db = $this->resolveDb();
+        $motivoTruncado = mb_substr(trim($motivo), 0, 250, 'UTF-8');
+
+        if ($workerToken !== null && trim($workerToken) !== '') {
+            $sql = "UPDATE notificaciones_citas
+                    SET estado = ?,
+                        ultimo_error = ?,
+                        proximo_intento_at = NULL,
+                        lease_expires_at = NULL,
+                        updated_at = NOW()
+                    WHERE id = ? AND (worker_token = ? OR worker_token IS NULL)";
+            $stmt = $db->prepare($sql);
+            if (!$stmt) {
+                throw new PersistenceException("Error al preparar descarte de notificación: " . $db->error);
+            }
+            $tok = trim($workerToken);
+            $stmt->bind_param('ssis', $nuevoEstado, $motivoTruncado, $id, $tok);
+        } else {
+            $sql = "UPDATE notificaciones_citas
+                    SET estado = ?,
+                        ultimo_error = ?,
+                        proximo_intento_at = NULL,
+                        lease_expires_at = NULL,
+                        updated_at = NOW()
+                    WHERE id = ?";
+            $stmt = $db->prepare($sql);
+            if (!$stmt) {
+                throw new PersistenceException("Error al preparar descarte de notificación: " . $db->error);
+            }
+            $stmt->bind_param('ssi', $nuevoEstado, $motivoTruncado, $id);
+        }
+
+        try {
+            if (!$stmt->execute()) {
+                $err = $stmt->error;
+                $stmt->close();
+                throw new PersistenceException("Error al ejecutar descarte de notificación: " . $err);
+            }
+            $afectadas = $stmt->affected_rows;
+            $stmt->close();
+
+            return $afectadas >= 0;
+        } catch (PersistenceException $e) {
+            error_log("[NotificacionCitaRepository::descartarNotificacion] " . $e->getMessage());
+            throw $e;
+        } catch (\Throwable $e) {
+            error_log("[NotificacionCitaRepository::descartarNotificacion] Excepción inesperada: " . $e->getMessage());
+            throw new PersistenceException("Fallo al descartar notificación.", 0, $e);
+        }
+    }
+
+    /**
+     * Busca notificaciones elegibles para envío o reintento:
+     * 1. En estado `'pendiente'`, `'reintentando'` o `'fallido'` con backoff cumplido (`<= $ahoraUtc`)
+     *    e intentos menores que `max_intentos`.
+     * 2. Tareas en `'enviando'` cuyo `lease_expires_at` haya vencido (`<= $ahoraUtc`), recuperando tareas atascadas.
+     *
+     * @param string $ahoraUtc
+     * @param int $limite
      * @return array<int, NotificacionCita>
      * @throws PersistenceException
      */
@@ -508,9 +930,15 @@ class NotificacionCitaRepository
 
         $sql = "SELECT *
                 FROM notificaciones_citas
-                WHERE estado IN ('pendiente', 'fallido')
-                  AND intentos < max_intentos
-                  AND (proximo_intento_at IS NULL OR proximo_intento_at <= ?)
+                WHERE (
+                    estado IN ('pendiente', 'reintentando', 'fallido')
+                    AND intentos < max_intentos
+                    AND (proximo_intento_at IS NULL OR proximo_intento_at <= ?)
+                ) OR (
+                    estado = 'enviando'
+                    AND lease_expires_at IS NOT NULL
+                    AND lease_expires_at <= ?
+                )
                 ORDER BY id ASC
                 LIMIT ?";
 
@@ -519,7 +947,7 @@ class NotificacionCitaRepository
             if (!$stmt) {
                 throw new PersistenceException("Error al preparar consulta de candidatas a reintento: " . $db->error);
             }
-            $stmt->bind_param('si', $ahoraUtc, $limiteSeguro);
+            $stmt->bind_param('ssi', $ahoraUtc, $ahoraUtc, $limiteSeguro);
             if (!$stmt->execute()) {
                 $err = $stmt->error;
                 $stmt->close();
@@ -598,29 +1026,38 @@ class NotificacionCitaRepository
 
             $notif = new NotificacionCita($fila);
 
+            $esEnviandoConLeaseVencido = ($notif->estado === NotificacionCita::ESTADO_ENVIANDO)
+                && ($notif->lease_expires_at === null || $notif->lease_expires_at <= $ahoraUtc);
+
             if (
-                !in_array($notif->estado, [NotificacionCita::ESTADO_PENDIENTE, NotificacionCita::ESTADO_FALLIDO], true) ||
+                (!in_array($notif->estado, [NotificacionCita::ESTADO_PENDIENTE, NotificacionCita::ESTADO_FALLIDO, NotificacionCita::ESTADO_REINTENTANDO], true) && !$esEnviandoConLeaseVencido) ||
+                ($notif->estado === NotificacionCita::ESTADO_ENVIANDO && !$esEnviandoConLeaseVencido) ||
                 $notif->intentos >= $notif->max_intentos ||
-                ($notif->proximo_intento_at !== null && $notif->proximo_intento_at > $ahoraUtc)
+                ($notif->proximo_intento_at !== null && $notif->proximo_intento_at > $ahoraUtc && !$esEnviandoConLeaseVencido)
             ) {
                 $db->commit();
                 $inTransaction = false;
                 return ['accion' => 'omitir', 'notificacion' => $notif];
             }
 
-            // Si es un recordatorio y la cita fue cancelada/eliminada (cita_id = NULL), no debe enviarse
-            if ($notif->tipo === NotificacionCita::TIPO_RECORDATORIO && $notif->cita_id === null) {
-                $estadoFallido = NotificacionCita::ESTADO_FALLIDO;
-                $motivo = 'Recordatorio descartado: la cita fue cancelada o eliminada.';
+            // Si es un recordatorio o confirmación y la cita fue cancelada/eliminada (cita_id = NULL), descartar
+            if (
+                in_array($notif->tipo, [NotificacionCita::TIPO_RECORDATORIO, NotificacionCita::TIPO_CONFIRMACION], true) &&
+                $notif->cita_id === null
+            ) {
+                $estadoDescartado = NotificacionCita::ESTADO_DESCARTADA;
+                $motivo = $notif->tipo === NotificacionCita::TIPO_RECORDATORIO
+                    ? 'Recordatorio descartado: la cita fue cancelada o eliminada.'
+                    : 'Confirmación descartada: la cita fue cancelada o eliminada.';
                 $maxInt = $notif->max_intentos;
 
                 $stmtDesc = $db->prepare(
                     "UPDATE notificaciones_citas
-                     SET estado = ?, intentos = ?, ultimo_error = ?, proximo_intento_at = NULL, updated_at = ?
+                     SET estado = ?, intentos = ?, ultimo_error = ?, proximo_intento_at = NULL, lease_expires_at = NULL, updated_at = ?
                      WHERE id = ?"
                 );
                 if ($stmtDesc) {
-                    $stmtDesc->bind_param('sissi', $estadoFallido, $maxInt, $motivo, $ahoraUtc, $id);
+                    $stmtDesc->bind_param('sissi', $estadoDescartado, $maxInt, $motivo, $ahoraUtc, $id);
                     $stmtDesc->execute();
                     $stmtDesc->close();
                 }
@@ -628,7 +1065,7 @@ class NotificacionCitaRepository
                 $db->commit();
                 $inTransaction = false;
 
-                $notif->estado = $estadoFallido;
+                $notif->estado = $estadoDescartado;
                 $notif->intentos = $maxInt;
                 $notif->ultimo_error = $motivo;
 
@@ -637,16 +1074,17 @@ class NotificacionCitaRepository
 
             $estadoEnviando = NotificacionCita::ESTADO_ENVIANDO;
             $nuevosIntentos = $notif->intentos + 1;
+            $workerToken = 'worker_' . bin2hex(random_bytes(16));
 
             $stmtUpd = $db->prepare(
                 "UPDATE notificaciones_citas
-                 SET estado = ?, intentos = ?, updated_at = ?
+                 SET estado = ?, intentos = ?, worker_token = ?, lease_expires_at = DATE_ADD(NOW(), INTERVAL 300 SECOND), updated_at = ?
                  WHERE id = ?"
             );
             if (!$stmtUpd) {
                 throw new PersistenceException("Error al preparar transición a 'enviando' en reintento: " . $db->error);
             }
-            $stmtUpd->bind_param('sisi', $estadoEnviando, $nuevosIntentos, $ahoraUtc, $id);
+            $stmtUpd->bind_param('sissi', $estadoEnviando, $nuevosIntentos, $workerToken, $ahoraUtc, $id);
             if (!$stmtUpd->execute()) {
                 $err = $stmtUpd->error;
                 $stmtUpd->close();
@@ -775,6 +1213,7 @@ class NotificacionCitaRepository
                 LEFT JOIN citasservicios cs ON cs.citaId = c.id
                 LEFT JOIN servicios s ON s.id = cs.servicioId
                 WHERE c.fecha BETWEEN ? AND ?
+                  AND (c.estado IS NULL OR c.estado != 'cancelada')
                 ORDER BY c.fecha ASC, COALESCE(c.hora_inicio, c.hora) ASC, c.id ASC, cs.id ASC";
 
         try {
