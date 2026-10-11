@@ -1137,5 +1137,132 @@ El commit `3809035d5045bb4c09bf7c0e33e6e47f41ca12be` implementó la remediación
 - **SHA Recomendado para Entrega Final:** `8d7be2130e58313e0b4558d0611098e898b24eca` (merge integrando commit `3809035d5045bb4c09bf7c0e33e6e47f41ca12be`).
 - **Dictamen:** Todos los hallazgos de auditoría externa e interna han sido completamente resueltos con pruebas automatizadas deterministas, sin condiciones de carrera, sin fugas de estado entre pruebas en orden aleatorio y con total inmutabilidad de los datos históricos del negocio. La rama `audit/correcciones-auditoria-integral` se encuentra lista y aprobada para su fusión definitiva a la rama principal (`main`).
 
+---
+
+## 9. Auditoría Independiente del SHA Integrado (`b700a83d319d02c7dc9ef3663286830998e57af6`)
+
+- **Fecha de Auditoría:** 2026-10-11
+- **Rol:** Subagente Auditor Independiente
+- **Worktree Exclusivo de Auditoría:** `C:\Users\jonat\.gemini\antigravity\worktrees\AppSalon_PHP_MVC_JS_SASS\auditing_fase_4b_reservas`
+- **SHA Evaluado:** `b700a83d319d02c7dc9ef3663286830998e57af6`
+- **Rama Asociada:** `audit/correcciones-auditoria-integral` / `feature/correcciones-auditoria-integral`
+- **Integridad de Stash:** `stash@{0}: On auditing_fase_4b_reservas: temp stash for checkout` verificado y preservado estrictamente intacto.
+- **Aislamiento de Entorno:** Contenedores locales `appsalon-web`, `appsalon-db`, red `appsalon-net`, base de datos `appsalon_mvc` y archivo `includes/.env` sin ninguna modificación.
+- **Veredicto Definitivo:** **`CORRECCIONES NECESARIAS`**
+
+---
+
+### 1. Evaluación Estática y de Dominio de los 6 Frentes
+
+| Frente | Requerimiento de Auditoría | Evidencia en Código (`b700a83`) | Test Automatizado | Evaluación Estática |
+| :--- | :--- | :--- | :--- | :---: |
+| **1. Restore BD y Colisiones FK (MySQL 1826)** | Resguardo transaccional en tablas `_bck_*`, liberación explícita de foreign keys (`DROP FOREIGN KEY`) para evitar error 1826 al recrear tablas con el mismo constraint name, eliminación de `_bck_*` antes de validar manifiesto, validación unificada y rollback defensivo con restauración de claves foráneas. | `scripts/restore_db.php:427-464,525-560,583-593,594-648`: Implementa `obtener_foreign_keys_esquema()`, `ALTER TABLE ... DROP FOREIGN KEY`, eliminación previa a `validar_manifiesto_y_esquema()` y bloque `catch` con reconstrucción exacta de FKs originales. | `tests/Integration/BackupRestoreIntegridadIntegrationTest.php` (7 tests, 84 assertions) | **CUMPLE** |
+| **2. Notificaciones y Vigencia en Citas Canceladas** | Omisión estricta de llamadas SMTP en citas canceladas o inexistentes tanto en worker como en despacho directo; descarte atómico bajo lease con `STATUS_OMITIDO`. | `services/NotificacionCitaService.php:834-880`: `verificarVigenciaParaDespacho()` unificado, adquiere lease, invoca `descartarNotificacion()` y bloquea el despacho SMTP con `valido: false` y `status: STATUS_OMITIDO` ante citas canceladas o inexistentes. | `tests/Integration/NotificacionesWorkerIntegrationTest.php` (8 tests, 39 assertions) | **CUMPLE** |
+| **3. Reportes Contables y CSV Conciliable** | Columnas financieras explícitas en reporte y CSV: Tipo Movimiento, Fecha Reembolso, Importe Cobro Periodo, Importe Reembolso Periodo y Neto Periodo. Desacoplamiento temporal entre fecha de cobro y fecha de reembolso (ej. cobro en Octubre, reembolso en Noviembre). | `services/ReporteService.php:1470-1506`: `exportarCsvReporteAdmin()` y `ensamblarReporte()` proyectan importes y netos desagregados por periodo contable. | `tests/Integration/ReportesFinancierosIntegrationTest.php` (6 tests, 88 assertions) | **CUMPLE** |
+| **4. Pagos, Sobrepago y Conciliación** | Detección de sobrepago acumulado en webhooks sin emitir reembolsos automáticos no autorizados; auditoría en payload y marca `requiere_conciliacion = true`. | `services/PagoService.php:610-652`, `models/Pago.php`, `repositories/PagoRepository.php`: Suma de cobros completados comparada con `total_cita`, alerta en logs, registro de exceso en `payload_proveedor` y retorno de `requiere_conciliacion`. Documentado en `docs/DECISIONES_PAGOS.md` punto 9. | `tests/Integration/PagoIdempotenciaSeguridadIntegrationTest.php` (6 tests, 82 assertions) | **CUMPLE** |
+| **5. Concurrencia Bidireccional en Agenda** | Prueba de concurrencia en orden contrario: reserva concurrente en vuelo inicia primero, adquiere bloqueo y confirma, tras lo cual la modificación administrativa incompatible en `ProfesionalService` es rechazada con HTTP 422 `colision_citas_confirmadas`. | `tests/Integration/CitaCancelacionAgendaIntegrationTest.php:530-600`: `test_concurrencia_orden_contrario_reserva_en_vuelo_bloquea_modificacion_agenda` ejecuta worker paralelo `concurrent_reserva_worker.php` con sincronización `READY`/`GO` y valida posterior rechazo 422 del intento de bloqueo administrativo. | `tests/Integration/CitaCancelacionAgendaIntegrationTest.php` (7 tests, 69 assertions) | **CUMPLE** |
+| **6. CI con Navegador E2E Real contra Apache Oficial** | Flujo de GitHub Actions que arranca contenedor oficial de Apache (`appsalon-web-ci`) en puerto 3000 contra MySQL 8.0, sondea readiness HTTP 200 y ejecuta Puppeteer headless contra el servidor real. | `.github/workflows/ci.yml:78-140`: Construye imagen Docker, arranca `appsalon-web-ci-instance`, espera disponibilidad de `http://localhost:3000/` y corre `tests/browser_e2e_test.js`. | `.github/workflows/ci.yml` | **CUMPLE** |
+
+---
+
+### 2. Evidencia Dinámica Independiente en Entornos Aislados
+
+#### A. Suite E2E de Navegador Headless Web (Puppeteer — `tests/verificar_navegador.ps1`)
+- **Comando:** `powershell -ExecutionPolicy Bypass -File tests\verificar_navegador.ps1`
+- **Resultado:**
+  - 19 comprobaciones interactivas superadas con `[OK]`.
+  - Paso `[6/6] Verificando persistencia estricta en base de datos`:
+    - Servicio CRUD verificado en BD con `duracion_minutos = 60`.
+    - Profesional y agenda validados en MySQL.
+    - Cita ID `3` verificada en fecha `2026-10-12`, profesional `2`, intervalo `[11:30:00, 13:00:00)` (90 min), 2 servicios.
+    - Notificaciones persistidas en BD: `confirmaciones | cancelaciones: 3 2`.
+    - Pago transaccional en BD: `$195.00 completado/pagado`.
+  - Errores de consola: `0`. Solicitudes de red fallidas: `0`.
+  - Código de salida: `0`.
+
+#### B. Hallazgo Bloqueante Detectado en PHPUnit bajo Orden Aleatorio (`--order-by=random`)
+- **Comando Ejecutado en Contenedor Aislado (`appsalon-audit-r4-db`):**
+  ```bash
+  vendor/bin/phpunit --do-not-cache-result --order-by=random --random-order-seed=1791756203 --colors=never
+  ```
+- **Resultado Obtenido:**
+  ```text
+  PHPUnit 10.5.66 by Sebastian Bergmann and contributors.
+  Configuration: /app/phpunit.xml
+  Random Seed:   1791756203
+
+  .......................................................F.......  63 / 214 ( 29%)
+  ............................................................... 126 / 214 ( 58%)
+  ............................................................... 189 / 214 ( 88%)
+  .........................                                       214 / 214 (100%)
+
+  Time: 01:27.008, Memory: 18.00 MB
+
+  There was 1 failure:
+
+  1) Tests\Unit\CsrfTest::testTokenValidoEnPostEsAceptado
+  Tokens coincidentes en POST deben ser aceptados
+  Failed asserting that false is true.
+
+  /app/tests/Unit/CsrfTest.php:69
+
+  FAILURES!
+  Tests: 214, Assertions: 2660, Failures: 1.
+  Código de salida: 1.
+  ```
+
+#### Causa Raíz Técnica
+1. En `tests/Unit/CsrfTest.php` (líneas 11–20), el método `setUp()` inicializa `$_SESSION = []` pero no garantiza que la sesión de PHP esté activa (`session_status() === PHP_SESSION_ACTIVE`):
+   ```php
+   protected function setUp(): void
+   {
+       if (session_status() === PHP_SESSION_ACTIVE) {
+           $_SESSION = [];
+       } else {
+           $_SESSION = [];
+       }
+       $_POST = [];
+       unset($_SERVER['HTTP_X_CSRF_TOKEN']);
+   }
+   ```
+2. Cuando `CsrfTest::testTokenValidoEnPostEsAceptado` es seleccionado como el primer método a ejecutar en orden aleatorio (o cuando corre tras una prueba unitaria que no utiliza sesión, como `CitaServiceTest`), `session_status()` es `PHP_SESSION_NONE`.
+3. La prueba asigna `$_SESSION['csrf_token'] = $token;` e invoca `validar_csrf()`.
+4. La función `validar_csrf()` (`includes/funciones.php:163`) invoca `iniciar_sesion_segura()`, la cual, al detectar `session_status() === PHP_SESSION_NONE`, ejecuta `session_start()`.
+5. En el ciclo de vida nativo de PHP, cuando `session_start()` es invocado, PHP inicializa `$_SESSION` a partir del almacenamiento de sesión (o inicializa un array vacío), **sobreescribiendo y destruyendo cualquier clave asignada a `$_SESSION` antes de `session_start()`**.
+6. En consecuencia, `$_SESSION['csrf_token']` queda en `null`, `validar_csrf()` evalúa `!is_string($sessionToken)` y devuelve `false`, provocando el fallo de la aserción (`Failed asserting that false is true`).
+7. Una vez que `iniciar_sesion_segura()` es invocado por primera vez, la sesión pasa a estar activa para los métodos siguientes en el mismo proceso, motivo por el cual la prueba pasa de forma engañosa cuando se ejecuta en orden fijo donde algún método previo ya había disparado `validar_csrf()`.
+
+---
+
+### 3. Comparativa de Resultados de Auditoría
+
+| Aspecto | Estado Reportado / Esperado | Verificado en SHA `b700a83` | Veredicto |
+| :--- | :--- | :--- | :---: |
+| **Persistencia Suite E2E Navegador** | 19 checks OK, 3 confirmaciones, 2 cancelaciones en BD, pago $195 | 19 checks OK, `confirmaciones \| cancelaciones: 3 2`, `$195.00 completado/pagado` (Exit 0) | **APROBADO** |
+| **6 Frentes Funcionales Auditados** | Restore con FKs, Vigencia Notificaciones, Reportes Contables, Sobrepago, Concurrencia Bidireccional, CI Apache | Implementación y aserciones verificadas en código y pruebas | **APROBADO** |
+| **PHPUnit Orden Aleatorio (`--order-by=random`)** | 214 tests pasados, 0 fallos | 214 tests, 1 failure en `CsrfTest::testTokenValidoEnPostEsAceptado` (Semilla 1791756203, Exit 1) | **FALLA (BLOQUEANTE PARA CI)** |
+| **Aislamiento Docker y Stash** | Sin tocar app local ni borrar `stash@{0}` | `appsalon-web`, `appsalon-db`, `appsalon_mvc`, `.env` y `stash@{0}` estrictamente intactos | **APROBADO** |
+
+---
+
+### 4. Conclusión y Veredicto Final
+
+- **Veredicto:** **`CORRECCIONES NECESARIAS`**
+- **Acción Requerida para Desbloqueo Definitivo:**
+  En `tests/Unit/CsrfTest.php`, asegurar en `setUp()` que la sesión esté iniciada antes de asignar o limpiar variables de sesión:
+  ```php
+  protected function setUp(): void
+  {
+      if (session_status() === PHP_SESSION_NONE) {
+          session_start();
+      }
+      $_SESSION = [];
+      $_POST = [];
+      unset($_SERVER['HTTP_X_CSRF_TOKEN']);
+  }
+  ```
+  (o invocar `iniciar_sesion_segura();` en `setUp()`), garantizando que `vendor/bin/phpunit --do-not-cache-result --order-by=random --random-order-seed=1791756203 --colors=never` pase al 100% con 214 tests y 0 fallos (Exit 0).
+
+
 
 
