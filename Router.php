@@ -19,6 +19,10 @@ class Router
 
     public function comprobarRutas()
     {
+        if (function_exists('emitir_cabeceras_seguridad')) {
+            emitir_cabeceras_seguridad();
+        }
+
         $currentUrl = strtok($_SERVER['REQUEST_URI'], '?') ?? '/'; // strtok corta la url en el signo de interrogación, para que no se muestren los parámetros de la url
         $method = $_SERVER['REQUEST_METHOD'];
 
@@ -33,12 +37,16 @@ class Router
             // Call user fn va a llamar una función cuando no sabemos cual sera
             call_user_func($fn, $this); // This es para pasar argumentos a la función
         } else {
+            http_response_code(404);
             echo "Página No Encontrada o Ruta no válida";
         }
     }
 
     public function render($view, $datos = [])
     {
+        if (function_exists('emitir_cabeceras_seguridad')) {
+            emitir_cabeceras_seguridad();
+        }
 
         // Leer lo que le pasamos  a la vista
         foreach ($datos as $key => $value) {

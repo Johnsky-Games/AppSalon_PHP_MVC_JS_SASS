@@ -30,7 +30,7 @@ Cada fase del proyecto se ejecuta bajo la coordinación de tres roles con respon
 | **Fase 6A** | `feature/fase-6a-notificaciones` | `4fe475c02cc3dcd38a79ad7ec4ce5ef48f9e58ec` | **Aprobada (`APROBADO`)** |
 | **Fase 6B** | `feature/fase-6b-reportes` | `fb82ec7f59571dca82bf738a30e79c2d19489894` | **Aprobada (`APROBADO`)** |
 | **Fase 6C** | `feature/fase-6c-base-pagos` | `8178b830bc03197775fa653857e66ec74eb290db` | **Aprobada (`APROBADO`)** |
-| **Cierre Técnico** | `feature/cierre-tecnico` | *(en desarrollo)* | **En curso** |
+| **Cierre Técnico** | `feature/cierre-tecnico` | *(pendiente de auditoría)* | **En auditoría** |
 
 ---
 
@@ -79,9 +79,11 @@ Cada fase del proyecto se ejecuta bajo la coordinación de tres roles con respon
 - Integración con `ReporteRepository` y `ReporteService` para reflejar en `/admin/reportes` los ingresos efectivamente cobrados (`pagado`) y reembolsados (`reembolsado`), y registro de decisiones de negocio pendientes en `docs/DECISIONES_PAGOS.md`.
 - Verificada por Desarrollador y Auditor independiente (`b7cab7d9-9fd1-466e-857a-25c0463a23ad` en `auditing_fase_4b_reservas` sobre `8178b830bc03197775fa653857e66ec74eb290db`) con `PHPUnit 10.5.66` (`OK (170 tests, 1949 assertions)`, exit `0`) y suite E2E en navegador (`RUN_ID: 8effe3d0db0e46bebc3ee51779558903`, 19 comprobaciones `[OK]` incluyendo `PAG-01`, `0` errores de consola, `0` peticiones fallidas, exit `0`). Ver detalle en `docs/AUDITORIA.md`.
 
-### Cierre Técnico
-- Auditoría integral de rutas, permisos, seguridad y manejo de errores.
-- Revisión de dependencias (`composer.json`, `package.json`) con cambios justificados y registros limpios de secretos.
-- Revisión de consultas SQL e índices.
-- Flujo de build y pruebas automatizadas en GitHub Actions (`.github/workflows/`).
-- Instalación y ejecución Docker reproducibles, `includes/.env.example` documentado, respaldo y restauración probados en entorno aislado, guía de migración/operación y verificación final desde entorno limpio.
+### Cierre Técnico (`feature/cierre-tecnico`) — En Auditoría
+- Auditoría integral de rutas, permisos (`isAuth()`, `isAdmin()`, `exigir_csrf()`), registro de `POST /api/pagos/reembolsar` y emisión consistente de cabeceras HTTP de seguridad (`X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy: strict-origin-when-cross-origin`) mediante `emitir_cabeceras_seguridad()`.
+- Revisión de dependencias y scripts estandarizados en `composer.json` y `package.json`, y endurecimiento de `.gitignore` (`includes/.env`, `storage/`).
+- Revisión de las 6 migraciones incrementales (`001` a `006`), índice `idx_citas_estado_pago`, claves foráneas (`ON DELETE RESTRICT`, `ON DELETE SET NULL`, `ON DELETE CASCADE`) y documentación actualizada en `database/README.md`.
+- Flujo de Integración Continua en GitHub Actions (`.github/workflows/ci.yml`) con PHP 8.2, MySQL 8.0, linter `php -l`, migraciones, PHPUnit y prueba CLI de respaldo/restauración.
+- Entorno Docker reproducible (`Dockerfile`, `docker-compose.yml`, `Dockerfile.test`) y `includes/.env.example` documentado con todas las variables del sistema.
+- Scripts CLI de respaldo y restauración consistentes en InnoDB (`scripts/backup_db.php` y `scripts/restore_db.php` con soporte GZIP `.sql.gz` y hash SHA-256) probados en aislamiento mediante `tests/Integration/BackupRestoreIntegrationTest.php`, junto con la guía operativa completa en `docs/GUIA_MIGRACION_OPERACIONES.md`.
+- Verificada por Desarrollador en `comprehensive_project_audit_roadmap` con `PHPUnit 10.5.66` (`OK (172 tests, 2046 assertions)`, exit `0`) y suite E2E en navegador (`RUN_ID: 30c68b1df71949a2afca0130e3526507`, 19 comprobaciones `[OK]`, `0` errores de consola, `0` peticiones fallidas, exit `0`).

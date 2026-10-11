@@ -1,13 +1,15 @@
 {
   "name": "app-salon-php-mvc-sass-s",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Assets de frontend (Sass/JS/Imágenes) para AppSalon PHP MVC",
+  "main": "gulpfile.js",
   "scripts": {
     "dev": "gulp",
-    "build": "gulp build"
+    "build": "gulp build",
+    "build:css": "gulp css",
+    "build:js": "gulp javascript"
   },
-  "author": "",
+  "author": "Jonathan Boada",
   "license": "ISC",
   "devDependencies": {
     "browser-sync": "^2.26.13",

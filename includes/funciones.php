@@ -44,10 +44,35 @@ function detener_ejecucion(int $codigo = 200): void
 }
 
 /**
+ * Emite de forma consistente las cabeceras HTTP de seguridad en respuestas web y API.
+ *
+ * @return array<string, string>
+ */
+function emitir_cabeceras_seguridad(): array
+{
+    $headers = [
+        'X-Content-Type-Options' => 'nosniff',
+        'X-Frame-Options' => 'SAMEORIGIN',
+        'Referrer-Policy' => 'strict-origin-when-cross-origin',
+    ];
+
+    $GLOBALS['__appsalon_security_headers'] = $headers;
+
+    if (!headers_sent()) {
+        foreach ($headers as $nombre => $valor) {
+            header($nombre . ': ' . $valor);
+        }
+    }
+
+    return $headers;
+}
+
+/**
  * Inicia la sesión con directivas de cookies seguras si aún no está activa.
  */
 function iniciar_sesion_segura(): void
 {
+    emitir_cabeceras_seguridad();
     if (session_status() === PHP_SESSION_NONE) {
         ini_set('session.cookie_httponly', '1');
         ini_set('session.use_only_cookies', '1');

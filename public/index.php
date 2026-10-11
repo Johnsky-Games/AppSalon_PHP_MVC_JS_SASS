@@ -52,6 +52,7 @@ $router->post('/api/citas', [APIController::class, 'guardar']);
 $router->post('/api/pagos/iniciar', [PagoController::class, 'iniciar']);
 $router->post('/api/pagos/webhook', [PagoController::class, 'webhook']);
 $router->get('/pago/resultado', [PagoController::class, 'resultado']);
+$router->post('/api/pagos/reembolsar', [PagoController::class, 'reembolsar']);
 
 //CRUD de Servicios
 $router->get('/servicios', [ServicioController::class, 'index']);
@@ -81,6 +82,7 @@ $router->get('/admin/reportes/exportar', [ReporteController::class, 'exportarCsv
 
 // Comprueba y valida las rutas, que existan y les asigna las funciones del Controlador
 try {
+    emitir_cabeceras_seguridad();
     $router->comprobarRutas();
 } catch (\AppTerminationException $e) {
     // Terminación controlada tras emisión de encabezados o respuesta

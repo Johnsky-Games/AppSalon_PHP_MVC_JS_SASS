@@ -236,4 +236,53 @@ class PagoController
             'advertenciaSeguridad' => $resultado['advertencia_seguridad'] ?? null,
         ]);
     }
+
+    /**
+     * Endpoint administrativo `POST /api/pagos/reembolsar`.
+     * Requiere rol de Administrador (`isAdmin()`) y validación CSRF (`validar_csrf()`).
+     */
+    public static function reembolsar(): void
+    {
+        iniciar_sesion_segura();
+        header('Content-Type: application/json; charset=utf-8');
+        isAdmin();
+
+        $datos = self::leerDatosEntrada();
+        if (!isset($_POST['csrf_token']) && isset($datos['csrf_token']) && is_string($datos['csrf_token'])) {
+            $_POST['csrf_token'] = $datos['csrf_token'];
+        }
+
+        if (!validar_csrf()) {
+            http_response_code(403);
+            echo json_encode([
+                'resultado' => false,
+                'status' => PagoService::STATUS_FORBIDDEN,
+                'error' => 'Token CSRF inválido o ausente',
+            ]);
+            detener_ejecucion(403);
+            return;
+        }
+
+        $referenciaRaw = $datos['referencia'] ?? $datos['referencia_pago'] ?? '';
+        $referencia = is_scalar($referenciaRaw) ? trim((string)$referenciaRaw) : '';
+
+        $monto = null;
+        if (isset($datos['monto']) && is_scalar($datos['monto']) && is_numeric((string)$datos['monto'])) {
+            $monto = (float)$datos['monto'];
+        }
+
+        $resultado = self::obtenerPagoService()->reembolsarPago($referencia, $monto);
+        $httpCode = (int)($resultado['http_code'] ?? 200);
+        unset($resultado['http_code']);
+
+        $respuesta = array_merge([
+            'resultado' => $httpCode === 200 && ($resultado['status'] ?? '') === PagoService::STATUS_OK,
+        ], $resultado);
+
+        http_response_code($httpCode);
+        echo json_encode($respuesta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($httpCode !== 200) {
+            detener_ejecucion($httpCode);
+        }
+    }
 }

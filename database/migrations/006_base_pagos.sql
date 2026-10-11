@@ -4,9 +4,10 @@
 -- Rama: feature/fase-6c-base-pagos
 -- ============================================================================
 
--- 1. Incorporar estado de pago en la tabla `citas` (por defecto 'pendiente')
+-- 1. Incorporar estado de pago en la tabla `citas` (por defecto 'pendiente') e índice de consulta
 ALTER TABLE citas
-    ADD COLUMN estado_pago VARCHAR(20) NOT NULL DEFAULT 'pendiente' AFTER profesionalId;
+    ADD COLUMN estado_pago VARCHAR(20) NOT NULL DEFAULT 'pendiente' AFTER profesionalId,
+    ADD INDEX idx_citas_estado_pago (estado_pago);
 
 -- 2. Crear tabla `pagos` con restricciones únicas de referencia, transacción externa e idempotencia
 CREATE TABLE IF NOT EXISTS pagos (

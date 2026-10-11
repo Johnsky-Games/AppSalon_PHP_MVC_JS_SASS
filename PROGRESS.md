@@ -3,9 +3,67 @@
 Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerdo con la metodología de entregas auditables por **ChatGPT** (revisión estática de código) y ejecución/verificación por **Antigravity** (desarrollo y pruebas dinámicas automatizadas), sujeto a la aprobación final del **Propietario**.
 
 > **Roles y Criterios:**
-> - **Desarrollo y Pruebas Automatizadas (Antigravity):** Implementación de código y ejecución de la suite completa de pruebas unitarias e integrales (170 pruebas, 1949 aserciones en PHPUnit 10.5.66), escenarios funcionales HTTP y suite E2E en navegador real Headless Chrome (`tests/verificar_navegador.ps1` y `tests/browser_e2e_test.js`).
+> - **Desarrollo y Pruebas Automatizadas (Antigravity):** Implementación de código y ejecución de la suite completa de pruebas unitarias e integrales (172 pruebas, 2046 aserciones en PHPUnit 10.5.66), escenarios funcionales HTTP y suite E2E en navegador real Headless Chrome (`tests/verificar_navegador.ps1` y `tests/browser_e2e_test.js`).
 > - **Revisión Estática Externa (ChatGPT):** Auditoría independiente de código de aplicación, arquitectura por capas, contratos transaccionales y revisión estática de scripts Bash.
 > - **Aprobación Final y Despliegue (Propietario):** Decisión formal sobre fusiones hacia `main` y despliegues en producción.
+
+---
+
+## Cierre Técnico: Consolidación de Seguridad, CI/CD, Docker, Respaldos y Operaciones
+
+- **Rama:** `feature/cierre-tecnico`
+- **Commit Base (Fase 6C aprobada):** `ab3350ba6abf2d89ea4f38551b006aace97ae286` (`8178b830bc03197775fa653857e66ec74eb290db` + registro de auditoría Fase 6C)
+- **Estado General del Cierre Técnico:** **Implementado y Verificado por Desarrollador (Listo para Auditoría Final)**
+
+### 1. Alcance Consolidado del Cierre Técnico
+
+1. **Auditoría Integral de Seguridad, Rutas, Permisos y Cabeceras HTTP (`includes/funciones.php`, `Router.php`, `public/index.php`, `controllers/PagoController.php`):**
+   - **Cabeceras de seguridad consistentes (`emitir_cabeceras_seguridad()`):** Emitidas de forma centralizada en `iniciar_sesion_segura()`, `Router::comprobarRutas()`, `Router::render()` y `public/index.php`:
+     - `X-Content-Type-Options: nosniff`
+     - `X-Frame-Options: SAMEORIGIN`
+     - `Referrer-Policy: strict-origin-when-cross-origin`
+   - **Cobertura completa de rutas y permisos:**
+     - Se registra `POST /api/pagos/reembolsar` en `public/index.php` hacia `PagoController::reembolsar()`, protegido con `isAdmin()` y validación CSRF (`validar_csrf()`).
+     - `Router::comprobarRutas()` emite explícitamente `http_response_code(404)` ante rutas inexistentes.
+     - Ningún controlador o repositorio filtra trazas SQL, contraseñas, tokens ni secretos en respuestas HTTP.
+
+2. **Revisión de Dependencias y Scripts (`composer.json`, `package.json`, `.gitignore`):**
+   - `composer.json` incorpora scripts estandarizados (`composer test`, `composer migrate:status`, `composer migrate:up`, `composer migrate:down`, `composer db:backup`, `composer db:restore`).
+   - `package.json` documenta metadatos y scripts de compilación reproducible (`npm run build`, `npm run build:css`, `npm run build:js`).
+   - `.gitignore` protege explícitamente `includes/.env` y `storage/` frente a versionado accidental.
+
+3. **Revisión de Consultas SQL, Claves Foráneas e Índices (`database/migrations/001` a `006`, `database/README.md`):**
+   - Se incorpora el índice `idx_citas_estado_pago (estado_pago)` en `006_base_pagos.sql` (y su `DROP INDEX` correspondiente en `006_base_pagos_rollback.sql`).
+   - Se actualiza `database/README.md` documentando las 6 migraciones incrementales (`001` a `006`) y sus políticas de integridad referencial (`ON DELETE RESTRICT` en `fk_citas_profesional`, `ON DELETE SET NULL` en `notificaciones_citas` y `pagos` preservando `cita_referencia_id`, y `ON DELETE CASCADE` en relaciones de agenda de profesionales).
+
+4. **Integración Continua Automatizada (`.github/workflows/ci.yml`):**
+   - Configura PHP 8.2 (`mysqli`, `pdo_mysql`, `mbstring`, `zlib`) y servicio `mysql:8.0` con healthcheck en cada `push` y `pull_request` sobre `main` y `feature/**`.
+   - Ejecuta `composer install`, verificación de sintaxis `php -l` sobre todos los archivos `.php` del proyecto, carga de `database/schema_base.sql`, aplicación y verificación de migraciones (`php database/migrador.php up` y `status`), suite completa de PHPUnit y prueba funcional en vivo de `scripts/backup_db.php` y `scripts/restore_db.php`.
+
+5. **Entorno Docker Reproducible y Plantilla de Variables de Entorno (`Dockerfile`, `docker-compose.yml`, `includes/.env.example`):**
+   - `includes/.env.example` documenta exhaustivamente todas las variables del sistema (`APP_ENV`, `APP_URL`, `APP_TIMEZONE=America/Guayaquil`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASS`, `DB_NAME`, `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_USER`, `EMAIL_PASS`, `EMAIL_PASSWORD`, `EMAIL_FROM`, `EMAIL_FROM_NAME`, `NOTIFICACIONES_RECORDATORIO_HORAS`, `RESERVA_EXIGIR_PROFESIONAL`, `PAYMENT_GATEWAY_PROVIDER`, `PAYMENT_WEBHOOK_SECRET`).
+   - `Dockerfile` y `docker-compose.yml` proveen una definición reproducible para PHP 8.2 Apache (`mod_rewrite`, `mod_headers`, `mysqli`, `pdo_mysql`) y MySQL 8.0 (`utf8mb4_unicode_ci`) con nombres de contenedores parametrizables que preservan intactos los contenedores locales existentes.
+
+6. **Scripts CLI de Respaldo y Restauración Probados en Aislamiento (`scripts/backup_db.php`, `scripts/restore_db.php`, `tests/Integration/BackupRestoreIntegrationTest.php`):**
+   - `scripts/backup_db.php`: Genera volcados SQL consistentes (`REPEATABLE READ` + `START TRANSACTION WITH CONSISTENT SNAPSHOT`) en texto plano (`.sql`) o comprimidos con GZIP (`.sql.gz` / `--gzip`) y calcula su hash `SHA-256`, sin depender de binarios externos del sistema operativo (`mysqldump`).
+   - `scripts/restore_db.php`: Restaura volcados `.sql` o `.sql.gz` verificando el resultado de cada sentencia SQL y garantizando la reactivación de `FOREIGN_KEY_CHECKS = 1` y `UNIQUE_CHECKS = 1`.
+   - `tests/Integration/BackupRestoreIntegrationTest.php`: Verifica en bases de datos aisladas el ciclo completo de respaldo (`.sql` y `.sql.gz`) y restauración sobre las 13 tablas del esquema migrado (`001` a `006`), incluyendo caracteres especiales (`;`, `'`, `--`, `&`), payloads JSON y registros históricos con `cita_id = NULL` (`ON DELETE SET NULL`), además de auditar cabeceras HTTP de seguridad, permisos de `POST /api/pagos/reembolsar` e índices en `INFORMATION_SCHEMA`.
+
+7. **Guía de Migración y Operaciones (`docs/GUIA_MIGRACION_OPERACIONES.md`):**
+   - Documenta requisitos de sistema, instalación desde cero, ejecución de migraciones y rollbacks, programación de tareas (Cron en Linux y Task Scheduler en Windows para `scripts/procesar_notificaciones.php`), política de respaldos y restauraciones, matriz de seguridad de rutas y monitoreo de salud.
+
+### 2. Validación Ejecutada en el Cierre Técnico (Desarrollador)
+
+#### A. Suite Completa PHPUnit y Verificación de Sintaxis (Docker PHP 8.2.34 + MySQL 8.0 Aislado)
+- **Versión efectiva:** `PHPUnit 10.5.66 by Sebastian Bergmann and contributors.` (`Runtime: PHP 8.2.34`, `Configuration: /app/phpunit.xml`).
+- **Comando ejecutado:**
+  `docker run --rm --name appsalon-web-phpunit-ct --network appsalon-net-phpunit-ct -v "${PWD}:/app" -w /app -e APP_ENV=testing -e DB_HOST=appsalon-db-phpunit-ct -e DB_PORT=3306 -e DB_USER=root -e DB_PASS=root -e DB_NAME=appsalon_ct_test appsalon-php-test php -d variables_order=EGPCS vendor/bin/phpunit --colors=never`
+- **Resultado PHPUnit:** `OK (172 tests, 2046 assertions)` (`Time: 00:46.428, Memory: 16.00 MB`) — Código de salida `0`.
+- **Verificación de sintaxis (`php -l`):** `0` errores de sintaxis en todos los archivos `.php` del proyecto — Código de salida `0`.
+
+#### B. Verificación E2E en Navegador con JavaScript Habilitado (`tests/verificar_navegador.ps1` + `tests/browser_e2e_test.js`)
+- **RUN_ID:** `30c68b1df71949a2afca0130e3526507` (Contenedores efímeros aislados, puerto dinámico `http://localhost:32798`, BD aislada `appsalon_browser_test`).
+- **Resultado:** 19/19 comprobaciones E2E superadas (`ADMIN-01` a `ADMIN-05`, `PROF-01`, `PROF-02`, `PRE-01`, `DISP-01`, `REC-01` a `REC-05`, `RES-01`, `REP-01`, `PAG-01`, `AUTH-01`, `NOTIF-01`), `0` errores de consola, `0` peticiones de red fallidas + verificación de persistencia en MySQL — Código de salida `0`.
 
 ---
 
@@ -659,6 +717,7 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 | **Fase 5** | Interfaz accesible de reservas y panel administrativo | `Completada` |
 | **Fase 6A** | Notificaciones transaccionales de citas, recordatorios configurables y cola de reintentos idempotente | `Completada` |
 | **Fase 6B** | Reportes administrativos de reservas, ocupación por profesional, importes históricos y exportación CSV segura | `Completada` |
-| **Fase 6C** | Base para pagos (*Payment Gateway Interface*, proveedor simulado e idempotencia de notificaciones) | `Completada (En Auditoría)` |
+| **Fase 6C** | Base para pagos (*Payment Gateway Interface*, proveedor simulado e idempotencia de notificaciones) | `Completada` |
+| **Cierre Técnico** | Auditoría de seguridad/rutas/cabeceras, revisión de índices SQL, CI en GitHub Actions, Docker reproducible, scripts de backup/restore probados y guía de operaciones | `Completada (En Auditoría)` |
 
 

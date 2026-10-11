@@ -7,6 +7,7 @@
 DROP TABLE IF EXISTS pagos;
 
 ALTER TABLE citas
+    DROP INDEX idx_citas_estado_pago,
     DROP COLUMN estado_pago;
 
 DELETE FROM migraciones WHERE migracion = '006_base_pagos';

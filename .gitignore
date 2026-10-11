@@ -1,6 +1,8 @@
 node_modules
 vendor
 .env
+includes/.env
+storage/
 DS_Store
 .vscode
 .phpunit.result.cache
