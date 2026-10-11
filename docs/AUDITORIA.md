@@ -829,3 +829,87 @@ Sobre la base de las pruebas reproducibles, el análisis de código estático y 
 - **SHA Recomendado para Entrega:** `dd79b5f43f7215ee856813679db7a846b023449d`
 - **Recomendación:** La rama `feature/correcciones-auditoria-integral` cumple plenamente con los criterios de robustez, seguridad, concurrencia y consistencia financiera requeridos para el cierre del proyecto.
 
+---
+
+## 6. Auditoría Independiente del SHA Integrado (`f4991be5881c134a4d181213264ed3a048e1e4b5`)
+
+- **Fecha de Auditoría:** 2026-10-11
+- **Rol:** Subagente Auditor Independiente
+- **Worktree Exclusivo de Auditoría:** `C:\Users\jonat\.gemini\antigravity\worktrees\AppSalon_PHP_MVC_JS_SASS\auditing_fase_4b_reservas`
+- **SHA Integrado Evaluado:** `f4991be5881c134a4d181213264ed3a048e1e4b5` (HEAD merge `160e9409054f9e4ee2a7acef18b8414ae2d0eb6e`)
+- **Rama Asociada:** `feature/correcciones-auditoria-integral` / `audit/correcciones-auditoria-integral`
+- **Integridad de Stash:** `stash@{0}: On auditing_fase_4b_reservas: temp stash for checkout` verificado y preservado intacto.
+
+---
+
+### 1. Evaluación Estática y de Dominio de los Frentes Auditados
+
+| Frente | Requerimiento de Auditoría | Evidencia en Código (`f4991be`) | Test Automatizado | Evaluación Estática |
+| :--- | :--- | :--- | :--- | :---: |
+| **Frente A (Restore y Manifiesto)** | Cargar y validar manifiesto (`.manifest.json`), incluyendo tablas asociativas/indexadas, conteo por tabla (`filas_por_tabla`), `total_filas` y `schema_version`, aún con `--hash`. Reversión post-staging demostrada con base destino intacta. | `scripts/restore_db.php:103-145,323-380`: Carga manifiesto obligatorio o adyacente, valida coincidencia con `--hash`, compara tablas de staging con `tablas`, valida filas por tabla contra `filas_por_tabla` y total acumulado contra `total_filas`. `BackupRestoreIntegridadIntegrationTest.php:436-490`: Error post-staging condicionado a `DATABASE() NOT LIKE '%_stg_%'` activa reversión y preserva `datos_criticos` intacto. | `tests/Integration/BackupRestoreIntegridadIntegrationTest.php` (4 tests, 41 assertions) | **CUMPLE** |
+| **Frente B (Reembolso y Estado Agregado)** | Al reembolsar un pago, la cita solo transiciona a `reembolsado` si no existen otros pagos completados; si otro cobro sigue completado, permanece `pagado`. | `services/PagoService.php:814-821`: `findCompletadoPorCitaId((int)$pago->cita_id, true)`. Si existe otro pago completado distinto al actual, mantiene `citas.estado_pago = 'pagado'`; de lo contrario actualiza a `'reembolsado'`. `PagoIdempotenciaSeguridadIntegrationTest.php:547-570`: Secuencia K1 falla -> K2 inicia -> éxito tardío K1 -> éxito K2 -> reembolso K1 (cita sigue pagada) -> reembolso K2 (cita pasa a reembolsado). | `tests/Integration/PagoIdempotenciaSeguridadIntegrationTest.php` (5 tests, 60 assertions) | **CUMPLE** |
+| **Frente C (Límites de Workers y Payload Canónico)** | Cláusulas SQL atómicas `WHERE intentos < max_intentos` y `(proximo_intento_at IS NULL OR proximo_intento_at <= NOW())` en adquisición. Payload persistido en outbox como fuente canónica de correo. | `repositories/NotificacionCitaRepository.php:837,1075`: Filtros atómicos en `adquirirParaEnvio` y `buscarCandidatasParaReintento`. `services/NotificacionCitaService.php:917-938`: Construye mensaje y destinatario desde `$notificacion->obtenerPayload()`, `destinatario_email`, `destinatario_nombre` y `asunto`. `NotificacionesWorkerIntegrationTest.php:303-374`: Pruebas de rechazo por `max_intentos` alcanzados y respeto a backoff activo. | `tests/Integration/NotificacionesWorkerIntegrationTest.php` (7 tests, 58 assertions) | **CUMPLE** |
+| **Frente C/D (Outbox en Flujo Clásico)** | Registrar evento outbox atómicamente dentro de la misma transacción antes del commit en el flujo clásico. | `repositories/CitaRepository.php:447-468`: En `crearReservaAtomica`, instancia `NotificacionCitaRepository` sobre la misma conexión `$db` y registra `cita:{$idCita}:confirmacion` con snapshot antes de `$db->commit()`. `Fase6ANotificacionesIntegrationTest.php:536-566`: Comprueba inserción atómica en outbox. | `tests/Integration/Fase6ANotificacionesIntegrationTest.php` (13 tests, 93 assertions) | **CUMPLE** |
+| **Frente D (Concurrencia Real Multiproceso)** | Prueba de concurrencia con proceso worker paralelo independiente (`proc_open`), barrera `READY`/`GO`, contención pesimista y resolución limpia con HTTP 422. | `tests/Integration/CitaCancelacionAgendaIntegrationTest.php:431-522`: Administrador abre transacción y adquiere `SELECT ... FOR UPDATE` en `profesionales` e inserta bloqueo. Lanza `concurrent_reserva_worker.php` con pipes `proc_open`, sincroniza `READY` y `GO`. Worker sufre contención, admin confirma y worker resuelve con HTTP 422 `fuera_de_horario`, 0 citas creadas y exitCode 0. | `tests/Integration/CitaCancelacionAgendaIntegrationTest.php` (6 tests, 63 assertions) | **CUMPLE** |
+| **Frente E (Stack Oficial Apache y CI)** | Servidor de prueba levantado con imagen oficial de Apache (`appsalon-web-test`) en puerto 80. CI valida contenedor Apache contra MySQL. | `tests/verificar_navegador.ps1:115-132`: Detecta `appsalon-web-test:latest` y mapea `-p 0:80 -v "${PWD}:/var/www/html"`. `.github/workflows/ci.yml:85-100`: Levanta `appsalon-web-ci-instance`, valida endpoint con `curl -f -I http://localhost:3000/` y revisa logs. | Suite E2E y GitHub Actions Workflow | **HALLAZGOS BLOQUEANTES (Ver sección 2)** |
+
+---
+
+### 2. Hallazgos Bloqueantes Dinámicos Detectados en la Auditoría
+
+A pesar de que las mitigaciones de dominio en los Frentes A, B, C, C/D y D están correctamente implementadas en el código PHP, la ejecución dinámica de las suites en el SHA `f4991be5881c134a4d181213264ed3a048e1e4b5` reveló **2 fallos bloqueantes**:
+
+#### Hallazgo Bloqueante 1: Fallo de Verificación en Base de Datos de la Suite E2E (`tests/verificar_navegador.ps1`)
+- **Evidencia:** Al ejecutar `powershell -ExecutionPolicy Bypass -File tests/verificar_navegador.ps1`, la suite supera los 19 recorridos interactivos de Puppeteer pero aborta en el paso `[6/6] Verificando persistencia estricta en base de datos` con código de salida `1`:
+  ```text
+  [ERROR EN VERIFICACION DE NAVEGADOR] Inconsistencia en notificaciones_citas persistidas en BD (confirmaciones | cancelaciones): 3 0
+  ```
+- **Causa Raíz:** En `tests/verificar_navegador.ps1` (línea 264), la consulta de verificación SQL fue escrita para el modelo legado de borrado físico (`DELETE FROM citas`), donde la clave foránea `ON DELETE SET NULL` forzaba `cita_id IS NULL`:
+  ```sql
+  SELECT SUM(CASE WHEN tipo='confirmacion' AND estado='enviado' AND intentos=1 THEN 1 ELSE 0 END) AS confirmaciones,
+         SUM(CASE WHEN tipo='cancelacion' AND estado='enviado' AND intentos=1 AND cita_id IS NULL AND cita_referencia_id > 0 THEN 1 ELSE 0 END) AS cancelaciones
+  FROM notificaciones_citas;
+  ```
+  Con la incorporación de la cancelación lógica (migración `007` y columna `citas.estado = 'cancelada'`), las citas canceladas ya **no** se eliminan de la tabla `citas`. En consecuencia, `notificaciones_citas.cita_id` **no** es `NULL` (mantiene la referencia a la cita existente cancelada), la cláusula `cita_id IS NULL` evalúa falso, el conteo devuelve `0` cancelaciones y la prueba lanza una excepción bloqueante.
+- **Corrección Requerida:** Ajustar la consulta en `tests/verificar_navegador.ps1` (línea 264) para admitir cancelación lógica (por ejemplo: `(cita_id IS NULL OR cita_referencia_id > 0)` o verificar `tipo='cancelacion' AND estado='enviado' AND intentos=1 AND cita_referencia_id > 0`).
+
+#### Hallazgo Bloqueante 2: Fallo en PHPUnit con Orden Aleatorio (`--order-by=random` en CI)
+- **Evidencia:** Al ejecutar la suite completa de PHPUnit con orden aleatorio (tal como está configurado en `.github/workflows/ci.yml:101`: `vendor/bin/phpunit --do-not-cache-result --order-by=random --colors=never`):
+  ```text
+  There was 1 risky test:
+  1) Tests\Integration\SecurityIntegrationTest::testTransicionDeRolAdminAClienteEnMismaSesionRevocaAccesoAdmin
+  Test code or tested code printed unexpected output: {"resultado":false,"error":"Acceso denegado"}
+  /app/tests/Integration/SecurityIntegrationTest.php:294
+
+  FAILURES! / Issues! Tests: 209, Assertions: 2587, Risky: 1.
+  Código de salida: 1.
+  ```
+- **Causa Raíz:** `SecurityIntegrationTest::setUp()` (`tests/Integration/SecurityIntegrationTest.php:38-69`) no limpia las superglobales `$_SERVER['REQUEST_URI']` ni `$_SERVER['HTTP_ACCEPT']`. Cuando PHPUnit corre con `--order-by=random`, si una prueba previa de API (como `DisponibilidadIntegrationTest`, `Fase5InterfazReservasIntegrationTest` o `Fase6ANotificacionesIntegrationTest`) se ejecuta antes que `SecurityIntegrationTest`, `$_SERVER['REQUEST_URI']` retiene un prefijo `/api/...`. Al ejecutarse `testTransicionDeRolAdminAClienteEnMismaSesionRevocaAccesoAdmin` (línea 357), la función `isAdmin()` (`includes/funciones.php:128-142`) evalúa `es_peticion_json() === true` e imprime a `stdout`:
+  ```json
+  {"resultado":false,"error":"Acceso denegado"}
+  ```
+  PHPUnit detecta salida no capturada (`beStrictAboutOutputDuringTests="true"`) y marca la prueba como `Risky`. Dado que `phpunit.xml` define `failOnRisky="true"`, el comando aborta con código de salida `1`. Esto causará fallos estocásticos en GitHub Actions.
+- **Corrección Requerida:** En `tests/Integration/SecurityIntegrationTest.php`, incorporar en `setUp()` y `tearDown()` el reseteo explícito de superglobales (`$_SERVER['REQUEST_URI'] = '/'`, `$_SERVER['HTTP_ACCEPT'] = ''`, etc.), o capturar la salida en la aserción de `isAdmin()` con `ob_start() ... ob_end_clean()`.
+
+---
+
+### 3. Comparativa entre Reporte del Desarrollador y Verificación del Auditor
+
+| Aspecto | Reportado por Desarrollador | Verificado Independientemente por Auditor | Coincidencia / Discrepancia |
+| :--- | :--- | :--- | :--- |
+| **SHA evaluado** | `f4991be5881c134a4d181213264ed3a048e1e4b5` | `f4991be5881c134a4d181213264ed3a048e1e4b5` (merge `160e940`) | Exacta |
+| **Versión PHPUnit / PHP** | PHPUnit `10.5.66` / PHP `8.2.34` | PHPUnit `10.5.66` / PHP `8.2.34` | Exacta |
+| **Resultado PHPUnit (orden por defecto)** | `OK (209 tests, 2587 assertions)` Exit 0 | `OK (209 tests, 2587 assertions)` Exit 0 | Exacta |
+| **Resultado PHPUnit (--order-by=random)** | No reportado | `FAILURES! (Risky: 1)` Exit 1 (Semilla `1791750515`) | **Discrepancia crítica:** Fuga de superglobales en `SecurityIntegrationTest`. |
+| **Resultado Suite Navegador E2E** | Reportado OK | 19 checks `[OK]`, pero paso 6 de persistencia falla con Exit 1 | **Discrepancia crítica:** Consulta en `verificar_navegador.ps1` incompatible con cancelación lógica. |
+| **Aislamiento App Local / Stash** | Intactos | `appsalon-web`, `appsalon-db`, `appsalon-net`, `appsalon_mvc`, `.env` y `stash@{0}` estrictamente intactos | Exacta |
+
+---
+
+### 4. Conclusión y Veredicto Final
+
+- **Veredicto:** **`CORRECCIONES NECESARIAS`**
+- **Acciones Requeridas para Desbloqueo:**
+  1. En `tests/verificar_navegador.ps1` (línea 264), corregir la consulta SQL para contar cancelaciones admitiendo que `cita_id` no sea `NULL` bajo cancelación lógica (`AND (cita_id IS NULL OR cita_referencia_id > 0)`).
+  2. En `tests/Integration/SecurityIntegrationTest.php`, resetear `$_SERVER['REQUEST_URI'] = '/'` y `$_SERVER['HTTP_ACCEPT'] = ''` en `setUp()` y `tearDown()`, garantizando que `vendor/bin/phpunit --do-not-cache-result --order-by=random --colors=never` pase sin pruebas marcadas como Risky (Exit 0).
+
