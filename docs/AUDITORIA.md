@@ -1032,4 +1032,110 @@ Al ejecutar la suite en el contenedor aislado Docker bajo las condiciones idént
   2. En las pruebas de integración que inyectan cabeceras JSON (`DisponibilidadIntegrationTest.php`, `Fase5InterfazReservasIntegrationTest.php`, `PagoIdempotenciaSeguridadIntegrationTest.php`):
      - Incorporar en sus respectivos métodos `tearDown()` la eliminación o restauración de `$_SERVER['HTTP_ACCEPT']` y `$_SERVER['CONTENT_TYPE']` para garantizar la higiene global de superglobales entre ejecuciones de pruebas con orden aleatorio.
 
+---
+
+## 8. Auditoría Independiente Final y Aceptación Definitiva: Saneamiento Global de Superglobales (SHA `8d7be2130e58313e0b4558d0611098e898b24eca` / Commit `3809035d5045bb4c09bf7c0e33e6e47f41ca12be`)
+
+- **Fecha de Auditoría:** 2026-10-11
+- **Rol:** Subagente Auditor Independiente
+- **Worktree Exclusivo de Auditoría:** `C:\Users\jonat\.gemini\antigravity\worktrees\AppSalon_PHP_MVC_JS_SASS\auditing_fase_4b_reservas`
+- **SHA Evaluado:** `8d7be2130e58313e0b4558d0611098e898b24eca` (merge integrando commit `3809035d5045bb4c09bf7c0e33e6e47f41ca12be`)
+- **Rama Asociada:** `audit/correcciones-auditoria-integral` / `feature/correcciones-auditoria-integral`
+- **Integridad de Stash:** `stash@{0}: On auditing_fase_4b_reservas: temp stash for checkout` verificado y preservado estrictamente intacto.
+- **Aislamiento de Entorno:** Contenedores locales `appsalon-web`, `appsalon-db`, red `appsalon-net`, base de datos `appsalon_mvc` y archivo `includes/.env` sin ninguna modificación.
+- **Veredicto Definitivo:** **`APROBADO`**
+
+---
+
+### 1. Verificación de las Correcciones de Dominio y Saneamiento
+
+El commit `3809035d5045bb4c09bf7c0e33e6e47f41ca12be` implementó la remediación exhaustiva para el aislamiento de superglobales y salida de buffer en la suite de pruebas:
+
+1. **Aislamiento en `tests/Integration/ApiSeguridadTest.php`:**
+   - En `setUp()` y `tearDown()`, se realiza la limpieza explícita de `$_SERVER['HTTP_ACCEPT']`, `$_SERVER['CONTENT_TYPE']`, `$_SERVER['HTTP_X_REQUESTED_WITH']`, `$_SERVER['HTTP_REFERER']`, `$_SERVER['HTTP_X_CSRF_TOKEN']`, fijando `$_SERVER['REQUEST_URI'] = '/'` y `http_response_code(200)`.
+   - En `testEliminarCitaExitosaNoEjecutaRollbackFalso` (líneas 442–450), la llamada a `APIController::eliminar()` se encuentra encapsulada dentro de un bloque `ob_start() ... finally { ob_end_clean(); }`, garantizando que ninguna salida residual a `stdout` sea interpretada como estado `Risky` por PHPUnit.
+
+2. **Higiene Global en las 10 Suites de Integración:**
+   - Se incorporó en los métodos `tearDown()` de todas las suites que mutan cabeceras (`DisponibilidadIntegrationTest`, `Fase5InterfazReservasIntegrationTest`, `PagoIdempotenciaSeguridadIntegrationTest`, `Fase6ANotificacionesIntegrationTest`, `Fase6BReportesIntegrationTest`, `Fase6CBasePagosIntegrationTest`, `ReportesFinancierosIntegrationTest`, `ProfesionalAgendaIntegrationTest`, `ReservaConcurrenciaIntegrationTest`, `ServicioModuloIntegrationTest`) el reseteo de:
+     ```php
+     $_SESSION = [];
+     $_POST = [];
+     $_GET = [];
+     $_SERVER['HTTP_X_CSRF_TOKEN'] = null;
+     $_SERVER['HTTP_REFERER'] = null;
+     unset($_SERVER['HTTP_ACCEPT'], $_SERVER['CONTENT_TYPE'], $_SERVER['HTTP_X_REQUESTED_WITH']);
+     $_SERVER['REQUEST_METHOD'] = 'GET';
+     $_SERVER['REQUEST_URI'] = '/';
+     http_response_code(200);
+     ```
+   - Esto erradica por diseño cualquier fuga o interferencia entre pruebas ejecutadas en cualquier orden.
+
+---
+
+### 2. Evidencia Dinámica Independiente en Entornos Aislados
+
+#### A. Suite E2E de Navegador Headless Web (Puppeteer — `tests/verificar_navegador.ps1`)
+- **Entorno Efímero de Auditoría:** Contenedores efímeros creados y destruidos por el script.
+- **Resultado:**
+  - 19 comprobaciones interactivas superadas con éxito: `ADMIN-01` a `ADMIN-04`, `PROF-01`, `PROF-02`, `PRE-01`, `DISP-01`, `REC-01` a `REC-04`, `RES-01`, `ADMIN-05`, `REP-01`, `PAG-01`, `AUTH-01`, `NOTIF-01`, `REC-05`.
+  - Paso `[6/6] Verificando persistencia estricta en base de datos`:
+    - Servicio CRUD verificado en BD con `duracion_minutos = 60`.
+    - Profesional y agenda validados en MySQL.
+    - Cita ID `3` verificada en fecha `2026-10-12`, profesional `2`, intervalo `[11:30:00, 13:00:00)` (90 min), 2 servicios.
+    - Notificaciones persistidas en BD: `confirmaciones | cancelaciones: 3 2`.
+    - Pago transaccional en BD: `$195.00 completado/pagado`.
+  - Errores de consola: `0`. Solicitudes de red fallidas: `0`.
+  - Código de salida: `0`.
+
+#### B. Suite Completa PHPUnit bajo Orden Aleatorio (`--order-by=random --do-not-cache-result --colors=never`)
+- **Entorno Aislado de Auditoría:** Red `appsalon-audit-r3-net`, contenedor MySQL `appsalon-audit-r3-db` inicializado con `schema_base.sql` y migraciones `001` a `009`.
+- **Ejecuciones con Orden Aleatorio:**
+  1. **Semilla Aleatoria Inicial (`1791753142`):**
+     ```text
+     PHPUnit 10.5.66 by Sebastian Bergmann and contributors.
+     Configuration: /app/phpunit.xml
+     Random Seed: 1791753142
+     ...............................................................  63 / 209 ( 30%)
+     ............................................................... 126 / 209 ( 60%)
+     ............................................................... 189 / 209 ( 90%)
+     ....................                                            209 / 209 (100%)
+     Time: 01:07.332, Memory: 18.00 MB
+     OK (209 tests, 2587 assertions) - Exit 0
+     ```
+  2. **Comprobación de Semilla de Regresión 1 (`1791752084`):**
+     ```text
+     Random Seed: 1791752084
+     OK (209 tests, 2587 assertions) - Exit 0
+     ```
+  3. **Comprobación de Semilla de Regresión 2 (`1791751792`):**
+     ```text
+     Random Seed: 1791751792
+     OK (209 tests, 2587 assertions) - Exit 0
+     ```
+- **Pruebas totales:** 209 tests, 2587 assertions.
+- **Fallos:** 0.
+- **Pruebas riesgosas (Risky):** 0.
+- **Código de salida:** 0.
+
+---
+
+### 3. Matriz de Coincidencia y Cumplimiento Integral
+
+| Requisito de Integración | Verificado Independientemente por el Auditor | Estado |
+| :--- | :--- | :---: |
+| **Persistencia Suite E2E Navegador** | 19 checks [OK], persistencia 3 confirmaciones y 2 cancelaciones en MySQL, pago $195.00 (Exit 0) | **CUMPLE** |
+| **PHPUnit Orden Aleatorio (`--order-by=random`)** | 209 tests, 2587 assertions, 0 fallos, 0 risky en semillas 1791753142, 1791752084 y 1791751792 (Exit 0) | **CUMPLE** |
+| **Aislamiento de Superglobales** | Saneamiento simétrico en `setUp()` y `tearDown()` en todas las suites de integración | **CUMPLE** |
+| **Aislamiento de Buffer en Pruebas** | Invocaciones a `APIController::eliminar()` aisladas con `ob_start() ... ob_end_clean()` | **CUMPLE** |
+| **Integridad de Entorno Local y Stash** | `appsalon-web`, `appsalon-db`, `appsalon_mvc`, `.env` y `stash@{0}` 100% intactos | **CUMPLE** |
+
+---
+
+### 4. Conclusión y Veredicto Final Definitivo
+
+- **Veredicto:** **`APROBADO`**
+- **SHA Recomendado para Entrega Final:** `8d7be2130e58313e0b4558d0611098e898b24eca` (merge integrando commit `3809035d5045bb4c09bf7c0e33e6e47f41ca12be`).
+- **Dictamen:** Todos los hallazgos de auditoría externa e interna han sido completamente resueltos con pruebas automatizadas deterministas, sin condiciones de carrera, sin fugas de estado entre pruebas en orden aleatorio y con total inmutabilidad de los datos históricos del negocio. La rama `audit/correcciones-auditoria-integral` se encuentra lista y aprobada para su fusión definitiva a la rama principal (`main`).
+
+
 
