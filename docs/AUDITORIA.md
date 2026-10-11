@@ -913,3 +913,123 @@ A pesar de que las mitigaciones de dominio en los Frentes A, B, C, C/D y D está
   1. En `tests/verificar_navegador.ps1` (línea 264), corregir la consulta SQL para contar cancelaciones admitiendo que `cita_id` no sea `NULL` bajo cancelación lógica (`AND (cita_id IS NULL OR cita_referencia_id > 0)`).
   2. En `tests/Integration/SecurityIntegrationTest.php`, resetear `$_SERVER['REQUEST_URI'] = '/'` y `$_SERVER['HTTP_ACCEPT'] = ''` en `setUp()` y `tearDown()`, garantizando que `vendor/bin/phpunit --do-not-cache-result --order-by=random --colors=never` pase sin pruebas marcadas como Risky (Exit 0).
 
+---
+
+## 7. Auditoría Independiente del SHA Integrado (`3e7ee8dcceba1978960f7ad6b26eec90cf7a7ba7`)
+
+- **Fecha de Auditoría:** 2026-10-11
+- **Rol:** Subagente Auditor Independiente
+- **Worktree Exclusivo de Auditoría:** `C:\Users\jonat\.gemini\antigravity\worktrees\AppSalon_PHP_MVC_JS_SASS\auditing_fase_4b_reservas`
+- **SHA Integrado Evaluado:** `3e7ee8dcceba1978960f7ad6b26eec90cf7a7ba7` (merge integrando commit `60991a3f8daa5f08955733aa8be1d0879b3b38c2`)
+- **Rama Asociada:** `audit/correcciones-auditoria-integral` / `feature/correcciones-auditoria-integral`
+- **Integridad de Stash:** `stash@{0}: On auditing_fase_4b_reservas: temp stash for checkout` verificado y preservado estrictamente intacto.
+- **Aislamiento de Entorno:** Contenedores locales `appsalon-web`, `appsalon-db`, red `appsalon-net`, base de datos `appsalon_mvc` y archivo `includes/.env` sin ninguna interacción ni modificación.
+
+---
+
+### 1. Evaluación Dinámica de las Correcciones del Commit `60991a3`
+
+El desarrollador integró el commit `60991a3f8daa5f08955733aa8be1d0879b3b38c2` con el propósito de resolver los dos hallazgos bloqueantes reportados en la Sección 6:
+
+1. **Hallazgo Bloqueante 1 (`tests/verificar_navegador.ps1:264`) — RESUELTO Y COMPROBADO:**
+   - **Modificación:** Se actualizó la comprobación de cancelaciones en base de datos para aceptar cancelaciones lógicas:
+     ```sql
+     AND (cita_id IS NULL OR cita_referencia_id > 0)
+     ```
+   - **Resultado en Entorno Efímero Puppeteer:**
+     - 19 recorridos interactivos superados con `[OK]`.
+     - Paso `[6/6] Verificando persistencia estricta en base de datos` ejecutado exitosamente:
+       ```text
+       confirmaciones | cancelaciones: 3 2
+       [OK] Pago verificado: $195.00 completado/pagado
+       ```
+     - Errores de consola: `0`. Solicitudes de red no atendidas: `0`.
+     - Código de salida: `0`.
+
+2. **Hallazgo Bloqueante 2 (`tests/Integration/SecurityIntegrationTest.php`) — RESUELTO EN SU ÁMBITO, PERO EMERGE FUGA EN `ApiSeguridadTest`:**
+   - En `tests/Integration/SecurityIntegrationTest.php`, se incorporó la limpieza de superglobales (`$_SERVER['REQUEST_URI'] = '/'`, `unset($_SERVER['HTTP_ACCEPT'], $_SERVER['CONTENT_TYPE'])`) y la captura de buffer con `ob_start() ... ob_end_clean()` en `testTransicionDeRolAdminAClienteEnMismaSesionRevocaAccesoAdmin`.
+   - Dicha prueba ya no genera estado `Risky` de forma aislada.
+   - En orden secuencial alfabético (`vendor/bin/phpunit --do-not-cache-result`), la suite completa de 209 pruebas pasa al 100%:
+     ```text
+     OK (209 tests, 2587 assertions) - Exit 0
+     ```
+
+---
+
+### 2. Hallazgo Bloqueante Detectado: Contaminación de Superglobales en `ApiSeguridadTest` bajo `--order-by=random`
+
+Al ejecutar la suite en el contenedor aislado Docker bajo las condiciones idénticas de integración continua definidas en `.github/workflows/ci.yml:101` (`--do-not-cache-result --order-by=random --colors=never`):
+
+- **Comando:**
+  ```powershell
+  docker run --rm --network appsalon-audit-final-net -v "C:/Users/jonat/...:/app" -w /app -e DB_HOST=appsalon-audit-final-db ... appsalon-php-test php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --order-by=random --colors=never
+  ```
+- **Resultado:**
+  ```text
+  Random Seed: 1791752084 (y 1791751792)
+  ...
+  There were 2 failures:
+
+  1) Tests\Integration\ApiSeguridadTest::testEliminarCitaExitosaNoEjecutaRollbackFalso
+  La eliminación exitosa debe redirigir con 302
+  Failed asserting that 200 is identical to 302.
+  /app/tests/Integration/ApiSeguridadTest.php:427
+
+  2) Tests\Integration\ApiSeguridadTest::testClientePuedeEliminarSuPropiaCita
+  Failed asserting that 200 is identical to 302.
+  /app/tests/Integration/ApiSeguridadTest.php:186
+
+  --
+
+  There was 1 risky test:
+
+  1) Tests\Integration\ApiSeguridadTest::testEliminarCitaExitosaNoEjecutaRollbackFalso
+  Test code or tested code printed unexpected output: {"resultado":true,"status":"ok","id":52,"mensaje":"Cita cancelada correctamente"}
+  /app/tests/Integration/ApiSeguridadTest.php:390
+
+  FAILURES!
+  Tests: 209, Assertions: 2580, Failures: 2, Risky: 1.
+  Código de salida: 1.
+  ```
+
+#### Causa Raíz Técnica
+1. Múltiples clases de integración (como `DisponibilidadIntegrationTest.php:59`, `Fase5InterfazReservasIntegrationTest.php:84` y `PagoIdempotenciaSeguridadIntegrationTest.php:63-64`) configuran `$_SERVER['HTTP_ACCEPT'] = 'application/json'` y/o `$_SERVER['CONTENT_TYPE'] = 'application/json'` en su `setUp()` y **no** las restauran ni eliminan en su `tearDown()`.
+2. Por su parte, `ApiSeguridadTest::setUp()` (`tests/Integration/ApiSeguridadTest.php:35-55`) limpia únicamente `$_SESSION`, `$_POST`, `$_SERVER['HTTP_X_CSRF_TOKEN']` y `$_SERVER['REQUEST_METHOD'] = 'POST'`, pero **no** resetea `$_SERVER['HTTP_ACCEPT']`, `$_SERVER['CONTENT_TYPE']` ni `$_SERVER['HTTP_X_REQUESTED_WITH']`.
+3. Cuando `--order-by=random` ejecuta alguna de las pruebas mencionadas antes de `ApiSeguridadTest`, la petición POST simulada en `APIController::eliminar()` evalúa `APIController::solicitaRespuestaJsonExplicita() === true`.
+4. En lugar de retornar la redirección HTTP `302` esperada por las peticiones de formulario web (`testClientePuedeEliminarSuPropiaCita` y `testEliminarCitaExitosaNoEjecutaRollbackFalso`), `APIController::eliminar()` imprime una respuesta JSON con `echo` y llama a `detener_ejecucion(200)`:
+   ```json
+   {"resultado":true,"status":"ok","id":52,"mensaje":"Cita cancelada correctamente"}
+   ```
+5. Esto ocasiona:
+   - Fallo en aserción: Se recibe código 200 en lugar del código 302 esperado.
+   - Prueba catalogada como `Risky`: La salida JSON enviada con `echo` no fue capturada con `ob_start() ... ob_end_clean()` en `testEliminarCitaExitosaNoEjecutaRollbackFalso`.
+   - Con `failOnRisky="true"` y fallos activos, el proceso PHPUnit finaliza con código de error `1`, lo que quebrará estocásticamente las corridas de GitHub Actions en CI.
+
+---
+
+### 3. Comparativa de Resultados de Auditoría
+
+| Aspecto | Estado Reportado / Esperado | Verificado en SHA `3e7ee8d` (merge `60991a3`) | Veredicto |
+| :--- | :--- | :--- | :---: |
+| **Persistencia Suite E2E Navegador** | 19 checks OK, 3 confirmaciones, 2 cancelaciones en BD | 19 checks OK, `confirmaciones \| cancelaciones: 3 2`, `$195.00 completado/pagado` (Exit 0) | **APROBADO** |
+| **PHPUnit Orden Secuencial Alfabético** | 209 tests pasados sin errores | `OK (209 tests, 2587 assertions)` (Exit 0) | **APROBADO** |
+| **PHPUnit Orden Aleatorio (`--order-by=random`)** | 209 tests pasados, 0 fallos, 0 risky | 209 tests, 2 failures, 1 risky (Exit 1) | **FALLA (BLOQUEANTE PARA CI)** |
+| **Aislamiento Docker y Stash** | Sin tocar app local ni borrar `stash@{0}` | `appsalon-web`, `appsalon-db`, `appsalon_mvc`, `.env` y `stash@{0}` intactos | **APROBADO** |
+
+---
+
+### 4. Conclusión y Veredicto Final
+
+- **Veredicto:** **`CORRECCIONES NECESARIAS`**
+- **Acciones Requeridas para Desbloqueo Definitivo:**
+  1. En `tests/Integration/ApiSeguridadTest.php`:
+     - Incorporar en `setUp()` y `tearDown()` la limpieza de cabeceras HTTP de solicitud:
+       ```php
+       unset($_SERVER['HTTP_ACCEPT'], $_SERVER['CONTENT_TYPE'], $_SERVER['HTTP_X_REQUESTED_WITH']);
+       $_SERVER['REQUEST_URI'] = '/';
+       ```
+     - En `testEliminarCitaExitosaNoEjecutaRollbackFalso` (línea 423), envolver la invocación de `APIController::eliminar()` dentro de un bloque `ob_start()` / `ob_end_clean()` defensivo para evitar salidas residuales no capturadas.
+  2. En las pruebas de integración que inyectan cabeceras JSON (`DisponibilidadIntegrationTest.php`, `Fase5InterfazReservasIntegrationTest.php`, `PagoIdempotenciaSeguridadIntegrationTest.php`):
+     - Incorporar en sus respectivos métodos `tearDown()` la eliminación o restauración de `$_SERVER['HTTP_ACCEPT']` y `$_SERVER['CONTENT_TYPE']` para garantizar la higiene global de superglobales entre ejecuciones de pruebas con orden aleatorio.
+
+
