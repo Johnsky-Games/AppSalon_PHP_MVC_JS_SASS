@@ -669,9 +669,9 @@ class ReporteService
             }
         }
 
-        $netoCobradoTotal = round(max(0.0, $cobrosConfirmadosTotal - $reembolsosTotal), 2);
-        $netoCobradoReal = round(max(0.0, $cobrosConfirmadosReales - $reembolsosReales), 2);
-        $netoCobradoSimulado = round(max(0.0, $cobrosConfirmadosSimulados - $reembolsosSimulados), 2);
+        $netoCobradoTotal = round($cobrosConfirmadosTotal - $reembolsosTotal, 2);
+        $netoCobradoReal = round($cobrosConfirmadosReales - $reembolsosReales, 2);
+        $netoCobradoSimulado = round($cobrosConfirmadosSimulados - $reembolsosSimulados, 2);
 
         // 2. Agrupar filas operativas de citas y servicios
         $citasAgrupadas = [];

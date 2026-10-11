@@ -446,6 +446,44 @@ class PagoRepository
     }
 
     /**
+     * Busca si existe un pago activo (estado 'pendiente' o 'procesando') para una cita dada.
+     */
+    public function findActivoPorCitaId(int $citaId, bool $forUpdate = false): ?Pago
+    {
+        $db = $this->resolveDb();
+        $sql = "SELECT * FROM pagos
+                WHERE (cita_id = ? OR cita_referencia_id = ?) AND estado IN ('pendiente', 'procesando')
+                ORDER BY id DESC
+                LIMIT 1";
+        if ($forUpdate) {
+            $sql .= " FOR UPDATE";
+        }
+
+        try {
+            $stmt = $db->prepare($sql);
+            if (!$stmt) {
+                throw new PersistenceException('Error al preparar consulta de pago activo: ' . $db->error);
+            }
+            $stmt->bind_param('ii', $citaId, $citaId);
+            if (!$stmt->execute()) {
+                $err = $stmt->error;
+                $stmt->close();
+                throw new PersistenceException('Error al ejecutar consulta de pago activo: ' . $err);
+            }
+            $res = $stmt->get_result();
+            $fila = $res ? $res->fetch_assoc() : null;
+            $stmt->close();
+
+            return $fila ? new Pago($fila) : null;
+        } catch (PersistenceException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            error_log('[PagoRepository::findActivoPorCitaId] Excepción: ' . $e->getMessage());
+            throw new PersistenceException('Error inesperado al consultar pago activo por cita.', 0, $e);
+        }
+    }
+
+    /**
      * Busca el último registro de pago asociado a una cita.
      */
     public function findUltimoPorCitaId(int $citaId, bool $forUpdate = false): ?Pago

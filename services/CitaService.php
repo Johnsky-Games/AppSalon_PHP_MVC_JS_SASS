@@ -274,6 +274,14 @@ class CitaService
      */
     public function servidorExigeProfesional(): bool
     {
+        if ($this->exigirProfesionalInstancia !== null) {
+            return $this->exigirProfesionalInstancia;
+        }
+
+        if (self::$exigirProfesionalGlobal !== null) {
+            return self::$exigirProfesionalGlobal;
+        }
+
         $envExigir = getenv('RESERVA_EXIGIR_PROFESIONAL');
         if ($envExigir === false && isset($_ENV['RESERVA_EXIGIR_PROFESIONAL'])) {
             $envExigir = (string)$_ENV['RESERVA_EXIGIR_PROFESIONAL'];
@@ -294,13 +302,7 @@ class CitaService
      */
     public function debeUsarFlujoConProfesional(array $datos): bool
     {
-        // 1. Si la política del servidor exige profesional por configuración de entorno,
-        // ninguna elección del cliente (incluyendo modo_reserva=clasico o legacy) puede prevalecer.
-        if ($this->servidorExigeProfesional()) {
-            return true;
-        }
-
-        // 2. Si la solicitud incluye parámetros explícitos de profesional
+        // 1. Si la solicitud incluye parámetros explícitos de profesional, enruta siempre al flujo con profesional
         if ($this->contieneParametroProfesional($datos)) {
             return true;
         }
@@ -308,7 +310,18 @@ class CitaService
         $modoRaw = $datos['modo_reserva'] ?? ($datos['flujo'] ?? null);
         $modo = is_string($modoRaw) ? strtolower(trim($modoRaw)) : '';
 
+        // 2. Si el cliente solicita explícitamente modo clásico o legacy:
         if ($modo === 'clasico' || $modo === 'legacy') {
+            // Si la política estricta de entorno RESERVA_EXIGIR_PROFESIONAL está activa en el servidor,
+            // no se permite evadirla bajo ningún concepto.
+            $envExigir = getenv('RESERVA_EXIGIR_PROFESIONAL');
+            if ($envExigir === false && isset($_ENV['RESERVA_EXIGIR_PROFESIONAL'])) {
+                $envExigir = (string)$_ENV['RESERVA_EXIGIR_PROFESIONAL'];
+            }
+            if (is_string($envExigir) && in_array(strtolower(trim($envExigir)), ['1', 'true', 'yes', 'on'], true)) {
+                return true;
+            }
+
             return false;
         }
 
@@ -316,12 +329,9 @@ class CitaService
             return true;
         }
 
-        if ($this->exigirProfesionalInstancia !== null) {
-            return $this->exigirProfesionalInstancia;
-        }
-
-        if (self::$exigirProfesionalGlobal !== null) {
-            return self::$exigirProfesionalGlobal;
+        // 3. Si el servidor o la configuración activa exige profesional:
+        if ($this->servidorExigeProfesional()) {
+            return true;
         }
 
         return false;
@@ -1047,9 +1057,10 @@ class CitaService
      * e indicador `puede_cancelar` evaluado en `America/Guayaquil`.
      *
      * @param mixed $usuarioIdAutenticado
+     * @param bool $soloConfirmadas Si true, restringe la consulta a citas activas no canceladas.
      * @return array<string, mixed>
      */
-    public function consultarCitasCliente($usuarioIdAutenticado): array
+    public function consultarCitasCliente($usuarioIdAutenticado, bool $soloConfirmadas = true): array
     {
         $usuarioId = $this->validarId($usuarioIdAutenticado);
         if ($usuarioId === null) {
@@ -1066,7 +1077,7 @@ class CitaService
         $fechaHoy = $this->obtenerAhora()->format('Y-m-d');
 
         try {
-            $citasRaw = $this->citaRepository->findCitasClienteByUsuarioId($usuarioId);
+            $citasRaw = $this->citaRepository->findCitasClienteByUsuarioId($usuarioId, $soloConfirmadas);
             $citas = [];
             foreach ($citasRaw as $c) {
                 $esFutura = ((string)$c['fecha'] > $fechaHoy);

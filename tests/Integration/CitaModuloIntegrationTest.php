@@ -532,12 +532,12 @@ class CitaModuloIntegrationTest extends TestCase
             'id' => (string)$idCita
         ];
 
-        // Provocar fallo SQL real en el segundo paso de la eliminación (tras borrar citasservicios, al borrar en citas)
-        self::$db->query("DROP TRIGGER IF EXISTS test_fail_delete_cita");
+        // Provocar fallo SQL real en la actualización de la cita (cancelación lógica)
+        self::$db->query("DROP TRIGGER IF EXISTS test_fail_update_cita");
         self::$db->query(
-            "CREATE TRIGGER test_fail_delete_cita BEFORE DELETE ON citas
+            "CREATE TRIGGER test_fail_update_cita BEFORE UPDATE ON citas
              FOR EACH ROW BEGIN
-                 SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Fallo SQL interno secreto en delete citas';
+                 SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Fallo SQL interno secreto en update citas';
              END"
         );
 
@@ -558,13 +558,14 @@ class CitaModuloIntegrationTest extends TestCase
             }
 
             $this->assertSame(500, http_response_code());
-            $this->assertStringContainsString('Error 500: No fue posible eliminar la cita debido a un error de base de datos.', $salidaHtml);
+            $this->assertStringContainsString('Error 500: No fue posible cancelar la cita debido a un error de base de datos.', $salidaHtml);
             $this->assertStringNotContainsString('Fallo SQL interno secreto', $salidaHtml, 'No debe exponer detalles SQL internos');
             $this->assertStringNotContainsString('SQLSTATE', $salidaHtml);
 
             // Comprobar que la cita y sus servicios asociados se conservaron tras el rollback
             $citaTrasFalloHtml = (new CitaRepository(self::$db))->findById($idCita);
             $this->assertNotNull($citaTrasFalloHtml, 'La cita debe conservarse intacta tras el fallo en petición HTML');
+            $this->assertSame('confirmada', $citaTrasFalloHtml->estado);
             $serviciosTrasFalloHtml = (int)self::$db->query("SELECT COUNT(*) AS total FROM citasservicios WHERE citaId = {$idCita}")->fetch_assoc()['total'];
             $this->assertSame(2, $serviciosTrasFalloHtml, 'Los 2 servicios asociados deben haberse restaurado por rollback');
 
@@ -585,7 +586,7 @@ class CitaModuloIntegrationTest extends TestCase
             $payloadJson = json_decode($salidaJson, true);
             $this->assertIsArray($payloadJson);
             $this->assertFalse($payloadJson['resultado']);
-            $this->assertSame('No fue posible eliminar la cita debido a un error de base de datos.', $payloadJson['error']);
+            $this->assertSame('No fue posible cancelar la cita debido a un error de base de datos.', $payloadJson['error']);
             $this->assertStringNotContainsString('Fallo SQL interno secreto', $salidaJson);
 
             // La cita y sus servicios siguen intactos tras el segundo rollback
@@ -593,24 +594,26 @@ class CitaModuloIntegrationTest extends TestCase
             $serviciosTrasFalloJson = (int)self::$db->query("SELECT COUNT(*) AS total FROM citasservicios WHERE citaId = {$idCita}")->fetch_assoc()['total'];
             $this->assertSame(2, $serviciosTrasFalloJson);
         } finally {
-            self::$db->query("DROP TRIGGER IF EXISTS test_fail_delete_cita");
+            self::$db->query("DROP TRIGGER IF EXISTS test_fail_update_cita");
         }
 
-        // 3. Eliminación exitosa una vez restablecida la persistencia (Petición HTML -> 302)
+        // 3. Cancelación exitosa una vez restablecida la persistencia (Petición HTML -> 302)
         $_SERVER['HTTP_ACCEPT'] = 'text/html,application/xhtml+xml';
         try {
             ob_start();
             APIController::eliminar();
-            $this->fail('La eliminación exitosa debe terminar con redirección 302');
+            $this->fail('La cancelación exitosa debe terminar con redirección 302');
         } catch (AppTerminationException $e) {
             $this->assertSame(302, $e->getStatusCode());
         } finally {
             ob_end_clean();
         }
 
-        $this->assertNull((new CitaRepository(self::$db))->findById($idCita), 'La cita debe eliminarse cuando no hay fallo SQL');
+        $citaCancelada = (new CitaRepository(self::$db))->findById($idCita);
+        $this->assertNotNull($citaCancelada, 'La cita debe conservarse lógicamente en base de datos');
+        $this->assertSame('cancelada', $citaCancelada->estado);
         $serviciosTrasExito = (int)self::$db->query("SELECT COUNT(*) AS total FROM citasservicios WHERE citaId = {$idCita}")->fetch_assoc()['total'];
-        $this->assertSame(0, $serviciosTrasExito);
+        $this->assertSame(2, $serviciosTrasExito, 'Los servicios asociados deben preservarse');
     }
 }
 

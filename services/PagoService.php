@@ -234,7 +234,37 @@ class PagoService
                 ];
             }
 
-            // 4. Verificar idempotencia por idempotency_key con bloqueo FOR UPDATE y huella de operación
+            // 4. Verificar si la cita ya tiene una operación activa pendiente o procesando
+            $pagoActivoCita = $this->pagoRepository->findActivoPorCitaId($citaId, true);
+            if ($pagoActivoCita !== null) {
+                // Si la clave provista coincide exactamente con el pago activo, o si no se proveyó clave explícita,
+                // retornar la operación activa existente de forma idempotente
+                if ($pagoActivoCita->idempotency_key === $idempotencyKey || !$idempotencyKeyExplicit) {
+                    $this->pagoRepository->commit();
+                    return [
+                        'status' => self::STATUS_OK,
+                        'http_code' => 200,
+                        'idempotente' => true,
+                        'ya_pagado' => false,
+                        'monto_calculado_servidor' => $pagoActivoCita->monto,
+                        'monto_cliente_ignorado' => $montoClienteIgnorado,
+                        'pago' => $pagoActivoCita->toArray(),
+                        'redirect_url' => '/pago/resultado?referencia=' . rawurlencode($pagoActivoCita->referencia_pago),
+                    ];
+                }
+
+                // Si se intenta iniciar una nueva operación activa con una clave de idempotencia distinta mientras hay una activa
+                $this->pagoRepository->rollback();
+                return [
+                    'status' => self::STATUS_INVALID,
+                    'http_code' => 409,
+                    'codigo_error' => 'IDEMPOTENCY_KEY_CONFLICT',
+                    'error' => 'La cita ya cuenta con una operación de pago activa en proceso.',
+                    'errores' => ['La cita ya cuenta con una operación de pago activa en proceso.'],
+                ];
+            }
+
+            // 5. Verificar idempotencia por idempotency_key con bloqueo FOR UPDATE y huella de operación
             $pagoExistenteKey = $this->pagoRepository->findByIdempotencyKey($idempotencyKey, true);
             if ($pagoExistenteKey !== null) {
                 // Mitigación cross-tenant: Si la clave ya fue utilizada para otro usuario, otra cita o distinto monto
@@ -417,16 +447,16 @@ class PagoService
             ];
         }
 
-        // 1. Obtener la cita asociada previamente para respetar el orden canónico de bloqueo: primero citas, luego pagos
-        $citaIdAsociada = null;
-        if ($referenciaPago !== '') {
-            $citaIdAsociada = $this->pagoRepository->obtenerCitaIdPorReferencia($referenciaPago);
-        }
-        if ($citaIdAsociada === null && $txExternaId !== null) {
-            $citaIdAsociada = $this->pagoRepository->obtenerCitaIdPorTransaccionExterna($txExternaId);
-        }
-
         try {
+            // 1. Obtener la cita asociada previamente para respetar el orden canónico de bloqueo: primero citas, luego pagos
+            $citaIdAsociada = null;
+            if ($referenciaPago !== '') {
+                $citaIdAsociada = $this->pagoRepository->obtenerCitaIdPorReferencia($referenciaPago);
+            }
+            if ($citaIdAsociada === null && $txExternaId !== null) {
+                $citaIdAsociada = $this->pagoRepository->obtenerCitaIdPorTransaccionExterna($txExternaId);
+            }
+
             $this->pagoRepository->beginTransaction();
 
             // Bloquear primero la fila de citas si existe para prevenir deadlocks con iniciarPago o reembolsarPago
@@ -552,7 +582,11 @@ class PagoService
                 } elseif ($nuevoEstado === Pago::ESTADO_REEMBOLSADO) {
                     $this->pagoRepository->actualizarEstadoPagoCita($pago->cita_id, 'reembolsado');
                 } elseif ($nuevoEstado === Pago::ESTADO_FALLIDO) {
-                    $this->pagoRepository->actualizarEstadoPagoCita($pago->cita_id, 'pendiente');
+                    // Un callback fallido de otro intento NO puede degradar a 'pendiente' una cita que ya tiene otro cobro confirmado
+                    $otroCompletado = $this->pagoRepository->findCompletadoPorCitaId((int)$pago->cita_id, true);
+                    if ($otroCompletado === null) {
+                        $this->pagoRepository->actualizarEstadoPagoCita($pago->cita_id, 'pendiente');
+                    }
                 }
             }
 
@@ -682,9 +716,8 @@ class PagoService
             ];
         }
 
-        $citaIdAsociada = $this->pagoRepository->obtenerCitaIdPorReferencia($ref);
-
         try {
+            $citaIdAsociada = $this->pagoRepository->obtenerCitaIdPorReferencia($ref);
             $this->pagoRepository->beginTransaction();
 
             // Bloquear primero la cita para garantizar orden de bloqueo uniforme (citas -> pagos)

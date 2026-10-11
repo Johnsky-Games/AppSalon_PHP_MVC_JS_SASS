@@ -188,9 +188,11 @@ class ApiSeguridadTest extends TestCase
             ob_end_clean();
         }
 
-        // Verificar que la cita fue eliminada
-        $citaEliminada = $citaRepo->findById($idCita);
-        $this->assertNull($citaEliminada, 'El propietario debe poder eliminar su propia cita');
+        // Verificar que la cita fue cancelada lógicamente (preservando registro con estado 'cancelada')
+        $citaCancelada = $citaRepo->findById($idCita);
+        $this->assertNotNull($citaCancelada, 'El registro de la cita debe preservarse en base de datos');
+        $this->assertSame('cancelada', $citaCancelada->estado, 'La cita debe encontrarse en estado cancelada');
+        $this->assertSame('cliente', $citaCancelada->cancelado_por);
     }
 
     public function testReservaValidaGuardaCitaConUsuarioDeSesion(): void
@@ -419,12 +421,14 @@ class ApiSeguridadTest extends TestCase
             $this->assertSame(302, $e->getStatusCode(), 'La eliminación exitosa debe redirigir con 302');
         }
 
-        // Verificar que el commit persistió y la cita y sus servicios fueron eliminados
-        $checkCita = self::$db->query("SELECT * FROM citas WHERE id = {$citaId}");
-        $this->assertSame(0, $checkCita->num_rows, 'La cita debe haber sido eliminada tras el commit exitoso');
+        // Verificar que el commit persistió y la cita quedó cancelada preservando servicios asociados
+        $checkCita = self::$db->query("SELECT estado, cancelado_por FROM citas WHERE id = {$citaId}")->fetch_assoc();
+        $this->assertNotNull($checkCita, 'La cita debe conservarse en base de datos');
+        $this->assertSame('cancelada', $checkCita['estado'], 'La cita debe haber sido cancelada tras el commit exitoso');
+        $this->assertSame('cliente', $checkCita['cancelado_por']);
 
         $checkCS = self::$db->query("SELECT * FROM citasservicios WHERE citaId = {$citaId}");
-        $this->assertSame(0, $checkCS->num_rows, 'Los servicios asociados deben haber sido eliminados');
+        $this->assertSame(1, $checkCS->num_rows, 'Los servicios asociados deben haberse preservado para trazabilidad histórica');
     }
 }
 

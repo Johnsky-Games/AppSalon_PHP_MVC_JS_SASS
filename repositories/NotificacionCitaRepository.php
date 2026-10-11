@@ -671,6 +671,140 @@ class NotificacionCitaRepository
     }
 
     /**
+     * Registra un evento outbox dentro de una transacción ya abierta en la misma conexión MySQL,
+     * sin abrir transacciones anidadas ni ejecutar commit/rollback propios.
+     *
+     * @param array<string, mixed> $datos
+     * @param string $ahoraUtc
+     * @param mysqli $db Conexión con transacción activa
+     * @return NotificacionCita
+     * @throws PersistenceException
+     */
+    public function registrarEventoOutboxEnConexion(array $datos, string $ahoraUtc, mysqli $db): NotificacionCita
+    {
+        $claveIdempotencia = trim((string)($datos['clave_idempotencia'] ?? ''));
+        if ($claveIdempotencia === '') {
+            throw new PersistenceException("La clave de idempotencia es obligatoria para registrar evento outbox.");
+        }
+
+        try {
+            $stmtLock = $db->prepare("SELECT * FROM notificaciones_citas WHERE clave_idempotencia = ? LIMIT 1 FOR UPDATE");
+            if (!$stmtLock) {
+                throw new PersistenceException("Error al preparar bloqueo por clave de idempotencia en transacción activa: " . $db->error);
+            }
+            $stmtLock->bind_param('s', $claveIdempotencia);
+            if (!$stmtLock->execute()) {
+                $err = $stmtLock->error;
+                $stmtLock->close();
+                throw new PersistenceException("Error al ejecutar bloqueo por clave de idempotencia en transacción activa: " . $err);
+            }
+            $resLock = $stmtLock->get_result();
+            if ($resLock === false) {
+                $err = $stmtLock->error;
+                $stmtLock->close();
+                throw new PersistenceException("Error al leer fila bloqueada por clave de idempotencia en transacción activa: " . $err);
+            }
+            $existente = $resLock->fetch_assoc();
+            $resLock->free();
+            $stmtLock->close();
+
+            if ($existente) {
+                return new NotificacionCita($existente);
+            }
+
+            $citaId = isset($datos['cita_id']) && $datos['cita_id'] !== null && (int)$datos['cita_id'] > 0
+                ? (int)$datos['cita_id']
+                : null;
+            $citaRefId = isset($datos['cita_referencia_id']) && (int)$datos['cita_referencia_id'] > 0
+                ? (int)$datos['cita_referencia_id']
+                : ($citaId ?? 0);
+            $usuarioId = isset($datos['usuario_id']) && $datos['usuario_id'] !== null && (int)$datos['usuario_id'] > 0
+                ? (int)$datos['usuario_id']
+                : null;
+            $tipo = trim((string)($datos['tipo'] ?? NotificacionCita::TIPO_CONFIRMACION));
+            $destEmail = mb_substr(trim((string)($datos['destinatario_email'] ?? '')), 0, 60, 'UTF-8');
+            $destNombre = mb_substr(trim((string)($datos['destinatario_nombre'] ?? '')), 0, 120, 'UTF-8');
+            $asunto = mb_substr(trim((string)($datos['asunto'] ?? '')), 0, 180, 'UTF-8');
+
+            $payloadRaw = $datos['payload_json'] ?? null;
+            if (is_array($payloadRaw)) {
+                $payloadJson = json_encode($payloadRaw, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: null;
+            } elseif (is_string($payloadRaw) && trim($payloadRaw) !== '') {
+                $payloadJson = $payloadRaw;
+            } else {
+                $payloadJson = null;
+            }
+
+            $estadoInicial = NotificacionCita::ESTADO_PENDIENTE;
+            $intentosInicial = 0;
+            $maxIntentos = isset($datos['max_intentos']) && (int)$datos['max_intentos'] >= 1
+                ? (int)$datos['max_intentos']
+                : NotificacionCita::DEFAULT_MAX_INTENTOS;
+
+            $sqlIns = "INSERT INTO notificaciones_citas
+                (cita_id, cita_referencia_id, usuario_id, tipo, clave_idempotencia,
+                 destinatario_email, destinatario_nombre, asunto, payload_json,
+                 estado, intentos, max_intentos, ultimo_error, enviado_at, proximo_intento_at,
+                 worker_token, lease_expires_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)";
+
+            $stmtIns = $db->prepare($sqlIns);
+            if (!$stmtIns) {
+                throw new PersistenceException("Error al preparar inserción en outbox en transacción activa: " . $db->error);
+            }
+            $stmtIns->bind_param(
+                'iiisssssssiiss',
+                $citaId,
+                $citaRefId,
+                $usuarioId,
+                $tipo,
+                $claveIdempotencia,
+                $destEmail,
+                $destNombre,
+                $asunto,
+                $payloadJson,
+                $estadoInicial,
+                $intentosInicial,
+                $maxIntentos,
+                $ahoraUtc,
+                $ahoraUtc
+            );
+            if (!$stmtIns->execute()) {
+                $err = $stmtIns->error;
+                $stmtIns->close();
+                throw new PersistenceException("Error al ejecutar inserción en outbox en transacción activa: " . $err);
+            }
+            $nuevoId = (int)$stmtIns->insert_id;
+            $stmtIns->close();
+
+            return new NotificacionCita([
+                'id' => $nuevoId,
+                'cita_id' => $citaId,
+                'cita_referencia_id' => $citaRefId,
+                'usuario_id' => $usuarioId,
+                'tipo' => $tipo,
+                'clave_idempotencia' => $claveIdempotencia,
+                'destinatario_email' => $destEmail,
+                'destinatario_nombre' => $destNombre,
+                'asunto' => $asunto,
+                'payload_json' => $payloadJson,
+                'estado' => $estadoInicial,
+                'intentos' => $intentosInicial,
+                'max_intentos' => $maxIntentos,
+                'worker_token' => null,
+                'lease_expires_at' => null,
+                'created_at' => $ahoraUtc,
+                'updated_at' => $ahoraUtc,
+            ]);
+        } catch (\Throwable $e) {
+            if ($e instanceof PersistenceException) {
+                throw $e;
+            }
+            throw new PersistenceException("Fallo al registrar evento outbox en transacción activa: " . $e->getMessage(), 0, $e);
+        }
+    }
+
+    /**
      * Adquiere de forma atómica una notificación para envío mediante arrendamiento exclusivo (worker lease).
      *
      * Actualiza atómicamente `estado = 'enviando'`, `worker_token = $workerToken`,

@@ -1411,10 +1411,11 @@ class CitaRepository
      * el profesional asignado o la condición de cita histórica sin profesional (`profesionalId = NULL`).
      *
      * @param int $usuarioId Identificador entero positivo del cliente.
+     * @param bool $soloConfirmadas Si true, restringe la consulta a citas activas (estado = 'confirmada').
      * @return array<int, array<string, mixed>> Lista de citas agrupadas del cliente.
      * @throws PersistenceException Si ocurre un fallo SQL.
      */
-    public function findCitasClienteByUsuarioId(int $usuarioId): array
+    public function findCitasClienteByUsuarioId(int $usuarioId, bool $soloConfirmadas = true): array
     {
         if ($usuarioId <= 0) {
             return [];
@@ -1422,6 +1423,7 @@ class CitaRepository
 
         $db = $this->resolveDb();
 
+        $condEstado = $soloConfirmadas ? " AND citas.estado = 'confirmada'" : "";
         $sql = "SELECT citas.id, citas.fecha, citas.hora, citas.hora_inicio, citas.hora_fin,
                        citas.duracion_total_minutos, citas.usuarioId, citas.profesionalId,
                        citas.estado, citas.cancelado_por, citas.cancelado_at, citas.motivo_cancelacion, citas.estado_pago,
@@ -1435,7 +1437,7 @@ class CitaRepository
                 LEFT OUTER JOIN profesionales ON citas.profesionalId = profesionales.id
                 LEFT OUTER JOIN citasservicios ON citasservicios.citaId = citas.id
                 LEFT OUTER JOIN servicios ON servicios.id = citasservicios.servicioId
-                WHERE citas.usuarioId = ?
+                WHERE citas.usuarioId = ?{$condEstado}
                 ORDER BY citas.fecha DESC, COALESCE(citas.hora_inicio, citas.hora) DESC, citas.id DESC, citasservicios.id ASC";
 
         try {

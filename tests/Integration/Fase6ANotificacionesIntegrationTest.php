@@ -283,19 +283,22 @@ class Fase6ANotificacionesIntegrationTest extends TestCase
         $this->assertStringContainsString('$195.00', $mailerCanc->Body);
 
         // Verificar que AMBOS registros ('confirmacion' y 'cancelacion') permanecen en notificaciones_citas
-        // con cita_id = NULL (ON DELETE SET NULL) y cita_referencia_id = $citaId
+        // con su clave de idempotencia, estado 'enviado' y trazabilidad preservada
         $historialCita = $notifRepo->findByCitaReferenciaId($citaId);
         $this->assertCount(2, $historialCita);
 
         $this->assertSame('confirmacion', $historialCita[0]->tipo);
-        $this->assertNull($historialCita[0]->cita_id);
         $this->assertSame($citaId, $historialCita[0]->cita_referencia_id);
         $this->assertSame('enviado', $historialCita[0]->estado);
 
         $this->assertSame('cancelacion', $historialCita[1]->tipo);
-        $this->assertNull($historialCita[1]->cita_id);
         $this->assertSame($citaId, $historialCita[1]->cita_referencia_id);
         $this->assertSame('enviado', $historialCita[1]->estado);
+
+        // La cita se cancela lógicamente y permanece registrada con estado 'cancelada'
+        $citaEnBd = $citaRepo->findById($citaId);
+        $this->assertNotNull($citaEnBd);
+        $this->assertSame('cancelada', $citaEnBd->estado);
     }
 
     public function testFalloSmtpEnConfirmacionYEnCancelacionNuncaRevierteLaReservaNiLaEliminacionEnBaseDeDatos(): void
@@ -362,14 +365,16 @@ class Fase6ANotificacionesIntegrationTest extends TestCase
         $resElim = $this->ejecutarControladorCapturandoJson(fn() => APIController::eliminar());
         $this->assertSame(200, $resElim['httpCode'], 'El fallo SMTP nunca debe impedir ni revertir la cancelación');
         $this->assertTrue($resElim['json']['resultado'] ?? false);
-        $this->assertNull($citaRepo->findById($citaId), 'La cita debe haberse eliminado de la tabla citas');
+
+        $citaCanceladaBd = $citaRepo->findById($citaId);
+        $this->assertNotNull($citaCanceladaBd, 'La cita debe preservarse en base de datos');
+        $this->assertSame('cancelada', $citaCanceladaBd->estado, 'La cita debe figurar en estado cancelada');
 
         $notifCanc = $notifRepo->findByClaveIdempotencia("cita:{$citaId}:cancelacion");
         $this->assertNotNull($notifCanc);
         $this->assertSame(NotificacionCita::ESTADO_FALLIDO, $notifCanc->estado);
         $this->assertSame(1, $notifCanc->intentos);
         $this->assertSame($citaId, $notifCanc->cita_referencia_id);
-        $this->assertNull($notifCanc->cita_id);
 
         // 3. Restaurar SMTP, avanzar el reloj 10 minutos para vencer el backoff y procesar reintentos
         Email::setTransport(function (): bool {
@@ -381,16 +386,15 @@ class Fase6ANotificacionesIntegrationTest extends TestCase
         $resReintentos = $notifService->procesarPendientesYReintentos();
 
         $this->assertSame(NotificacionCitaService::STATUS_OK, $resReintentos['status']);
-        $this->assertSame(2, $resReintentos['procesadas']);
-        $this->assertSame(2, $resReintentos['enviados']);
+        // La cancelación se envía exitosamente (1). La confirmación pendiente se descarta (1 omitida) porque la cita ya está cancelada.
+        $this->assertSame(1, $resReintentos['enviados']);
+        $this->assertSame(1, $resReintentos['omitidos']);
         $this->assertSame(0, $resReintentos['fallidos']);
-        $this->assertCount(2, Email::$emailsEnviados, 'Deben haberse enviado exactamente los 2 correos pendientes reconstruidos desde payload_json');
+        $this->assertCount(1, Email::$emailsEnviados, 'Solo el correo de cancelación debe enviarse; la confirmación de la cita ya cancelada se descarta.');
 
         $notifConfTrasReintento = $notifRepo->findByClaveIdempotencia("cita:{$citaId}:confirmacion");
-        $this->assertSame(NotificacionCita::ESTADO_ENVIADO, $notifConfTrasReintento->estado);
-        $this->assertSame(2, $notifConfTrasReintento->intentos);
-        $this->assertNull($notifConfTrasReintento->ultimo_error);
-        $this->assertNull($notifConfTrasReintento->proximo_intento_at);
+        $this->assertSame(NotificacionCita::ESTADO_DESCARTADA, $notifConfTrasReintento->estado);
+        $this->assertStringContainsString('cita asociada está cancelada', (string)$notifConfTrasReintento->ultimo_error);
 
         $notifCancTrasReintento = $notifRepo->findByClaveIdempotencia("cita:{$citaId}:cancelacion");
         $this->assertSame(NotificacionCita::ESTADO_ENVIADO, $notifCancTrasReintento->estado);
@@ -400,11 +404,11 @@ class Fase6ANotificacionesIntegrationTest extends TestCase
         // 4. Segunda pasada de reintentos o invocación directa no debe volver a enviar ningún correo (idempotencia)
         $resSegundaPasada = $notifService->procesarPendientesYReintentos();
         $this->assertSame(0, $resSegundaPasada['enviados']);
-        $this->assertCount(2, Email::$emailsEnviados, 'No deben enviarse correos duplicados en pasadas posteriores');
+        $this->assertCount(1, Email::$emailsEnviados, 'No deben enviarse correos duplicados en pasadas posteriores');
 
         $resInvocacionRepetida = $notifService->notificarCancelacionCitaDesdeSnapshot($notifCancTrasReintento->obtenerPayload(), false);
         $this->assertSame(NotificacionCitaService::STATUS_YA_ENVIADO, $resInvocacionRepetida['status']);
-        $this->assertCount(2, Email::$emailsEnviados);
+        $this->assertCount(1, Email::$emailsEnviados);
     }
 
     public function testRecordatoriosConfigurablesYScriptCliProcesarNotificacionesEnAmericaGuayaquil(): void

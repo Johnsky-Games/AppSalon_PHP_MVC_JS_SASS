@@ -479,10 +479,23 @@ class NotificacionCitaService
             // Consultar la cita asociada para verificar su estado en base de datos
             $citaRefId = (int)$candidata->cita_referencia_id;
             $cita = null;
+            $errorConsultaCita = false;
             try {
                 $cita = $this->citaRepository->findById($citaRefId);
             } catch (\Throwable $e) {
+                $errorConsultaCita = true;
                 error_log("[NotificacionCitaService::procesarPendientesYReintentos] Error al consultar cita {$citaRefId}: " . $e->getMessage());
+            }
+
+            // No enviar cuando falla la comprobación del estado de la cita para prevenir envíos erróneos
+            if ($errorConsultaCita) {
+                $fallidos++;
+                $detalles[] = [
+                    'id' => $idNotif,
+                    'clave_idempotencia' => $candidata->clave_idempotencia,
+                    'resultado' => 'error_comprobacion_cita',
+                ];
+                continue;
             }
 
             // Regla 4.B: Si la cita asociada está cancelada (o eliminada), descartar confirmaciones y recordatorios
@@ -566,40 +579,52 @@ class NotificacionCitaService
             $instanteFinUtc = $this->obtenerAhoraUtc()->format('Y-m-d H:i:s');
 
             if ($despacho['exito']) {
-                $this->notificacionRepository->marcarComoEnviado($idNotif, $workerTokenActual);
-                $this->notificacionRepository->marcarEnviado($idNotif, $instanteFinUtc);
-                $enviados++;
-                $detalles[] = [
-                    'id' => $idNotif,
-                    'clave_idempotencia' => $candidata->clave_idempotencia,
-                    'resultado' => 'enviado',
-                    'intentos' => $candidata->intentos + 1,
-                ];
+                $confirmado = $this->notificacionRepository->marcarComoEnviado($idNotif, $workerTokenActual);
+                if ($confirmado) {
+                    $enviados++;
+                    $detalles[] = [
+                        'id' => $idNotif,
+                        'clave_idempotencia' => $candidata->clave_idempotencia,
+                        'resultado' => 'enviado',
+                        'intentos' => $candidata->intentos + 1,
+                    ];
+                } else {
+                    // El lease expiró y otro worker tomó la tarea; no contabilizar éxito de este worker
+                    $omitidos++;
+                    $detalles[] = [
+                        'id' => $idNotif,
+                        'clave_idempotencia' => $candidata->clave_idempotencia,
+                        'resultado' => 'lease_expirado_durante_despacho',
+                    ];
+                }
             } else {
                 $proximoUtc = $this->calcularProximoIntentoUtc(
                     $candidata->intentos + 1,
                     $candidata->max_intentos
                 );
-                $this->notificacionRepository->marcarComoFallido(
+                $confirmadoFallo = $this->notificacionRepository->marcarComoFallido(
                     $idNotif,
                     $workerTokenActual,
                     (string)($despacho['error'] ?? 'Fallo en reintento SMTP.'),
                     $proximoUtc
                 );
-                $this->notificacionRepository->marcarFallido(
-                    $idNotif,
-                    (string)($despacho['error'] ?? 'Fallo en reintento SMTP.'),
-                    $proximoUtc,
-                    $instanteFinUtc
-                );
-                $fallidos++;
-                $detalles[] = [
-                    'id' => $idNotif,
-                    'clave_idempotencia' => $candidata->clave_idempotencia,
-                    'resultado' => 'fallido',
-                    'intentos' => $candidata->intentos + 1,
-                    'error' => $despacho['error'],
-                ];
+                if ($confirmadoFallo) {
+                    $fallidos++;
+                    $detalles[] = [
+                        'id' => $idNotif,
+                        'clave_idempotencia' => $candidata->clave_idempotencia,
+                        'resultado' => 'fallido',
+                        'intentos' => $candidata->intentos + 1,
+                        'error' => $despacho['error'],
+                    ];
+                } else {
+                    $omitidos++;
+                    $detalles[] = [
+                        'id' => $idNotif,
+                        'clave_idempotencia' => $candidata->clave_idempotencia,
+                        'resultado' => 'lease_expirado_durante_fallo',
+                    ];
+                }
             }
         }
 
@@ -902,7 +927,6 @@ class NotificacionCitaService
 
         if ($despacho['exito']) {
             $this->notificacionRepository->marcarComoEnviado((int)$notificacion->id, $workerToken);
-            $this->notificacionRepository->marcarEnviado((int)$notificacion->id, $instanteFinUtc);
             return [
                 'status' => self::STATUS_OK,
                 'enviado' => true,
@@ -924,12 +948,6 @@ class NotificacionCitaService
             $workerToken,
             $errorTexto,
             $proximoUtc
-        );
-        $this->notificacionRepository->marcarFallido(
-            (int)$notificacion->id,
-            $errorTexto,
-            $proximoUtc,
-            $instanteFinUtc
         );
 
         return [

@@ -3,7 +3,7 @@ FROM php:8.2-apache
 # Instalar dependencias del sistema y extensiones de PHP requeridas (mysqli, pdo_mysql y soporte mbstring)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libonig-dev \
-    && docker-php-ext-install mysqli pdo_mysql \
+    && docker-php-ext-install mysqli pdo_mysql mbstring \
     && rm -rf /var/lib/apt/lists/* \
     && a2enmod rewrite headers
 

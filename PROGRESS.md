@@ -60,7 +60,7 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 ### 1. Evidencia de Ejecución de Suites Automatizadas
 - **PHPUnit 10.5.66 en contenedor aislado (`appsalon-test-int-db`, PHP 8.2.34):**
   - **Comando:** `vendor/bin/phpunit --do-not-cache-result --colors=never`
-  - **Resultado:** `OK (203 tests, 2526 assertions)` — Código de salida `0`.
+  - **Resultado:** `OK (203 tests, 2530 assertions)` — Código de salida `0`.
 - **Suite de Navegador Real Headless Chrome (`tests/verificar_navegador.ps1`):**
   - **Comando:** `powershell -ExecutionPolicy Bypass -File tests/verificar_navegador.ps1`
   - **Resultado:** 19/19 comprobaciones `[OK]`, `0` errores de consola, `0` solicitudes de red fallidas, verificación de persistencia en MySQL — Código de salida `0`.

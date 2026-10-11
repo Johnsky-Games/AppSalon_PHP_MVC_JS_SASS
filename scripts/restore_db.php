@@ -70,7 +70,36 @@ if (!preg_match('/^[a-zA-Z0-9_]+$/', $dbName)) {
 }
 
 // -----------------------------------------------------------------------------
-// 1. Verificación criptográfica SHA-256 previa a cualquier operación
+// 1. Lectura preliminar y validación de completitud / sintaxis
+// -----------------------------------------------------------------------------
+$raw = @file_get_contents($rutaEntrada);
+if ($raw === false || $raw === '') {
+    fwrite(STDERR, "[ERROR] El archivo de respaldo está vacío o no pudo leerse: {$rutaEntrada}\n");
+    exit(1);
+}
+
+// Detectar cabecera GZIP (\x1f\x8b) o extensión .gz
+if (str_starts_with($raw, "\x1f\x8b") || str_ends_with(strtolower($rutaEntrada), '.gz')) {
+    $descomprimido = @gzdecode($raw);
+    if ($descomprimido === false || $descomprimido === '') {
+        fwrite(STDERR, "[ERROR] No fue posible descomprimir el archivo GZIP: {$rutaEntrada}\n");
+        exit(1);
+    }
+    $sqlContenido = $descomprimido;
+} else {
+    $sqlContenido = $raw;
+}
+
+// Si el archivo declara el encabezado oficial de AppSalon, exigir el marcador de finalización
+if (str_contains($sqlContenido, '-- AppSalon SQL Backup')) {
+    if (!str_contains($sqlContenido, '-- Fin del respaldo AppSalon')) {
+        fwrite(STDERR, "[ERROR] Archivo de respaldo truncado o incompleto: falta el marcador final '-- Fin del respaldo AppSalon'.\n");
+        exit(1);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 2. Verificación criptográfica SHA-256 previa a cualquier operación
 // -----------------------------------------------------------------------------
 $hashCalculado = hash_file('sha256', $rutaEntrada);
 $hashEsperado = null;
@@ -91,47 +120,18 @@ if (isset($opciones['hash']) && is_string($opciones['hash']) && trim($opciones['
     }
 }
 
-if (!isset($opciones['skip-hash-check'])) {
-    if ($hashEsperado !== null) {
-        if ($hashCalculado !== $hashEsperado) {
-            fwrite(STDERR, sprintf(
-                "[ERROR] Verificación de integridad fallida: el hash SHA-256 del archivo (%s) no coincide con el esperado (%s). El respaldo fue alterado o está corrupto.\n",
-                $hashCalculado,
-                $hashEsperado
-            ));
-            exit(1);
-        }
-    }
-}
-
-// -----------------------------------------------------------------------------
-// 2. Lectura y descompresión de contenido
-// -----------------------------------------------------------------------------
-$raw = @file_get_contents($rutaEntrada);
-if ($raw === false || $raw === '') {
-    fwrite(STDERR, "[ERROR] El archivo de respaldo está vacío o no pudo leerse: {$rutaEntrada}\n");
-    exit(1);
-}
-
-// Detectar cabecera GZIP (\x1f\x8b) o extensión .gz
-if (str_starts_with($raw, "\x1f\x8b") || str_ends_with(strtolower($rutaEntrada), '.gz')) {
-    $descomprimido = @gzdecode($raw);
-    if ($descomprimido === false || $descomprimido === '') {
-        fwrite(STDERR, "[ERROR] No fue posible descomprimir el archivo GZIP: {$rutaEntrada}\n");
+if (!isset($opciones['skip-hash-check']) && !isset($opciones['insecure'])) {
+    if ($hashEsperado === null) {
+        fwrite(STDERR, "[ERROR] Modo seguro (--safe-restore): Se requiere verificación criptográfica obligatoria. No se encontró archivo de manifiesto (.manifest.json) ni se proporcionó un hash SHA-256 esperado con --hash. Use --skip-hash-check para omitir conscientemente esta verificación en pruebas.\n");
         exit(1);
     }
-    $sqlContenido = $descomprimido;
-} else {
-    $sqlContenido = $raw;
-}
 
-// -----------------------------------------------------------------------------
-// 3. Validación de completitud y sintaxis previa
-// -----------------------------------------------------------------------------
-// Si el archivo declara el encabezado oficial de AppSalon, exigir el marcador de finalización
-if (str_contains($sqlContenido, '-- AppSalon SQL Backup')) {
-    if (!str_contains($sqlContenido, '-- Fin del respaldo AppSalon')) {
-        fwrite(STDERR, "[ERROR] Archivo de respaldo truncado o incompleto: falta el marcador final '-- Fin del respaldo AppSalon'.\n");
+    if ($hashCalculado !== $hashEsperado) {
+        fwrite(STDERR, sprintf(
+            "[ERROR] Verificación de integridad fallida: el hash SHA-256 del archivo (%s) no coincide con el esperado (%s). El respaldo fue alterado o está corrupto.\n",
+            $hashCalculado,
+            $hashEsperado
+        ));
         exit(1);
     }
 }
@@ -282,31 +282,33 @@ try {
     if ($usarSafeRestore && $totalTablasPrevias > 0) {
         $stagingDb = $dbName . '_stg_' . substr(bin2hex(random_bytes(4)), 0, 8);
         $okStaging = $mysqli->query("CREATE DATABASE `{$stagingDb}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
-        if ($okStaging) {
-            $mysqli->select_db($stagingDb);
-            $mysqli->query("SET FOREIGN_KEY_CHECKS = 0");
-            $mysqli->query("SET UNIQUE_CHECKS = 0");
-
-            foreach ($sentencias as $indice => $sqlStmt) {
-                $ok = $mysqli->query($sqlStmt);
-                if (!$ok) {
-                    $numSentencia = $indice + 1;
-                    throw new RuntimeException(sprintf(
-                        "Error en sentencia #%d durante validación previa en staging (errno %d): %s",
-                        $numSentencia,
-                        $mysqli->errno,
-                        $mysqli->error
-                    ));
-                }
-            }
-
-            // Staging exitoso: limpiar base temporal y volver a base destino
-            $mysqli->query("SET FOREIGN_KEY_CHECKS = 1");
-            $mysqli->query("SET UNIQUE_CHECKS = 1");
-            $mysqli->select_db($dbName);
-            $mysqli->query("DROP DATABASE IF EXISTS `{$stagingDb}`");
-            $stagingDb = null;
+        if (!$okStaging) {
+            throw new RuntimeException("No fue posible crear la base de datos de staging `{$stagingDb}`: " . $mysqli->error);
         }
+
+        $mysqli->select_db($stagingDb);
+        $mysqli->query("SET FOREIGN_KEY_CHECKS = 0");
+        $mysqli->query("SET UNIQUE_CHECKS = 0");
+
+        foreach ($sentencias as $indice => $sqlStmt) {
+            $ok = $mysqli->query($sqlStmt);
+            if (!$ok) {
+                $numSentencia = $indice + 1;
+                throw new RuntimeException(sprintf(
+                    "Error en sentencia #%d durante validación previa en staging (errno %d): %s",
+                    $numSentencia,
+                    $mysqli->errno,
+                    $mysqli->error
+                ));
+            }
+        }
+
+        // Staging exitoso: limpiar base temporal y volver a base destino
+        $mysqli->query("SET FOREIGN_KEY_CHECKS = 1");
+        $mysqli->query("SET UNIQUE_CHECKS = 1");
+        $mysqli->select_db($dbName);
+        $mysqli->query("DROP DATABASE IF EXISTS `{$stagingDb}`");
+        $stagingDb = null;
     }
 
     // Aplicar sentencias sobre la base destino definitiva
