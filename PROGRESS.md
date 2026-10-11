@@ -15,8 +15,10 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 - **Rama de Integración Activa:** `feature/correcciones-auditoria-integral`
 - **Código Auditado Externamente:** `f33076c304e766239b1bfc13d9dde1927d749827`
 - **Cierre Documental Revocado:** `d4124f27abcb46fb947f158cf4a44d04d481e6eb`
-- **Estado General:** **RESOLUCIÓN Y VERIFICACIÓN COMPLETA DE HALLAZGOS DE AUDITORÍA EXTERNA — 6 Especialidades Integradas y Verificadas**
+- **Estado General:** **RESOLUCIÓN Y VERIFICACIÓN COMPLETA DE HALLAZGOS DE AUDITORÍA EXTERNA — 6 Especialidades Integradas y Verificadas (209 pruebas, 2587 aserciones, salida 0)**
 - **Matriz de Negocio:** Documentada en `docs/MATRIZ_ACEPTACION_NEGOCIO.md` con trazabilidad de requisitos, reglas, pruebas y decisiones del negocio.
+- **Suite PHPUnit (Orden Aleatorio):** `OK (209 tests, 2587 assertions)` — 0 fallas, 0 risky, código de salida `0`.
+- **Suite Navegador E2E (`tests/verificar_navegador.ps1`):** 19/19 comprobaciones superadas, 0 errores de consola, persistencia MySQL validada — Código de salida `0`.
 
 ### 0. Consolidación de Correcciones de Especialistas
 

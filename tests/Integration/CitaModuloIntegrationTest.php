@@ -55,14 +55,34 @@ class CitaModuloIntegrationTest extends TestCase
         $_POST = [];
         $_SERVER['HTTP_X_CSRF_TOKEN'] = null;
         $_SERVER['HTTP_REFERER'] = null;
-        $_SERVER['HTTP_ACCEPT'] = null;
-        $_SERVER['CONTENT_TYPE'] = null;
+        unset($_SERVER['HTTP_ACCEPT']);
+        unset($_SERVER['CONTENT_TYPE']);
+        unset($_SERVER['HTTP_X_REQUESTED_WITH']);
         $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_SERVER['REQUEST_URI'] = '/';
 
         APIController::setServicioService(null);
         APIController::setCitaService(null);
         AdminController::setCitaService(null);
         ActiveRecord::setDB(self::$db);
+        http_response_code(200);
+    }
+
+    protected function tearDown(): void
+    {
+        $_SESSION = [];
+        $_GET = [];
+        $_POST = [];
+        $_SERVER['HTTP_X_CSRF_TOKEN'] = null;
+        $_SERVER['HTTP_REFERER'] = null;
+        unset($_SERVER['HTTP_ACCEPT']);
+        unset($_SERVER['CONTENT_TYPE']);
+        unset($_SERVER['HTTP_X_REQUESTED_WITH']);
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_SERVER['REQUEST_URI'] = '/';
+        APIController::setServicioService(null);
+        APIController::setCitaService(null);
+        AdminController::setCitaService(null);
         http_response_code(200);
     }
 
@@ -494,13 +514,22 @@ class CitaModuloIntegrationTest extends TestCase
     {
         $router = new Router();
 
-        // Cliente autenticado no administrador
+        // Cliente autenticado no administrador accediendo vía navegador HTML
         $_SESSION = ['login' => true, 'id' => 10, 'admin' => '0'];
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_SERVER['REQUEST_URI'] = '/admin';
+        unset($_SERVER['HTTP_ACCEPT']);
+        unset($_SERVER['CONTENT_TYPE']);
+        unset($_SERVER['HTTP_X_REQUESTED_WITH']);
+
+        ob_start();
         try {
             AdminController::index($router);
             $this->fail('Cliente sin rol admin debe ser redirigido de /admin');
         } catch (AppTerminationException $e) {
             $this->assertSame(302, $e->getStatusCode());
+        } finally {
+            ob_end_clean();
         }
     }
 
