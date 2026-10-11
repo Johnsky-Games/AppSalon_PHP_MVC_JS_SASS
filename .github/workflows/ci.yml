@@ -66,7 +66,7 @@ jobs:
           php database/migrador.php status
 
       - name: Ejecutar suite completa de PHPUnit
-        run: php -d variables_order=EGPCS vendor/bin/phpunit --colors=never
+        run: php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --colors=never
 
       - name: Verificar scripts CLI de respaldo y restauración
         run: |

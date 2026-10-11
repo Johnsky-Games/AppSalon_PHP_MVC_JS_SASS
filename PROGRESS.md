@@ -57,12 +57,12 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 #### A. Suite Completa PHPUnit y Verificación de Sintaxis (Docker PHP 8.2.34 + MySQL 8.0 Aislado)
 - **Versión efectiva:** `PHPUnit 10.5.66 by Sebastian Bergmann and contributors.` (`Runtime: PHP 8.2.34`, `Configuration: /app/phpunit.xml`).
 - **Comando ejecutado:**
-  `docker run --rm --name appsalon-web-phpunit-ct --network appsalon-net-phpunit-ct -v "${PWD}:/app" -w /app -e APP_ENV=testing -e DB_HOST=appsalon-db-phpunit-ct -e DB_PORT=3306 -e DB_USER=root -e DB_PASS=root -e DB_NAME=appsalon_ct_test appsalon-php-test php -d variables_order=EGPCS vendor/bin/phpunit --colors=never`
-- **Resultado PHPUnit:** `OK (172 tests, 2046 assertions)` (`Time: 00:46.428, Memory: 16.00 MB`) — Código de salida `0`.
+  `docker run --rm --name appsalon-web-phpunit-ct --network appsalon-net-phpunit-ct -v "${PWD}:/app" -w /app -e APP_ENV=testing -e DB_HOST=appsalon-db-phpunit-ct -e DB_PORT=3306 -e DB_USER=root -e DB_PASS=root -e DB_NAME=appsalon_ct_test appsalon-php-test php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --colors=never`
+- **Resultado PHPUnit:** `OK (172 tests, 2046 assertions)` (`Time: 00:43.683, Memory: 16.00 MB`) — Código de salida `0` (con restauración estricta de superglobales `$_SERVER`, `$_POST`, `$_GET` y `$_SESSION` en `BackupRestoreIntegrationTest::tearDown()` y `try/finally`).
 - **Verificación de sintaxis (`php -l`):** `0` errores de sintaxis en todos los archivos `.php` del proyecto — Código de salida `0`.
 
 #### B. Verificación E2E en Navegador con JavaScript Habilitado (`tests/verificar_navegador.ps1` + `tests/browser_e2e_test.js`)
-- **RUN_ID:** `30c68b1df71949a2afca0130e3526507` (Contenedores efímeros aislados, puerto dinámico `http://localhost:32798`, BD aislada `appsalon_browser_test`).
+- **RUN_ID:** `3d118172c3e6461b9b07a841bf7e5d5b` (Contenedores efímeros aislados, puerto dinámico `http://localhost:32800`, BD aislada `appsalon_browser_test`).
 - **Resultado:** 19/19 comprobaciones E2E superadas (`ADMIN-01` a `ADMIN-05`, `PROF-01`, `PROF-02`, `PRE-01`, `DISP-01`, `REC-01` a `REC-05`, `RES-01`, `REP-01`, `PAG-01`, `AUTH-01`, `NOTIF-01`), `0` errores de consola, `0` peticiones de red fallidas + verificación de persistencia en MySQL — Código de salida `0`.
 
 ---

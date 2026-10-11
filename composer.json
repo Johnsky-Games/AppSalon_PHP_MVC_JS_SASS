@@ -27,7 +27,7 @@
         "phpunit/phpunit": "^10.5"
     },
     "scripts": {
-        "test": "phpunit --colors=never",
+        "test": "phpunit --do-not-cache-result --colors=never",
         "migrate:status": "php database/migrador.php status",
         "migrate:up": "php database/migrador.php up",
         "migrate:down": "php database/migrador.php down",

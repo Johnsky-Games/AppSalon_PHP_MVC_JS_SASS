@@ -309,6 +309,20 @@ class BackupRestoreIntegrationTest extends TestCase
         }
     }
 
+    protected function tearDown(): void
+    {
+        $_SERVER['REQUEST_URI'] = '/';
+        $_SERVER['HTTP_ACCEPT'] = '';
+        $_SERVER['CONTENT_TYPE'] = '';
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_POST = [];
+        $_GET = [];
+        $_SESSION = [];
+        PagoController::setPagoService(null);
+        PagoController::setRawJsonOverride(null);
+        parent::tearDown();
+    }
+
     public function testAuditoriaIntegralDeCabecerasSeguridadRutasPermisosEIndices(): void
     {
         ActiveRecord::setDB(self::$db);
@@ -320,49 +334,59 @@ class BackupRestoreIntegrationTest extends TestCase
         $this->assertSame('strict-origin-when-cross-origin', $headersSeguridad['Referrer-Policy'] ?? null);
 
         // 2. Verificar protección de POST /api/pagos/reembolsar (bloquea cliente no admin con 403 y exige CSRF a admin)
-        $_SESSION = [
-            'id' => 999,
-            'nombre' => 'Cliente',
-            'apellido' => 'Prueba',
-            'login' => true,
-            'csrf_token' => 'token_csrf_cierre_tecnico',
-        ];
-        $_SERVER['REQUEST_METHOD'] = 'POST';
-        $_SERVER['REQUEST_URI'] = '/api/pagos/reembolsar';
-        $_SERVER['HTTP_ACCEPT'] = 'application/json';
-        $_POST = [
-            'csrf_token' => 'token_csrf_cierre_tecnico',
-            'referencia' => 'PAY-20261116-INEXISTENTE',
-        ];
-
-        ob_start();
         try {
-            PagoController::reembolsar();
-            $this->fail('PagoController::reembolsar debe rechazar con 403 a usuarios no administradores');
-        } catch (\AppTerminationException $e) {
-            $this->assertSame(403, $e->getStatusCode());
-        } finally {
-            $outCliente = (string)ob_get_clean();
-        }
-        $jsonCliente = json_decode($outCliente, true);
-        $this->assertIsArray($jsonCliente);
-        $this->assertFalse($jsonCliente['resultado']);
+            $_SESSION = [
+                'id' => 999,
+                'nombre' => 'Cliente',
+                'apellido' => 'Prueba',
+                'login' => true,
+                'csrf_token' => 'token_csrf_cierre_tecnico',
+            ];
+            $_SERVER['REQUEST_METHOD'] = 'POST';
+            $_SERVER['REQUEST_URI'] = '/api/pagos/reembolsar';
+            $_SERVER['HTTP_ACCEPT'] = 'application/json';
+            $_POST = [
+                'csrf_token' => 'token_csrf_cierre_tecnico',
+                'referencia' => 'PAY-20261116-INEXISTENTE',
+            ];
 
-        // Admin sin CSRF válido -> 403
-        $_SESSION['admin'] = '1';
-        $_POST['csrf_token'] = 'token_invalido';
-        ob_start();
-        try {
-            PagoController::reembolsar();
-            $this->fail('PagoController::reembolsar debe exigir token CSRF válido');
-        } catch (\AppTerminationException $e) {
-            $this->assertSame(403, $e->getStatusCode());
+            ob_start();
+            try {
+                PagoController::reembolsar();
+                $this->fail('PagoController::reembolsar debe rechazar con 403 a usuarios no administradores');
+            } catch (\AppTerminationException $e) {
+                $this->assertSame(403, $e->getStatusCode());
+            } finally {
+                $outCliente = (string)ob_get_clean();
+            }
+            $jsonCliente = json_decode($outCliente, true);
+            $this->assertIsArray($jsonCliente);
+            $this->assertFalse($jsonCliente['resultado']);
+
+            // Admin sin CSRF válido -> 403
+            $_SESSION['admin'] = '1';
+            $_POST['csrf_token'] = 'token_invalido';
+            ob_start();
+            try {
+                PagoController::reembolsar();
+                $this->fail('PagoController::reembolsar debe exigir token CSRF válido');
+            } catch (\AppTerminationException $e) {
+                $this->assertSame(403, $e->getStatusCode());
+            } finally {
+                $outSinCsrf = (string)ob_get_clean();
+            }
+            $jsonSinCsrf = json_decode($outSinCsrf, true);
+            $this->assertIsArray($jsonSinCsrf);
+            $this->assertFalse($jsonSinCsrf['resultado']);
         } finally {
-            $outSinCsrf = (string)ob_get_clean();
+            $_SERVER['REQUEST_URI'] = '/';
+            $_SERVER['HTTP_ACCEPT'] = '';
+            $_SERVER['CONTENT_TYPE'] = '';
+            $_SERVER['REQUEST_METHOD'] = 'GET';
+            $_POST = [];
+            $_GET = [];
+            $_SESSION = [];
         }
-        $jsonSinCsrf = json_decode($outSinCsrf, true);
-        $this->assertIsArray($jsonSinCsrf);
-        $this->assertFalse($jsonSinCsrf['resultado']);
 
         // 3. Verificar en INFORMATION_SCHEMA los índices y claves foráneas esenciales de las migraciones 001 a 006
         $indicesRequeridos = [
