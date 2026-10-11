@@ -462,4 +462,87 @@ class PagoIdempotenciaSeguridadIntegrationTest extends TestCase
         $this->assertSame('PAYMENT_CONFIGURATION_ERROR', $jsonRespuesta['codigo_error']);
         $this->assertStringContainsString('MockPaymentGateway está estrictamente prohibido en entorno de producción', $jsonRespuesta['error']);
     }
+
+    /**
+     * 6. Conciliación y secuencia compleja de callbacks (Frente 4):
+     * Secuencia: K1 falla -> K2 inicia -> éxito tardío K1 -> éxito K2.
+     * Ambas operaciones quedan registradas de forma durable sin pérdida de trazabilidad.
+     * La cita queda confirmada como 'pagada' sin degradación ni inconsistencia contable.
+     */
+    public function testSecuenciaK1FallaK2IniciaExitoTardioK1ExitoK2ConciliacionRobusta(): void
+    {
+        $usuarioId = $this->crearUsuario('conciliacion@correo.com', 'Cliente Conciliacion');
+        $profId = $this->crearProfesional('Carlos Estilista');
+        $servId = $this->crearServicio('Tratamiento Capilar', 60.00);
+        $citaId = $this->crearCitaConServicio($usuarioId, $profId, $servId, 60.00);
+
+        $pagoRepo = new PagoRepository(self::$db);
+        $mockGateway = new MockPaymentGateway('test_safe_webhook_secret_2026');
+        $pagoService = new PagoService($pagoRepo, $mockGateway);
+
+        // Paso 1: Intento K1 inicia
+        $resK1 = $pagoService->iniciarPago($usuarioId, [
+            'cita_id' => $citaId,
+            'idempotency_key' => 'idemp_secuencia_K1',
+            'metodo_pago' => 'tarjeta_mock',
+        ]);
+        $this->assertSame(PagoService::STATUS_OK, $resK1['status']);
+        $refK1 = $resK1['pago']['referencia_pago'];
+
+        // Paso 2: K1 falla inicialmente (ej. fondos insuficientes o timeout de red)
+        $pagoRepo->actualizarEstadoPago((int)$resK1['pago']['id'], Pago::ESTADO_FALLIDO);
+
+        // Paso 3: El cliente reintenta e inicia K2 exitosamente
+        $resK2 = $pagoService->iniciarPago($usuarioId, [
+            'cita_id' => $citaId,
+            'idempotency_key' => 'idemp_secuencia_K2',
+            'metodo_pago' => 'tarjeta_mock',
+        ]);
+        $this->assertSame(PagoService::STATUS_OK, $resK2['status']);
+        $refK2 = $resK2['pago']['referencia_pago'];
+        $this->assertNotSame($refK1, $refK2);
+
+        // Paso 4: Llega un webhook tardío indicando éxito tardío de K1 (confirmación desfasada del gateway)
+        $payloadK1 = [
+            'referencia_pago' => $refK1,
+            'evento' => 'pago.completado',
+            'estado' => 'completado',
+            'monto' => 60.00,
+            'transaccion_externa_id' => 'tx_gateway_k1_tardio',
+        ];
+        $headersK1 = ['X-Mock-Signature' => $mockGateway->generarFirmaWebhook($payloadK1)];
+        $resWebK1 = $pagoService->procesarWebhook($payloadK1, $headersK1);
+        $this->assertSame(PagoService::STATUS_OK, $resWebK1['status']);
+        $this->assertSame(Pago::ESTADO_COMPLETADO, $resWebK1['pago']['estado']);
+
+        // Verificar que la cita está marcada como pagada
+        $citaActualizada1 = self::$db->query("SELECT estado_pago FROM citas WHERE id = {$citaId}")->fetch_assoc();
+        $this->assertSame('pagado', $citaActualizada1['estado_pago']);
+
+        // Paso 5: Llega el webhook de confirmación de K2
+        $payloadK2 = [
+            'referencia_pago' => $refK2,
+            'evento' => 'pago.completado',
+            'estado' => 'completado',
+            'monto' => 60.00,
+            'transaccion_externa_id' => 'tx_gateway_k2_confirmado',
+        ];
+        $headersK2 = ['X-Mock-Signature' => $mockGateway->generarFirmaWebhook($payloadK2)];
+        $resWebK2 = $pagoService->procesarWebhook($payloadK2, $headersK2);
+        $this->assertSame(PagoService::STATUS_OK, $resWebK2['status']);
+        $this->assertSame(Pago::ESTADO_COMPLETADO, $resWebK2['pago']['estado']);
+
+        // Verificar que ambos pagos K1 y K2 existen con su respectiva trazabilidad durable
+        $resPagos = self::$db->query("SELECT estado FROM pagos WHERE cita_id = {$citaId} ORDER BY id ASC");
+        $estadosPagos = [];
+        while ($row = $resPagos->fetch_assoc()) {
+            $estadosPagos[] = $row['estado'];
+        }
+        $this->assertCount(2, $estadosPagos);
+        $this->assertSame([Pago::ESTADO_COMPLETADO, Pago::ESTADO_COMPLETADO], $estadosPagos);
+
+        // Y la cita permanece como 'pagado'
+        $citaActualizadaFinal = self::$db->query("SELECT estado_pago FROM citas WHERE id = {$citaId}")->fetch_assoc();
+        $this->assertSame('pagado', $citaActualizadaFinal['estado_pago']);
+    }
 }

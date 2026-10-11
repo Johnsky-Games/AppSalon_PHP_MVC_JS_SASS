@@ -531,9 +531,11 @@ class ReporteRepository
                     pg.metodo_pago,
                     pg.idempotency_key,
                     pg.pagado_at,
+                    pg.reembolsado_at,
                     pg.created_at AS pago_created_at,
                     pg.updated_at AS pago_updated_at,
                     COALESCE(pg.pagado_at, pg.created_at) AS fecha_cobro,
+                    pg.reembolsado_at AS fecha_reembolso,
                     c.id AS cita_id_join,
                     c.fecha AS cita_fecha,
                     c.hora AS cita_hora,
@@ -566,8 +568,25 @@ class ReporteRepository
         $params = [];
 
         if ($criterioFecha === 'cobro') {
-            $sql .= "DATE(COALESCE(pg.pagado_at, pg.created_at)) >= ? AND DATE(COALESCE(pg.pagado_at, pg.created_at)) <= ?";
-            $tipos .= 'ss';
+            // Captura pagos con cobro en el rango O reembolsos ejecutados en el rango
+            $sql .= "(
+                        (pg.estado = 'completado' AND DATE(COALESCE(pg.pagado_at, pg.created_at)) >= ? AND DATE(COALESCE(pg.pagado_at, pg.created_at)) <= ?)
+                        OR
+                        (pg.estado = 'reembolsado' AND (
+                            (pg.reembolsado_at IS NOT NULL AND DATE(pg.reembolsado_at) >= ? AND DATE(pg.reembolsado_at) <= ?)
+                            OR
+                            (pg.reembolsado_at IS NULL AND DATE(COALESCE(pg.pagado_at, pg.created_at)) >= ? AND DATE(COALESCE(pg.pagado_at, pg.created_at)) <= ?)
+                            OR
+                            (pg.pagado_at IS NOT NULL AND DATE(pg.pagado_at) >= ? AND DATE(pg.pagado_at) <= ?)
+                        ))
+                    )";
+            $tipos .= 'ssssssss';
+            $params[] = $fechaInicio;
+            $params[] = $fechaFin;
+            $params[] = $fechaInicio;
+            $params[] = $fechaFin;
+            $params[] = $fechaInicio;
+            $params[] = $fechaFin;
             $params[] = $fechaInicio;
             $params[] = $fechaFin;
         } else {

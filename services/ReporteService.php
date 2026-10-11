@@ -587,6 +587,11 @@ class ReporteService
                         ? (int)$filaP['profesional_id']
                         : null;
 
+                    $fechaCobroStr = (string)($filaP['fecha_cobro'] ?? '');
+                    $fechaReembolsoStr = isset($filaP['fecha_reembolso']) && $filaP['fecha_reembolso'] !== null
+                        ? (string)$filaP['fecha_reembolso']
+                        : ($filaP['reembolsado_at'] !== null ? (string)$filaP['reembolsado_at'] : null);
+
                     $movimientosFinancieros[$pId] = [
                         'id' => $pId,
                         'pago_id' => $pId,
@@ -599,8 +604,10 @@ class ReporteService
                         'moneda' => (string)($filaP['pago_moneda'] ?? 'USD'),
                         'estado' => $estadoP,
                         'metodo_pago' => $filaP['metodo_pago'] !== null ? (string)$filaP['metodo_pago'] : null,
-                        'fecha_cobro' => (string)($filaP['fecha_cobro'] ?? ''),
+                        'fecha_cobro' => $fechaCobroStr,
+                        'fecha_reembolso' => $fechaReembolsoStr,
                         'pagado_at' => $filaP['pagado_at'] !== null ? (string)$filaP['pagado_at'] : null,
+                        'reembolsado_at' => $filaP['reembolsado_at'] !== null ? (string)$filaP['reembolsado_at'] : null,
                         'created_at' => (string)($filaP['pago_created_at'] ?? ''),
                         'cita_fecha' => $filaP['cita_fecha'] !== null ? (string)$filaP['cita_fecha'] : null,
                         'cita_hora' => $filaP['cita_hora'] !== null ? (string)$filaP['cita_hora'] : null,
@@ -615,31 +622,66 @@ class ReporteService
                         'servicios' => [],
                     ];
 
+                    // Evaluación temporal de movimientos en el rango solicitado
+                    $fechaCobroDia = substr($fechaCobroStr, 0, 10);
+                    $fechaReembolsoDia = $fechaReembolsoStr !== null ? substr($fechaReembolsoStr, 0, 10) : $fechaCobroDia;
+
+                    $aplicaCobroEnRango = true;
+                    $aplicaReembolsoEnRango = true;
+
+                    if ($criterioFecha === 'cobro') {
+                        $aplicaCobroEnRango = ($fechaCobroDia >= $fechaInicio && $fechaCobroDia <= $fechaFin);
+                        $aplicaReembolsoEnRango = ($fechaReembolsoDia >= $fechaInicio && $fechaReembolsoDia <= $fechaFin);
+                    }
+
                     if ($estadoP === 'completado') {
-                        $cobrosConfirmadosTotal = round($cobrosConfirmadosTotal + $montoP, 2);
-                        if ($esSimulado) {
-                            $cobrosConfirmadosSimulados = round($cobrosConfirmadosSimulados + $montoP, 2);
-                        } else {
-                            $cobrosConfirmadosReales = round($cobrosConfirmadosReales + $montoP, 2);
-                        }
-                        if ($pProfId !== null) {
-                            $pagosPorProf[$pProfId]['cobros_confirmados'] = round(
-                                ($pagosPorProf[$pProfId]['cobros_confirmados'] ?? 0.00) + $montoP,
-                                2
-                            );
+                        if ($aplicaCobroEnRango) {
+                            $cobrosConfirmadosTotal = round($cobrosConfirmadosTotal + $montoP, 2);
+                            if ($esSimulado) {
+                                $cobrosConfirmadosSimulados = round($cobrosConfirmadosSimulados + $montoP, 2);
+                            } else {
+                                $cobrosConfirmadosReales = round($cobrosConfirmadosReales + $montoP, 2);
+                            }
+                            if ($pProfId !== null) {
+                                $pagosPorProf[$pProfId]['cobros_confirmados'] = round(
+                                    ($pagosPorProf[$pProfId]['cobros_confirmados'] ?? 0.00) + $montoP,
+                                    2
+                                );
+                            }
                         }
                     } elseif ($estadoP === 'reembolsado') {
-                        $reembolsosTotal = round($reembolsosTotal + $montoP, 2);
-                        if ($esSimulado) {
-                            $reembolsosSimulados = round($reembolsosSimulados + $montoP, 2);
-                        } else {
-                            $reembolsosReales = round($reembolsosReales + $montoP, 2);
+                        // En criterio por fecha de cobro contable, el cobro original y el reembolso se computan en sus fechas respectivas
+                        if ($criterioFecha === 'cobro') {
+                            if ($aplicaCobroEnRango) {
+                                $cobrosConfirmadosTotal = round($cobrosConfirmadosTotal + $montoP, 2);
+                                if ($esSimulado) {
+                                    $cobrosConfirmadosSimulados = round($cobrosConfirmadosSimulados + $montoP, 2);
+                                } else {
+                                    $cobrosConfirmadosReales = round($cobrosConfirmadosReales + $montoP, 2);
+                                }
+                                if ($pProfId !== null) {
+                                    $pagosPorProf[$pProfId]['cobros_confirmados'] = round(
+                                        ($pagosPorProf[$pProfId]['cobros_confirmados'] ?? 0.00) + $montoP,
+                                        2
+                                    );
+                                }
+                            }
                         }
-                        if ($pProfId !== null) {
-                            $pagosPorProf[$pProfId]['reembolsos'] = round(
-                                ($pagosPorProf[$pProfId]['reembolsos'] ?? 0.00) + $montoP,
-                                2
-                            );
+
+                        // El reembolso se computa siempre que su fecha/evento corresponda al rango evaluado
+                        if ($aplicaReembolsoEnRango) {
+                            $reembolsosTotal = round($reembolsosTotal + $montoP, 2);
+                            if ($esSimulado) {
+                                $reembolsosSimulados = round($reembolsosSimulados + $montoP, 2);
+                            } else {
+                                $reembolsosReales = round($reembolsosReales + $montoP, 2);
+                            }
+                            if ($pProfId !== null) {
+                                $pagosPorProf[$pProfId]['reembolsos'] = round(
+                                    ($pagosPorProf[$pProfId]['reembolsos'] ?? 0.00) + $montoP,
+                                    2
+                                );
+                            }
                         }
                     }
                 }
@@ -1029,7 +1071,7 @@ class ReporteService
 
             $cobrosProf = $pagosPorProf[$profId]['cobros_confirmados'] ?? (float)$datosOcup['ingreso_pagado'];
             $reembolsosProf = $pagosPorProf[$profId]['reembolsos'] ?? 0.00;
-            $netoProf = round(max(0.0, $cobrosProf - $reembolsosProf), 2);
+            $netoProf = round($cobrosProf - $reembolsosProf, 2);
 
             $resumenProfesionales[] = [
                 'profesional_id' => $profId,

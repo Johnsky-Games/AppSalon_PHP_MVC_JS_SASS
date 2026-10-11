@@ -618,13 +618,15 @@ class PagoRepository
         ?string $transaccionExternaId = null,
         ?string $pagadoAt = null,
         array|string|null $payloadProveedor = null,
-        ?string $metodoPago = null
+        ?string $metodoPago = null,
+        ?string $reembolsadoAt = null
     ): void {
         $db = $this->resolveDb();
         $sql = "UPDATE pagos
                 SET estado = ?,
                     transaccion_externa_id = COALESCE(?, transaccion_externa_id),
                     pagado_at = COALESCE(?, pagado_at),
+                    reembolsado_at = COALESCE(?, reembolsado_at),
                     payload_proveedor = COALESCE(?, payload_proveedor),
                     metodo_pago = COALESCE(?, metodo_pago)
                 WHERE id = ?
@@ -638,10 +640,11 @@ class PagoRepository
                 throw new PersistenceException('Error al preparar actualización de pago: ' . $db->error);
             }
             $stmt->bind_param(
-                'sssssi',
+                'ssssssi',
                 $estado,
                 $transaccionExternaId,
                 $pagadoAt,
+                $reembolsadoAt,
                 $payloadSeguro,
                 $metodoPago,
                 $pagoId

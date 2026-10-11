@@ -30,6 +30,7 @@ class Pago
     public string $idempotency_key = '';
     public ?string $payload_proveedor = null;
     public ?string $pagado_at = null;
+    public ?string $reembolsado_at = null;
     public ?string $created_at = null;
     public ?string $updated_at = null;
 
@@ -67,6 +68,9 @@ class Pago
             : null;
         $this->pagado_at = isset($args['pagado_at']) && $args['pagado_at'] !== null && $args['pagado_at'] !== ''
             ? (string)$args['pagado_at']
+            : null;
+        $this->reembolsado_at = isset($args['reembolsado_at']) && $args['reembolsado_at'] !== null && $args['reembolsado_at'] !== ''
+            ? (string)$args['reembolsado_at']
             : null;
         $this->created_at = isset($args['created_at']) && $args['created_at'] !== null
             ? (string)$args['created_at']
@@ -116,6 +120,7 @@ class Pago
             'metodo_pago' => $this->metodo_pago,
             'idempotency_key' => $this->idempotency_key,
             'pagado_at' => $this->pagado_at,
+            'reembolsado_at' => $this->reembolsado_at,
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
         ];

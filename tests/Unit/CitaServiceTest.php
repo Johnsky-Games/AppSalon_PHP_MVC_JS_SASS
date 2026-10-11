@@ -286,7 +286,7 @@ class CitaServiceTest extends TestCase
                 $this->assertSame('solicitud_invalida', $resModo['codigo']);
             }
 
-            // 3. Con exigirProfesional activo globalmente, rechaza solicitudes sin profesional salvo modo_reserva = 'clasico'
+            // 3. Con exigirProfesional activo globalmente, NINGÚN parámetro del cliente (incluyendo modo_reserva = 'clasico') puede eludir la exigencia
             CitaService::setExigirProfesional(true);
             $datosSinClave = [
                 'fecha' => '2026-11-19',
@@ -304,7 +304,8 @@ class CitaServiceTest extends TestCase
                 'hora' => '11:00',
                 'servicios' => '1'
             ];
-            $this->assertFalse($service->debeUsarFlujoConProfesional($datosClasicoExplicito));
+            // La política estricta exige profesional incondicionalmente si el servidor lo exige
+            $this->assertTrue($service->debeUsarFlujoConProfesional($datosClasicoExplicito));
         } finally {
             CitaService::setExigirProfesional(null);
         }

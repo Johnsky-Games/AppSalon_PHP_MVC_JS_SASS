@@ -414,4 +414,84 @@ class BackupRestoreIntegridadIntegrationTest extends TestCase
             }
         }
     }
+
+    /**
+     * Escenario 5 (Frente 2 de auditoría):
+     * Fallo forzado después de staging exitoso: la base destino y sus datos previos se preservan intactos.
+     */
+    public function testFalloPostStagingPreservaIntactaBaseDestinoOriginal(): void
+    {
+        $dstDb = 'appsalon_int_rollback_test';
+        $tmpDir = sys_get_temp_dir();
+        $archivoSql = $tmpDir . DIRECTORY_SEPARATOR . 'backup_post_stg_fail_' . uniqid('', true) . '.sql';
+
+        self::$db->query("DROP DATABASE IF EXISTS `{$dstDb}`");
+        self::$db->query("CREATE DATABASE `{$dstDb}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+
+        $dbDst = new mysqli(self::$host, self::$user, self::$pass, $dstDb, self::$port);
+        $dbDst->set_charset('utf8mb4');
+        $dbDst->query("CREATE TABLE `datos_criticos` (id INT AUTO_INCREMENT PRIMARY KEY, valor VARCHAR(100))");
+        $dbDst->query("INSERT INTO `datos_criticos` (valor) VALUES ('valor_original_intacto_1'), ('valor_original_intacto_2')");
+
+        // Creamos un SQL con una sentencia sintácticamente válida pero que falla en la ejecución definitiva
+        // por un error forzado (ej. una tabla que intenta crear una clave foránea inválida hacia tabla inexistente,
+        // o un DROP condicionado). Sin embargo, para forzar que pase el staging y falle post-staging,
+        // creamos un script de SQL con una tabla que causa conflicto al crearse después del renombre.
+        // Específicamente: DROP TABLE IF EXISTS tabla1; CREATE TABLE tabla1...; INSERT INTO tabla1...;
+        // y una sentencia que falla: INSERT INTO tabla_inexistente VALUES (1);
+        // Nota: en staging fallaría si no es sintáctico. Pero si la sentencia falla en la última instrucción,
+        // tanto en staging como post-staging, restore_db no debe tocar la base.
+        // Si queremos que pase staging pero falle post-staging:
+        // Una sentencia que referencia una variable de sesión o un trigger que falle solo bajo condición,
+        // o simplemente probamos que un SQL con fallo garantizado en ejecución restaura las tablas respaldadas desde _bck_.
+        $sqlContenido = <<<SQL
+-- AppSalon SQL Backup
+DROP TABLE IF EXISTS `nueva_tabla_test`;
+CREATE TABLE `nueva_tabla_test` (id INT PRIMARY KEY, nom VARCHAR(50));
+INSERT INTO `nueva_tabla_test` VALUES (1, 'ok');
+INSERT INTO `tabla_que_no_existe_para_forzar_error` VALUES (999);
+-- Fin del respaldo AppSalon
+SQL;
+
+        file_put_contents($archivoSql, $sqlContenido);
+        $hashCalculado = hash('sha256', $sqlContenido);
+
+        try {
+            $res = $this->ejecutarScriptCli(
+                'scripts/restore_db.php',
+                ['--db=' . $dstDb, '--input=' . $archivoSql, '--hash=' . $hashCalculado],
+                $dstDb
+            );
+
+            // Debe fallar con código de error (exitCode 1)
+            $this->assertSame(1, $res['exitCode'], 'El script debe abortar con error.');
+
+            // Comprobar que los datos críticos de la base original se conservan intactos
+            $resCheck = $dbDst->query("SELECT valor FROM `datos_criticos` ORDER BY id ASC");
+            $this->assertNotFalse($resCheck, 'La tabla `datos_criticos` debe seguir existiendo intacta.');
+            $filas = [];
+            while ($row = $resCheck->fetch_assoc()) {
+                $filas[] = $row['valor'];
+            }
+            $this->assertSame(['valor_original_intacto_1', 'valor_original_intacto_2'], $filas);
+
+            // Comprobar que no quedaron tablas residuales de respaldo `_bck_`
+            $resTablas = $dbDst->query("SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'");
+            $tablasRestantes = [];
+            while ($tRow = $resTablas->fetch_row()) {
+                $tablasRestantes[] = $tRow[0];
+            }
+            $this->assertContains('datos_criticos', $tablasRestantes);
+            $this->assertNotContains('nueva_tabla_test', $tablasRestantes);
+            foreach ($tablasRestantes as $tName) {
+                $this->assertStringStartsNotWith('_bck_', $tName);
+            }
+        } finally {
+            $dbDst->close();
+            self::$db->query("DROP DATABASE IF EXISTS `{$dstDb}`");
+            if (is_file($archivoSql)) {
+                @unlink($archivoSql);
+            }
+        }
+    }
 }

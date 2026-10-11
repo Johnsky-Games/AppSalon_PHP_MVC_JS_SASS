@@ -22,6 +22,7 @@ class NotificacionCitaService
     public const STATUS_YA_ENVIADO = 'ya_enviado';
     public const STATUS_FALLIDO = 'fallido';
     public const STATUS_OMITIDO = 'omitido';
+    public const STATUS_LEASE_PERDIDO = 'lease_perdido';
     public const STATUS_ERROR = 'error';
 
     public const TIMEZONE = 'America/Guayaquil';
@@ -498,19 +499,24 @@ class NotificacionCitaService
                 continue;
             }
 
-            // Regla 4.B: Si la cita asociada está cancelada (o eliminada), descartar confirmaciones y recordatorios
+            // Regla 4.B: Si la cita asociada no existe, fue eliminada o está cancelada, descartar confirmaciones y recordatorios
+            $citaInexistente = ($cita === null);
             $citaCancelada = ($cita !== null && $cita->estado === 'cancelada')
                 || ($candidata->cita_id === null && $candidata->tipo === NotificacionCita::TIPO_RECORDATORIO);
-            if ($citaCancelada && in_array($candidata->tipo, [NotificacionCita::TIPO_CONFIRMACION, NotificacionCita::TIPO_RECORDATORIO], true)) {
-                $motivoCancelacion = $candidata->tipo === NotificacionCita::TIPO_RECORDATORIO
-                    ? 'Recordatorio descartado: la cita asociada está cancelada'
-                    : 'Confirmación descartada: la cita asociada está cancelada';
+            if (($citaInexistente || $citaCancelada) && in_array($candidata->tipo, [NotificacionCita::TIPO_CONFIRMACION, NotificacionCita::TIPO_RECORDATORIO], true)) {
+                $motivoCancelacion = $citaInexistente
+                    ? ($candidata->tipo === NotificacionCita::TIPO_RECORDATORIO
+                        ? 'Recordatorio descartado: la cita asociada no existe o fue eliminada'
+                        : 'Confirmación descartada: la cita asociada no existe o fue eliminada')
+                    : ($candidata->tipo === NotificacionCita::TIPO_RECORDATORIO
+                        ? 'Recordatorio descartado: la cita asociada está cancelada'
+                        : 'Confirmación descartada: la cita asociada está cancelada');
                 $this->notificacionRepository->descartarNotificacion($idNotif, $motivoCancelacion, null, NotificacionCita::ESTADO_DESCARTADA);
                 $omitidos++;
                 $detalles[] = [
                     'id' => $idNotif,
                     'clave_idempotencia' => $candidata->clave_idempotencia,
-                    'resultado' => 'cita_cancelada',
+                    'resultado' => $citaInexistente ? 'cita_no_encontrada' : 'cita_cancelada',
                 ];
                 continue;
             }
@@ -926,14 +932,27 @@ class NotificacionCitaService
         $instanteFinUtc = $this->obtenerAhoraUtc()->format('Y-m-d H:i:s');
 
         if ($despacho['exito']) {
-            $this->notificacionRepository->marcarComoEnviado((int)$notificacion->id, $workerToken);
+            $confirmado = $this->notificacionRepository->marcarComoEnviado((int)$notificacion->id, $workerToken);
+            if ($confirmado) {
+                return [
+                    'status' => self::STATUS_OK,
+                    'enviado' => true,
+                    'id' => $notificacion->id,
+                    'clave_idempotencia' => $claveIdempotencia,
+                    'estado' => NotificacionCita::ESTADO_ENVIADO,
+                    'intentos' => $notificacion->intentos,
+                ];
+            }
+
+            // El lease expiró y otro worker tomó la tarea; no declarar enviado=true
             return [
-                'status' => self::STATUS_OK,
-                'enviado' => true,
+                'status' => self::STATUS_LEASE_PERDIDO,
+                'enviado' => false,
                 'id' => $notificacion->id,
                 'clave_idempotencia' => $claveIdempotencia,
-                'estado' => NotificacionCita::ESTADO_ENVIADO,
+                'estado' => $notificacion->estado,
                 'intentos' => $notificacion->intentos,
+                'motivo' => 'lease_expirado_durante_despacho',
             ];
         }
 
@@ -943,12 +962,25 @@ class NotificacionCitaService
         );
         $errorTexto = (string)($despacho['error'] ?? 'Fallo en despacho SMTP.');
 
-        $this->notificacionRepository->marcarComoFallido(
+        $confirmadoFallo = $this->notificacionRepository->marcarComoFallido(
             (int)$notificacion->id,
             $workerToken,
             $errorTexto,
             $proximoUtc
         );
+
+        if (!$confirmadoFallo) {
+            return [
+                'status' => self::STATUS_LEASE_PERDIDO,
+                'enviado' => false,
+                'id' => $notificacion->id,
+                'clave_idempotencia' => $claveIdempotencia,
+                'estado' => $notificacion->estado,
+                'intentos' => $notificacion->intentos,
+                'motivo' => 'lease_expirado_durante_fallo',
+                'error' => $errorTexto,
+            ];
+        }
 
         return [
             'status' => self::STATUS_FALLIDO,

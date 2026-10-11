@@ -279,6 +279,9 @@ try {
     }
 
     // Si safe-restore esta activo y la base destino tiene datos previos, validar primero en base temporal aislada
+    $tablasRespaldadas = [];
+    $prefijoBck = '_bck_' . substr(bin2hex(random_bytes(3)), 0, 6) . '_';
+
     if ($usarSafeRestore && $totalTablasPrevias > 0) {
         $stagingDb = $dbName . '_stg_' . substr(bin2hex(random_bytes(4)), 0, 8);
         $okStaging = $mysqli->query("CREATE DATABASE `{$stagingDb}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
@@ -303,12 +306,57 @@ try {
             }
         }
 
-        // Staging exitoso: limpiar base temporal y volver a base destino
+        // Validación adicional contra manifiesto si existe
+        if (isset($datosMan) && is_array($datosMan)) {
+            if (isset($datosMan['tablas']) && is_array($datosMan['tablas'])) {
+                $resStgTablas = $mysqli->query("SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'");
+                $tablasEnStaging = [];
+                if ($resStgTablas) {
+                    while ($filaT = $resStgTablas->fetch_row()) {
+                        $tablasEnStaging[] = $filaT[0];
+                    }
+                    $resStgTablas->free();
+                }
+                foreach ($datosMan['tablas'] as $nombreT => $infoT) {
+                    if (!in_array($nombreT, $tablasEnStaging, true)) {
+                        throw new RuntimeException("Validación de staging fallida: la tabla '{$nombreT}' declarada en el manifiesto no existe en staging.");
+                    }
+                }
+            }
+        }
+
+        // Staging exitoso: limpiar base temporal
         $mysqli->query("SET FOREIGN_KEY_CHECKS = 1");
         $mysqli->query("SET UNIQUE_CHECKS = 1");
         $mysqli->select_db($dbName);
         $mysqli->query("DROP DATABASE IF EXISTS `{$stagingDb}`");
         $stagingDb = null;
+
+        // Fase de resguardo previo de tablas de la base destino antes de la sustitución
+        $resTablasActuales = $mysqli->query("SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'");
+        $nombresTablas = [];
+        if ($resTablasActuales) {
+            while ($filaT = $resTablasActuales->fetch_row()) {
+                $nombresTablas[] = $filaT[0];
+            }
+            $resTablasActuales->free();
+        }
+
+        $mysqli->query("SET FOREIGN_KEY_CHECKS = 0");
+        foreach ($nombresTablas as $nombreTabla) {
+            $nombreBck = $prefijoBck . $nombreTabla;
+            $okRename = $mysqli->query("RENAME TABLE `{$nombreTabla}` TO `{$nombreBck}`");
+            if ($okRename) {
+                $tablasRespaldadas[$nombreTabla] = $nombreBck;
+            } else {
+                // Si falla el renombre preliminar, revertir renombres ya hechos
+                foreach ($tablasRespaldadas as $orig => $bck) {
+                    @$mysqli->query("RENAME TABLE `{$bck}` TO `{$orig}`");
+                }
+                throw new RuntimeException("No fue posible crear respaldo transaccional de tablas previas: " . $mysqli->error);
+            }
+        }
+        $mysqli->query("SET FOREIGN_KEY_CHECKS = 1");
     }
 
     // Aplicar sentencias sobre la base destino definitiva
@@ -317,18 +365,48 @@ try {
     $mysqli->query("SET UNIQUE_CHECKS = 0");
 
     $ejecutadas = 0;
-    foreach ($sentencias as $indice => $sqlStmt) {
-        $ok = $mysqli->query($sqlStmt);
-        if (!$ok) {
-            $numSentencia = $indice + 1;
-            throw new RuntimeException(sprintf(
-                "Error en sentencia #%d (errno %d): %s",
-                $numSentencia,
-                $mysqli->errno,
-                $mysqli->error
-            ));
+    try {
+        foreach ($sentencias as $indice => $sqlStmt) {
+            $ok = $mysqli->query($sqlStmt);
+            if (!$ok) {
+                $numSentencia = $indice + 1;
+                throw new RuntimeException(sprintf(
+                    "Error en sentencia #%d (errno %d): %s",
+                    $numSentencia,
+                    $mysqli->errno,
+                    $mysqli->error
+                ));
+            }
+            $ejecutadas++;
         }
-        $ejecutadas++;
+    } catch (Throwable $eEjecucion) {
+        // En caso de fallo post-staging, revertir y preservar intacta la base original
+        if (!empty($tablasRespaldadas)) {
+            fwrite(STDERR, "[ADVERTENCIA] Error post-staging detectado. Revertiendo cambios y restaurando tablas originales desde resguardo...\n");
+            $resTablasNuevas = $mysqli->query("SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'");
+            if ($resTablasNuevas) {
+                while ($filaTN = $resTablasNuevas->fetch_row()) {
+                    $tName = $filaTN[0];
+                    if (!str_starts_with($tName, $prefijoBck)) {
+                        @$mysqli->query("DROP TABLE IF EXISTS `{$tName}`");
+                    }
+                }
+                $resTablasNuevas->free();
+            }
+
+            foreach ($tablasRespaldadas as $orig => $bck) {
+                @$mysqli->query("RENAME TABLE `{$bck}` TO `{$orig}`");
+            }
+            fwrite(STDERR, "[INFO] Base destino restaurada exitosamente a su estado anterior.\n");
+        }
+        throw $eEjecucion;
+    }
+
+    // Si todo salió bien, limpiar las tablas de respaldo `_bck_`
+    if (!empty($tablasRespaldadas)) {
+        foreach ($tablasRespaldadas as $orig => $bck) {
+            @$mysqli->query("DROP TABLE IF EXISTS `{$bck}`");
+        }
     }
 
     $mysqli->query("SET FOREIGN_KEY_CHECKS = 1");

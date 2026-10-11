@@ -9,8 +9,10 @@ use Model\Cita;
 use Model\CitaServicio;
 use Model\DescansoProfesional;
 use Model\HorarioProfesional;
+use Model\NotificacionCita;
 use Model\Servicio;
 use mysqli;
+use Repositories\NotificacionCitaRepository;
 
 /**
  * Repositorio para consultas y persistencia transaccional de `citas` y `citasservicios`,
@@ -700,6 +702,29 @@ class CitaRepository
                 ];
             }
 
+            // Registrar evento Outbox en la misma conexión y transacción antes del commit
+            $notifRepo = new NotificacionCitaRepository($db);
+            $ahoraUtc = gmdate('Y-m-d H:i:s');
+            $claveConfirmacion = "cita:{$idCita}:confirmacion";
+            $snapshotParaOutbox = $notifRepo->obtenerSnapshotCompletoCitaEnConexion($idCita, $db);
+            if ($snapshotParaOutbox !== null) {
+                $emailCliente = trim((string)($snapshotParaOutbox['cliente_email'] ?? ''));
+                $nombreCliente = trim((string)($snapshotParaOutbox['cliente_nombre'] ?? 'Cliente AppSalon'));
+                $asunto = "Confirmación de tu cita #{$idCita} en AppSalon";
+
+                $notifRepo->registrarEventoOutboxEnConexion([
+                    'cita_id' => $idCita,
+                    'cita_referencia_id' => $idCita,
+                    'usuario_id' => $usuarioId,
+                    'tipo' => NotificacionCita::TIPO_CONFIRMACION,
+                    'clave_idempotencia' => $claveConfirmacion,
+                    'destinatario_email' => $emailCliente,
+                    'destinatario_nombre' => $nombreCliente,
+                    'asunto' => $asunto,
+                    'payload_json' => $snapshotParaOutbox,
+                ], $ahoraUtc, $db);
+            }
+
             if (!$db->commit()) {
                 throw new PersistenceException("Fallo al confirmar la transacción de la reserva con profesional.");
             }
@@ -1312,6 +1337,37 @@ class CitaRepository
                 throw new PersistenceException("Fallo al ejecutar cancelación lógica: " . $err);
             }
             $stmtUpdate->close();
+
+            // Registrar evento Outbox de cancelación en la misma conexión y transacción antes del commit
+            $notifRepo = new NotificacionCitaRepository($db);
+            $ahoraUtc = gmdate('Y-m-d H:i:s');
+            $claveCancelacion = "cita:{$citaId}:cancelacion";
+            $snapshotParaOutbox = $notifRepo->obtenerSnapshotCompletoCitaEnConexion($citaId, $db);
+            if ($snapshotParaOutbox !== null) {
+                $snapshotParaOutbox['tipo_notificacion'] = NotificacionCita::TIPO_CANCELACION;
+                $snapshotParaOutbox['cancelado_por'] = $actorValido;
+                $snapshotParaOutbox['cancelado_at'] = $canceladoAt;
+                $snapshotParaOutbox['motivo_cancelacion'] = $motivoValido;
+
+                $emailCliente = trim((string)($snapshotParaOutbox['cliente_email'] ?? ''));
+                $nombreCliente = trim((string)($snapshotParaOutbox['cliente_nombre'] ?? 'Cliente AppSalon'));
+                $usuarioIdCita = isset($snapshotParaOutbox['usuario_id']) && (int)$snapshotParaOutbox['usuario_id'] > 0
+                    ? (int)$snapshotParaOutbox['usuario_id']
+                    : null;
+                $asunto = "Cancelación de tu cita #{$citaId} — AppSalon";
+
+                $notifRepo->registrarEventoOutboxEnConexion([
+                    'cita_id' => $citaId,
+                    'cita_referencia_id' => $citaId,
+                    'usuario_id' => $usuarioIdCita,
+                    'tipo' => NotificacionCita::TIPO_CANCELACION,
+                    'clave_idempotencia' => $claveCancelacion,
+                    'destinatario_email' => $emailCliente,
+                    'destinatario_nombre' => $nombreCliente,
+                    'asunto' => $asunto,
+                    'payload_json' => $snapshotParaOutbox,
+                ], $ahoraUtc, $db);
+            }
 
             if (!$db->commit()) {
                 throw new PersistenceException("Fallo al confirmar transacción de cancelación lógica.");

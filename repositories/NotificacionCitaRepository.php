@@ -1262,11 +1262,21 @@ class NotificacionCitaRepository
      */
     public function obtenerSnapshotCompletoCita(int $citaId): ?array
     {
+        return $this->obtenerSnapshotCompletoCitaEnConexion($citaId, $this->resolveDb());
+    }
+
+    /**
+     * Obtiene el snapshot completo de una cita utilizando una conexión específica (ej. dentro de una transacción activa).
+     *
+     * @return array<string, mixed>|null
+     * @throws PersistenceException
+     */
+    public function obtenerSnapshotCompletoCitaEnConexion(int $citaId, mysqli $db): ?array
+    {
         if ($citaId <= 0) {
             return null;
         }
 
-        $db = $this->resolveDb();
         $sql = "SELECT c.id AS cita_id, c.fecha, c.hora, c.hora_inicio, c.hora_fin,
                        c.duracion_total_minutos, c.usuarioId AS usuario_id, c.profesionalId AS profesional_id,
                        u.nombre AS cliente_nombre, u.apellido AS cliente_apellido,
@@ -1314,10 +1324,10 @@ class NotificacionCitaRepository
 
             return $snapshot;
         } catch (PersistenceException $e) {
-            error_log("[NotificacionCitaRepository::obtenerSnapshotCompletoCita] " . $e->getMessage());
+            error_log("[NotificacionCitaRepository::obtenerSnapshotCompletoCitaEnConexion] " . $e->getMessage());
             throw $e;
         } catch (\Throwable $e) {
-            error_log("[NotificacionCitaRepository::obtenerSnapshotCompletoCita] Excepción inesperada: " . $e->getMessage());
+            error_log("[NotificacionCitaRepository::obtenerSnapshotCompletoCitaEnConexion] Excepción inesperada: " . $e->getMessage());
             throw new PersistenceException("Fallo al obtener snapshot completo de la cita.", 0, $e);
         }
     }

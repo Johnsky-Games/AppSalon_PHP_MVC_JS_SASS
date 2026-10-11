@@ -302,6 +302,11 @@ class CitaService
      */
     public function debeUsarFlujoConProfesional(array $datos): bool
     {
+        // 0. Si el servidor exige profesional (instancia > estática > entorno), NINGÚN parámetro de cliente (clasico/legacy) puede eludirlo
+        if ($this->servidorExigeProfesional()) {
+            return true;
+        }
+
         // 1. Si la solicitud incluye parámetros explícitos de profesional, enruta siempre al flujo con profesional
         if ($this->contieneParametroProfesional($datos)) {
             return true;
@@ -310,27 +315,12 @@ class CitaService
         $modoRaw = $datos['modo_reserva'] ?? ($datos['flujo'] ?? null);
         $modo = is_string($modoRaw) ? strtolower(trim($modoRaw)) : '';
 
-        // 2. Si el cliente solicita explícitamente modo clásico o legacy:
+        // 2. Si el cliente solicita explícitamente modo clásico o legacy (y el servidor no exige profesional):
         if ($modo === 'clasico' || $modo === 'legacy') {
-            // Si la política estricta de entorno RESERVA_EXIGIR_PROFESIONAL está activa en el servidor,
-            // no se permite evadirla bajo ningún concepto.
-            $envExigir = getenv('RESERVA_EXIGIR_PROFESIONAL');
-            if ($envExigir === false && isset($_ENV['RESERVA_EXIGIR_PROFESIONAL'])) {
-                $envExigir = (string)$_ENV['RESERVA_EXIGIR_PROFESIONAL'];
-            }
-            if (is_string($envExigir) && in_array(strtolower(trim($envExigir)), ['1', 'true', 'yes', 'on'], true)) {
-                return true;
-            }
-
             return false;
         }
 
         if ($modo === 'profesional') {
-            return true;
-        }
-
-        // 3. Si el servidor o la configuración activa exige profesional:
-        if ($this->servidorExigeProfesional()) {
             return true;
         }
 

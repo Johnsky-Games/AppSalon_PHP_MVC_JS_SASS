@@ -563,8 +563,12 @@ class PagoService
             }
 
             $pagadoAt = null;
+            $reembolsadoAt = null;
             if ($nuevoEstado === Pago::ESTADO_COMPLETADO) {
                 $pagadoAt = $pago->pagado_at ?? $this->obtenerAhora()->format('Y-m-d H:i:s');
+            } elseif ($nuevoEstado === Pago::ESTADO_REEMBOLSADO) {
+                $pagadoAt = $pago->pagado_at;
+                $reembolsadoAt = $pago->reembolsado_at ?? $this->obtenerAhora()->format('Y-m-d H:i:s');
             }
 
             $this->pagoRepository->actualizarEstadoPago(
@@ -573,14 +577,19 @@ class PagoService
                 $verificacion['transaccion_externa_id'] ?? $pago->transaccion_externa_id,
                 $pagadoAt,
                 $verificacion['payload_sanitizado'] ?? [],
-                $verificacion['metodo_pago'] ?? $pago->metodo_pago
+                $verificacion['metodo_pago'] ?? $pago->metodo_pago,
+                $reembolsadoAt
             );
 
             if ($pago->cita_id !== null) {
                 if ($nuevoEstado === Pago::ESTADO_COMPLETADO) {
                     $this->pagoRepository->actualizarEstadoPagoCita($pago->cita_id, 'pagado');
                 } elseif ($nuevoEstado === Pago::ESTADO_REEMBOLSADO) {
-                    $this->pagoRepository->actualizarEstadoPagoCita($pago->cita_id, 'reembolsado');
+                    // Solo marcar la cita como reembolsada si no existen otros pagos que sigan activos/completados
+                    $otrosCompletados = $this->pagoRepository->findCompletadoPorCitaId((int)$pago->cita_id, true);
+                    if ($otrosCompletados === null || (int)$otrosCompletados->id === (int)$pago->id) {
+                        $this->pagoRepository->actualizarEstadoPagoCita($pago->cita_id, 'reembolsado');
+                    }
                 } elseif ($nuevoEstado === Pago::ESTADO_FALLIDO) {
                     // Un callback fallido de otro intento NO puede degradar a 'pendiente' una cita que ya tiene otro cobro confirmado
                     $otroCompletado = $this->pagoRepository->findCompletadoPorCitaId((int)$pago->cita_id, true);
@@ -791,12 +800,15 @@ class PagoService
                 ];
             }
 
+            $ahoraReembolso = $this->obtenerAhora()->format('Y-m-d H:i:s');
             $this->pagoRepository->actualizarEstadoPago(
                 (int)$pago->id,
                 Pago::ESTADO_REEMBOLSADO,
                 $pago->transaccion_externa_id,
                 $pago->pagado_at,
-                $resReembolso['payload_sanitizado'] ?? []
+                $resReembolso['payload_sanitizado'] ?? [],
+                null,
+                $ahoraReembolso
             );
 
             if ($pago->cita_id !== null) {

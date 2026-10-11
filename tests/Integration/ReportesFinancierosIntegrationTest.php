@@ -521,4 +521,114 @@ class ReportesFinancierosIntegrationTest extends TestCase
         $this->assertSame(0.00, $repCobro25['resumen_global']['cobros_confirmados_total']);
         $this->assertEmpty($repCobro25['movimientos_financieros']);
     }
+
+    /**
+     * Escenario 5 (Frente 3 de auditoría):
+     * Cobro y reembolso en períodos separados:
+     * - Cobro en mes 1 (Enero): cobros = $100.00, reembolsos = $0.00, neto = $100.00.
+     * - Reembolso en mes 2 (Febrero): cobros = $0.00, reembolsos = $100.00, neto = -$100.00 (sin max(0)).
+     * - Valida resumen global, resumen por profesional y exportación CSV.
+     */
+    public function testCobroEnMesYReembolsoEnOtroPeriodoConNetosNegativos(): void
+    {
+        $clienteId = $this->crearCliente('Lucía', 'Gómez', 'lucia@correo.com');
+        $srvId = $this->crearServicio('Balayage Especial', '100.00', 120);
+        $profId = $this->crearProfesionalConHorario('Elena Ramos', [$srvId]);
+
+        $fechaCobroEnero = '2026-01-15';
+        $fechaReembolsoFebrero = '2026-02-10';
+        $fechaServicio = '2026-11-20';
+
+        // Insertar la cita directamente para permitir cualquier fecha de simulación
+        self::$db->query(
+            "INSERT INTO citas (fecha, hora, hora_inicio, hora_fin, duracion_total_minutos, usuarioId, profesionalId, estado, estado_pago)
+             VALUES ('{$fechaServicio}', '10:00:00', '10:00:00', '12:00:00', 120, {$clienteId}, {$profId}, 'confirmada', 'pagado')"
+        );
+        $citaId = (int)self::$db->insert_id;
+        self::$db->query(
+            "INSERT INTO citasservicios (citaId, servicioId, nombre_servicio, precio_servicio, duracion_minutos)
+             VALUES ({$citaId}, {$srvId}, 'Balayage Especial', 100.00, 120)"
+        );
+
+        // 1. Registrar pago completado en Enero
+        $pago = new Pago([
+            'cita_id' => $citaId,
+            'cita_referencia_id' => $citaId,
+            'usuario_id' => $clienteId,
+            'referencia_pago' => 'PAY-BITEMPORAL-100',
+            'proveedor' => 'mock',
+            'monto' => 100.00,
+            'estado' => Pago::ESTADO_COMPLETADO,
+            'idempotency_key' => 'idemp_bitemporal_100',
+            'pagado_at' => $fechaCobroEnero . ' 11:00:00',
+            'created_at' => $fechaCobroEnero . ' 11:00:00',
+        ]);
+        self::$pagoRepository->create($pago);
+        self::$pagoRepository->actualizarEstadoPagoCita($citaId, 'pagado');
+
+        // 2. Reembolsar en Febrero con fecha específica de reembolso
+        self::$pagoRepository->actualizarEstadoPago(
+            (int)$pago->id,
+            Pago::ESTADO_REEMBOLSADO,
+            'tx_reembolso_feb',
+            $fechaCobroEnero . ' 11:00:00',
+            ['motivo' => 'devolucion_febrero'],
+            'mock',
+            $fechaReembolsoFebrero . ' 15:30:00'
+        );
+        self::$pagoRepository->actualizarEstadoPagoCita($citaId, 'reembolsado');
+
+        // 3. Consultar reporte para el mes de Enero por fecha de cobro:
+        // El cobro permanece intacto en Enero: cobros = 100.00, reembolsos = 0.00, neto = 100.00
+        $repEnero = self::$reporteService->consultarReporte([
+            'fecha_inicio' => '2026-01-01',
+            'fecha_fin' => '2026-01-31',
+            'criterio_fecha' => 'cobro',
+        ]);
+
+        $this->assertSame(ReporteService::STATUS_OK, $repEnero['status']);
+        $this->assertSame(100.00, $repEnero['resumen_global']['cobros_confirmados_total']);
+        $this->assertSame(0.00, $repEnero['resumen_global']['reembolsos_total']);
+        $this->assertSame(100.00, $repEnero['resumen_global']['neto_cobrado_total']);
+
+        // 4. Consultar reporte para el mes de Febrero por fecha de cobro:
+        // En Febrero solo ocurrió el reembolso: cobros = 0.00, reembolsos = 100.00, neto = -100.00
+        $repFebrero = self::$reporteService->consultarReporte([
+            'fecha_inicio' => '2026-02-01',
+            'fecha_fin' => '2026-02-28',
+            'criterio_fecha' => 'cobro',
+        ]);
+
+        $this->assertSame(ReporteService::STATUS_OK, $repFebrero['status']);
+        $this->assertSame(0.00, $repFebrero['resumen_global']['cobros_confirmados_total']);
+        $this->assertSame(100.00, $repFebrero['resumen_global']['reembolsos_total']);
+        $this->assertSame(-100.00, $repFebrero['resumen_global']['neto_cobrado_total']);
+
+        // Verificar resumen por profesional en Febrero
+        $this->assertNotEmpty($repFebrero['resumen_profesionales']);
+        $profElena = null;
+        foreach ($repFebrero['resumen_profesionales'] as $pItem) {
+            if ($pItem['profesional_id'] === $profId) {
+                $profElena = $pItem;
+                break;
+            }
+        }
+        $this->assertNotNull($profElena);
+        $this->assertSame(0.00, $profElena['ingreso_pagado']);
+        $this->assertSame(100.00, $profElena['reembolsos']);
+        $this->assertSame(-100.00, $profElena['neto_cobrado']);
+
+        // 5. Validar exportación CSV en Febrero reflejando los netos negativos
+        $this->autenticarAdmin();
+        $_GET = ['fecha_inicio' => '2026-02-01', 'fecha_fin' => '2026-02-28', 'criterio_fecha' => 'cobro'];
+        $router = new Router();
+        ob_start();
+        try {
+            AdminReporteController::exportarCsv($router);
+        } catch (AppTerminationException $e) {
+            $this->assertSame(200, $e->getStatusCode());
+        }
+        $csv = (string)ob_get_clean();
+        $this->assertStringContainsString('-100.00', $csv);
+    }
 }

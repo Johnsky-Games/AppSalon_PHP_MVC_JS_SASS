@@ -69,11 +69,18 @@ jobs:
         run: |
           find Router.php classes controllers database includes interfaces models public repositories scripts services tests views -name "*.php" -print0 | xargs -0 -n1 php -l
 
-      - name: Cargar esquema base y aplicar migraciones incrementales (001 a 008)
+      - name: Cargar esquema base y aplicar migraciones incrementales (001 a 009)
         run: |
           mysql -h 127.0.0.1 -P 3306 -uroot -proot appsalon_ci_test < database/schema_base.sql
           php database/migrador.php up
           php database/migrador.php status
+
+      - name: Construir y verificar imagen Docker oficial (Apache + PHP 8.2 + mbstring)
+        run: |
+          docker build -t appsalon-web-ci .
+          docker run --rm appsalon-web-ci php -m | grep -i mbstring
+          docker run --rm appsalon-web-ci php -m | grep -i mysqli
+          docker run --rm appsalon-web-ci apache2ctl -M | grep rewrite_module
 
       - name: Ejecutar suite completa de PHPUnit (sin caché y orden aleatorio)
         run: php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --order-by=random --colors=never
