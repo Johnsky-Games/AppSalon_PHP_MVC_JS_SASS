@@ -447,7 +447,7 @@ class APIController
                 || $resultado['status'] === CitaService::STATUS_UNAUTHORIZED
             ) {
                 http_response_code(403);
-                if (es_peticion_json()) {
+                if ($esJsonExplicito) {
                     header('Content-Type: application/json; charset=utf-8');
                     echo json_encode([
                         'resultado' => false,
@@ -465,7 +465,7 @@ class APIController
             if ($resultado['status'] === CitaService::STATUS_ERROR) {
                 http_response_code(500);
                 $mensajeError = $resultado['error'] ?? 'No fue posible cancelar la cita';
-                if (es_peticion_json()) {
+                if ($esJsonExplicito) {
                     header('Content-Type: application/json; charset=utf-8');
                     echo json_encode([
                         'resultado' => false,

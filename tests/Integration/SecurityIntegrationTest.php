@@ -63,6 +63,9 @@ class SecurityIntegrationTest extends TestCase
         $_GET = [];
         $_SERVER['HTTP_X_CSRF_TOKEN'] = null;
         $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_SERVER['REQUEST_URI'] = '/';
+        unset($_SERVER['HTTP_ACCEPT']);
+        unset($_SERVER['CONTENT_TYPE']);
         LoginController::setAuthService(null);
         Usuario::limpiarAlertas();
         http_response_code(200);
@@ -74,6 +77,14 @@ class SecurityIntegrationTest extends TestCase
         LoginController::setAuthService(null);
         \Classes\Email::setTransport(null);
         \Classes\Email::limpiarEmailsEnviados();
+        $_SESSION = [];
+        $_POST = [];
+        $_GET = [];
+        $_SERVER['HTTP_X_CSRF_TOKEN'] = null;
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_SERVER['REQUEST_URI'] = '/';
+        unset($_SERVER['HTTP_ACCEPT']);
+        unset($_SERVER['CONTENT_TYPE']);
     }
 
     public function testEntradasMaliciosasSeProcesanComoDatosEnConsultasPreparadas(): void
@@ -353,8 +364,17 @@ class SecurityIntegrationTest extends TestCase
         $this->assertArrayNotHasKey('admin', $_SESSION, 'El rol de administrador debe ser eliminado de la sesión');
 
         // 5. Comprobar que isAdmin() rechaza inmediatamente al cliente
-        $this->expectException(AppTerminationException::class);
-        isAdmin();
+        $_SERVER['REQUEST_URI'] = '/admin';
+        unset($_SERVER['HTTP_ACCEPT']);
+        ob_start();
+        try {
+            isAdmin();
+            $this->fail('isAdmin debió lanzar AppTerminationException para usuario no administrador');
+        } catch (AppTerminationException $e) {
+            $this->assertSame(302, $e->getStatusCode());
+        } finally {
+            ob_end_clean();
+        }
     }
 
     public function testLogoutExigePostConCsrfYDestruyeSesion(): void
