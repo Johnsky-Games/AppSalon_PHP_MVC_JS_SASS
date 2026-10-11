@@ -12,8 +12,9 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 ## Fase 6B: Reportes Administrativos
 
 - **Rama:** `feature/fase-6b-reportes`
+- **Commit de Código Auditado:** `fb82ec7f59571dca82bf738a30e79c2d19489894`
 - **Commit Base (Fase 6A aprobada):** `4e85266eb33a3c0b890384a1303e800d771c2340` (`4fe475c02cc3dcd38a79ad7ec4ce5ef48f9e58ec` + registro de auditoría Fase 6A)
-- **Estado General de Fase 6B:** **Completada — Lista para Auditoría Independiente**
+- **Estado General de Fase 6B:** **Completada y Auditada (`APROBADO` en `docs/AUDITORIA.md`)**
 
 ### 1. Diseño Arquitectónico, Cálculo de Ocupación, Integridad Histórica y Exportación CSV Segura
 

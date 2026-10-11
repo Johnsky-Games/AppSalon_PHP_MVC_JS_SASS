@@ -337,6 +337,109 @@ Tras proporcionar al auditor el contexto Docker del proyecto, el subagente audit
 ### 5. Conclusión y Veredicto de Cierre de Fase 6A
 
 - **Pendientes bloqueantes en Fase 6A:** Ninguno. Los 3 hallazgos detectados en la Ronda 1 (`0aa1e11d9328aa5558d43d50b5483a492850ce7f`) fueron resueltos en `4fe475c02cc3dcd38a79ad7ec4ce5ef48f9e58ec`, y los 8 criterios de alcance de la Fase 6A (migración `005_notificaciones_citas` + rollback con `ON DELETE SET NULL` y `cita_referencia_id`, correos de confirmación y cancelación completos, aislamiento de fallos SMTP post-commit, idempotencia con `FOR UPDATE` y cola de reintentos con descarte de recordatorios cancelados, recordatorios configurables en `America/Guayaquil` con script CLI documentado, endurecimiento de `APP_URL`/cabeceras/HTML, pruebas automatizadas sin regresiones y arquitectura por capas con sentencias preparadas) están implementados y verificados.
-- **Veredicto Final Fase 6A (`4fe475c02cc3dcd38a79ad7ec4ce5ef48f9e58ec`):** **`APROBADO`**.
 - **Siguiente paso autorizado:** Inicio de la Fase 6B (`feature/fase-6b-reportes` — Reportes Administrativos) a partir del commit aprobado de la Fase 6A.
+
+---
+
+## Auditoría de Fase 6B: Reportes Administrativos
+
+### 1. Metadatos de la Revisión
+
+| Campo | Detalle |
+| :--- | :--- |
+| **Fase Auditada** | Fase 6B — Reportes Administrativos (`/admin/reportes` y `/admin/reportes/exportar`) |
+| **Rama Evaluada** | `feature/fase-6b-reportes` |
+| **SHA Auditado** | `fb82ec7f59571dca82bf738a30e79c2d19489894` |
+| **SHA Base (Fase 6A aprobada)** | `4e85266eb33a3c0b890384a1303e800d771c2340` (código `4fe475c02cc3dcd38a79ad7ec4ce5ef48f9e58ec`) |
+| **Worktree del Auditor** | `C:\Users\jonat\.gemini\antigravity\worktrees\AppSalon_PHP_MVC_JS_SASS\auditing_fase_4b_reservas` |
+| **Subagente Auditor** | Auditor Independiente |
+| **Fecha de Auditoría** | `2026-10-10` |
+| **Stash preservado intacto** | `stash@{0}: On auditing_fase_4b_reservas: temp stash for checkout` |
+| **Veredicto Final** | **`APROBADO`** |
+
+---
+
+### 2. Verificación de Aislamiento y Stash Local (`stash@{0}`)
+
+- **`git rev-parse HEAD`:** `fb82ec7f59571dca82bf738a30e79c2d19489894`.
+- **Verificación de `stash@{0}`:** `stash@{0}: On auditing_fase_4b_reservas: temp stash for checkout` verificado y preservado intacto sin aplicar (`pop`) ni eliminar (`drop`).
+- **Aislamiento de entorno:** No se modificó el código de negocio auditado ni se interactuó con `appsalon-web`, `appsalon-db`, `appsalon-net`, `appsalon_mvc`, `includes/.env` ni la copia local en OneDrive.
+
+---
+
+### 3. Revisión Estática Exhaustiva de los 8 Criterios Obligatorios de Fase 6B
+
+| # | Criterio de Auditoría (Fase 6B) | Estado | Evidencia Técnica en el SHA `fb82ec7f59571dca82bf738a30e79c2d19489894` |
+| :-: | :--- | :---: | :--- |
+| **1** | **Filtros `GET /admin/reportes` y `exportar`:** validación estricta de `fecha_inicio`, `fecha_fin` (`YYYY-MM-DD`, `fecha_inicio <= fecha_fin`, máx. 366 días), `profesional_id` (vacío / entero positivo / `'sin_profesional'`), `servicio_id`; respuesta HTTP `422` sin ejecutar consultas ante entradas inválidas (incluidos arrays). | **CUMPLE** | `services/ReporteService.php`: líneas 183–271 (`validarYNormalizarFiltros` valida `esFechaValida()`, orden cronológico, máximo 366 días, formatos de profesional y servicio), líneas 428–445 (`consultarReporte` comprueba `!$validacion['valido']` y aborta inmediatamente retornando `STATUS_INVALID` y `http_code = 422` sin invocar `obtenerFilasReservasEnRango`). `controllers/ReporteController.php`: líneas 58–61 (`index`) y 85–106 (`exportarCsv`) asignan `http_response_code($httpCode)` (422) y renderizan la vista con alertas descriptivas. `tests/Unit/ReporteServiceTest.php`: líneas 12–75 (`testValidarYNormalizarFiltrosRangoPredeterminadoYRechazo422AnteEntradasInvalidas` comprueba `expects($this->never())->method('obtenerFilasReservasEnRango')`). `tests/Integration/Fase6BReportesIntegrationTest.php`: líneas 376–394 prueba 422 ante fechas invertidas. |
+| **2** | **Ocupación real sobre horas disponibles de turno:** `minutos_disponibles` por profesional y fecha (día ISO en `America/Guayaquil`) descontando descansos y bloqueos (totales y parciales) sin doble resta de solapamientos; `minutos_ocupados`; `porcentaje_ocupacion` sin división por cero; citas con `profesionalId IS NULL` separadas en sección propia sin distorsionar ocupación de profesionales activos. | **CUMPLE** | `services/ReporteService.php`: líneas 117–166 (`restarRestriccionesDeTurno` emplea semántica semiabierta `[inicio, fin)` previniendo restar dos veces descansos y bloqueos solapados), líneas 318–419 (`calcularMinutosDisponiblesPorProfesional` mapea por día de la semana ISO `1..7` en `America/Guayaquil` y asigna `0` minutos a profesionales inactivos), líneas 815–844 (`porcentaje_ocupacion = !$sinTurno ? round(($minOcup / $minDisp) * 100, 2) : 0.00` y `etiqueta_ocupacion = '0.00% (Sin turno disponible)'` evitando división por cero si `minDisp <= 0`), líneas 846–866 (`$acumuladorHistoricasSinProf` agrupa citas sin profesional en fila propia con `etiqueta_ocupacion = 'No aplica (cita histórica)'`, `minutos_disponibles = 0`, sin alterar el numerador ni denominador de los profesionales activos). `tests/Unit/ReporteServiceTest.php`: líneas 77–140. `tests/Integration/Fase6BReportesIntegrationTest.php`: líneas 248–263, 314–318 (Sofía Andrade 90 min ocupados / 390 min disponibles netos = 23.08%). |
+| **3** | **Importes y duraciones desde snapshot histórico:** uso de `COALESCE(cs.nombre_servicio, s.nombre)`, `COALESCE(cs.precio_servicio, s.precio)` y `COALESCE(cs.duracion_minutos, s.duracion_minutos)`, inmutables ante cambios o eliminación del servicio del catálogo (`servicioId = NULL`); sin duplicar totales al filtrar por servicio. | **CUMPLE** | `repositories/ReporteRepository.php`: líneas 379–381 proyecta `COALESCE(cs.nombre_servicio, s.nombre)`, `COALESCE(cs.precio_servicio, s.precio)` y `COALESCE(cs.duracion_minutos, s.duracion_minutos)`; líneas 400–408 filtra por servicio mediante subconsulta `AND EXISTS (SELECT 1 FROM citasservicios cs_f WHERE cs_f.citaId = c.id AND cs_f.servicioId = ?)`. `services/ReporteService.php`: líneas 564–570 (`$servPrecio` y `$servDuracion`), líneas 615–628 (`$subtotalServicioFiltrado` y `$importeAtribuible = $servicioIdFiltro !== null ? $subtotalServicioFiltrado : $importeTotalCita`), líneas 741–743 (acumula `$importeAtribuible` en `$importeReservadoTotal` evitando duplicar totales en citas multiservicio). `tests/Integration/Fase6BReportesIntegrationTest.php`: líneas 290–324 (modificación de servicio de $80 a $160 y eliminación de servicio de $120; el reporte preserva $280.00 con nombres históricos intactos). |
+| **4** | **Distinción explícita `importe_reservado_total` vs `ingreso_pagado_total`:** en servicio, UI (`/admin/reportes`) y CSV exportado (`$0.00` / pendiente de pago mientras no haya cobro confirmado). | **CUMPLE** | `services/ReporteService.php`: líneas 284–304 (`evaluarEstadoPagoCita` asigna `ingreso_pagado = 0.00` y `etiqueta_estado_pago = 'Pendiente de cobro (sin pago registrado)'` mientras `estado_pago !== 'pagado'`), líneas 912–917 (KPIs `importe_reservado_total`, `ingreso_pagado_total = 0.00`, `saldo_pendiente_cobro_total` y `nota_pagos`), líneas 1056–1072, 1087–1088, 1125–1126 y 1142–1145 (columnas independientes en las 4 secciones del CSV). `views/reportes/index.php`: líneas 99–101 (`#nota-distincion-pagos`), 126–148 (KPIs `#kpi-importe-reservado` y `#kpi-ingreso-pagado`), 166–167, 192–197, 220–221, 240–245, 281–293. `tests/Unit/ReporteServiceTest.php`: líneas 240–244, 258, 306–308. `tests/Integration/Fase6BReportesIntegrationTest.php`: líneas 309–312, 442–445. |
+| **5** | **Estados vacíos y exportación CSV segura:** estados vacíos informativos; CSV con cabeceras seguras (`text/csv; charset=UTF-8`, `attachment`, `nosniff`, `no-cache`) y neutralización exhaustiva de *CSV Formula Injection* (`=`, `+`, `-`, `@`, `\t`, `\r`, `\n`, también tras espacios iniciales). | **CUMPLE** | `views/reportes/index.php`: líneas 153–155, 208–212 (`#estado-vacio-servicios`), 255–259 (`#estado-vacio-reportes`). `controllers/ReporteController.php`: líneas 112–118 emite cabeceras HTTP seguras. `services/ReporteService.php`: líneas 989–1018 (`sanearCeldaCsv` antepone `'` ante `=`, `+`, `-`, `@`, `\t`, `\r`, `\n`, evaluando tanto el primer carácter directo como el primer carácter visible tras `ltrim` de espacios y saltos), líneas 1029–1040 (escribe BOM UTF-8 `\xEF\xBB\xBF` y aplica `sanearCeldaCsv` a cada celda vía `fputcsv`). `tests/Unit/ReporteServiceTest.php`: líneas 277–292 y 353–360. `tests/Integration/Fase6BReportesIntegrationTest.php`: líneas 363–375 (estado vacío) y líneas 418–445 (fórmulas neutralizadas en CSV y cabeceras verificadas). |
+| **6** | **Permisos administrativos y protección contra XSS:** control estricto con `isAdmin()` en `/admin/reportes` y `/admin/reportes/exportar`; escapado HTML exhaustivo (`s()`/`htmlspecialchars`) en `views/reportes/index.php`. | **CUMPLE** | `controllers/ReporteController.php`: líneas 55–56 (`index`) y 81–82 (`exportarCsv`) invocan obligatoriamente `iniciar_sesion_segura()` e `isAdmin()`. `views/reportes/index.php`: el 100% de las variables dinámicas de formulario, KPIs, tablas de profesionales, desglose de servicios y listado detallado de citas son escapadas con `s()` / `htmlspecialchars`. `views/templates/barra.php`: línea 15 restringe el enlace de navegación `<a href="/admin/reportes">` a sesiones con rol administrador. `tests/Integration/Fase6BReportesIntegrationTest.php`: líneas 189–238 comprueba bloqueo de visitantes no autenticados (`302`) y clientes sin rol admin (`403` en JSON / `302` en HTML) en ambas rutas. |
+| **7** | **Pruebas automatizadas y suite E2E:** cobertura completa con `ReporteServiceTest`, `Fase6BReportesIntegrationTest` y escenario E2E `REP-01`. | **CUMPLE** | `tests/Unit/ReporteServiceTest.php` (5 pruebas unitarias cubriendo normalización, ocupación solapada, snapshots históricos, CSV injection y manejo de fallos 500). `tests/Integration/Fase6BReportesIntegrationTest.php` (4 pruebas de integración con MySQL 8 real cubriendo permisos admin, inmutabilidad tras edición/borrado de servicios, filtros combinados + 422 y exportación CSV). `tests/browser_e2e_test.js`: líneas 1121–1218 añade escenario interactivo `REP-01` en Puppeteer validando navegación, filtros, KPIs, ocupación de Valeria y Sofía, subtotal filtrado `$115.00` vs `$0.00` pagado y descarga de `/admin/reportes/exportar`. |
+| **8** | **Arquitectura por capas y persistencia segura:** `ReporteRepository` opera exclusivamente con sentencias preparadas y excepciones de persistencia (`PersistenceException`); `ReporteService` desacoplado sin `$_SESSION`, `$_GET`, `$_POST` ni cabeceras HTTP. | **CUMPLE** | `repositories/ReporteRepository.php`: todas las consultas (`listarProfesionalesCatalogo`, `listarServiciosCatalogo`, `obtenerHorariosProfesionales`, `obtenerDescansosProfesionales`, `obtenerBloqueosEnRango`, `obtenerFilasReservasEnRango`) utilizan estrictamente `$db->prepare()`, `$stmt->bind_param()`, `$stmt->execute()` y envuelven cualquier fallo en `PersistenceException`. `services/ReporteService.php`: servicio de dominio puro con inyección de repositorio y reloj de referencia, sin dependencias superglobales de sesión o transporte HTTP. |
+
+---
+
+### 4. Pruebas Ejecutadas en Docker Aislado y Comparativa Desarrollador vs. Auditor
+
+#### A. Suite Completa PHPUnit (Contenedor Aislado del Auditor `appsalon-audit6b-db` / `appsalon-audit6b-net`)
+
+- **Entorno creado por el auditor:**
+  - Red Docker: `appsalon-audit6b-net`
+  - Contenedor MySQL 8.0: `appsalon-audit6b-db` (base de datos `appsalon_audit_test`, inicializada con `database/schema_base.sql` + `php database/migrador.php up`, aplicando migraciones `001` a `005`).
+- **Comando ejecutado:**
+  ```powershell
+  docker run --rm --network appsalon-audit6b-net -v "C:/Users/jonat/.gemini/antigravity/worktrees/AppSalon_PHP_MVC_JS_SASS/auditing_fase_4b_reservas:/app" -w /app -e DB_HOST=appsalon-audit6b-db -e DB_PORT=3306 -e DB_USER=root -e DB_PASS=root -e DB_NAME=appsalon_audit_test appsalon-php-test php -d variables_order=EGPCS -d date.timezone=America/Guayaquil vendor/bin/phpunit --colors=never
+  ```
+- **Resultado obtenido:**
+  - `PHPUnit 10.5.66 by Sebastian Bergmann and contributors.` (`Runtime: PHP 8.2.34`)
+  - **`OK (161 tests, 1817 assertions)`** (`Time: 00:27.128, Memory: 16.00 MB`)
+  - **Código de salida:** `0`
+- **Nota técnica sobre zona horaria:** Al sincronizar la zona horaria de negocio (`America/Guayaquil`) entre PHP y MySQL, la suite completa (161 pruebas y 1817 aserciones) se ejecuta sin fallos ni desajustes de medianoche UTC.
+- **Limpieza posterior verificada:** Contenedor `appsalon-audit6b-db` detenido y eliminado, y red `appsalon-audit6b-net` eliminada al finalizar.
+
+#### B. Suite E2E en Navegador Real Headless Chrome (`tests/verificar_navegador.ps1`)
+
+- **Comando ejecutado en worktree del auditor:**
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File tests/verificar_navegador.ps1
+  ```
+- **Resultado obtenido:**
+  - **Identificador de ejecución independiente (`RUN_ID`):** `89a23c7e2ff64515b28c6a771a8f3839`
+  - **18 comprobaciones E2E superadas (`[OK]`):**
+    - `ADMIN-01` a `ADMIN-04`: CRUD administrativo de servicios con duración.
+    - `PROF-01` y `PROF-02`: Gestión de profesionales, horarios, descansos y bloqueos.
+    - `PRE-01`: Login interactivo de cliente y redirección a `/cita`.
+    - `DISP-01`: Consulta autenticada en `GET /api/disponibilidad`.
+    - `REC-01` a `REC-04`: Flujo interactivo en `/cita`, accesibilidad, filtrado de profesionales, resumen y reserva SweetAlert2.
+    - `RES-01`: Reserva con profesional, descuento de ocupación, rechazo `409` por solapamiento y cancelación en `#mis-citas`.
+    - `ADMIN-05`: Consulta administrativa en `/admin?fecha=2026-10-12`, eliminación en `/api/eliminar` y liberación de ocupación.
+    - `REP-01`: Consulta de reportes administrativos en `/admin/reportes`, validación de KPIs globales, ocupación de Valeria Castro (16.67%, 90/540 min) y Sofía Andrade (0.00%, 0/390 min), distinción de importe reservado ($195.00) vs ingreso pagado ($0.00), filtro por servicio #4 ($115.00 vs $0.00 pagado) y descarga de CSV con cabeceras y datos íntegros.
+    - `AUTH-01`: Ciclo de autenticación, rechazo de usuario sin confirmar y recuperación de cuenta sin enumeración.
+    - `NOTIF-01`: Despacho SMTP de correos transaccionales de confirmación y cancelación en buzón de pruebas (8 correos capturados).
+    - `REC-05`: `Errores consola: 0, Solicitudes fallidas: 0`.
+  - **Persistencia verificada en MySQL (`appsalon_browser_test`):** Cita ID `3`, fecha `2026-10-12`, profesional `2`, intervalo `[11:30:00, 13:00:00)`, duración `90 min`, `2` servicios asociados; notificaciones `3` confirmaciones y `2` cancelaciones.
+  - **Código de salida:** `0`.
+  - **Limpieza posterior:** Contenedores efímeros y `includes/.env` temporal eliminados; `git checkout -- tests/browser_test_report.json` ejecutado para mantener el worktree limpio.
+
+#### C. Comparativa entre Reporte del Desarrollador y Verificación del Auditor
+
+| Aspecto | Reportado por Desarrollador (`comprehensive_project_audit_roadmap`) | Verificado Independientemente por Auditor (`auditing_fase_4b_reservas`) | Coincidencia |
+| :--- | :--- | :--- | :--- |
+| **SHA evaluado** | `fb82ec7f59571dca82bf738a30e79c2d19489894` | `fb82ec7f59571dca82bf738a30e79c2d19489894` | Exacta |
+| **Versión PHPUnit / PHP** | PHPUnit `10.5.66` / PHP `8.2.34` | PHPUnit `10.5.66` / PHP `8.2.34` | Exacta |
+| **Resultado PHPUnit** | `OK (161 tests, 1817 assertions)` (Exit `0`) | `OK (161 tests, 1817 assertions)` (Exit `0`) | Exacta |
+| **Resultado Suite Navegador E2E** | 18 checks `[OK]` (`RUN_ID: a1ca5acb73e54a49a7e83ec784e0eb4e`), `0` errores consola, `0` fallos red (Exit `0`) | 18 checks `[OK]` (`RUN_ID: 89a23c7e2ff64515b28c6a771a8f3839`), `0` errores consola, `0` fallos red (Exit `0`) | Exacta |
+| **Aislamiento respecto a app local** | `appsalon-web`, `appsalon-db`, `appsalon-net`, `appsalon_mvc` y `.env` intactos | `appsalon-web`, `appsalon-db`, `appsalon-net`, `appsalon_mvc`, `.env` y `stash@{0}` intactos | Exacta |
+
+---
+
+### 5. Conclusión y Veredicto de Cierre de Fase 6B
+
+- **Pendientes bloqueantes en Fase 6B:** Ninguno. Los 8 criterios de alcance de la Fase 6B (validación estricta de filtros con 422, cálculo de ocupación respecto a horas disponibles de turno sin división por cero ni duplicación de solapamientos, snapshots históricos inmutables, distinción explícita de importe reservado vs ingreso pagado $0.00, estados vacíos, exportación CSV segura con neutralización de formula injection, permisos administrativos con `isAdmin()` y escapado HTML, pruebas unitarias e integración completas y arquitectura desacoplada por capas) están implementados y verificados exhaustivamente.
+- **Veredicto Final Fase 6B (`fb82ec7f59571dca82bf738a30e79c2d19489894`):** **`APROBADO`**.
+- **Siguiente paso autorizado:** Inicio de la Fase 6C (`feature/fase-6c-pagos` — Pagos y Cobros) a partir del commit aprobado de la Fase 6B.
+
 

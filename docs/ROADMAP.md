@@ -28,8 +28,8 @@ Cada fase del proyecto se ejecuta bajo la coordinación de tres roles con respon
 | **Fase 4B** | `feature/fase-4b-reservas-concurrencia` | `83e2a24b235a72c2865453ec13ea055d96419700` | **Aprobada (`APROBADO`)** |
 | **Fase 5** | `feature/fase-5-interfaz-reservas` | `1fb3475fe2eec5ed4dc2f6afd22bc6b1bcaabb27` | **Aprobada (`APROBADO`)** |
 | **Fase 6A** | `feature/fase-6a-notificaciones` | `4fe475c02cc3dcd38a79ad7ec4ce5ef48f9e58ec` | **Aprobada (`APROBADO`)** |
-| **Fase 6B** | `feature/fase-6b-reportes` | *(en auditoría)* | **En auditoría** |
-| **Fase 6C** | `feature/fase-6c-base-pagos` *(prevista)* | — | **Pendiente** |
+| **Fase 6B** | `feature/fase-6b-reportes` | `fb82ec7f59571dca82bf738a30e79c2d19489894` | **Aprobada (`APROBADO`)** |
+| **Fase 6C** | `feature/fase-6c-base-pagos` | *(en desarrollo)* | **En curso** |
 | **Cierre Técnico** | `feature/cierre-tecnico` *(prevista)* | — | **Pendiente** |
 
 ---
@@ -61,12 +61,13 @@ Cada fase del proyecto se ejecuta bajo la coordinación de tres roles con respon
 - Configuración segura de enlaces (`Email::resolverAppUrl`) y remitentes (`Email::resolverRemitente`, `Email::sanearTextoCabecera`); pruebas automatizadas con transporte sustituible y buzón SMTP mock (`tests/smtp_mock_server.php`).
 - Verificada por Desarrollador y Auditor independiente (`eaf68f52-b7bb-4e2f-80cf-485ff299e602` en `auditing_fase_4b_reservas`, Ronda 2 sobre `4fe475c02cc3dcd38a79ad7ec4ce5ef48f9e58ec`) con `PHPUnit 10.5.66` (`OK (152 tests, 1714 assertions)`, exit `0`) y suite E2E en navegador (`RUN_ID: 853769e6acbd48fcbb266d5713b9b725`, 17 comprobaciones `[OK]` incluyendo `NOTIF-01`, `0` errores de consola, `0` peticiones fallidas, exit `0`). Ver detalle en `docs/AUDITORIA.md`.
 
-### Fase 6B — Reportes Administrativos (`feature/fase-6b-reportes` — En Auditoría)
+### Fase 6B — Cerrada con Veredicto `APROBADO` (`fb82ec7f59571dca82bf738a30e79c2d19489894`)
 - Reportes administrativos de reservas por rango de fechas (`fecha_inicio`, `fecha_fin` hasta 366 días en `America/Guayaquil`), profesional (`profesional_id`, incluyendo `'sin_profesional'`) y servicio (`servicio_id`) en `GET /admin/reportes`.
 - Métricas de ocupación respecto de la jornada neta disponible del profesional (`horarios_profesionales` menos `descansos_profesionales` y `bloqueos_profesionales` mediante recorte de intervalos semiabiertos `[inicio, fin)`, manejando disponibilidad `0` sin división por cero).
 - Importes y duraciones calculados estrictamente a partir de los snapshots históricos capturados al reservar (`citasservicios.nombre_servicio`, `precio_servicio`, `duracion_minutos`), inmutables frente a ediciones o eliminaciones posteriores del catálogo.
 - Distinción explícita en UI, servicio y CSV entre **Importe Reservado (Comprometido Histórico)** (`importe_reservado_total`) e **Ingreso Efectivamente Pagado** (`ingreso_pagado_total`, `$0.00` para citas en `pendiente_pago`).
-- Filtros validados con respuesta `422` ante entradas inválidas, estados vacíos, exportación CSV segura (`GET /admin/reportes/exportar` con UTF-8 BOM y neutralización de *CSV formula injection* `=`, `+`, `-`, `@`, `\t`, `\r`, `\n`), permisos administrativos (`isAdmin()`) y cobertura en `Tests\Unit\ReporteServiceTest`, `Tests\Integration\Fase6BReportesIntegrationTest` y `REP-01` en `tests/browser_e2e_test.js` (`PHPUnit 10.5.66`: `161 tests, 1817 assertions`; E2E: `18/18` checks `[OK]`).
+- Filtros validados con respuesta `422` ante entradas inválidas, estados vacíos, exportación CSV segura (`GET /admin/reportes/exportar` con UTF-8 BOM y neutralización de *CSV formula injection* `=`, `+`, `-`, `@`, `\t`, `\r`, `\n`), permisos administrativos (`isAdmin()`).
+- Verificada por Desarrollador y Auditor independiente (`b7cab7d9-9fd1-466e-857a-25c0463a23ad` en `auditing_fase_4b_reservas` sobre `fb82ec7f59571dca82bf738a30e79c2d19489894`) con `PHPUnit 10.5.66` (`OK (161 tests, 1817 assertions)`, exit `0`) y suite E2E en navegador (`RUN_ID: 89a23c7e2ff64515b28c6a771a8f3839`, 18 comprobaciones `[OK]` incluyendo `REP-01`, `0` errores de consola, `0` peticiones fallidas, exit `0`). Ver detalle en `docs/AUDITORIA.md`.
 
 ### Fase 6C — Base para Pagos
 - Estados de pago e interfaz sustituible de proveedor de pagos (*Payment Gateway Interface*).
