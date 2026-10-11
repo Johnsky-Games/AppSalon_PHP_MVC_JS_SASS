@@ -41,16 +41,52 @@ class PagoController
         self::$rawJsonOverride = $payload;
     }
 
-    private static function obtenerPagoService(): PagoService
+    /**
+     * Resuelve el adaptador del gateway inspeccionando el entorno de ejecución.
+     * En producción, prohíbe terminantemente el uso de MockPaymentGateway y secretos por defecto.
+     *
+     * @throws \RuntimeException
+     */
+    public static function resolverGateway(): \Interfaces\PaymentGatewayInterface
+    {
+        $appEnv = strtolower(trim((string)($_ENV['APP_ENV'] ?? getenv('APP_ENV') ?: 'development')));
+        $provider = strtolower(trim((string)($_ENV['PAYMENT_GATEWAY_PROVIDER'] ?? getenv('PAYMENT_GATEWAY_PROVIDER') ?: 'mock')));
+        $webhookSecret = trim((string)($_ENV['PAYMENT_WEBHOOK_SECRET'] ?? getenv('PAYMENT_WEBHOOK_SECRET') ?: ''));
+
+        $secretosPorDefectoInseguros = [
+            '',
+            MockPaymentGateway::DEFAULT_WEBHOOK_SECRET,
+            'mock_secret_cambiar_en_produccion',
+            'mock_secret',
+        ];
+
+        if ($appEnv === 'production') {
+            if ($provider === 'mock' || $provider === '') {
+                throw new \RuntimeException('Configuración de pagos inválida: El simulador MockPaymentGateway está estrictamente prohibido en entorno de producción.');
+            }
+
+            if (in_array($webhookSecret, $secretosPorDefectoInseguros, true)) {
+                throw new \RuntimeException('Configuración de pagos inválida: El secreto de webhook en producción no puede ser nulo ni utilizar el valor por defecto.');
+            }
+
+            throw new \RuntimeException("Configuración de pagos inválida: El proveedor '{$provider}' no se encuentra implementado para producción.");
+        }
+
+        return new MockPaymentGateway($webhookSecret !== '' ? $webhookSecret : null);
+    }
+
+    public static function obtenerPagoService(): PagoService
     {
         if (self::$pagoService !== null) {
             return self::$pagoService;
         }
 
         $db = ActiveRecord::getDB();
+        $gateway = self::resolverGateway();
+
         return new PagoService(
             new PagoRepository($db),
-            new MockPaymentGateway()
+            $gateway
         );
     }
 
@@ -148,7 +184,22 @@ class PagoController
         $usuarioId = (int)$_SESSION['id'];
         $esAdmin = isset($_SESSION['admin']) && (string)$_SESSION['admin'] === '1';
 
-        $resultado = self::obtenerPagoService()->iniciarPago($usuarioId, $datos, $esAdmin);
+        try {
+            $service = self::obtenerPagoService();
+        } catch (\RuntimeException $e) {
+            http_response_code(500);
+            echo json_encode([
+                'resultado' => false,
+                'status' => PagoService::STATUS_ERROR,
+                'codigo_error' => 'PAYMENT_CONFIGURATION_ERROR',
+                'error' => $e->getMessage(),
+                'errores' => [$e->getMessage()],
+            ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            detener_ejecucion(500);
+            return;
+        }
+
+        $resultado = $service->iniciarPago($usuarioId, $datos, $esAdmin);
         $httpCode = (int)($resultado['http_code'] ?? 200);
         unset($resultado['http_code']);
 
@@ -174,7 +225,22 @@ class PagoController
         $payload = self::leerDatosEntrada();
         $headers = self::extraerCabeceras();
 
-        $resultado = self::obtenerPagoService()->procesarWebhook($payload, $headers);
+        try {
+            $service = self::obtenerPagoService();
+        } catch (\RuntimeException $e) {
+            http_response_code(500);
+            echo json_encode([
+                'resultado' => false,
+                'status' => PagoService::STATUS_ERROR,
+                'codigo_error' => 'PAYMENT_CONFIGURATION_ERROR',
+                'error' => $e->getMessage(),
+                'errores' => [$e->getMessage()],
+            ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            detener_ejecucion(500);
+            return;
+        }
+
+        $resultado = $service->procesarWebhook($payload, $headers);
         $httpCode = (int)($resultado['http_code'] ?? 200);
         unset($resultado['http_code']);
 
@@ -202,7 +268,40 @@ class PagoController
         $usuarioId = (int)($_SESSION['id'] ?? 0);
         $esAdmin = isset($_SESSION['admin']) && (string)$_SESSION['admin'] === '1';
 
-        $resultado = self::obtenerPagoService()->consultarResultadoPago($_GET, $usuarioId, $esAdmin);
+        $accept = $_SERVER['HTTP_ACCEPT'] ?? '';
+        $quiereJson = str_contains($accept, 'application/json') || (($_GET['format'] ?? '') === 'json');
+
+        try {
+            $service = self::obtenerPagoService();
+        } catch (\RuntimeException $e) {
+            http_response_code(500);
+            if ($quiereJson) {
+                header('Content-Type: application/json; charset=utf-8');
+                echo json_encode([
+                    'resultado' => false,
+                    'status' => PagoService::STATUS_ERROR,
+                    'codigo_error' => 'PAYMENT_CONFIGURATION_ERROR',
+                    'error' => $e->getMessage(),
+                    'errores' => [$e->getMessage()],
+                ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                detener_ejecucion(500);
+                return;
+            }
+
+            $router->render('pagos/resultado', [
+                'nombre' => $_SESSION['nombre'] ?? '',
+                'apellido' => $_SESSION['apellido'] ?? '',
+                'alertas' => ['error' => [$e->getMessage()]],
+                'resultadoPago' => ['status' => PagoService::STATUS_ERROR, 'errores' => [$e->getMessage()]],
+                'pago' => null,
+                'cita' => null,
+                'advertenciaSeguridad' => null,
+            ]);
+            detener_ejecucion(500);
+            return;
+        }
+
+        $resultado = $service->consultarResultadoPago($_GET, $usuarioId, $esAdmin);
         $httpCode = (int)($resultado['http_code'] ?? 200);
 
         $accept = $_SERVER['HTTP_ACCEPT'] ?? '';
@@ -271,7 +370,22 @@ class PagoController
             $monto = (float)$datos['monto'];
         }
 
-        $resultado = self::obtenerPagoService()->reembolsarPago($referencia, $monto);
+        try {
+            $service = self::obtenerPagoService();
+        } catch (\RuntimeException $e) {
+            http_response_code(500);
+            echo json_encode([
+                'resultado' => false,
+                'status' => PagoService::STATUS_ERROR,
+                'codigo_error' => 'PAYMENT_CONFIGURATION_ERROR',
+                'error' => $e->getMessage(),
+                'errores' => [$e->getMessage()],
+            ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            detener_ejecucion(500);
+            return;
+        }
+
+        $resultado = $service->reembolsarPago($referencia, $monto);
         $httpCode = (int)($resultado['http_code'] ?? 200);
         unset($resultado['http_code']);
 

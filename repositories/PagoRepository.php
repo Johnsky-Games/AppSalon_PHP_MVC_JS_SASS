@@ -231,6 +231,125 @@ class PagoRepository
         }
     }
 
+    /**
+     * Adquiere un bloqueo pesimista `FOR UPDATE` sobre una cita específica.
+     * Garantiza el orden estricto de bloqueos (citas -> pagos) para prevenir deadlocks cíclicos.
+     */
+    public function bloquearCitaPorId(int $citaId): bool
+    {
+        $db = $this->resolveDb();
+        $sql = "SELECT id FROM citas WHERE id = ? FOR UPDATE";
+
+        try {
+            $stmt = $db->prepare($sql);
+            if (!$stmt) {
+                throw new PersistenceException('Error al preparar bloqueo pesimista de cita: ' . $db->error);
+            }
+            $stmt->bind_param('i', $citaId);
+            if (!$stmt->execute()) {
+                $err = $stmt->error;
+                $stmt->close();
+                throw new PersistenceException('Error al ejecutar bloqueo pesimista de cita: ' . $err);
+            }
+            $res = $stmt->get_result();
+            $existe = $res && $res->num_rows > 0;
+            $stmt->close();
+
+            return $existe;
+        } catch (PersistenceException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            error_log('[PagoRepository::bloquearCitaPorId] Excepción: ' . $e->getMessage());
+            throw new PersistenceException('Error inesperado al bloquear cita para pago.', 0, $e);
+        }
+    }
+
+    /**
+     * Consulta el identificador de cita asociado a una referencia de pago sin bloqueo exclusivo.
+     */
+    public function obtenerCitaIdPorReferencia(string $referenciaPago): ?int
+    {
+        $db = $this->resolveDb();
+        $sql = "SELECT cita_id, cita_referencia_id FROM pagos WHERE referencia_pago = ? LIMIT 1";
+
+        try {
+            $stmt = $db->prepare($sql);
+            if (!$stmt) {
+                throw new PersistenceException('Error al preparar consulta de cita por referencia de pago: ' . $db->error);
+            }
+            $stmt->bind_param('s', $referenciaPago);
+            if (!$stmt->execute()) {
+                $err = $stmt->error;
+                $stmt->close();
+                throw new PersistenceException('Error al ejecutar consulta de cita por referencia de pago: ' . $err);
+            }
+            $res = $stmt->get_result();
+            $fila = $res ? $res->fetch_assoc() : null;
+            $stmt->close();
+
+            if (!$fila) {
+                return null;
+            }
+
+            if ($fila['cita_id'] !== null && (int)$fila['cita_id'] > 0) {
+                return (int)$fila['cita_id'];
+            }
+            if (isset($fila['cita_referencia_id']) && (int)$fila['cita_referencia_id'] > 0) {
+                return (int)$fila['cita_referencia_id'];
+            }
+
+            return null;
+        } catch (PersistenceException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            error_log('[PagoRepository::obtenerCitaIdPorReferencia] Excepción: ' . $e->getMessage());
+            throw new PersistenceException('Error inesperado al obtener cita por referencia de pago.', 0, $e);
+        }
+    }
+
+    /**
+     * Consulta el identificador de cita asociado a un ID de transacción externa sin bloqueo exclusivo.
+     */
+    public function obtenerCitaIdPorTransaccionExterna(string $transaccionExternaId): ?int
+    {
+        $db = $this->resolveDb();
+        $sql = "SELECT cita_id, cita_referencia_id FROM pagos WHERE transaccion_externa_id = ? LIMIT 1";
+
+        try {
+            $stmt = $db->prepare($sql);
+            if (!$stmt) {
+                throw new PersistenceException('Error al preparar consulta de cita por transacción externa: ' . $db->error);
+            }
+            $stmt->bind_param('s', $transaccionExternaId);
+            if (!$stmt->execute()) {
+                $err = $stmt->error;
+                $stmt->close();
+                throw new PersistenceException('Error al ejecutar consulta de cita por transacción externa: ' . $err);
+            }
+            $res = $stmt->get_result();
+            $fila = $res ? $res->fetch_assoc() : null;
+            $stmt->close();
+
+            if (!$fila) {
+                return null;
+            }
+
+            if ($fila['cita_id'] !== null && (int)$fila['cita_id'] > 0) {
+                return (int)$fila['cita_id'];
+            }
+            if (isset($fila['cita_referencia_id']) && (int)$fila['cita_referencia_id'] > 0) {
+                return (int)$fila['cita_referencia_id'];
+            }
+
+            return null;
+        } catch (PersistenceException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            error_log('[PagoRepository::obtenerCitaIdPorTransaccionExterna] Excepción: ' . $e->getMessage());
+            throw new PersistenceException('Error inesperado al obtener cita por transacción externa.', 0, $e);
+        }
+    }
+
     public function findById(int $id, bool $forUpdate = false): ?Pago
     {
         return $this->findOneByColumn('id', 'i', $id, $forUpdate);

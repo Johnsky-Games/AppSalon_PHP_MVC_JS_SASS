@@ -218,9 +218,43 @@ class PagoService
                 ];
             }
 
-            // 4. Verificar idempotencia por idempotency_key con bloqueo FOR UPDATE
+            // Si la cita ya está marcada como pagada en citas, prevenir cualquier nuevo cobro
+            if (($cita['estado_pago'] ?? '') === 'pagado') {
+                $ultimoPago = $this->pagoRepository->findUltimoPorCitaId($citaId, true);
+                $this->pagoRepository->commit();
+                return [
+                    'status' => self::STATUS_OK,
+                    'http_code' => 200,
+                    'idempotente' => true,
+                    'ya_pagado' => true,
+                    'monto_calculado_servidor' => $montoServidor,
+                    'monto_cliente_ignorado' => $montoClienteIgnorado,
+                    'pago' => $ultimoPago ? $ultimoPago->toArray() : null,
+                    'redirect_url' => $ultimoPago ? ('/pago/resultado?referencia=' . rawurlencode($ultimoPago->referencia_pago)) : null,
+                ];
+            }
+
+            // 4. Verificar idempotencia por idempotency_key con bloqueo FOR UPDATE y huella de operación
             $pagoExistenteKey = $this->pagoRepository->findByIdempotencyKey($idempotencyKey, true);
             if ($pagoExistenteKey !== null) {
+                // Mitigación cross-tenant: Si la clave ya fue utilizada para otro usuario, otra cita o distinto monto
+                $huellaCoincide = $pagoExistenteKey->coincideConOperacion(
+                    (int)$cita['usuario_id'],
+                    $citaId,
+                    $montoServidor
+                );
+
+                if (!$huellaCoincide) {
+                    $this->pagoRepository->rollback();
+                    return [
+                        'status' => self::STATUS_INVALID,
+                        'http_code' => 409,
+                        'codigo_error' => 'IDEMPOTENCY_KEY_CONFLICT',
+                        'error' => 'La clave de idempotencia ya fue utilizada para una operación diferente',
+                        'errores' => ['La clave de idempotencia ya fue utilizada para una operación diferente'],
+                    ];
+                }
+
                 if (
                     $idempotencyKeyExplicit
                     || in_array($pagoExistenteKey->estado, [Pago::ESTADO_PENDIENTE, Pago::ESTADO_PROCESANDO, Pago::ESTADO_COMPLETADO], true)
@@ -371,30 +405,86 @@ class PagoService
         }
 
         $referenciaPago = trim((string)($verificacion['referencia_pago'] ?? ''));
-        if ($referenciaPago === '') {
+        $txExternaId = isset($verificacion['transaccion_externa_id']) && trim((string)$verificacion['transaccion_externa_id']) !== ''
+            ? trim((string)$verificacion['transaccion_externa_id'])
+            : null;
+
+        if ($referenciaPago === '' && $txExternaId === null) {
             return [
                 'status' => self::STATUS_INVALID,
                 'http_code' => 422,
-                'errores' => ['La referencia de pago es obligatoria en la notificación del proveedor.'],
+                'errores' => ['La referencia de pago o transacción externa es obligatoria en la notificación del proveedor.'],
             ];
+        }
+
+        // 1. Obtener la cita asociada previamente para respetar el orden canónico de bloqueo: primero citas, luego pagos
+        $citaIdAsociada = null;
+        if ($referenciaPago !== '') {
+            $citaIdAsociada = $this->pagoRepository->obtenerCitaIdPorReferencia($referenciaPago);
+        }
+        if ($citaIdAsociada === null && $txExternaId !== null) {
+            $citaIdAsociada = $this->pagoRepository->obtenerCitaIdPorTransaccionExterna($txExternaId);
         }
 
         try {
             $this->pagoRepository->beginTransaction();
 
-            $pago = $this->pagoRepository->findByReferencia($referenciaPago, true);
+            // Bloquear primero la fila de citas si existe para prevenir deadlocks con iniciarPago o reembolsarPago
+            if ($citaIdAsociada !== null && $citaIdAsociada > 0) {
+                $this->pagoRepository->bloquearCitaPorId($citaIdAsociada);
+            }
+
+            // Bloquear posteriormente la fila de pagos
+            $pago = null;
+            if ($referenciaPago !== '') {
+                $pago = $this->pagoRepository->findByReferencia($referenciaPago, true);
+            }
+            if ($pago === null && $txExternaId !== null) {
+                $pago = $this->pagoRepository->findByTransaccionExternaId($txExternaId, true);
+            }
+
             if ($pago === null) {
                 $this->pagoRepository->rollback();
                 return [
                     'status' => self::STATUS_NOT_FOUND,
                     'http_code' => 404,
-                    'errores' => ['No existe un registro de pago para la referencia indicada.'],
+                    'errores' => ['No existe un registro de pago para la referencia o transacción indicada.'],
+                ];
+            }
+
+            // REGLA TERMINAL: Una vez en 'reembolsado', el cobro es terminal.
+            // Una confirmación tardía de webhook (replay de evento 'completado' u otro) NUNCA puede revertir 'reembolsado'.
+            if ($pago->estado === Pago::ESTADO_REEMBOLSADO) {
+                $this->pagoRepository->commit();
+                return [
+                    'status' => self::STATUS_OK,
+                    'http_code' => 200,
+                    'idempotente' => true,
+                    'ya_procesado' => true,
+                    'terminal_reembolsado' => true,
+                    'mensaje' => 'El pago ya se encuentra en estado terminal reembolsado. Evento tardío ignorado de forma idempotente.',
+                    'pago' => $pago->toArray(),
                 ];
             }
 
             $nuevoEstado = (string)$verificacion['estado'];
 
-            // 1. Idempotencia ante webhooks repetidos del mismo estado final
+            // Deduplica eventos del proveedor mediante transaccion_externa_id y mismo estado
+            if (
+                $pago->estado === $nuevoEstado
+                && ($txExternaId === null || $pago->transaccion_externa_id === $txExternaId)
+            ) {
+                $this->pagoRepository->commit();
+                return [
+                    'status' => self::STATUS_OK,
+                    'http_code' => 200,
+                    'idempotente' => true,
+                    'ya_procesado' => true,
+                    'pago' => $pago->toArray(),
+                ];
+            }
+
+            // 1. Idempotencia ante webhooks repetidos del mismo estado final completado
             if ($pago->estado === Pago::ESTADO_COMPLETADO && $nuevoEstado === Pago::ESTADO_COMPLETADO) {
                 $this->pagoRepository->commit();
                 return [
@@ -406,20 +496,9 @@ class PagoService
                 ];
             }
 
-            if ($pago->estado === Pago::ESTADO_REEMBOLSADO && $nuevoEstado === Pago::ESTADO_REEMBOLSADO) {
-                $this->pagoRepository->commit();
-                return [
-                    'status' => self::STATUS_OK,
-                    'http_code' => 200,
-                    'idempotente' => true,
-                    'ya_procesado' => true,
-                    'pago' => $pago->toArray(),
-                ];
-            }
-
-            // No degradar un pago ya completado o reembolsado ante un evento atrasado de fallo/pendiente
+            // No degradar un pago ya completado ante un evento atrasado de fallo/pendiente
             if (
-                in_array($pago->estado, [Pago::ESTADO_COMPLETADO, Pago::ESTADO_REEMBOLSADO], true)
+                $pago->estado === Pago::ESTADO_COMPLETADO
                 && in_array($nuevoEstado, [Pago::ESTADO_PENDIENTE, Pago::ESTADO_PROCESANDO, Pago::ESTADO_FALLIDO], true)
             ) {
                 $this->pagoRepository->commit();
@@ -603,8 +682,15 @@ class PagoService
             ];
         }
 
+        $citaIdAsociada = $this->pagoRepository->obtenerCitaIdPorReferencia($ref);
+
         try {
             $this->pagoRepository->beginTransaction();
+
+            // Bloquear primero la cita para garantizar orden de bloqueo uniforme (citas -> pagos)
+            if ($citaIdAsociada !== null && $citaIdAsociada > 0) {
+                $this->pagoRepository->bloquearCitaPorId($citaIdAsociada);
+            }
 
             $pago = $this->pagoRepository->findByReferencia($ref, true);
             if ($pago === null) {
@@ -635,12 +721,28 @@ class PagoService
                 ];
             }
 
-            $montoReembolso = $monto !== null ? round($monto, 2) : $pago->monto;
+            $montoReembolso = $monto !== null ? round((float)$monto, 2) : $pago->monto;
+
+            // Rechazar explícitamente reembolsos parciales
+            if ($monto !== null && abs($montoReembolso - $pago->monto) > 0.009) {
+                if ($montoReembolso < $pago->monto) {
+                    $this->pagoRepository->rollback();
+                    return [
+                        'status' => self::STATUS_INVALID,
+                        'http_code' => 422,
+                        'codigo_error' => 'REEMBOLSO_PARCIAL_NO_PERMITIDO',
+                        'error' => 'Solo se admiten reembolsos totales mientras el negocio no apruebe la capacidad de saldos parciales.',
+                        'errores' => ['Solo se admiten reembolsos totales mientras el negocio no apruebe la capacidad de saldos parciales.'],
+                    ];
+                }
+            }
+
             if ($montoReembolso <= 0 || $montoReembolso > $pago->monto) {
                 $this->pagoRepository->rollback();
                 return [
                     'status' => self::STATUS_INVALID,
                     'http_code' => 422,
+                    'codigo_error' => 'MONTO_REEMBOLSO_INVALIDO',
                     'errores' => ['El monto a reembolsar es inválido o supera el monto pagado.'],
                 ];
             }

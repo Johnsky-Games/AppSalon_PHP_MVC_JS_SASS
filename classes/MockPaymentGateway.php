@@ -230,6 +230,19 @@ class MockPaymentGateway implements PaymentGatewayInterface
             $firmaRecibida = substr($firmaRecibida, 7);
         }
 
+        $appEnv = strtolower(trim((string)($_ENV['APP_ENV'] ?? getenv('APP_ENV') ?: 'development')));
+        if ($appEnv === 'production') {
+            $secretosInseguros = [
+                '',
+                self::DEFAULT_WEBHOOK_SECRET,
+                'mock_secret_cambiar_en_produccion',
+                'mock_secret',
+            ];
+            if (in_array($this->webhookSecret, $secretosInseguros, true)) {
+                return false;
+            }
+        }
+
         $firmaCanonica = $this->generarFirmaWebhook($payload);
         if (hash_equals($firmaCanonica, $firmaRecibida)) {
             return true;

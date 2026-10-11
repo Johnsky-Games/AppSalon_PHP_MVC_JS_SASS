@@ -77,6 +77,27 @@ class Pago
     }
 
     /**
+     * Determina si el pago se encuentra en un estado terminal que no admite transiciones posteriores.
+     */
+    public function esTerminal(): bool
+    {
+        return $this->estado === self::ESTADO_REEMBOLSADO;
+    }
+
+    /**
+     * Valida si el registro coincide exactamente con la huella de operación (usuario, cita y monto),
+     * previniendo colisiones e intentos de reutilización de idempotency_key cross-tenant.
+     */
+    public function coincideConOperacion(int $usuarioId, int $citaId, float $monto): bool
+    {
+        $citaCoincide = ((int)$this->cita_id === $citaId) || ((int)$this->cita_referencia_id === $citaId);
+        $usuarioCoincide = ($this->usuario_id !== null && (int)$this->usuario_id === $usuarioId);
+        $montoCoincide = abs($this->monto - round($monto, 2)) < 0.01;
+
+        return $citaCoincide && $usuarioCoincide && $montoCoincide;
+    }
+
+    /**
      * @return array<string, mixed>
      */
     public function toArray(): array
