@@ -632,9 +632,20 @@ class PagoRepository
                 WHERE id = ?
                 LIMIT 1";
 
-        $payloadSeguro = self::serializarPayloadSeguro($payloadProveedor);
-
         try {
+            $payloadSeguro = self::serializarPayloadSeguro($payloadProveedor);
+            if ($payloadSeguro !== null) {
+                // La conciliación es metadato del servidor: un webhook o reembolso
+                // sustituye el payload del proveedor, pero no su historial de auditoría.
+                $existente = $this->findById($pagoId, true);
+                $historico = $existente?->obtenerPayloadProveedor() ?? [];
+                $nuevoPayload = json_decode($payloadSeguro, true) ?: [];
+                unset($nuevoPayload['conciliacion']);
+                if (isset($historico['conciliacion'])) {
+                    $nuevoPayload['conciliacion'] = $historico['conciliacion'];
+                }
+                $payloadSeguro = self::serializarPayloadSeguro($nuevoPayload);
+            }
             $stmt = $db->prepare($sql);
             if (!$stmt) {
                 throw new PersistenceException('Error al preparar actualización de pago: ' . $db->error);
@@ -750,14 +761,62 @@ class PagoRepository
             'total_cita_esperado' => round($totalCita, 2),
             'detectado_at' => date('Y-m-d H:i:s'),
         ];
-        $payloadJson = json_encode($payload, JSON_UNESCAPED_UNICODE);
+        $this->guardarPayloadConciliacion($pagoId, $payload);
+    }
 
-        $stmt = $db->prepare("UPDATE pagos SET payload_proveedor = ? WHERE id = ? LIMIT 1");
-        if ($stmt) {
-            $stmt->bind_param('si', $payloadJson, $pagoId);
-            $stmt->execute();
-            $stmt->close();
+    /**
+     * Conserva la detección original y agrega la resolución del exceso tras un
+     * reembolso confirmado. Se ejecuta bajo la transacción y bloqueo de la cita.
+     */
+    public function registrarResolucionConciliacionTrasReembolso(
+        int $citaId,
+        int $pagoReembolsadoId,
+        string $fechaResolucion
+    ): void {
+        $pagos = $this->findTodosPorCitaId($citaId, true);
+        $totalVigente = 0.00;
+        foreach ($pagos as $pago) {
+            if ($pago->estado === Pago::ESTADO_COMPLETADO) {
+                $totalVigente += $pago->monto;
+            }
         }
+        $totalVigente = round($totalVigente, 2);
+
+        foreach ($pagos as $pago) {
+            $payload = $pago->obtenerPayloadProveedor();
+            $conciliacion = $payload['conciliacion'] ?? null;
+            if (!is_array($conciliacion) || !($conciliacion['requiere_conciliacion'] ?? false)) {
+                continue;
+            }
+            $excesoRestante = round(max(0.00, $totalVigente - (float)$conciliacion['total_cita_esperado']), 2);
+            $conciliacion['requiere_conciliacion'] = $excesoRestante > 0.009;
+            $conciliacion['resoluciones'][] = [
+                'pago_reembolsado_id' => $pagoReembolsadoId,
+                'registrado_at' => $fechaResolucion,
+                'total_pagado_vigente' => $totalVigente,
+                'exceso_restante' => $excesoRestante,
+                'estado' => $excesoRestante > 0.009 ? 'pendiente' : 'resuelta',
+            ];
+            $payload['conciliacion'] = $conciliacion;
+            $this->guardarPayloadConciliacion((int)$pago->id, $payload);
+        }
+    }
+
+    private function guardarPayloadConciliacion(int $pagoId, array $payload): void
+    {
+        $db = $this->resolveDb();
+        $payloadJson = self::serializarPayloadSeguro($payload);
+        $stmt = $db->prepare("UPDATE pagos SET payload_proveedor = ? WHERE id = ? LIMIT 1");
+        if (!$stmt) {
+            throw new PersistenceException('No fue posible preparar el registro de conciliación.');
+        }
+        $stmt->bind_param('si', $payloadJson, $pagoId);
+        if (!$stmt->execute()) {
+            $error = $stmt->error;
+            $stmt->close();
+            throw new PersistenceException('No fue posible registrar la conciliación: ' . $error);
+        }
+        $stmt->close();
     }
 }
 

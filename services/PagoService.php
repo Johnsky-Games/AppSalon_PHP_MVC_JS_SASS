@@ -622,6 +622,11 @@ class PagoService
                         }
                     }
                 } elseif ($nuevoEstado === Pago::ESTADO_REEMBOLSADO) {
+                    $this->pagoRepository->registrarResolucionConciliacionTrasReembolso(
+                        (int)$pago->cita_id,
+                        (int)$pago->id,
+                        (string)$reembolsadoAt
+                    );
                     // Solo marcar la cita como reembolsada si no existen otros pagos que sigan activos/completados
                     $otrosCompletados = $this->pagoRepository->findCompletadoPorCitaId((int)$pago->cita_id, true);
                     if ($otrosCompletados === null || (int)$otrosCompletados->id === (int)$pago->id) {
@@ -853,6 +858,11 @@ class PagoService
             );
 
             if ($pago->cita_id !== null) {
+                $this->pagoRepository->registrarResolucionConciliacionTrasReembolso(
+                    (int)$pago->cita_id,
+                    (int)$pago->id,
+                    $ahoraReembolso
+                );
                 // Solo marcar la cita como reembolsada si no existen otros pagos que sigan activos/completados
                 $otrosCompletados = $this->pagoRepository->findCompletadoPorCitaId((int)$pago->cita_id, true);
                 if ($otrosCompletados === null || (int)$otrosCompletados->id === (int)$pago->id) {

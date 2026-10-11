@@ -172,22 +172,21 @@ Salida esperada:
 [OK] Respaldo completado: bd=appsalon_mvc | tablas=13 | filas=142 | archivo=storage/backups/appsalon_prod.sql.gz | bytes=4821 | sha256=... | manifiesto=storage/backups/appsalon_prod.sql.gz.manifest.json
 ```
 
-### 5.3. Restauración Segura (`scripts/restore_db.php`)
+### 5.3. Restauración en una base nueva o vacía
+
 ```bash
-# Restauración estándar (detecta automáticamente el archivo de manifiesto adyacente para verificar el hash SHA-256)
-php scripts/restore_db.php --input=storage/backups/appsalon_prod.sql.gz
-
-# Restauración con verificación explícita de hash SHA-256
-php scripts/restore_db.php --input=storage/backups/appsalon_prod.sql.gz --hash=<hash_sha256>
-
-# Restauración en base aislada temporal o de recuperación
 php scripts/restore_db.php --db=appsalon_recuperacion --input=storage/backups/appsalon_prod.sql.gz --create-db
+# Hash explícito opcional; el manifiesto adyacente se sigue validando.
+php scripts/restore_db.php --db=appsalon_recuperacion_vacia --input=storage/backups/appsalon_prod.sql.gz --hash=<hash_sha256>
 ```
 
-**Mecanismos de Resiliencia y Validación Previa en Restauración:**
-1. **Comprobación Criptográfica:** El script calcula el `SHA-256` del archivo y lo compara contra el parámetro `--hash`, el archivo `--manifest` o el `.manifest.json` adyacente. Si el archivo ha sido alterado o corrompido, aborta de inmediato con código `1` sin ejecutar ninguna sentencia SQL.
-2. **Detección de Archivos Truncados:** Valida que el volcado contenga el encabezado oficial y el marcador final `-- Fin del respaldo AppSalon`. Si el archivo fue truncado tras una sentencia completa, aborta antes de aplicar DDL destructivo.
-3. **Modo Seguro (`--safe-restore`, activo por defecto):** Cuando la base de datos destino ya existe y contiene tablas, `restore_db.php` realiza una prueba de restauración previa en una base temporal de *staging* para garantizar que todas las sentencias se ejecuten con éxito. Si ocurre cualquier error a mitad de restauración, la base temporal se descarta y la base de datos existente permanece **100% intacta e inalterada**.
+El destino debe indicarse explícitamente. El script **rechaza una base con tablas o vistas**, incluso si se intenta usar `--no-safe-restore`. Se retiró la sustitución automática por renombres y eliminación de claves foráneas: ningún original se modifica.
+
+El respaldo se verifica por hash, se importa primero en staging y se comparan tablas, conteos y la migración declarada. Solo después se importa en el destino nuevo/vacío y se repite la validación. Se admite el formato de tablas generado por `backup_db.php`; no se permiten `USE`, objetos ejecutables ni nombres de tablas de otras bases. El hash comprueba integridad y no sustituye la confianza en el origen del respaldo.
+
+Si la importación o validación final falla, el destino nuevo queda disponible para diagnóstico y el comando devuelve `1`; **no cambies la conexión de la aplicación a esa base**. Se elimina únicamente el staging creado por esta ejecución. La restauración debe realizarse sobre una base de recuperación sin escritores concurrentes. El lock del script serializa sus propias invocaciones, no detiene otros clientes MySQL.
+
+Tras un resultado `0`, verifica las rutas de la aplicación contra la base recuperada. El cambio de conexión y la retirada de la base anterior son operaciones separadas del restore, que debe ejecutar el responsable del entorno. Conserva la base anterior y el respaldo hasta confirmar esa verificación.
 
 ### 5.4. Política Recomendada de Respaldos en Producción
 - **Frecuencia:** Respaldo automático diario comprimido (`--gzip`) a las `02:00 America/Guayaquil` y respaldo previo obligatorio antes de cada despliegue o migración.

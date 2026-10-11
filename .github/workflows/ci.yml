@@ -52,10 +52,10 @@ jobs:
           ini-values: variables_order=EGPCS
           coverage: none
 
-      - name: Configurar Node.js 18
+      - name: Configurar Node.js 24
         uses: actions/setup-node@v4
         with:
-          node-version: "18"
+          node-version: "24"
 
       - name: Instalar dependencias de Composer
         run: composer install --prefer-dist --no-progress --no-interaction
@@ -82,65 +82,19 @@ jobs:
           docker run --rm appsalon-web-ci php -m | grep -i mysqli
           docker run --rm appsalon-web-ci apache2ctl -M | grep rewrite_module
 
-      - name: Iniciar contenedor Apache oficial y ejecutar suite E2E en navegador
-        run: |
-          # Sembrar administrador, cliente y catálogo inicial para el recorrido E2E
-          PASS_HASH='$2y$10$5fbKwtKYcyFUSgV5wgWyMuvoxmR97oZYrvbEScIEWoqMNRZMaSp8q'
-          mysql -h 127.0.0.1 -P 3306 -uroot -proot appsalon_ci_test <<EOSQL
-          INSERT INTO servicios (id, nombre, precio) VALUES (1, 'Corte de Cabello Hombre', 80.00), (2, 'Corte de Cabello Mujer', 120.00), (3, 'Corte de Barba', 60.00) ON DUPLICATE KEY UPDATE nombre=VALUES(nombre);
-          DELETE FROM usuarios WHERE email IN ('carlos@correo.com', 'admin@appsalon.com');
-          INSERT INTO usuarios (id, nombre, apellido, email, password, telefono, admin, confirmado, token) VALUES (1, 'Carlos', 'Mendoza', 'carlos@correo.com', '${PASS_HASH}', '1234567890', 0, 1, NULL), (2, 'Admin', 'Salon', 'admin@appsalon.com', '${PASS_HASH}', '0987654321', 1, 1, NULL);
-          DELETE FROM intentos_login;
-          EOSQL
+      - name: Recorrido E2E aislado en Apache, MySQL y SMTP mock
+        env:
+          E2E_WEB_IMAGE: appsalon-web-ci
+          E2E_ARTIFACT_DIR: ${{ runner.temp }}/appsalon-e2e
+        run: bash tests/run_browser_e2e.sh
 
-          # Iniciar contenedor Apache oficial conectado a la base MySQL
-          docker run -d --name appsalon-web-ci-instance \
-            -p 3000:80 \
-            -v "$GITHUB_WORKSPACE:/var/www/html" \
-            -e DB_HOST=172.17.0.1 \
-            -e DB_PORT=3306 \
-            -e DB_USER=root \
-            -e DB_PASS=root \
-            -e DB_NAME=appsalon_ci_test \
-            -e APP_ENV=testing \
-            -e APP_URL=http://localhost:3000 \
-            -e PAYMENT_WEBHOOK_SECRET=ci_test_webhook_secret_hmac_2026 \
-            appsalon-web-ci
-
-          # Esperar readiness real del servidor web (polling con reintentos)
-          echo "Esperando disponibilidad de http://localhost:3000/..."
-          READY=0
-          for i in {1..30}; do
-            if curl -s -f -I http://localhost:3000/ > /dev/null 2>&1; then
-              echo "Servidor Apache listo tras $i intentos."
-              READY=1
-              break
-            fi
-            sleep 1
-          done
-
-          if [ $READY -ne 1 ]; then
-            echo "[ERROR] El servidor Apache no respondió a tiempo."
-            docker logs appsalon-web-ci-instance
-            docker stop appsalon-web-ci-instance && docker rm appsalon-web-ci-instance
-            exit 1
-          fi
-
-          # Ejecutar suite E2E real en navegador headless (Chrome / Puppeteer)
-          CHROME_BIN=$(which google-chrome || which chromium-browser || which chromium)
-          echo "Ejecutando suite E2E con binario: $CHROME_BIN contra http://localhost:3000"
-          CHROME_BIN=$CHROME_BIN APP_URL=http://localhost:3000 node tests/browser_e2e_test.js
-          E2E_STATUS=$?
-
-          if [ $E2E_STATUS -ne 0 ]; then
-            echo "[ERROR] Suite E2E en navegador falló."
-            docker logs appsalon-web-ci-instance
-            docker stop appsalon-web-ci-instance && docker rm appsalon-web-ci-instance
-            exit $E2E_STATUS
-          fi
-
-          echo "Suite E2E completada exitosamente."
-          docker stop appsalon-web-ci-instance && docker rm appsalon-web-ci-instance
+      - name: Conservar resultados y registros E2E
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apache-browser-e2e
+          path: ${{ runner.temp }}/appsalon-e2e
+          if-no-files-found: ignore
 
       - name: Ejecutar suite completa de PHPUnit (sin caché y orden aleatorio)
         run: php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --order-by=random --colors=never

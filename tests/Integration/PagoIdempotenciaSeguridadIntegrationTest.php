@@ -478,7 +478,13 @@ class PagoIdempotenciaSeguridadIntegrationTest extends TestCase
      * Ambas operaciones quedan registradas de forma durable sin pérdida de trazabilidad.
      * La cita queda confirmada como 'pagada' sin degradación ni inconsistencia contable.
      */
-    public function testSecuenciaK1FallaK2IniciaExitoTardioK1ExitoK2ConciliacionRobusta(): void
+    public static function viasReembolsoConciliacion(): array
+    {
+        return ['administrativo' => [false], 'webhook firmado' => [true]];
+    }
+
+    /** @dataProvider viasReembolsoConciliacion */
+    public function testSecuenciaK1FallaK2IniciaExitoTardioK1ExitoK2ConciliacionRobusta(bool $viaWebhook): void
     {
         $usuarioId = $this->crearUsuario('conciliacion@correo.com', 'Cliente Conciliacion');
         $profId = $this->crearProfesional('Carlos Estilista');
@@ -553,6 +559,8 @@ class PagoIdempotenciaSeguridadIntegrationTest extends TestCase
         $this->assertIsArray($payloadK2Db);
         $this->assertTrue($payloadK2Db['conciliacion']['requiere_conciliacion'] ?? false);
         $this->assertEquals(60.00, $payloadK2Db['conciliacion']['exceso_monto'] ?? 0);
+        $deteccionOriginal = $payloadK2Db['conciliacion'];
+        $pagadoAtK2 = $pagoRepo->findByReferencia($refK2)->pagado_at;
 
         // Verificar que ambos pagos K1 y K2 existen con su respectiva trazabilidad durable
         $resPagos = self::$db->query("SELECT estado FROM pagos WHERE cita_id = {$citaId} ORDER BY id ASC");
@@ -571,22 +579,57 @@ class PagoIdempotenciaSeguridadIntegrationTest extends TestCase
         // Dado que K2 sigue en estado 'completado', la cita DEBE permanecer como 'pagado'.
         $pagoK1Obj = $pagoRepo->findByReferencia($refK1);
         $this->assertNotNull($pagoK1Obj);
-        $resReembolsoK1 = $pagoService->reembolsarPago($refK1, 60.00);
+        $resReembolsoK1 = $this->reembolsarParaConciliacion($pagoService, $mockGateway, $refK1, $viaWebhook);
         $this->assertSame(PagoService::STATUS_OK, $resReembolsoK1['status']);
         $this->assertSame(Pago::ESTADO_REEMBOLSADO, $resReembolsoK1['pago']['estado']);
 
         // Verificar que la cita sigue en estado 'pagado' gracias al pago K2 completado
         $citaPostReembolsoK1 = self::$db->query("SELECT estado_pago FROM citas WHERE id = {$citaId}")->fetch_assoc();
         $this->assertSame('pagado', $citaPostReembolsoK1['estado_pago'], 'La cita debe seguir marcada como pagada mientras K2 esté completado');
+        $conciliacionResuelta = $pagoRepo->findByReferencia($refK2)->obtenerPayloadProveedor()['conciliacion'];
+        foreach (['detectado_at', 'motivo', 'exceso_monto', 'total_pagado_acumulado', 'total_cita_esperado'] as $campo) {
+            $this->assertSame($deteccionOriginal[$campo], $conciliacionResuelta[$campo]);
+        }
+        $this->assertFalse($conciliacionResuelta['requiere_conciliacion']);
+        $this->assertCount(1, $conciliacionResuelta['resoluciones']);
+        $this->assertSame((int)$pagoK1Obj->id, $conciliacionResuelta['resoluciones'][0]['pago_reembolsado_id']);
+        $this->assertSame('resuelta', $conciliacionResuelta['resoluciones'][0]['estado']);
+        $this->assertEquals(0.00, $conciliacionResuelta['resoluciones'][0]['exceso_restante']);
+        $this->assertEquals(60.00, $conciliacionResuelta['resoluciones'][0]['total_pagado_vigente']);
+        $this->assertNotEmpty($conciliacionResuelta['resoluciones'][0]['registrado_at']);
 
         // Paso 7: Si posteriormente se reembolsa K2, al no quedar pagos completados, la cita pasa a 'reembolsado'
         $pagoK2Obj = $pagoRepo->findByReferencia($refK2);
         $this->assertNotNull($pagoK2Obj);
-        $resReembolsoK2 = $pagoService->reembolsarPago($refK2, 60.00);
+        $resReembolsoK2 = $this->reembolsarParaConciliacion($pagoService, $mockGateway, $refK2, $viaWebhook);
         $this->assertSame(PagoService::STATUS_OK, $resReembolsoK2['status']);
         $this->assertSame(Pago::ESTADO_REEMBOLSADO, $resReembolsoK2['pago']['estado']);
 
         $citaPostReembolsoK2 = self::$db->query("SELECT estado_pago FROM citas WHERE id = {$citaId}")->fetch_assoc();
         $this->assertSame('reembolsado', $citaPostReembolsoK2['estado_pago'], 'La cita debe pasar a reembolsado cuando ya no quedan cobros completados');
+        $pagoK2Reembolsado = $pagoRepo->findByReferencia($refK2);
+        $this->assertSame($pagadoAtK2, $pagoK2Reembolsado->pagado_at);
+        $this->assertNotEmpty($pagoK2Reembolsado->reembolsado_at);
+        $this->assertSame($conciliacionResuelta, $pagoK2Reembolsado->obtenerPayloadProveedor()['conciliacion'],
+            'El payload del reembolso debe preservar la detección y su resolución histórica.');
+        $this->reembolsarParaConciliacion($pagoService, $mockGateway, $refK2, $viaWebhook);
+        $this->assertSame($conciliacionResuelta, $pagoRepo->findByReferencia($refK2)->obtenerPayloadProveedor()['conciliacion'],
+            'Un reembolso repetido no debe duplicar la resolución.');
+    }
+
+    private function reembolsarParaConciliacion(PagoService $service, MockPaymentGateway $gateway, string $referencia, bool $viaWebhook): array
+    {
+        if (!$viaWebhook) {
+            return $service->reembolsarPago($referencia, 60.00);
+        }
+        $payload = [
+            'referencia_pago' => $referencia,
+            'evento' => 'payment.refunded',
+            'estado' => 'reembolsado',
+            'monto' => 60.00,
+            // Un proveedor no debe poder sustituir metadatos de conciliación del servidor.
+            'conciliacion' => ['detectado_at' => 'dato_manipulado'],
+        ];
+        return $service->procesarWebhook($payload, ['X-Mock-Signature' => $gateway->generarFirmaWebhook($payload)]);
     }
 }

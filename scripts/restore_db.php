@@ -6,7 +6,7 @@ declare(strict_types=1);
  * Script CLI de Restauración Segura de Base de Datos MySQL — AppSalon
  *
  * Uso:
- *   php scripts/restore_db.php --input=<archivo.sql|.sql.gz> [--db=<nombre_bd>] [--hash=<sha256>] [--manifest=<ruta>] [--create-db] [--safe-restore|--no-safe-restore] [--skip-hash-check]
+ *   php scripts/restore_db.php --input=<archivo.sql|.sql.gz> --db=<base_nueva_o_vacia> [--hash=<sha256>] [--manifest=<ruta>] [--create-db] [--safe-restore]
  *
  * Características de Integridad y Resiliencia:
  * - Ejecutable exclusivamente desde CLI (`php_sapi_name() === 'cli'`).
@@ -14,9 +14,9 @@ declare(strict_types=1);
  * - Verificación criptográfica obligatoria: valida el hash SHA-256 del archivo contra el parámetro `--hash`,
  *   el archivo `--manifest`, o el manifiesto adyacente `.manifest.json` antes de ejecutar cualquier sentencia DDL.
  * - Detección estricta de truncamiento y validación sintáctica previa antes de aplicar cambios a la base destino.
- * - Modo Seguro (`--safe-restore`, activo por defecto): ante bases de datos existentes con datos, realiza una
- *   restauración previa en una base aislada temporal de staging para verificar que todas las sentencias se ejecuten
- *   sin fallos antes de reemplazar datos. Si ocurre cualquier error a mitad de restauración, preserva intacta la base destino.
+ * - Importa únicamente en una base nueva o vacía indicada explícitamente con --db.
+ * - Valida en staging antes de importar. Nunca renombra ni elimina tablas originales.
+ * - Un destino nuevo incompleto se conserva para diagnóstico si falla la importación final.
  * - Restaura `FOREIGN_KEY_CHECKS = 1` y `UNIQUE_CHECKS = 1` de manera garantizada al finalizar.
  */
 
@@ -46,7 +46,7 @@ $opciones = getopt('', [
 ]);
 
 if (isset($opciones['help'])) {
-    echo "Uso: php scripts/restore_db.php --input=<archivo.sql|.sql.gz> [--db=<nombre_bd>] [--hash=<sha256>] [--manifest=<ruta>] [--create-db] [--safe-restore|--no-safe-restore] [--skip-hash-check]\n";
+    echo "Uso: php scripts/restore_db.php --input=<archivo.sql|.sql.gz> --db=<base_nueva_o_vacia> [--hash=<sha256>] [--manifest=<ruta>] [--create-db] [--safe-restore]\n";
     exit(0);
 }
 
@@ -60,6 +60,15 @@ $dbHost = (string)($_ENV['DB_HOST'] ?? getenv('DB_HOST') ?: '127.0.0.1');
 $dbPort = (int)($_ENV['DB_PORT'] ?? getenv('DB_PORT') ?: 3306);
 $dbUser = (string)($_ENV['DB_USER'] ?? getenv('DB_USER') ?: 'root');
 $dbPass = (string)($_ENV['DB_PASS'] ?? (getenv('DB_PASS') !== false ? getenv('DB_PASS') : ''));
+if (!isset($opciones['db']) || !is_string($opciones['db']) || trim($opciones['db']) === '') {
+    fwrite(STDERR, "[ERROR] Es obligatorio indicar una base nueva o vacía con --db.\n");
+    exit(1);
+}
+if (isset($opciones['no-safe-restore']) || isset($opciones['skip-hash-check'])) {
+    fwrite(STDERR, "[ERROR] No se permite omitir la validación de una restauración.\n");
+    exit(1);
+}
+
 $dbName = isset($opciones['db']) && is_string($opciones['db']) && trim($opciones['db']) !== ''
     ? trim($opciones['db'])
     : (string)($_ENV['DB_NAME'] ?? getenv('DB_NAME') ?: 'appsalon_mvc');
@@ -116,6 +125,10 @@ if (isset($opciones['manifest']) && is_string($opciones['manifest']) && is_file(
 if ($rutaMan !== null) {
     $rawMan = @file_get_contents($rutaMan);
     $datosMan = $rawMan !== false ? json_decode($rawMan, true) : null;
+    if (!is_array($datosMan)) {
+        fwrite(STDERR, "[ERROR] Manifiesto ilegible o JSON inválido.\n");
+        exit(1);
+    }
     if (is_array($datosMan) && isset($datosMan['sha256']) && is_string($datosMan['sha256'])) {
         $hashEsperado = strtolower(trim($datosMan['sha256']));
     }
@@ -137,7 +150,7 @@ if (isset($opciones['hash']) && is_string($opciones['hash']) && trim($opciones['
 
 if (!isset($opciones['skip-hash-check']) && !isset($opciones['insecure'])) {
     if ($hashEsperado === null) {
-        fwrite(STDERR, "[ERROR] Modo seguro (--safe-restore): Se requiere verificación criptográfica obligatoria. No se encontró archivo de manifiesto (.manifest.json) ni se proporcionó un hash SHA-256 esperado con --hash. Use --skip-hash-check para omitir conscientemente esta verificación en pruebas.\n");
+        fwrite(STDERR, "[ERROR] Modo seguro (--safe-restore): Se requiere verificación criptográfica obligatoria. No se encontró archivo de manifiesto (.manifest.json) ni se proporcionó un hash SHA-256 esperado con --hash. Proporcione --hash o un manifiesto válido.\n");
         exit(1);
     }
 
@@ -151,12 +164,6 @@ if (!isset($opciones['skip-hash-check']) && !isset($opciones['insecure'])) {
     }
 }
 
-/**
- * Divide un volcado SQL en sentencias ejecutables individuales respetando cadenas entrecomilladas,
- * secuencias de escape y comentarios de línea.
- *
- * @return list<string>
- */
 function dividir_sentencias_sql_respaldo(string $sql): array
 {
     $sentencias = [];
@@ -235,66 +242,7 @@ function dividir_sentencias_sql_respaldo(string $sql): array
     return $sentencias;
 }
 
-$sentencias = dividir_sentencias_sql_respaldo($sqlContenido);
-if (empty($sentencias)) {
-    fwrite(STDERR, "[ERROR] El archivo de respaldo no contiene sentencias SQL ejecutables.\n");
-    exit(1);
-}
 
-// -----------------------------------------------------------------------------
-// 4. Conexión a MySQL y Restauración Segura
-// -----------------------------------------------------------------------------
-mysqli_report(MYSQLI_REPORT_OFF);
-$mysqli = @mysqli_connect($dbHost, $dbUser, $dbPass, '', $dbPort);
-if (!$mysqli) {
-    fwrite(STDERR, sprintf(
-        "[ERROR] No fue posible conectar a MySQL (errno %d) para restaurar la base '%s'.\n",
-        mysqli_connect_errno(),
-        $dbName
-    ));
-    exit(1);
-}
-
-$mysqli->set_charset('utf8mb4');
-
-$usarSafeRestore = !isset($opciones['no-safe-restore']);
-$stagingDb = null;
-
-try {
-    $dbExiste = false;
-    $resCheckDb = $mysqli->query("SHOW DATABASES LIKE '{$dbName}'");
-    if ($resCheckDb && $resCheckDb->num_rows > 0) {
-        $dbExiste = true;
-        $resCheckDb->free();
-    } elseif ($resCheckDb) {
-        $resCheckDb->free();
-    }
-
-    if (!$dbExiste) {
-        if (isset($opciones['create-db'])) {
-            $okCreate = $mysqli->query("CREATE DATABASE IF NOT EXISTS `{$dbName}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
-            if (!$okCreate) {
-                throw new RuntimeException("No fue posible crear la base destino `{$dbName}`: " . $mysqli->error);
-            }
-            $dbExiste = true;
-        } else {
-            throw new RuntimeException("La base de datos destino `{$dbName}` no existe. Use --create-db si desea crearla automáticamente.");
-        }
-    }
-
-    if (!$mysqli->select_db($dbName)) {
-        throw new RuntimeException("No fue posible seleccionar la base de datos destino `{$dbName}`: " . $mysqli->error);
-    }
-
-    // Contar tablas previas en la base destino
-/**
- * Validador unificado de esquema y manifiesto para base nueva, vacía o poblada.
- *
- * @param mysqli $mysqli
- * @param string $dbTarget
- * @param array<string, mixed>|null $manifiesto
- * @throws RuntimeException
- */
 function validar_manifiesto_y_esquema(mysqli $mysqli, string $dbTarget, ?array $manifiesto): void
 {
     if (!$mysqli->select_db($dbTarget)) {
@@ -317,10 +265,19 @@ function validar_manifiesto_y_esquema(mysqli $mysqli, string $dbTarget, ?array $
     }
 
     // 1. Validar versión de esquema si está declarada
-    if (array_key_exists('schema_version', $manifiesto)) {
+    if (array_key_exists('schema_version', $manifiesto) && in_array('migraciones', $tablasReales, true)) {
         $versionDeclarada = (string)$manifiesto['schema_version'];
         if (trim($versionDeclarada) === '' || !preg_match('/^[a-zA-Z0-9_\.\-]+$/', $versionDeclarada)) {
             throw new RuntimeException("Validación de manifiesto fallida: 'schema_version' está vacío o es inválido.");
+        }
+        $resVersion = $mysqli->query('SELECT migracion FROM migraciones ORDER BY id DESC LIMIT 1');
+        if (!$resVersion) {
+            throw new RuntimeException('No fue posible comprobar la versión de migraciones: ' . $mysqli->error);
+        }
+        $versionReal = (string)($resVersion->fetch_assoc()['migracion'] ?? 'sin_migraciones');
+        $resVersion->free();
+        if ($versionReal !== $versionDeclarada) {
+            throw new RuntimeException('schema_version no coincide con las migraciones restauradas.');
         }
     }
 
@@ -419,262 +376,121 @@ function validar_manifiesto_y_esquema(mysqli $mysqli, string $dbTarget, ?array $
     }
 }
 
-/**
- * Consulta todas las foreign keys activas de la base dada.
- *
- * @return list<array<string, string>>
- */
-function obtener_foreign_keys_esquema(mysqli $mysqli, string $dbName): array
+
+
+/** Accept only the portable table dump emitted by backup_db.php. */
+function validar_sentencia_respaldo(string $sql): void
 {
-    $dbEsc = $mysqli->real_escape_string($dbName);
-    $sql = "SELECT 
-                kcu.TABLE_NAME,
-                kcu.CONSTRAINT_NAME,
-                kcu.COLUMN_NAME,
-                kcu.REFERENCED_TABLE_NAME,
-                kcu.REFERENCED_COLUMN_NAME,
-                rc.UPDATE_RULE,
-                rc.DELETE_RULE
-            FROM information_schema.KEY_COLUMN_USAGE kcu
-            JOIN information_schema.REFERENTIAL_CONSTRAINTS rc 
-                ON kcu.CONSTRAINT_SCHEMA = rc.CONSTRAINT_SCHEMA 
-                AND kcu.CONSTRAINT_NAME = rc.CONSTRAINT_NAME
-            WHERE kcu.CONSTRAINT_SCHEMA = '{$dbEsc}'
-              AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
-            ORDER BY kcu.TABLE_NAME, kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION";
-
-    $res = $mysqli->query($sql);
-    if (!$res) {
-        throw new RuntimeException("Error al consultar foreign keys de la base '{$dbName}': " . $mysqli->error);
+    // Remove data literals for inspection; retain quoted identifiers.
+    $estructura = preg_replace("/'(?:\\\\.|''|[^'\\\\])*'|\"(?:\\\\.|\"\"|[^\"\\\\])*\"/s", "''", $sql);
+    if ($estructura === null || preg_match('/\/\*|\b(?:USE|SCHEMA|TRIGGER|PROCEDURE|FUNCTION|EVENT|OUTFILE|DUMPFILE|LOAD_FILE)\b/i', $estructura)
+        || preg_match('/(?:`[^`]+`|[A-Za-z_]\w*)\s*\.\s*(?:`[^`]+`|[A-Za-z_]\w*)/', $estructura)) {
+        throw new RuntimeException('Sentencia no admitida: el respaldo no puede cambiar de base ni ejecutar operaciones externas.');
     }
-    $fks = [];
-    while ($fila = $res->fetch_assoc()) {
-        $fks[] = [
-            'table_name' => (string)$fila['TABLE_NAME'],
-            'constraint_name' => (string)$fila['CONSTRAINT_NAME'],
-            'column_name' => (string)$fila['COLUMN_NAME'],
-            'referenced_table_name' => (string)$fila['REFERENCED_TABLE_NAME'],
-            'referenced_column_name' => (string)$fila['REFERENCED_COLUMN_NAME'],
-            'update_rule' => (string)($fila['UPDATE_RULE'] ?? 'CASCADE'),
-            'delete_rule' => (string)($fila['DELETE_RULE'] ?? 'CASCADE'),
-        ];
+    if (preg_match("/^SET\\s+(?:NAMES\\s+utf8mb4|TIME_ZONE\\s*=\\s*'\\+00:00'|FOREIGN_KEY_CHECKS\\s*=\\s*[01]|UNIQUE_CHECKS\\s*=\\s*[01]|SQL_MODE\\s*=\\s*'NO_AUTO_VALUE_ON_ZERO')\\s*$/i", $sql)) {
+        return;
     }
-    $res->free();
-    return $fks;
+    if (preg_match('/\b(?:CONNECTION|DIRECTORY)\b|\bENGINE\s*=\s*(?!InnoDB\b)\w+/i', $estructura)) {
+        throw new RuntimeException('Sentencia no admitida: no se permiten motores externos ni rutas del sistema.');
+    }
+    if (preg_match('/^DROP/i', $estructura)) {
+        if (!preg_match('/^DROP\s+TABLE\s+IF\s+EXISTS\s+(?:`[A-Za-z0-9_]+`|[A-Za-z_]\w*)\s*$/i', $estructura)) {
+            throw new RuntimeException('Sentencia no admitida: DROP solo permite una tabla local.');
+        }
+        return;
+    }
+    if (!preg_match('/^(?:DROP\s+TABLE\s+IF\s+EXISTS|CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?|INSERT\s+INTO)\s+(?:`[A-Za-z0-9_]+`|[A-Za-z_]\w*)(?=\s|\()/i', $estructura)) {
+        throw new RuntimeException('Sentencia no admitida: solo se restauran tablas del formato de backup de AppSalon.');
+    }
 }
 
-    // Contar tablas previas en la base destino
-    $resTablasPrevias = $mysqli->query("SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'");
-    $totalTablasPrevias = $resTablasPrevias ? $resTablasPrevias->num_rows : 0;
-    if ($resTablasPrevias) {
-        $resTablasPrevias->free();
+$mysqli = null;
+$stagingDb = null;
+$lockTomado = false;
+try {
+    $sentencias = dividir_sentencias_sql_respaldo($sqlContenido);
+    if (!$sentencias) {
+        throw new RuntimeException('El archivo no contiene sentencias SQL ejecutables.');
     }
-
-    // Fase 1: Validación previa obligatoria en Staging aislado bajo --safe-restore
-    // Se ejecuta tanto en bases nuevas como vacías o pobladas para asegurar integridad del volcado
-    if ($usarSafeRestore) {
-        $stagingDb = $dbName . '_stg_' . substr(bin2hex(random_bytes(4)), 0, 8);
-        $okStaging = $mysqli->query("CREATE DATABASE `{$stagingDb}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
-        if (!$okStaging) {
-            throw new RuntimeException("No fue posible crear la base de datos de staging `{$stagingDb}`: " . $mysqli->error);
-        }
-
-        $mysqli->select_db($stagingDb);
-        $mysqli->query("SET FOREIGN_KEY_CHECKS = 0");
-        $mysqli->query("SET UNIQUE_CHECKS = 0");
-
-        foreach ($sentencias as $indice => $sqlStmt) {
-            $ok = $mysqli->query($sqlStmt);
-            if (!$ok) {
-                $numSentencia = $indice + 1;
-                throw new RuntimeException(sprintf(
-                    "Error en sentencia #%d durante validación previa en staging (errno %d): %s",
-                    $numSentencia,
-                    $mysqli->errno,
-                    $mysqli->error
-                ));
-            }
-        }
-
-        // Ejecutar el validador unificado de esquema y manifiesto en staging
-        validar_manifiesto_y_esquema($mysqli, $stagingDb, $datosMan);
-
-        // Staging exitoso: limpiar base temporal
-        $mysqli->query("SET FOREIGN_KEY_CHECKS = 1");
-        $mysqli->query("SET UNIQUE_CHECKS = 1");
+    foreach ($sentencias as $sql) {
+        validar_sentencia_respaldo($sql);
+    }
+    mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+    $mysqli = new mysqli($dbHost, $dbUser, $dbPass, '', $dbPort);
+    $mysqli->set_charset('utf8mb4');
+    $mysqli->query("SET SESSION SQL_MODE = 'NO_AUTO_VALUE_ON_ZERO'");
+    // Serializes invocations of this CLI for the same target; does not replace maintenance coordination.
+    $stmtLock = $mysqli->prepare('SELECT GET_LOCK(?, 0) AS adquirido');
+    $lockName = 'appsalon_restore_' . substr(hash('sha256', $dbName), 0, 40);
+    $stmtLock->bind_param('s', $lockName);
+    $stmtLock->execute();
+    $lockTomado = (int)$stmtLock->get_result()->fetch_assoc()['adquirido'] === 1;
+    $stmtLock->close();
+    if (!$lockTomado) {
+        throw new RuntimeException('Otra restauración está usando este destino.');
+    }
+    $stmtExists = $mysqli->prepare('SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?');
+    $stmtExists->bind_param('s', $dbName);
+    $stmtExists->execute();
+    $existe = $stmtExists->get_result()->num_rows === 1;
+    $stmtExists->close();
+    if ($existe) {
         $mysqli->select_db($dbName);
-        $mysqli->query("DROP DATABASE IF EXISTS `{$stagingDb}`");
-        $stagingDb = null;
+        if ($mysqli->query('SHOW FULL TABLES')->num_rows > 0) {
+            throw new RuntimeException('Destino poblado: se rechaza el reemplazo. Restaure en una base nueva o vacía; los originales permanecen intactos.');
+        }
+    } elseif (!isset($opciones['create-db'])) {
+        throw new RuntimeException('La base destino no existe. Use --create-db con un nombre nuevo.');
     }
-
-    // Fase 2: Resguardo previo de tablas y gestión de Foreign Keys en la base destino
-    $tablasRespaldadas = [];
-    $fksOriginales = [];
-    $prefijoBck = '_bck_' . substr(bin2hex(random_bytes(3)), 0, 6) . '_';
-
-    if ($usarSafeRestore && $totalTablasPrevias > 0) {
-        $resTablasActuales = $mysqli->query("SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'");
-        $nombresTablas = [];
-        if ($resTablasActuales) {
-            while ($filaT = $resTablasActuales->fetch_row()) {
-                $nombresTablas[] = (string)$filaT[0];
-            }
-            $resTablasActuales->free();
+    $stagingDb = 'appsalon_restore_stg_' . bin2hex(random_bytes(8));
+    $mysqli->query("CREATE DATABASE `{$stagingDb}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+    $mysqli->select_db($stagingDb);
+    foreach ($sentencias as $indice => $sql) {
+        try {
+            $mysqli->query($sql);
+        } catch (Throwable $error) {
+            throw new RuntimeException('Error en sentencia #' . ($indice + 1) . ' durante staging: ' . $error->getMessage(), 0, $error);
         }
-
-        // Obtener la definición de todas las FKs existentes antes del renombre
-        $fksOriginales = obtener_foreign_keys_esquema($mysqli, $dbName);
-
-        $mysqli->query("SET FOREIGN_KEY_CHECKS = 0");
-        foreach ($nombresTablas as $nombreTabla) {
-            $nombreBck = $prefijoBck . $nombreTabla;
-            $okRename = $mysqli->query("RENAME TABLE `{$nombreTabla}` TO `{$nombreBck}`");
-            if ($okRename) {
-                $tablasRespaldadas[$nombreTabla] = $nombreBck;
-            } else {
-                // Si falla el renombre preliminar, revertir renombres ya hechos
-                foreach ($tablasRespaldadas as $orig => $bck) {
-                    $mysqli->query("RENAME TABLE `{$bck}` TO `{$orig}`");
-                }
-                throw new RuntimeException("No fue posible crear respaldo transaccional de tablas previas: " . $mysqli->error);
-            }
-        }
-
-        // Soltar las FKs de las tablas _bck_* para liberar sus nombres explícitos de constraint en el schema
-        // evitando colisiones (ERROR 1826) cuando el backup recree las tablas originales con los mismos nombres de FK
-        foreach ($fksOriginales as $fk) {
-            $tablaBck = $tablasRespaldadas[$fk['table_name']] ?? null;
-            if ($tablaBck !== null) {
-                $sqlDropFk = "ALTER TABLE `{$tablaBck}` DROP FOREIGN KEY `{$fk['constraint_name']}`";
-                $okDropFk = $mysqli->query($sqlDropFk);
-                if (!$okDropFk) {
-                    // Si falla soltar la FK de la tabla resguardada, revertir
-                    foreach ($tablasRespaldadas as $orig => $bck) {
-                        $mysqli->query("RENAME TABLE `{$bck}` TO `{$orig}`");
-                    }
-                    throw new RuntimeException("No fue posible liberar constraint '{$fk['constraint_name']}' en tabla de resguardo: " . $mysqli->error);
-                }
-            }
-        }
-        $mysqli->query("SET FOREIGN_KEY_CHECKS = 1");
     }
-
-    // Fase 3: Aplicar sentencias sobre la base destino definitiva
-    $mysqli->select_db($dbName);
-    $mysqli->query("SET FOREIGN_KEY_CHECKS = 0");
-    $mysqli->query("SET UNIQUE_CHECKS = 0");
-
-    $ejecutadas = 0;
-    try {
-        foreach ($sentencias as $indice => $sqlStmt) {
-            $ok = $mysqli->query($sqlStmt);
-            if (!$ok) {
-                $numSentencia = $indice + 1;
-                throw new RuntimeException(sprintf(
-                    "Error en sentencia #%d (errno %d): %s",
-                    $numSentencia,
-                    $mysqli->errno,
-                    $mysqli->error
-                ));
-            }
-            $ejecutadas++;
+    validar_manifiesto_y_esquema($mysqli, $stagingDb, $datosMan);
+    // Recheck immediately before any destination DDL. Existing data is never altered.
+    if ($existe) {
+        $mysqli->select_db($dbName);
+        if ($mysqli->query('SHOW FULL TABLES')->num_rows > 0) {
+            throw new RuntimeException('Destino poblado durante la validación; no se importó ningún dato.');
         }
-
-        // Si se aplicaron todas las sentencias y existían tablas de resguardo `_bck_`,
-        // eliminarlas ANTES de la validación final del manifiesto para que no figuren como tablas extras no declaradas
-        if (!empty($tablasRespaldadas)) {
-            $mysqli->query("SET FOREIGN_KEY_CHECKS = 0");
-            foreach ($tablasRespaldadas as $orig => $bck) {
-                $mysqli->query("DROP TABLE IF EXISTS `{$bck}`");
+    } else {
+        $mysqli->query("CREATE DATABASE `{$dbName}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+        $mysqli->select_db($dbName);
+    }
+    foreach ($sentencias as $indice => $sql) {
+        try {
+            $mysqli->query($sql);
+        } catch (Throwable $error) {
+            throw new RuntimeException('Error en sentencia #' . ($indice + 1) . ' del destino nuevo. Se conserva para diagnóstico; no hubo reemplazo de originales: ' . $error->getMessage(), 0, $error);
+        }
+    }
+    validar_manifiesto_y_esquema($mysqli, $dbName, $datosMan);
+    $mysqli->query('SET FOREIGN_KEY_CHECKS = 1');
+    $mysqli->query('SET UNIQUE_CHECKS = 1');
+    $mysqli->query("DROP DATABASE `{$stagingDb}`");
+    $stagingDb = null;
+    echo "[OK] Restauración completada: base nueva/vacía {$dbName}. Verifique antes de cambiar la conexión de la aplicación.\n";
+    $exitCode = 0;
+} catch (Throwable $error) {
+    fwrite(STDERR, '[ERROR] ' . $error->getMessage() . "\n");
+    $exitCode = 1;
+} finally {
+    if ($mysqli instanceof mysqli) {
+        if ($stagingDb !== null) {
+            try {
+                $mysqli->query("DROP DATABASE `{$stagingDb}`");
+            } catch (Throwable $cleanupError) {
+                fwrite(STDERR, "[ERROR] Staging retenido para limpieza manual: {$stagingDb}: " . $cleanupError->getMessage() . "\n");
+                $exitCode = 1;
             }
         }
-
-        // Ejecutar el validador unificado de esquema y manifiesto sobre la base destino final
-        validar_manifiesto_y_esquema($mysqli, $dbName, $datosMan);
-    } catch (Throwable $eEjecucion) {
-        // En caso de fallo post-staging, revertir y restituir de forma estricta comprobando cada operación
-        if (!empty($tablasRespaldadas)) {
-            fwrite(STDERR, "[ADVERTENCIA] Error post-staging detectado. Revertiendo cambios y restaurando tablas originales desde resguardo...\n");
-            $erroresRestitucion = [];
-            $mysqli->query("SET FOREIGN_KEY_CHECKS = 0");
-
-            $resTablasNuevas = $mysqli->query("SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'");
-            if ($resTablasNuevas) {
-                while ($filaTN = $resTablasNuevas->fetch_row()) {
-                    $tName = (string)$filaTN[0];
-                    if (!str_starts_with($tName, $prefijoBck)) {
-                        $okDrop = $mysqli->query("DROP TABLE IF EXISTS `{$tName}`");
-                        if (!$okDrop) {
-                            $erroresRestitucion[] = "Fallo al eliminar tabla parcial '{$tName}': " . $mysqli->error;
-                        }
-                    }
-                }
-                $resTablasNuevas->free();
-            }
-
-            foreach ($tablasRespaldadas as $orig => $bck) {
-                $okRen = $mysqli->query("RENAME TABLE `{$bck}` TO `{$orig}`");
-                if (!$okRen) {
-                    $erroresRestitucion[] = "Fallo al restaurar nombre de '{$bck}' a '{$orig}': " . $mysqli->error;
-                }
-            }
-
-            // Recrear cada una de las Foreign Keys originales que fueron retiradas
-            foreach ($fksOriginales as $fk) {
-                $sqlAddFk = sprintf(
-                    "ALTER TABLE `%s` ADD CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES `%s`(`%s`) ON UPDATE %s ON DELETE %s",
-                    $fk['table_name'],
-                    $fk['constraint_name'],
-                    $fk['column_name'],
-                    $fk['referenced_table_name'],
-                    $fk['referenced_column_name'],
-                    $fk['update_rule'],
-                    $fk['delete_rule']
-                );
-                $okAdd = $mysqli->query($sqlAddFk);
-                if (!$okAdd) {
-                    $erroresRestitucion[] = "Fallo al recrear constraint '{$fk['constraint_name']}' en '{$fk['table_name']}': " . $mysqli->error;
-                }
-            }
-            $mysqli->query("SET FOREIGN_KEY_CHECKS = 1");
-
-            if (!empty($erroresRestitucion)) {
-                fwrite(STDERR, "[CRÍTICO] La restitución de la base destino quedó incompleta. Errores:\n - " . implode("\n - ", $erroresRestitucion) . "\n");
-                throw new RuntimeException("Fallo en recuperación de base destino: " . implode("; ", $erroresRestitucion), 0, $eEjecucion);
-            }
-
-            fwrite(STDERR, "[INFO] Base destino restaurada exitosamente a su estado anterior (esquema, datos y claves foráneas verificados).\n");
-        }
-        throw $eEjecucion;
+        $mysqli->close(); // Releases GET_LOCK even after failure.
     }
-
-    $mysqli->query("SET FOREIGN_KEY_CHECKS = 1");
-    $mysqli->query("SET UNIQUE_CHECKS = 1");
-
-    $resTablas = $mysqli->query("SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'");
-    $totalTablas = $resTablas ? $resTablas->num_rows : 0;
-    if ($resTablas) {
-        $resTablas->free();
-    }
-
-    $mysqli->close();
-
-    echo sprintf(
-        "[OK] Restauración completada: bd=%s | tablas=%d | sentencias=%d | origen=%s\n",
-        $dbName,
-        $totalTablas,
-        $ejecutadas,
-        $rutaEntrada
-    );
-    exit(0);
-    exit(0);
-} catch (Throwable $e) {
-    if ($stagingDb !== null) {
-        @$mysqli->query("DROP DATABASE IF EXISTS `{$stagingDb}`");
-    }
-    @$mysqli->query("SET FOREIGN_KEY_CHECKS = 1");
-    @$mysqli->query("SET UNIQUE_CHECKS = 1");
-    @$mysqli->close();
-    fwrite(STDERR, "[ERROR] Fallo durante la restauración: " . $e->getMessage() . "\n");
-    exit(1);
 }
+exit($exitCode);

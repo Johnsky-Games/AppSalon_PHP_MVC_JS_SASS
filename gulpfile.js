@@ -5,7 +5,8 @@ const postcss    = require('gulp-postcss')
 const sourcemaps = require('gulp-sourcemaps')
 const cssnano = require('cssnano');
 const concat = require('gulp-concat');
-const terser = require('gulp-terser-js');
+const { Transform } = require('node:stream');
+const { minify } = require('terser');
 const rename = require('gulp-rename');
 const imagemin = require('gulp-imagemin'); // Minificar imagenes 
 const notify = require('gulp-notify');
@@ -33,7 +34,19 @@ function css() {
 
 function javascript() {
     return src(paths.js)
-      .pipe(terser())
+      .pipe(new Transform({
+          objectMode: true,
+          transform(file, encoding, callback) {
+              if (file.isNull()) return callback(null, file);
+              if (file.isStream()) return callback(new Error('La minificación JS requiere archivos en buffer.'));
+              // Usa Terser 5 del lockfile: soporta optional chaining y nullish coalescing.
+              minify({ [file.relative]: file.contents.toString('utf8') }, { ecma: 2020 })
+                  .then(result => {
+                      file.contents = Buffer.from(result.code, 'utf8');
+                      callback(null, file);
+                  }, callback);
+          }
+      }))
       .pipe(sourcemaps.write('.'))
       .pipe(dest('public/build/js'));
 }
@@ -64,4 +77,4 @@ exports.css = css;
 exports.javascript = javascript;
 exports.watchArchivos = watchArchivos;
 exports.default = parallel(css, javascript,  imagenes, versionWebp,  watchArchivos ); 
-exports.build = parallel(css, javascript,  imagenes, versionWebp ); 
+exports.build = parallel(css, javascript,  imagenes, versionWebp );

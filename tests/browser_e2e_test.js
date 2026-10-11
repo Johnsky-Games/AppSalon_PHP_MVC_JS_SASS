@@ -17,7 +17,12 @@ const { execFileSync } = require('child_process');
 function consultarHorariosEnMySql(diaSemana) {
     const dbContainer = process.env.TEST_DB_CONTAINER;
     const dbName = process.env.TEST_DB_NAME || 'appsalon_browser_test';
-    if (!dbContainer) return null;
+    if (!dbContainer) {
+        if (process.env.TEST_REQUIRE_DB_ASSERTIONS === '1') {
+            throw new Error('TEST_DB_CONTAINER es obligatorio para las aserciones de persistencia.');
+        }
+        return null;
+    }
     const sql = `SELECT CONCAT(hora_inicio, '-', hora_fin) FROM horarios_profesionales WHERE profesionalId = 1 AND dia_semana = ${Number(diaSemana)} ORDER BY hora_inicio ASC;`;
     const out = execFileSync('docker', [
         'exec', dbContainer,
@@ -1438,7 +1443,24 @@ async function runBrowserTests() {
         // ------------------------------------------------------------------
         console.log('\n>>> [FASE 6A - NOTIFICACIONES] Verificación de correos de confirmación y cancelación de citas en buzón SMTP mock...');
 
-        const mailboxPath = path.resolve(__dirname, 'mailbox.json');
+        const mailboxPath = process.env.TEST_MAILBOX_PATH || path.resolve(__dirname, 'mailbox.json');
+        // El worker del outbox puede despachar después de terminar la petición HTTP.
+        const deadline = Date.now() + 10000;
+        while (Date.now() < deadline) {
+            if (fs.existsSync(mailboxPath)) {
+                try {
+                    const messages = JSON.parse(fs.readFileSync(mailboxPath, 'utf-8'));
+                    if (Array.isArray(messages) && messages.length >= 5) {
+                        const bodies = messages.filter(m => String(m.to || '').includes('carlos@correo.com'))
+                            .map(m => String(m.body || '').replace(/=\r?\n/g, '')
+                                .replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16))));
+                        if (bodies.some(b => b.includes(`#${citaIdCreada}`) && b.includes('Valeria Castro') && b.includes('11:30 - 13:00'))
+                            && bodies.some(b => b.includes('Cancelada') && (b.includes(`#${citaTemporalId}`) || b.includes('14:00 - 15:00') || b.includes('10:00 - 11:00')))) break;
+                    }
+                } catch (error) { /* SMTP puede estar reemplazando el archivo. */ }
+            }
+            await new Promise(resolve => setTimeout(resolve, 200));
+        }
         if (!fs.existsSync(mailboxPath)) {
             throw new Error(`No se encontró el archivo de buzón SMTP mock en ${mailboxPath}`);
         }
@@ -1504,7 +1526,7 @@ async function runBrowserTests() {
         };
 
         fs.writeFileSync(
-            path.resolve(__dirname, 'browser_test_report.json'),
+            process.env.TEST_BROWSER_REPORT_PATH || path.resolve(__dirname, 'browser_test_report.json'),
             JSON.stringify(report, null, 2),
             'utf-8'
         );

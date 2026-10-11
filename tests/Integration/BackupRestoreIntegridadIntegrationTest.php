@@ -262,7 +262,7 @@ class BackupRestoreIntegridadIntegrationTest extends TestCase
             );
 
             $this->assertSame(1, $resultado['exitCode'], 'El script debe salir con codigo 1 ante un fallo de sentencia a mitad de ejecucion');
-            $this->assertStringContainsString('Error en sentencia', $resultado['stderr']);
+            $this->assertStringContainsString('Destino poblado', $resultado['stderr']);
 
             // Verificar que la base destino se preservo intacta gracias a safe-restore (staging aislado)
             $dbVerif = new mysqli(self::$host, self::$user, self::$pass, $dstDb, self::$port);
@@ -419,7 +419,7 @@ class BackupRestoreIntegridadIntegrationTest extends TestCase
      * Escenario 5 (Frente 2 de auditoría):
      * Fallo forzado después de staging exitoso: la base destino y sus datos previos se preservan intactos.
      */
-    public function testFalloPostStagingPreservaIntactaBaseDestinoOriginal(): void
+    public function testDestinoPobladoEsRechazadoSinAlterarOriginales(): void
     {
         $dstDb = 'appsalon_int_rollback_test';
         $tmpDir = sys_get_temp_dir();
@@ -461,7 +461,7 @@ SQL;
 
             // Debe fallar con código de error (exitCode 1)
             $this->assertSame(1, $res['exitCode'], 'El script debe abortar con error.');
-            $this->assertStringContainsString('Error post-staging detectado', $res['stderr'], 'Debe registrar la activación de reversión post-staging');
+            $this->assertStringContainsString('Destino poblado', $res['stderr']);
 
             // Comprobar que los datos críticos de la base original se conservan intactos
             $resCheck = $dbDst->query("SELECT valor FROM `datos_criticos` ORDER BY id ASC");
@@ -497,7 +497,7 @@ SQL;
      * Escenario 6: Restore sobre una base de datos de destino que ya posee el esquema completo
      * con migraciones aplicadas y Foreign Keys idénticas (evitando el error MySQL 1826: Duplicate foreign key).
      */
-    public function testRestoreSobreBasePobladaConEsquemaCompletoYForeignKeysResuelveColisiones(): void
+    public function testRestoreRechazaBasePobladaConForeignKeysYConservaDatos(): void
     {
         $srcDb = 'appsalon_int_fk_src_' . uniqid();
         $dstDb = 'appsalon_int_fk_dst_' . uniqid();
@@ -562,27 +562,13 @@ SQL;
 
             // Restaurar sobre $dstDb que ya tiene las mismas Foreign Keys activas
             $resRestore = $this->ejecutarScriptCli('scripts/restore_db.php', ['--db=' . $dstDb, '--input=' . $backupGz], $dstDb);
-            $this->assertSame(0, $resRestore['exitCode'], 'El restore sobre base poblada con FKs debe completarse sin error 1826: ' . $resRestore['stderr']);
-            $this->assertStringContainsString('[OK] Restauración completada', $resRestore['stdout']);
-
-            // Validar que los datos de $srcDb están presentes en $dstDb
+            $this->assertSame(1, $resRestore['exitCode']);
+            $this->assertStringContainsString('Destino poblado', $resRestore['stderr']);
             $dbDst = new mysqli(self::$host, self::$user, self::$pass, $dstDb, self::$port);
-            $dbDst->set_charset('utf8mb4');
-            $rowCita = $dbDst->query("SELECT estado, estado_pago FROM citas WHERE id = 1")->fetch_assoc();
-            $this->assertNotNull($rowCita);
-            $this->assertSame('confirmada', $rowCita['estado']);
-            $this->assertSame('pagado', $rowCita['estado_pago']);
-
-            $rowPago = $dbDst->query("SELECT referencia_pago, monto FROM pagos WHERE id = 1")->fetch_assoc();
-            $this->assertNotNull($rowPago);
-            $this->assertSame('PAY-FK-TEST-001', $rowPago['referencia_pago']);
-            $this->assertEquals(15.00, (float)$rowPago['monto']);
-
-            // Verificar que no existen tablas residuales _bck_
-            $resTablas = $dbDst->query("SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'");
-            while ($tRow = $resTablas->fetch_row()) {
-                $this->assertStringStartsNotWith('_bck_', $tRow[0], "No deben quedar tablas temporales de respaldo: {$tRow[0]}");
-            }
+            $this->assertSame('viejo@test.com', $dbDst->query('SELECT email FROM usuarios WHERE id = 2')->fetch_assoc()['email']);
+            $this->assertSame(0, (int)$dbDst->query('SELECT COUNT(*) AS n FROM citas')->fetch_assoc()['n']);
+            $resFk = $dbDst->query("SELECT COUNT(*) AS n FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = '{$dstDb}'");
+            $this->assertGreaterThan(0, (int)$resFk->fetch_assoc()['n']);
             $dbDst->close();
         } finally {
             self::$db->query("DROP DATABASE IF EXISTS `{$srcDb}`");
@@ -643,5 +629,92 @@ SQL;
             }
         }
     }
+    public function testFalloValidacionFinalNoPuedeBorrarOriginales(): void
+    {
+        $original = 'appsalon_original_validation_test';
+        $destino = 'appsalon_empty_validation_test';
+        $sqlPath = sys_get_temp_dir() . '/appsalon_final_' . uniqid() . '.sql';
+        self::$db->query("CREATE DATABASE `{$original}`");
+        self::$db->query("CREATE DATABASE `{$destino}`");
+        self::$db->query("CREATE TABLE `{$original}`.centinela (id INT PRIMARY KEY, dato VARCHAR(30))");
+        self::$db->query("INSERT INTO `{$original}`.centinela VALUES (1, 'original intacto')");
+        // The dump passes staging but its row count differs only in the final database.
+        $sql = "CREATE TABLE contador (id INT PRIMARY KEY);\n"
+            . "INSERT INTO contador SELECT 1 WHERE DATABASE() LIKE '%_stg_%';\n";
+        file_put_contents($sqlPath, $sql);
+        file_put_contents($sqlPath . '.manifest.json', json_encode([
+            'sha256' => hash('sha256', $sql), 'tablas' => ['contador'],
+            'total_tablas' => 1, 'filas_por_tabla' => ['contador' => 1], 'total_filas' => 1,
+        ]));
+        try {
+            $res = $this->ejecutarScriptCli('scripts/restore_db.php', ['--db=' . $destino, '--input=' . $sqlPath], $destino);
+            $this->assertSame(1, $res['exitCode']);
+            $this->assertStringContainsString($destino, $res['stderr']);
+            $this->assertStringContainsString('manifiesto', $res['stderr']);
+            $this->assertStringNotContainsString('[OK]', $res['stdout']);
+            $this->assertSame('original intacto', self::$db->query("SELECT dato FROM `{$original}`.centinela")->fetch_assoc()['dato']);
+            // Failed new destination is retained, not deleted by a destructive rollback.
+            $this->assertSame(0, (int)self::$db->query("SELECT COUNT(*) AS n FROM `{$destino}`.contador")->fetch_assoc()['n']);
+        } finally {
+            self::$db->query("DROP DATABASE `{$original}`");
+            self::$db->query("DROP DATABASE `{$destino}`");
+            unlink($sqlPath);
+            unlink($sqlPath . '.manifest.json');
+        }
+    }
+
+    public function testRespaldoNoPuedeEjecutarSqlFueraDelDestino(): void
+    {
+        $destino = 'appsalon_scope_empty_test';
+        $original = 'appsalon_scope_original_test';
+        self::$db->query("CREATE DATABASE `{$original}`");
+        self::$db->query("CREATE DATABASE `{$destino}`");
+        self::$db->query("CREATE TABLE `{$original}`.centinela (id INT PRIMARY KEY)");
+        self::$db->query("INSERT INTO `{$original}`.centinela VALUES (7)");
+        $path = sys_get_temp_dir() . '/appsalon_scope_' . uniqid() . '.sql';
+        try {
+            foreach (["USE `{$original}`; DROP TABLE IF EXISTS centinela;",
+                "DROP TABLE IF EXISTS `{$original}`.centinela;",
+                "DROP DATABASE `{$original}`;",
+                "/*!50000 DROP DATABASE `{$original}` */;",
+                "SET SQL_MODE='ANSI_QUOTES'; DROP TABLE IF EXISTS tabla_local, \"{$original}\".\"centinela\";"] as $sql) {
+                file_put_contents($path, $sql);
+                $res = $this->ejecutarScriptCli('scripts/restore_db.php', [
+                    '--db=' . $destino, '--input=' . $path, '--hash=' . hash('sha256', $sql),
+                ], $destino);
+                $this->assertSame(1, $res['exitCode']);
+                $this->assertStringContainsString('Sentencia no admitida', $res['stderr']);
+                $this->assertSame(7, (int)self::$db->query("SELECT id FROM `{$original}`.centinela")->fetch_assoc()['id']);
+            }
+        } finally {
+            self::$db->query("DROP DATABASE `{$original}`");
+            self::$db->query("DROP DATABASE `{$destino}`");
+            unlink($path);
+        }
+    }
+
+    public function testDestinoPobladoNoSePuedeForzarSinValidacion(): void
+    {
+        $db = 'appsalon_bypass_restore_test';
+        self::$db->query("CREATE DATABASE `{$db}`");
+        self::$db->query("CREATE TABLE `{$db}`.centinela (id INT PRIMARY KEY)");
+        self::$db->query("INSERT INTO `{$db}`.centinela VALUES (8)");
+        $path = sys_get_temp_dir() . '/appsalon_bypass_' . uniqid() . '.sql';
+        $sql = 'DROP TABLE IF EXISTS centinela; CREATE TABLE centinela (id INT PRIMARY KEY);';
+        file_put_contents($path, $sql);
+        try {
+            foreach (['--no-safe-restore', '--skip-hash-check'] as $flag) {
+                $res = $this->ejecutarScriptCli('scripts/restore_db.php', [
+                    '--db=' . $db, '--input=' . $path, '--hash=' . hash('sha256', $sql), $flag,
+                ], $db);
+                $this->assertSame(1, $res['exitCode']);
+                $this->assertSame(8, (int)self::$db->query("SELECT id FROM `{$db}`.centinela")->fetch_assoc()['id']);
+            }
+        } finally {
+            self::$db->query("DROP DATABASE `{$db}`");
+            unlink($path);
+        }
+    }
+
 }
 
