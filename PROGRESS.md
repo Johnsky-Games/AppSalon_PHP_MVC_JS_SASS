@@ -15,9 +15,9 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 - **Rama de Integración Activa:** `feature/correcciones-auditoria-integral`
 - **Código Auditado Externamente:** `f33076c304e766239b1bfc13d9dde1927d749827`
 - **Cierre Documental Revocado:** `d4124f27abcb46fb947f158cf4a44d04d481e6eb`
-- **Estado General:** **RESOLUCIÓN Y VERIFICACIÓN COMPLETA DE HALLAZGOS DE AUDITORÍA EXTERNA — 6 Especialidades Integradas y Verificadas (209 pruebas, 2587 aserciones, salida 0)**
+- **Estado General:** **RESOLUCIÓN Y VERIFICACIÓN COMPLETA DE HALLAZGOS DE AUDITORÍA EXTERNA — 6 Especialidades Integradas y Verificadas (214 pruebas, 2660 aserciones, salida 0)**
 - **Matriz de Negocio:** Documentada en `docs/MATRIZ_ACEPTACION_NEGOCIO.md` con trazabilidad de requisitos, reglas, pruebas y decisiones del negocio.
-- **Suite PHPUnit (Orden Aleatorio):** `OK (209 tests, 2587 assertions)` — 0 fallas, 0 risky, código de salida `0`.
+- **Suite PHPUnit (Orden Aleatorio):** `OK (214 tests, 2660 assertions)` — 0 fallas, 0 risky, código de salida `0`.
 - **Suite Navegador E2E (`tests/verificar_navegador.ps1`):** 19/19 comprobaciones superadas, 0 errores de consola, persistencia MySQL validada — Código de salida `0`.
 
 ### 0. Consolidación de Correcciones de Especialistas
@@ -26,8 +26,10 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 - **Migración `007_citas_estado_cancelacion.sql` y rollback:** Columnas `estado`, `cancelado_por`, `cancelado_at`, `motivo_cancelacion` con índices `idx_citas_estado` e `idx_citas_prof_fecha_estado`.
 - **Cancelación Lógica Idempotente:** `CitaRepository::cancelarCitaLogica()` libera disponibilidad manteniendo filas en `citas`, `citasservicios` y `pagos`. Prohíbe cancelar citas pasadas (HTTP 422).
 - **Protección de Agenda y Transacciones InnoDB:** Modificaciones en `horarios`, `descansos` o `bloqueos` mediante `replaceHorarios()`, `createDescanso()` y `createBloqueo()` adquieren bloqueos pesimistas y rechazan (HTTP 422) cualquier alteración que colisione con citas confirmadas futuras.
-- **Concurrencia Real Multiproceso:** Implementación de prueba concurrente multiproceso con `proc_open` y barrera de sincronización `READY`/`GO` (`test_concurrencia_reserva_y_modificacion_agenda_bloqueo_pesimista`) demostrando resolución serializada determinista.
-- **Pruebas:** `tests/Integration/CitaCancelacionAgendaIntegrationTest.php` (6 tests, 60 aserciones, salida 0).
+- **Concurrencia Real Multiproceso Bidireccional:** Pruebas multiproceso concurrentes con `proc_open` y sincronización `READY`/`GO`:
+  1. Modificación de agenda en vuelo bloquea reserva solapada.
+  2. Reserva en vuelo bloquea modificación de agenda incompatible posterior.
+- **Pruebas:** `tests/Integration/CitaCancelacionAgendaIntegrationTest.php` (7 tests, 69 aserciones, salida 0).
 
 #### Especialista 2: Seguridad HTTP y Frontend
 - **Erradicación de XSS:** Eliminación total de `.innerHTML` inseguro en `src/js/app.js` y `public/build/js/app.js`. Reemplazado por nodos DOM estructurados (`document.createElement`, `document.createTextNode` y `.textContent`).
@@ -37,38 +39,40 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 #### Especialista 3: Pagos, Autorización e Idempotencia (Fase 6C)
 - **Huella de Idempotencia y Protección Cross-Tenant:** `Pago::coincideConOperacion()` valida `usuario_id`, `cita_id` y `monto`. Si la clave de idempotencia existe para otra operación, responde HTTP 409 sin filtrar datos ajenos.
 - **Estado Terminal Reembolsado:** Una vez en `reembolsado`, webhooks tardíos no pueden revertirlo. Rechazo de reembolsos parciales (HTTP 422).
-- **Estado Agregado de Cita en Reembolsos:** En `PagoService::reembolsarPago()`, si una cita tiene múltiples cobros y uno es reembolsado, la cita preserva su estado `'pagado'` mientras existan otros cobros completados.
-- **Secuencia Completa K1/K2:** Prueba integral de la secuencia: K1 falla -> K2 inicia -> éxito tardío K1 -> éxito K2 -> reembolso de K1 -> verificación de estado pagado con K2 -> reembolso final de K2.
+- **Saldo Acumulado y Detección de Sobrepago (Exceso):** Al procesar webhooks o confirmaciones, `PagoService` computa el saldo acumulado de cobros completados y compara contra el importe total de la cita (`$totalPagadoAcumulado > $totalCitaEsperado + 0.009`). Ante exceso, marca `requiere_conciliacion = true`, audita el exceso en `payload_proveedor` y preserva ambos cobros sin ejecutar reembolsos automáticos no autorizados.
+- **Secuencia Completa K1/K2 con Exceso y Conciliación:** K1 falla -> K2 inicia -> éxito tardío K1 ($60) -> éxito K2 ($60) -> exceso detectado ($120 acumulado vs $60 esperado) -> conciliación trazable.
 - **Orden Uniforme de Bloqueo:** Siempre `citas` (`FOR UPDATE`) primero, luego `pagos` (`FOR UPDATE`), previniendo interbloqueos (deadlocks).
 - **Protección de Producción:** Bloqueo de `MockPaymentGateway` y secretos por defecto cuando `APP_ENV=production`.
-- **Pruebas:** `tests/Integration/PagoIdempotenciaSeguridadIntegrationTest.php` (6 tests, 75 aserciones, salida 0).
+- **Pruebas:** `tests/Integration/PagoIdempotenciaSeguridadIntegrationTest.php` (6 tests, 82 aserciones, salida 0).
 
 #### Especialista 4: Notificaciones y Recuperación de Workers (Fase 6A)
 - **Migración `008_notificaciones_outbox_lease.sql` y rollback:** Columnas `worker_token`, `lease_expires_at` con índice `idx_notificaciones_lease`.
 - **Límites Atómicos de Workers:** Cláusulas atómicas en SQL `WHERE intentos < max_intentos` y `(proximo_intento_at IS NULL OR proximo_intento_at <= NOW())` en `adquirirParaEnvio()` y `buscarCandidatasParaReintento()`.
-- **Payload Canónico en Outbox:** El despacho de correos en `NotificacionCitaService::registrarYDespachar()` toma como fuente de verdad inmutable el evento persistido en el outbox (`notificaciones_citas`).
-- **Outbox en Flujo Clásico:** Inserción atómica del evento de confirmación en la misma transacción y conexión antes del commit tanto en `crearReservaConProfesionalAtomica` como en `crearReservaAtomica`.
-- **Pruebas:** `tests/Integration/NotificacionesWorkerIntegrationTest.php` (7 tests, 27 aserciones, salida 0) y `tests/Integration/Fase6ANotificacionesIntegrationTest.php` (4 tests, 106 aserciones, salida 0).
+- **Vigencia Compartida y Omisión Estricta de SMTP:** Método unificado `verificarVigenciaParaDespacho()` aplicado tanto en despacho directo como en worker. Si la cita fue cancelada o no existe, descarta la notificación bajo lease (`descartarNotificacion`) y retorna `STATUS_OMITIDO`, garantizando que SMTP jamás sea invocado.
+- **Outbox en Flujo Clásico y Reserva con Profesional:** Inserción atómica del evento en la misma transacción y conexión antes del commit.
+- **Pruebas:** `tests/Integration/NotificacionesWorkerIntegrationTest.php` (8 tests, 39 aserciones, salida 0) y `tests/Integration/Fase6ANotificacionesIntegrationTest.php` (4 tests, 106 aserciones, salida 0).
 
 #### Especialista 5: Reportes e Historial Financiero (Fase 6B)
 - **Persistencia Contable Desacoplada y Bitemporalidad:** Migración `009_pagos_reembolsos_fecha.sql` con `reembolsado_at` y soporte de periodos con neto negativo cuando los reembolsos del mes superan la recaudación bruta.
-- **Distinción Cita vs Cobro:** Filtro explícito `criterio_fecha = 'servicio'` (fecha operativa de agenda) vs `criterio_fecha = 'cobro'` (fecha contable de recaudación).
-- **Controladores y Vistas:** `AdminReporteController` (`/admin/reportes`, `/admin/reportes/exportar`), `views/admin/reportes.php`, exportación CSV con snapshots históricos inmutables.
-- **Pruebas:** `tests/Integration/ReportesFinancierosIntegrationTest.php` (4 tests, 62 aserciones, salida 0).
+- **Reporte y Exportación CSV Conciliable:** Inclusión de columnas `Tipo Movimiento`, `Fecha Reembolso`, `Importe Cobro Periodo`, `Importe Reembolso Periodo` y `Neto Periodo`. Si un cobro se realiza en un mes (ej. Octubre) y se reembolsa en otro (ej. Noviembre), el cobro permanece inalterado en el periodo original y el reembolso se imputa al periodo posterior.
+- **Distinción Cita vs Cobro:** Filtro explícito `criterio_fecha = 'servicio'` vs `criterio_fecha = 'cobro'`.
+- **Controladores y Vistas:** `AdminReporteController` (`/admin/reportes`, `/admin/reportes/exportar`), `views/admin/reportes.php`.
+- **Pruebas:** `tests/Integration/ReportesFinancierosIntegrationTest.php` (6 tests, 88 aserciones, salida 0).
 
 #### Especialista 6: Docker, Respaldos, Restauración y CI
-- **Contrato Estricto Backup/Restore:** Carga y validación exhaustiva de manifiesto (`.manifest.json`), incluyendo lista de tablas indexadas o asociativas, conteo de filas por tabla (`filas_por_tabla`), `total_filas` y versión de esquema, aún cuando se utilice `--hash`.
+- **Resolución de Colisiones FK en Restore:** Detección y eliminación controlada de Foreign Keys en tablas de resguardo `_bck_*` mediante `DROP FOREIGN KEY`, previniendo colisiones de nombres de constraints en MySQL (Error 1826). Eliminación de tablas `_bck_*` antes de la validación estricta del manifiesto.
+- **Validador Único y Exhaustivo de Manifiesto:** Comprobación estricta de `schema_version`, presencia exacta de tablas (sin faltantes ni sobrantes), `total_tablas`, `filas_por_tabla` y `total_filas`.
 - **Preservación Destino Post-Staging:** Demostración con prueba de fallo forzado exclusivamente en fase post-staging (`DATABASE() NOT LIKE '%_stg_%'`) donde la base destino y sus datos previos se restauran intactos desde el resguardo `_bck_`.
-- **Stack Oficial Apache y CI:** `tests/verificar_navegador.ps1` arranca con la imagen oficial Apache (`appsalon-web-test`) en el puerto 80 del contenedor. `.github/workflows/ci.yml` incluye el paso de arranque y verificación de Apache oficial contra MySQL.
-- **Pruebas:** `tests/Integration/BackupRestoreIntegridadIntegrationTest.php` (5 tests, 50 aserciones, salida 0) y `tests/Integration/MigrationTest.php` (7 tests, 171 aserciones, salida 0).
+- **CI con Browser E2E Real:** Pipeline en `.github/workflows/ci.yml` ejecuta la suite E2E en navegador contra Apache oficial y MySQL 8 con healthcheck activo.
+- **Pruebas:** `tests/Integration/BackupRestoreIntegridadIntegrationTest.php` (7 tests, 84 aserciones, salida 0) y `tests/Integration/MigrationTest.php` (7 tests, 171 aserciones, salida 0).
 
 ### 1. Evidencia de Ejecución de Suites Automatizadas
-- **PHPUnit 10.5.66 en contenedor aislado (`appsalon-db-test-coord`, PHP 8.2.34 + MySQL 8.0):**
-  - **Comando:** `vendor/bin/phpunit --do-not-cache-result --colors=never`
-  - **Resultado:** `OK (209 tests, 2587 assertions)` — Código de salida `0`.
+- **PHPUnit 10.5.66 en contenedor aislado (`appsalon-db-audit-exp`, PHP 8.2.34 + MySQL 8.0, orden aleatorio):**
+  - **Comando:** `vendor/bin/phpunit --do-not-cache-result --order-by=random --colors=never`
+  - **Resultado:** `OK (214 tests, 2660 assertions)` — 0 fallas, 0 errores, código de salida `0`.
 - **Suite de Navegador Real Headless Chrome (`tests/verificar_navegador.ps1`):**
   - **Comando:** `powershell -ExecutionPolicy Bypass -File tests/verificar_navegador.ps1`
-  - **Resultado:** 19/19 comprobaciones `[OK]`, `0` errores de consola, `0` solicitudes de red fallidas, verificación de persistencia en MySQL — Código de salida `0`.
+  - **Resultado:** 19/19 comprobaciones `[OK]`, `0` errores de consola, `0` solicitudes de red fallidas, persistencia en MySQL verificada — Código de salida `0`.
 
 ### 1. Alcance Consolidado del Cierre Técnico
 

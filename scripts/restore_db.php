@@ -287,17 +287,192 @@ try {
     }
 
     // Contar tablas previas en la base destino
+/**
+ * Validador unificado de esquema y manifiesto para base nueva, vacía o poblada.
+ *
+ * @param mysqli $mysqli
+ * @param string $dbTarget
+ * @param array<string, mixed>|null $manifiesto
+ * @throws RuntimeException
+ */
+function validar_manifiesto_y_esquema(mysqli $mysqli, string $dbTarget, ?array $manifiesto): void
+{
+    if (!$mysqli->select_db($dbTarget)) {
+        throw new RuntimeException("No fue posible seleccionar la base de datos '{$dbTarget}' para validación: " . $mysqli->error);
+    }
+
+    $resTablas = $mysqli->query("SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'");
+    if (!$resTablas) {
+        throw new RuntimeException("Error al listar las tablas de la base '{$dbTarget}': " . $mysqli->error);
+    }
+
+    $tablasReales = [];
+    while ($fila = $resTablas->fetch_row()) {
+        $tablasReales[] = (string)$fila[0];
+    }
+    $resTablas->free();
+
+    if ($manifiesto === null) {
+        return;
+    }
+
+    // 1. Validar versión de esquema si está declarada
+    if (array_key_exists('schema_version', $manifiesto)) {
+        $versionDeclarada = (string)$manifiesto['schema_version'];
+        if (trim($versionDeclarada) === '' || !preg_match('/^[a-zA-Z0-9_\.\-]+$/', $versionDeclarada)) {
+            throw new RuntimeException("Validación de manifiesto fallida: 'schema_version' está vacío o es inválido.");
+        }
+    }
+
+    // 2. Extraer conjunto de tablas declaradas
+    $tablasEsperadas = [];
+    if (isset($manifiesto['tablas']) && is_array($manifiesto['tablas'])) {
+        foreach ($manifiesto['tablas'] as $clave => $valor) {
+            $nom = is_string($clave) && !is_numeric($clave) ? $clave : (string)$valor;
+            $tablasEsperadas[] = $nom;
+        }
+    }
+
+    // Si hay tablas declaradas, comprobar conjunto exacto (ni faltan ni sobran)
+    if (!empty($tablasEsperadas)) {
+        $tablasFaltantes = array_diff($tablasEsperadas, $tablasReales);
+        if (!empty($tablasFaltantes)) {
+            throw new RuntimeException(sprintf(
+                "Validación de manifiesto fallida en '%s': faltan las siguientes tablas declaradas: %s.",
+                $dbTarget,
+                implode(', ', $tablasFaltantes)
+            ));
+        }
+
+        $tablasExtras = array_diff($tablasReales, $tablasEsperadas);
+        if (!empty($tablasExtras)) {
+            throw new RuntimeException(sprintf(
+                "Validación de manifiesto fallida en '%s': se encontraron tablas adicionales no declaradas: %s.",
+                $dbTarget,
+                implode(', ', $tablasExtras)
+            ));
+        }
+    }
+
+    // 3. Validar total_tablas si está declarado
+    if (isset($manifiesto['total_tablas']) && is_numeric($manifiesto['total_tablas'])) {
+        $totalEsperado = (int)$manifiesto['total_tablas'];
+        $totalReal = count($tablasReales);
+        if ($totalReal !== $totalEsperado) {
+            throw new RuntimeException(sprintf(
+                "Validación de manifiesto fallida en '%s': total_tablas es %d pero el manifiesto declara %d.",
+                $dbTarget,
+                $totalReal,
+                $totalEsperado
+            ));
+        }
+    }
+
+    // 4. Validar filas por tabla
+    if (isset($manifiesto['filas_por_tabla']) && is_array($manifiesto['filas_por_tabla'])) {
+        foreach ($manifiesto['filas_por_tabla'] as $tabla => $filasEsperadas) {
+            $tablaStr = (string)$tabla;
+            if (!in_array($tablaStr, $tablasReales, true)) {
+                throw new RuntimeException("Validación de manifiesto fallida: la tabla '{$tablaStr}' requerida para comprobación de filas no existe en '{$dbTarget}'.");
+            }
+            $tablaEsc = str_replace('`', '``', $tablaStr);
+            $resCount = $mysqli->query("SELECT COUNT(*) AS total FROM `{$tablaEsc}`");
+            if (!$resCount) {
+                throw new RuntimeException("Error al consultar el conteo de filas en la tabla '{$tablaStr}': " . $mysqli->error);
+            }
+            $filasReales = (int)($resCount->fetch_assoc()['total'] ?? 0);
+            $resCount->free();
+
+            if ($filasReales !== (int)$filasEsperadas) {
+                throw new RuntimeException(sprintf(
+                    "Validación de manifiesto fallida en '%s': la tabla '%s' tiene %d filas pero el manifiesto declara %d.",
+                    $dbTarget,
+                    $tablaStr,
+                    $filasReales,
+                    (int)$filasEsperadas
+                ));
+            }
+        }
+    }
+
+    // 5. Validar total_filas
+    if (isset($manifiesto['total_filas']) && is_numeric($manifiesto['total_filas'])) {
+        $sumaFilas = 0;
+        foreach ($tablasReales as $t) {
+            $tEsc = str_replace('`', '``', $t);
+            $resCnt = $mysqli->query("SELECT COUNT(*) AS total FROM `{$tEsc}`");
+            if (!$resCnt) {
+                throw new RuntimeException("Error al consultar el conteo de filas en '{$t}': " . $mysqli->error);
+            }
+            $sumaFilas += (int)($resCnt->fetch_assoc()['total'] ?? 0);
+            $resCnt->free();
+        }
+        $totalFilasEsperado = (int)$manifiesto['total_filas'];
+        if ($sumaFilas !== $totalFilasEsperado) {
+            throw new RuntimeException(sprintf(
+                "Validación de manifiesto fallida en '%s': total_filas es %d pero el manifiesto declara %d.",
+                $dbTarget,
+                $sumaFilas,
+                $totalFilasEsperado
+            ));
+        }
+    }
+}
+
+/**
+ * Consulta todas las foreign keys activas de la base dada.
+ *
+ * @return list<array<string, string>>
+ */
+function obtener_foreign_keys_esquema(mysqli $mysqli, string $dbName): array
+{
+    $dbEsc = $mysqli->real_escape_string($dbName);
+    $sql = "SELECT 
+                kcu.TABLE_NAME,
+                kcu.CONSTRAINT_NAME,
+                kcu.COLUMN_NAME,
+                kcu.REFERENCED_TABLE_NAME,
+                kcu.REFERENCED_COLUMN_NAME,
+                rc.UPDATE_RULE,
+                rc.DELETE_RULE
+            FROM information_schema.KEY_COLUMN_USAGE kcu
+            JOIN information_schema.REFERENTIAL_CONSTRAINTS rc 
+                ON kcu.CONSTRAINT_SCHEMA = rc.CONSTRAINT_SCHEMA 
+                AND kcu.CONSTRAINT_NAME = rc.CONSTRAINT_NAME
+            WHERE kcu.CONSTRAINT_SCHEMA = '{$dbEsc}'
+              AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
+            ORDER BY kcu.TABLE_NAME, kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION";
+
+    $res = $mysqli->query($sql);
+    if (!$res) {
+        throw new RuntimeException("Error al consultar foreign keys de la base '{$dbName}': " . $mysqli->error);
+    }
+    $fks = [];
+    while ($fila = $res->fetch_assoc()) {
+        $fks[] = [
+            'table_name' => (string)$fila['TABLE_NAME'],
+            'constraint_name' => (string)$fila['CONSTRAINT_NAME'],
+            'column_name' => (string)$fila['COLUMN_NAME'],
+            'referenced_table_name' => (string)$fila['REFERENCED_TABLE_NAME'],
+            'referenced_column_name' => (string)$fila['REFERENCED_COLUMN_NAME'],
+            'update_rule' => (string)($fila['UPDATE_RULE'] ?? 'CASCADE'),
+            'delete_rule' => (string)($fila['DELETE_RULE'] ?? 'CASCADE'),
+        ];
+    }
+    $res->free();
+    return $fks;
+}
+
+    // Contar tablas previas en la base destino
     $resTablasPrevias = $mysqli->query("SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'");
     $totalTablasPrevias = $resTablasPrevias ? $resTablasPrevias->num_rows : 0;
     if ($resTablasPrevias) {
         $resTablasPrevias->free();
     }
 
-    // Si safe-restore esta activo y la base destino tiene datos previos, validar primero en base temporal aislada
-    $tablasRespaldadas = [];
-    $prefijoBck = '_bck_' . substr(bin2hex(random_bytes(3)), 0, 6) . '_';
-
-    if ($usarSafeRestore && $totalTablasPrevias > 0) {
+    // Fase 1: Validación previa obligatoria en Staging aislado bajo --safe-restore
+    // Se ejecuta tanto en bases nuevas como vacías o pobladas para asegurar integridad del volcado
+    if ($usarSafeRestore) {
         $stagingDb = $dbName . '_stg_' . substr(bin2hex(random_bytes(4)), 0, 8);
         $okStaging = $mysqli->query("CREATE DATABASE `{$stagingDb}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
         if (!$okStaging) {
@@ -321,62 +496,8 @@ try {
             }
         }
 
-        // Validación adicional contra manifiesto si existe
-        if (isset($datosMan) && is_array($datosMan)) {
-            $resStgTablas = $mysqli->query("SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'");
-            $tablasEnStaging = [];
-            if ($resStgTablas) {
-                while ($filaT = $resStgTablas->fetch_row()) {
-                    $tablasEnStaging[] = (string)$filaT[0];
-                }
-                $resStgTablas->free();
-            }
-
-            // Validar que todas las tablas declaradas existan en staging (soporta array indexado o asociativo)
-            if (isset($datosMan['tablas']) && is_array($datosMan['tablas'])) {
-                foreach ($datosMan['tablas'] as $claveT => $valT) {
-                    $nombreTablaEsperada = is_string($claveT) && !is_numeric($claveT) ? $claveT : (string)$valT;
-                    if (!in_array($nombreTablaEsperada, $tablasEnStaging, true)) {
-                        throw new RuntimeException("Validación de staging fallida: la tabla '{$nombreTablaEsperada}' declarada en el manifiesto no existe en staging.");
-                    }
-                }
-            }
-
-            // Validar conteo de filas por tabla si está declarado en el manifiesto
-            if (isset($datosMan['filas_por_tabla']) && is_array($datosMan['filas_por_tabla'])) {
-                foreach ($datosMan['filas_por_tabla'] as $tablaNom => $filasEsperadas) {
-                    $tablaNomStr = (string)$tablaNom;
-                    if (!in_array($tablaNomStr, $tablasEnStaging, true)) {
-                        throw new RuntimeException("Validación de staging fallida: la tabla '{$tablaNomStr}' para comprobación de filas no existe en staging.");
-                    }
-                    $tablaEsc = str_replace('`', '``', $tablaNomStr);
-                    $resCount = $mysqli->query("SELECT COUNT(*) AS total FROM `{$tablaEsc}`");
-                    if ($resCount) {
-                        $filasReales = (int)($resCount->fetch_assoc()['total'] ?? 0);
-                        $resCount->free();
-                        if ($filasReales !== (int)$filasEsperadas) {
-                            throw new RuntimeException("Validación de staging fallida: la tabla '{$tablaNomStr}' tiene {$filasReales} filas pero el manifiesto declara {$filasEsperadas}.");
-                        }
-                    }
-                }
-            }
-
-            // Validar total_filas si está declarado en el manifiesto
-            if (isset($datosMan['total_filas']) && is_numeric($datosMan['total_filas'])) {
-                $totalFilasStaging = 0;
-                foreach ($tablasEnStaging as $tStg) {
-                    $tStgEsc = str_replace('`', '``', $tStg);
-                    $resCnt = $mysqli->query("SELECT COUNT(*) AS total FROM `{$tStgEsc}`");
-                    if ($resCnt) {
-                        $totalFilasStaging += (int)($resCnt->fetch_assoc()['total'] ?? 0);
-                        $resCnt->free();
-                    }
-                }
-                if ($totalFilasStaging !== (int)$datosMan['total_filas']) {
-                    throw new RuntimeException("Validación de staging fallida: total de filas en staging ({$totalFilasStaging}) no coincide con el manifiesto ({$datosMan['total_filas']}).");
-                }
-            }
-        }
+        // Ejecutar el validador unificado de esquema y manifiesto en staging
+        validar_manifiesto_y_esquema($mysqli, $stagingDb, $datosMan);
 
         // Staging exitoso: limpiar base temporal
         $mysqli->query("SET FOREIGN_KEY_CHECKS = 1");
@@ -384,16 +505,25 @@ try {
         $mysqli->select_db($dbName);
         $mysqli->query("DROP DATABASE IF EXISTS `{$stagingDb}`");
         $stagingDb = null;
+    }
 
-        // Fase de resguardo previo de tablas de la base destino antes de la sustitución
+    // Fase 2: Resguardo previo de tablas y gestión de Foreign Keys en la base destino
+    $tablasRespaldadas = [];
+    $fksOriginales = [];
+    $prefijoBck = '_bck_' . substr(bin2hex(random_bytes(3)), 0, 6) . '_';
+
+    if ($usarSafeRestore && $totalTablasPrevias > 0) {
         $resTablasActuales = $mysqli->query("SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'");
         $nombresTablas = [];
         if ($resTablasActuales) {
             while ($filaT = $resTablasActuales->fetch_row()) {
-                $nombresTablas[] = $filaT[0];
+                $nombresTablas[] = (string)$filaT[0];
             }
             $resTablasActuales->free();
         }
+
+        // Obtener la definición de todas las FKs existentes antes del renombre
+        $fksOriginales = obtener_foreign_keys_esquema($mysqli, $dbName);
 
         $mysqli->query("SET FOREIGN_KEY_CHECKS = 0");
         foreach ($nombresTablas as $nombreTabla) {
@@ -404,15 +534,32 @@ try {
             } else {
                 // Si falla el renombre preliminar, revertir renombres ya hechos
                 foreach ($tablasRespaldadas as $orig => $bck) {
-                    @$mysqli->query("RENAME TABLE `{$bck}` TO `{$orig}`");
+                    $mysqli->query("RENAME TABLE `{$bck}` TO `{$orig}`");
                 }
                 throw new RuntimeException("No fue posible crear respaldo transaccional de tablas previas: " . $mysqli->error);
+            }
+        }
+
+        // Soltar las FKs de las tablas _bck_* para liberar sus nombres explícitos de constraint en el schema
+        // evitando colisiones (ERROR 1826) cuando el backup recree las tablas originales con los mismos nombres de FK
+        foreach ($fksOriginales as $fk) {
+            $tablaBck = $tablasRespaldadas[$fk['table_name']] ?? null;
+            if ($tablaBck !== null) {
+                $sqlDropFk = "ALTER TABLE `{$tablaBck}` DROP FOREIGN KEY `{$fk['constraint_name']}`";
+                $okDropFk = $mysqli->query($sqlDropFk);
+                if (!$okDropFk) {
+                    // Si falla soltar la FK de la tabla resguardada, revertir
+                    foreach ($tablasRespaldadas as $orig => $bck) {
+                        $mysqli->query("RENAME TABLE `{$bck}` TO `{$orig}`");
+                    }
+                    throw new RuntimeException("No fue posible liberar constraint '{$fk['constraint_name']}' en tabla de resguardo: " . $mysqli->error);
+                }
             }
         }
         $mysqli->query("SET FOREIGN_KEY_CHECKS = 1");
     }
 
-    // Aplicar sentencias sobre la base destino definitiva
+    // Fase 3: Aplicar sentencias sobre la base destino definitiva
     $mysqli->select_db($dbName);
     $mysqli->query("SET FOREIGN_KEY_CHECKS = 0");
     $mysqli->query("SET UNIQUE_CHECKS = 0");
@@ -432,34 +579,73 @@ try {
             }
             $ejecutadas++;
         }
+
+        // Si se aplicaron todas las sentencias y existían tablas de resguardo `_bck_`,
+        // eliminarlas ANTES de la validación final del manifiesto para que no figuren como tablas extras no declaradas
+        if (!empty($tablasRespaldadas)) {
+            $mysqli->query("SET FOREIGN_KEY_CHECKS = 0");
+            foreach ($tablasRespaldadas as $orig => $bck) {
+                $mysqli->query("DROP TABLE IF EXISTS `{$bck}`");
+            }
+        }
+
+        // Ejecutar el validador unificado de esquema y manifiesto sobre la base destino final
+        validar_manifiesto_y_esquema($mysqli, $dbName, $datosMan);
     } catch (Throwable $eEjecucion) {
-        // En caso de fallo post-staging, revertir y preservar intacta la base original
+        // En caso de fallo post-staging, revertir y restituir de forma estricta comprobando cada operación
         if (!empty($tablasRespaldadas)) {
             fwrite(STDERR, "[ADVERTENCIA] Error post-staging detectado. Revertiendo cambios y restaurando tablas originales desde resguardo...\n");
+            $erroresRestitucion = [];
+            $mysqli->query("SET FOREIGN_KEY_CHECKS = 0");
+
             $resTablasNuevas = $mysqli->query("SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'");
             if ($resTablasNuevas) {
                 while ($filaTN = $resTablasNuevas->fetch_row()) {
-                    $tName = $filaTN[0];
+                    $tName = (string)$filaTN[0];
                     if (!str_starts_with($tName, $prefijoBck)) {
-                        @$mysqli->query("DROP TABLE IF EXISTS `{$tName}`");
+                        $okDrop = $mysqli->query("DROP TABLE IF EXISTS `{$tName}`");
+                        if (!$okDrop) {
+                            $erroresRestitucion[] = "Fallo al eliminar tabla parcial '{$tName}': " . $mysqli->error;
+                        }
                     }
                 }
                 $resTablasNuevas->free();
             }
 
             foreach ($tablasRespaldadas as $orig => $bck) {
-                @$mysqli->query("RENAME TABLE `{$bck}` TO `{$orig}`");
+                $okRen = $mysqli->query("RENAME TABLE `{$bck}` TO `{$orig}`");
+                if (!$okRen) {
+                    $erroresRestitucion[] = "Fallo al restaurar nombre de '{$bck}' a '{$orig}': " . $mysqli->error;
+                }
             }
-            fwrite(STDERR, "[INFO] Base destino restaurada exitosamente a su estado anterior.\n");
+
+            // Recrear cada una de las Foreign Keys originales que fueron retiradas
+            foreach ($fksOriginales as $fk) {
+                $sqlAddFk = sprintf(
+                    "ALTER TABLE `%s` ADD CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES `%s`(`%s`) ON UPDATE %s ON DELETE %s",
+                    $fk['table_name'],
+                    $fk['constraint_name'],
+                    $fk['column_name'],
+                    $fk['referenced_table_name'],
+                    $fk['referenced_column_name'],
+                    $fk['update_rule'],
+                    $fk['delete_rule']
+                );
+                $okAdd = $mysqli->query($sqlAddFk);
+                if (!$okAdd) {
+                    $erroresRestitucion[] = "Fallo al recrear constraint '{$fk['constraint_name']}' en '{$fk['table_name']}': " . $mysqli->error;
+                }
+            }
+            $mysqli->query("SET FOREIGN_KEY_CHECKS = 1");
+
+            if (!empty($erroresRestitucion)) {
+                fwrite(STDERR, "[CRÍTICO] La restitución de la base destino quedó incompleta. Errores:\n - " . implode("\n - ", $erroresRestitucion) . "\n");
+                throw new RuntimeException("Fallo en recuperación de base destino: " . implode("; ", $erroresRestitucion), 0, $eEjecucion);
+            }
+
+            fwrite(STDERR, "[INFO] Base destino restaurada exitosamente a su estado anterior (esquema, datos y claves foráneas verificados).\n");
         }
         throw $eEjecucion;
-    }
-
-    // Si todo salió bien, limpiar las tablas de respaldo `_bck_`
-    if (!empty($tablasRespaldadas)) {
-        foreach ($tablasRespaldadas as $orig => $bck) {
-            @$mysqli->query("DROP TABLE IF EXISTS `{$bck}`");
-        }
     }
 
     $mysqli->query("SET FOREIGN_KEY_CHECKS = 1");
@@ -480,6 +666,7 @@ try {
         $ejecutadas,
         $rutaEntrada
     );
+    exit(0);
     exit(0);
 } catch (Throwable $e) {
     if ($stagingDb !== null) {

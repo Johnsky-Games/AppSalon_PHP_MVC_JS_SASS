@@ -492,4 +492,156 @@ SQL;
             }
         }
     }
+
+    /**
+     * Escenario 6: Restore sobre una base de datos de destino que ya posee el esquema completo
+     * con migraciones aplicadas y Foreign Keys idénticas (evitando el error MySQL 1826: Duplicate foreign key).
+     */
+    public function testRestoreSobreBasePobladaConEsquemaCompletoYForeignKeysResuelveColisiones(): void
+    {
+        $srcDb = 'appsalon_int_fk_src_' . uniqid();
+        $dstDb = 'appsalon_int_fk_dst_' . uniqid();
+        $tmpDir = sys_get_temp_dir();
+        $backupGz = $tmpDir . DIRECTORY_SEPARATOR . 'backup_fk_' . uniqid() . '.sql.gz';
+        $manifestGz = $backupGz . '.manifest.json';
+
+        self::$db->query("DROP DATABASE IF EXISTS `{$srcDb}`");
+        self::$db->query("DROP DATABASE IF EXISTS `{$dstDb}`");
+        self::$db->query("CREATE DATABASE `{$srcDb}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+        self::$db->query("CREATE DATABASE `{$dstDb}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+
+        // 1. Inicializar esquema y migraciones en $srcDb y $dstDb
+        $schemaBase = (string)file_get_contents(__DIR__ . '/../../database/schema_base.sql');
+        $dbSetupSrc = new mysqli(self::$host, self::$user, self::$pass, $srcDb, self::$port);
+        $dbSetupSrc->set_charset('utf8mb4');
+        $dbSetupSrc->multi_query($schemaBase);
+        while ($dbSetupSrc->more_results() && $dbSetupSrc->next_result()) {
+            if ($res = $dbSetupSrc->store_result()) {
+                $res->free();
+            }
+        }
+        $dbSetupSrc->close();
+
+        $dbSetupDst = new mysqli(self::$host, self::$user, self::$pass, $dstDb, self::$port);
+        $dbSetupDst->set_charset('utf8mb4');
+        $dbSetupDst->multi_query($schemaBase);
+        while ($dbSetupDst->more_results() && $dbSetupDst->next_result()) {
+            if ($res = $dbSetupDst->store_result()) {
+                $res->free();
+            }
+        }
+        $dbSetupDst->close();
+
+        $this->ejecutarScriptCli('database/migrador.php', ['up'], $srcDb);
+        $this->ejecutarScriptCli('database/migrador.php', ['up'], $dstDb);
+
+        // 2. Insertar datos relacionados en $srcDb
+        $dbSrc = new mysqli(self::$host, self::$user, self::$pass, $srcDb, self::$port);
+        $dbSrc->set_charset('utf8mb4');
+        $this->assertTrue($dbSrc->query("INSERT INTO usuarios (id, nombre, apellido, email, password, telefono, admin, confirmado, token) VALUES (1, 'Admin', 'Test', 'admin_fk@test.com', 'hash', '0999999999', 1, 1, '')"), 'Insert usuarios src: ' . $dbSrc->error);
+        $this->assertTrue($dbSrc->query("INSERT INTO servicios (id, nombre, precio, duracion_minutos) VALUES (1, 'Corte Clásico FK', 15.00, 30)"), 'Insert servicios src: ' . $dbSrc->error);
+        $this->assertTrue($dbSrc->query("INSERT INTO profesionales (id, nombre, activo) VALUES (1, 'Estilista FK', 1)"), 'Insert profesionales src: ' . $dbSrc->error);
+        $this->assertTrue($dbSrc->query("INSERT INTO citas (id, fecha, hora, usuarioId, profesionalId, hora_inicio, hora_fin, duracion_total_minutos, estado, estado_pago) VALUES (1, '2026-11-20', '10:00:00', 1, 1, '10:00:00', '10:30:00', 30, 'confirmada', 'pagado')"), 'Insert citas src: ' . $dbSrc->error);
+        $this->assertTrue($dbSrc->query("INSERT INTO citasservicios (id, citaId, servicioId, nombre_servicio, precio_servicio, duracion_minutos) VALUES (1, 1, 1, 'Corte Clásico FK', 15.00, 30)"), 'Insert citasservicios src: ' . $dbSrc->error);
+        $this->assertTrue($dbSrc->query("INSERT INTO pagos (id, cita_id, cita_referencia_id, usuario_id, referencia_pago, proveedor, transaccion_externa_id, monto, moneda, estado, metodo_pago, idempotency_key) VALUES (1, 1, 1, 1, 'PAY-FK-TEST-001', 'mock', 'MOCK-FK-01', 15.00, 'USD', 'completado', 'simulado', 'idem-fk-01')"), 'Insert pagos src: ' . $dbSrc->error);
+        $dbSrc->close();
+
+        // 3. Insertar datos existentes diferentes en $dstDb para demostrar sobreescritura limpia
+        $dbDst = new mysqli(self::$host, self::$user, self::$pass, $dstDb, self::$port);
+        $dbDst->set_charset('utf8mb4');
+        $this->assertTrue($dbDst->query("INSERT INTO usuarios (id, nombre, apellido, email, password, telefono, admin, confirmado, token) VALUES (2, 'Viejo', 'Destino', 'viejo@test.com', 'hash', '0911111111', 0, 1, '')"), 'Insert usuarios dst: ' . $dbDst->error);
+        $this->assertTrue($dbDst->query("INSERT INTO servicios (id, nombre, precio, duracion_minutos) VALUES (2, 'Servicio Viejo', 50.00, 45)"), 'Insert servicios dst: ' . $dbDst->error);
+        $dbDst->close();
+
+        try {
+            // Generar backup completo con manifiesto desde $srcDb
+            $resBackup = $this->ejecutarScriptCli('scripts/backup_db.php', ['--db=' . $srcDb, '--output=' . $backupGz, '--gzip'], $srcDb);
+            $this->assertSame(0, $resBackup['exitCode'], 'El backup debe completarse con éxito: ' . $resBackup['stderr']);
+            $this->assertFileExists($backupGz);
+            $this->assertFileExists($manifestGz);
+
+            // Restaurar sobre $dstDb que ya tiene las mismas Foreign Keys activas
+            $resRestore = $this->ejecutarScriptCli('scripts/restore_db.php', ['--db=' . $dstDb, '--input=' . $backupGz], $dstDb);
+            $this->assertSame(0, $resRestore['exitCode'], 'El restore sobre base poblada con FKs debe completarse sin error 1826: ' . $resRestore['stderr']);
+            $this->assertStringContainsString('[OK] Restauración completada', $resRestore['stdout']);
+
+            // Validar que los datos de $srcDb están presentes en $dstDb
+            $dbDst = new mysqli(self::$host, self::$user, self::$pass, $dstDb, self::$port);
+            $dbDst->set_charset('utf8mb4');
+            $rowCita = $dbDst->query("SELECT estado, estado_pago FROM citas WHERE id = 1")->fetch_assoc();
+            $this->assertNotNull($rowCita);
+            $this->assertSame('confirmada', $rowCita['estado']);
+            $this->assertSame('pagado', $rowCita['estado_pago']);
+
+            $rowPago = $dbDst->query("SELECT referencia_pago, monto FROM pagos WHERE id = 1")->fetch_assoc();
+            $this->assertNotNull($rowPago);
+            $this->assertSame('PAY-FK-TEST-001', $rowPago['referencia_pago']);
+            $this->assertEquals(15.00, (float)$rowPago['monto']);
+
+            // Verificar que no existen tablas residuales _bck_
+            $resTablas = $dbDst->query("SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'");
+            while ($tRow = $resTablas->fetch_row()) {
+                $this->assertStringStartsNotWith('_bck_', $tRow[0], "No deben quedar tablas temporales de respaldo: {$tRow[0]}");
+            }
+            $dbDst->close();
+        } finally {
+            self::$db->query("DROP DATABASE IF EXISTS `{$srcDb}`");
+            self::$db->query("DROP DATABASE IF EXISTS `{$dstDb}`");
+            if (is_file($backupGz)) {
+                @unlink($backupGz);
+            }
+            if (is_file($manifestGz)) {
+                @unlink($manifestGz);
+            }
+        }
+    }
+
+    /**
+     * Escenario 7: Validación de Manifiesto aborta inmediatamente si faltan tablas, sobran tablas o conteos no coinciden.
+     */
+    public function testValidadorDeManifiestoDetectaInconsistenciasYAborta(): void
+    {
+        $dstDb = 'appsalon_int_manif_fail_' . uniqid();
+        $tmpDir = sys_get_temp_dir();
+        $archivoSql = $tmpDir . DIRECTORY_SEPARATOR . 'backup_manif_' . uniqid() . '.sql';
+        $archivoMan = $archivoSql . '.manifest.json';
+
+        self::$db->query("DROP DATABASE IF EXISTS `{$dstDb}`");
+        self::$db->query("CREATE DATABASE `{$dstDb}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+
+        $sql = <<<SQL
+-- AppSalon SQL Backup
+CREATE TABLE `tabla_a` (id INT PRIMARY KEY);
+INSERT INTO `tabla_a` VALUES (1), (2);
+-- Fin del respaldo AppSalon
+SQL;
+        file_put_contents($archivoSql, $sql);
+        $hashSql = hash('sha256', $sql);
+
+        // Caso A: Manifiesto declara tabla_b que no existe en el volcado
+        $manifiestoInconsistente = [
+            'sha256' => $hashSql,
+            'schema_version' => '1.0',
+            'tablas' => ['tabla_a', 'tabla_b'],
+            'total_tablas' => 2,
+            'filas_por_tabla' => ['tabla_a' => 2, 'tabla_b' => 0],
+            'total_filas' => 2
+        ];
+        file_put_contents($archivoMan, json_encode($manifiestoInconsistente));
+
+        try {
+            $res = $this->ejecutarScriptCli('scripts/restore_db.php', ['--db=' . $dstDb, '--input=' . $archivoSql], $dstDb);
+            $this->assertSame(1, $res['exitCode'], 'Debe fallar al faltar tabla declarada en el manifiesto.');
+            $this->assertStringContainsString('faltan las siguientes tablas declaradas: tabla_b', $res['stderr']);
+        } finally {
+            self::$db->query("DROP DATABASE IF EXISTS `{$dstDb}`");
+            if (is_file($archivoSql)) {
+                @unlink($archivoSql);
+            }
+            if (is_file($archivoMan)) {
+                @unlink($archivoMan);
+            }
+        }
+    }
 }
+

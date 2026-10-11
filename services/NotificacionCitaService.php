@@ -477,49 +477,29 @@ class NotificacionCitaService
                 continue;
             }
 
-            // Consultar la cita asociada para verificar su estado en base de datos
-            $citaRefId = (int)$candidata->cita_referencia_id;
-            $cita = null;
-            $errorConsultaCita = false;
-            try {
-                $cita = $this->citaRepository->findById($citaRefId);
-            } catch (\Throwable $e) {
-                $errorConsultaCita = true;
-                error_log("[NotificacionCitaService::procesarPendientesYReintentos] Error al consultar cita {$citaRefId}: " . $e->getMessage());
-            }
+            $citaRefId = (int)($candidata->cita_referencia_id ?? $candidata->cita_id ?? 0);
 
-            // No enviar cuando falla la comprobación del estado de la cita para prevenir envíos erróneos
-            if ($errorConsultaCita) {
-                $fallidos++;
-                $detalles[] = [
-                    'id' => $idNotif,
-                    'clave_idempotencia' => $candidata->clave_idempotencia,
-                    'resultado' => 'error_comprobacion_cita',
-                ];
+            // Comprobación compartida y unificada de vigencia de la cita antes de arrendar y enviar
+            $vigenciaWorker = $this->verificarVigenciaParaDespacho($candidata->tipo, $citaRefId, $idNotif);
+            if ($vigenciaWorker['valido'] === false) {
+                if ($vigenciaWorker['status'] === self::STATUS_FALLIDO) {
+                    $fallidos++;
+                    $detalles[] = [
+                        'id' => $idNotif,
+                        'clave_idempotencia' => $candidata->clave_idempotencia,
+                        'resultado' => $vigenciaWorker['motivo'],
+                    ];
+                } else {
+                    $omitidos++;
+                    $detalles[] = [
+                        'id' => $idNotif,
+                        'clave_idempotencia' => $candidata->clave_idempotencia,
+                        'resultado' => $vigenciaWorker['motivo'],
+                    ];
+                }
                 continue;
             }
-
-            // Regla 4.B: Si la cita asociada no existe, fue eliminada o está cancelada, descartar confirmaciones y recordatorios
-            $citaInexistente = ($cita === null);
-            $citaCancelada = ($cita !== null && $cita->estado === 'cancelada')
-                || ($candidata->cita_id === null && $candidata->tipo === NotificacionCita::TIPO_RECORDATORIO);
-            if (($citaInexistente || $citaCancelada) && in_array($candidata->tipo, [NotificacionCita::TIPO_CONFIRMACION, NotificacionCita::TIPO_RECORDATORIO], true)) {
-                $motivoCancelacion = $citaInexistente
-                    ? ($candidata->tipo === NotificacionCita::TIPO_RECORDATORIO
-                        ? 'Recordatorio descartado: la cita asociada no existe o fue eliminada'
-                        : 'Confirmación descartada: la cita asociada no existe o fue eliminada')
-                    : ($candidata->tipo === NotificacionCita::TIPO_RECORDATORIO
-                        ? 'Recordatorio descartado: la cita asociada está cancelada'
-                        : 'Confirmación descartada: la cita asociada está cancelada');
-                $this->notificacionRepository->descartarNotificacion($idNotif, $motivoCancelacion, null, NotificacionCita::ESTADO_DESCARTADA);
-                $omitidos++;
-                $detalles[] = [
-                    'id' => $idNotif,
-                    'clave_idempotencia' => $candidata->clave_idempotencia,
-                    'resultado' => $citaInexistente ? 'cita_no_encontrada' : 'cita_cancelada',
-                ];
-                continue;
-            }
+            $cita = $vigenciaWorker['cita'];
 
             // Regla 4.A: Si es recordatorio y la fecha/hora de la cita ya pasó en America/Guayaquil, descartar
             if ($candidata->tipo === NotificacionCita::TIPO_RECORDATORIO) {
@@ -846,6 +826,74 @@ class NotificacionCitaService
     }
 
     /**
+     * Comprueba de manera unificada si una cita asociada sigue siendo válida para el envío de notificaciones.
+     * Si la cita está cancelada o no existe, descarta la notificación y bloquea el despacho SMTP.
+     *
+     * @return array{valido: bool, status: string, motivo: string, cita: ?object}
+     */
+    private function verificarVigenciaParaDespacho(
+        string $tipo,
+        int $citaId,
+        int $notificacionId,
+        ?string $workerToken = null
+    ): array {
+        // Notificaciones de tipo 'cancelacion' sí deben enviarse cuando la cita está cancelada
+        if ($tipo === NotificacionCita::TIPO_CANCELACION) {
+            return ['valido' => true, 'status' => self::STATUS_OK, 'motivo' => '', 'cita' => null];
+        }
+
+        $cita = null;
+        $errorConsulta = false;
+        try {
+            $cita = $this->citaRepository->findById($citaId);
+        } catch (\Throwable $e) {
+            $errorConsulta = true;
+            error_log("[NotificacionCitaService::verificarVigenciaParaDespacho] Error al consultar cita {$citaId}: " . $e->getMessage());
+        }
+
+        if ($errorConsulta) {
+            // Ante fallo de DB al verificar la cita, no enviar para prevenir despachos erróneos
+            return [
+                'valido' => false,
+                'status' => self::STATUS_FALLIDO,
+                'motivo' => 'error_comprobacion_cita',
+                'cita' => null
+            ];
+        }
+
+        $citaInexistente = ($cita === null);
+        $citaCancelada = ($cita !== null && $cita->estado === 'cancelada');
+
+        if ($citaInexistente || $citaCancelada) {
+            $motivo = $citaInexistente
+                ? ($tipo === NotificacionCita::TIPO_RECORDATORIO
+                    ? 'Recordatorio descartado: la cita asociada no existe o fue eliminada'
+                    : 'Confirmación descartada: la cita asociada no existe o fue eliminada')
+                : ($tipo === NotificacionCita::TIPO_RECORDATORIO
+                    ? 'Recordatorio descartado: la cita asociada está cancelada'
+                    : 'Confirmación descartada: la cita asociada está cancelada');
+
+            if ($notificacionId > 0) {
+                $this->notificacionRepository->descartarNotificacion(
+                    $notificacionId,
+                    $motivo,
+                    $workerToken,
+                    NotificacionCita::ESTADO_DESCARTADA
+                );
+            }
+
+            return [
+                'valido' => false,
+                'status' => self::STATUS_OMITIDO,
+                'motivo' => $citaInexistente ? 'cita_no_encontrada' : 'cita_cancelada',
+                'cita' => $cita
+            ];
+        }
+
+        return ['valido' => true, 'status' => self::STATUS_OK, 'motivo' => '', 'cita' => $cita];
+    }
+
+    /**
      * Ejecuta el flujo transaccional de idempotencia + despacho SMTP + actualización de estado final.
      *
      * @param string $tipo
@@ -923,6 +971,20 @@ class NotificacionCitaService
         $destEmailFinal = trim((string)$notificacion->destinatario_email) !== '' ? (string)$notificacion->destinatario_email : $destEmail;
         $destNombreFinal = trim((string)$notificacion->destinatario_nombre) !== '' ? (string)$notificacion->destinatario_nombre : $destNombre;
         $asuntoFinal = trim((string)$notificacion->asunto) !== '' ? (string)$notificacion->asunto : ($mensaje['asunto'] ?? null);
+
+        // Validación unificada de vigencia de la cita antes del despacho SMTP
+        $vigencia = $this->verificarVigenciaParaDespacho($tipo, $citaId, (int)$notificacion->id, $workerToken);
+        if ($vigencia['valido'] === false) {
+            return [
+                'status' => $vigencia['status'],
+                'enviado' => false,
+                'motivo' => $vigencia['motivo'],
+                'id' => $notificacion->id,
+                'clave_idempotencia' => $claveIdempotencia,
+                'estado' => $notificacion->estado,
+                'intentos' => $notificacion->intentos,
+            ];
+        }
 
         $mensajeFinal = $this->construirContenidoHtml($tipo, $payloadCanonico, $asuntoFinal);
 

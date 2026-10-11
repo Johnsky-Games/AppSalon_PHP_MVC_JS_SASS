@@ -372,4 +372,79 @@ class NotificacionesWorkerIntegrationTest extends TestCase
         $this->assertSame('worker_backoff_2', $notifAdquirida->worker_token);
         $this->assertSame(2, (int)$notifAdquirida->intentos);
     }
+
+    /**
+     * Prueba Frente 4 de auditoría:
+     * Una cita cancelada antes del despacho (inmediato o worker) descarta la notificación bajo lease y jamás invoca el transporte SMTP.
+     */
+    public function testConfirmacionDeCitaCanceladaDescartaConLeaseYSinLlamarSmtp(): void
+    {
+        [$usuarioId, $profId, $servicioId] = $this->crearUsuarioYProfesional();
+
+        // 1. Crear cita confirmada y luego cancelarla
+        self::$db->query("INSERT INTO citas (fecha, hora, hora_inicio, hora_fin, duracion_total_minutos, usuarioId, profesionalId, estado, cancelado_por, cancelado_at, motivo_cancelacion)
+            VALUES ('2026-11-25', '11:00:00', '11:00:00', '11:30:00', 30, {$usuarioId}, {$profId}, 'cancelada', 'cliente', NOW(), 'Cancelado voluntario')");
+        $citaId = (int)self::$db->insert_id;
+
+        self::$db->query("INSERT INTO citasservicios (citaId, servicioId, nombre_servicio, precio_servicio, duracion_minutos)
+            VALUES ({$citaId}, {$servicioId}, 'Corte Test', 20.00, 30)");
+
+        // Configurar transporte espía que detecte cualquier invocación a SMTP
+        $smtpInvocado = false;
+        $transportEspia = function () use (&$smtpInvocado) {
+            $smtpInvocado = true;
+            return true;
+        };
+
+        $servicioConEspia = new NotificacionCitaService(
+            self::$notifRepo,
+            new \Repositories\CitaRepository(self::$db),
+            null,
+            $transportEspia
+        );
+
+        // A. Intento de notificación inmediata para cita cancelada
+        $resInmediato = $servicioConEspia->notificarConfirmacionCita($citaId);
+
+        $this->assertFalse($smtpInvocado, 'SMTP jamás debe ser invocado si la cita está cancelada');
+        $this->assertSame(NotificacionCitaService::STATUS_OMITIDO, $resInmediato['status']);
+        $this->assertSame('cita_cancelada', $resInmediato['motivo']);
+
+        // Comprobar que en la base de datos la notificación quedó registrada y marcada como 'descartada'
+        $clave = NotificacionCitaService::generarClaveConfirmacion($citaId);
+        $notifEnDb = self::$notifRepo->findByClaveIdempotencia($clave);
+        $this->assertNotNull($notifEnDb);
+        $this->assertSame(NotificacionCita::ESTADO_DESCARTADA, $notifEnDb->estado);
+        $this->assertStringContainsString('cancelada', (string)$notifEnDb->ultimo_error);
+
+        // B. Intento de procesamiento mediante worker en cola de pendientes
+        // Simular que existía una notificación 'pendiente' asociada a esta cita cancelada
+        $claveWorker = 'pend_cancel_' . bin2hex(random_bytes(8));
+        $eventoWorker = self::$notifRepo->registrarEventoOutbox([
+            'cita_id' => $citaId,
+            'cita_referencia_id' => $citaId,
+            'usuario_id' => $usuarioId,
+            'tipo' => NotificacionCita::TIPO_CONFIRMACION,
+            'clave_idempotencia' => $claveWorker,
+            'destinatario_email' => 'cliente_cancel@example.com',
+            'destinatario_nombre' => 'Cliente Cancel',
+            'asunto' => 'Confirmacion Worker',
+            'payload_json' => ['cita_id' => $citaId],
+            'max_intentos' => 3,
+        ], date('Y-m-d H:i:s'));
+
+        $idWorker = (int)$eventoWorker->id;
+        $smtpInvocado = false; // Reset
+
+        $resWorker = $servicioConEspia->procesarPendientesYReintentos(10);
+
+        $this->assertFalse($smtpInvocado, 'Worker jamás debe llamar a SMTP para una cita cancelada');
+        $this->assertSame(0, $resWorker['enviados']);
+        $this->assertGreaterThanOrEqual(1, $resWorker['omitidos']);
+
+        $notifWorkerDb = self::$notifRepo->findById($idWorker);
+        $this->assertSame(NotificacionCita::ESTADO_DESCARTADA, $notifWorkerDb->estado);
+        $this->assertStringContainsString('cancelada', (string)$notifWorkerDb->ultimo_error);
+    }
 }
+

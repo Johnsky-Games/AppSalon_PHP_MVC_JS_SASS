@@ -102,6 +102,23 @@ class Pago
     }
 
     /**
+     * Retorna el payload del proveedor decodificado como arreglo asociativo.
+     *
+     * @return array<string, mixed>
+     */
+    public function obtenerPayloadProveedor(): array
+    {
+        if (is_array($this->payload_proveedor)) {
+            return $this->payload_proveedor;
+        }
+        if (is_string($this->payload_proveedor) && trim($this->payload_proveedor) !== '') {
+            $dec = json_decode($this->payload_proveedor, true);
+            return is_array($dec) ? $dec : [];
+        }
+        return [];
+    }
+
+    /**
      * @return array<string, mixed>
      */
     public function toArray(): array

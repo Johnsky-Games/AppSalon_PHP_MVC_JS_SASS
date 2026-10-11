@@ -627,7 +627,7 @@ class ReportesFinancierosIntegrationTest extends TestCase
         $this->assertSame(100.00, $profElena['reembolsos']);
         $this->assertSame(-100.00, $profElena['neto_cobrado']);
 
-        // 5. Validar exportación CSV en Febrero reflejando los netos negativos
+        // 5. Validar exportación CSV en Febrero reflejando los netos negativos y columnas conciliables
         $this->autenticarAdmin();
         $_GET = ['fecha_inicio' => '2026-02-01', 'fecha_fin' => '2026-02-28', 'criterio_fecha' => 'cobro'];
         $router = new Router();
@@ -639,5 +639,85 @@ class ReportesFinancierosIntegrationTest extends TestCase
         }
         $csv = (string)ob_get_clean();
         $this->assertStringContainsString('-100.00', $csv);
+        $this->assertStringContainsString('Tipo Movimiento', $csv);
+        $this->assertStringContainsString('Fecha Reembolso', $csv);
+        $this->assertStringContainsString('Importe Reembolso Periodo', $csv);
+        $this->assertStringContainsString('2026-02-10 15:30:00', $csv);
+    }
+
+    /**
+     * Prueba Frente 5 de auditoría:
+     * Cobro en octubre y reembolso en noviembre muestra el reembolso con su fecha de noviembre en el CSV de noviembre sin atribuir la devolución a octubre.
+     */
+    public function testCobroEnOctubreYReembolsoEnNoviembreMuestraReembolsoEnNoviembreSinAtribuirAOctubre(): void
+    {
+        $clienteId = $this->crearCliente('Cliente', 'Conciliacion', 'test_concilia@test.com');
+        $srvId = $this->crearServicio('Tratamiento Capilar', '60.00', 60);
+        $profId = $this->crearProfesionalConHorario('Profesional Concilia', [$srvId]);
+
+        self::$db->query(
+            "INSERT INTO citas (fecha, hora, hora_inicio, hora_fin, duracion_total_minutos, usuarioId, profesionalId, estado, estado_pago)
+             VALUES ('2026-10-15', '10:00:00', '10:00:00', '11:00:00', 60, {$clienteId}, {$profId}, 'confirmada', 'pagado')"
+        );
+        $citaId = (int)self::$db->insert_id;
+        self::$db->query(
+            "INSERT INTO citasservicios (citaId, servicioId, nombre_servicio, precio_servicio, duracion_minutos)
+             VALUES ({$citaId}, {$srvId}, 'Tratamiento Capilar', 60.00, 60)"
+        );
+
+        $pago = new Pago([
+            'cita_id' => $citaId,
+            'cita_referencia_id' => $citaId,
+            'usuario_id' => $clienteId,
+            'referencia_pago' => 'PAY-OCT-NOV-001',
+            'proveedor' => 'mock',
+            'monto' => 60.00,
+            'estado' => Pago::ESTADO_COMPLETADO,
+            'idempotency_key' => 'idemp_oct_nov_001',
+            'pagado_at' => '2026-10-20 10:00:00',
+            'created_at' => '2026-10-20 10:00:00',
+        ]);
+        self::$pagoRepository->create($pago);
+        self::$pagoRepository->actualizarEstadoPagoCita($citaId, 'pagado');
+
+        // Reembolso efectuado en noviembre
+        self::$pagoRepository->actualizarEstadoPago(
+            (int)$pago->id,
+            Pago::ESTADO_REEMBOLSADO,
+            'tx_reembolso_nov',
+            '2026-10-20 10:00:00',
+            ['motivo' => 'devolucion_noviembre'],
+            'mock',
+            '2026-11-05 14:00:00'
+        );
+        self::$pagoRepository->actualizarEstadoPagoCita($citaId, 'reembolsado');
+
+        // CSV de Octubre con criterio cobro: muestra el cobro de 60.00, reembolso de periodo 0.00, neto 60.00
+        $this->autenticarAdmin();
+        $_GET = ['fecha_inicio' => '2026-10-01', 'fecha_fin' => '2026-10-31', 'criterio_fecha' => 'cobro'];
+        $router = new Router();
+        ob_start();
+        try {
+            AdminReporteController::exportarCsv($router);
+        } catch (AppTerminationException $e) {
+            $this->assertSame(200, $e->getStatusCode());
+        }
+        $csvOctubre = (string)ob_get_clean();
+        $this->assertStringContainsString('PAY-OCT-NOV-001', $csvOctubre);
+        $this->assertStringContainsString('60.00', $csvOctubre);
+
+        // CSV de Noviembre con criterio cobro: muestra el reembolso de 60.00 con fecha de noviembre
+        $_GET = ['fecha_inicio' => '2026-11-01', 'fecha_fin' => '2026-11-30', 'criterio_fecha' => 'cobro'];
+        ob_start();
+        try {
+            AdminReporteController::exportarCsv($router);
+        } catch (AppTerminationException $e) {
+            $this->assertSame(200, $e->getStatusCode());
+        }
+        $csvNoviembre = (string)ob_get_clean();
+        $this->assertStringContainsString('PAY-OCT-NOV-001', $csvNoviembre);
+        $this->assertStringContainsString('2026-11-05 14:00:00', $csvNoviembre);
+        $this->assertStringContainsString('-60.00', $csvNoviembre);
     }
 }
+

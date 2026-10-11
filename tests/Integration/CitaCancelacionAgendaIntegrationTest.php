@@ -520,4 +520,88 @@ class CitaCancelacionAgendaIntegrationTest extends TestCase
         $totalCitas = (int)self::$db->query("SELECT COUNT(*) AS total FROM citas WHERE profesionalId = {$profId}")->fetch_assoc()['total'];
         $this->assertSame(0, $totalCitas, 'No debe haberse registrado ninguna cita sobre el rango bloqueado');
     }
+
+    /**
+     * Caso 7 (Frente 8 de auditoría): Concurrencia en orden contrario.
+     * Una reserva concurrente inicia primero en vuelo y adquiere su transacción/bloqueo,
+     * y la modificación administrativa incompatible en ProfesionalService (crear bloqueo sobre el mismo intervalo)
+     * se ejecuta después: es serializada correctamente por MySQL InnoDB y rechazada con 422 colision_citas_confirmadas.
+     */
+    public function test_concurrencia_orden_contrario_reserva_en_vuelo_bloquea_modificacion_agenda(): void
+    {
+        $usuarioId = $this->crearUsuarioFixture('cliente_contrario@test.com');
+        $servicioId = $this->crearServicioFixture('Color Pro Concurrente', 45.00, 60);
+        $profId = $this->crearProfesionalConHorarioFixture($servicioId);
+        $fecha = $this->obtenerFechaHabilFutura();
+
+        $host = getenv('DB_HOST') ?: 'appsalon-test-db';
+        $user = getenv('DB_USER') ?: 'root';
+        $pass = getenv('DB_PASS') ?: 'root';
+        $name = getenv('DB_NAME') ?: 'appsalon_test';
+        $port = (int)(getenv('DB_PORT') ?: 3306);
+
+        // Lanzar worker concurrente que ejecutará la reserva a las 11:00
+        $workerScript = __DIR__ . '/concurrent_reserva_worker.php';
+        $cfg = [
+            'accion' => 'reservar',
+            'usuarioId' => $usuarioId,
+            'profesionalId' => $profId,
+            'fecha' => $fecha,
+            'hora' => '11:00',
+            'servicios' => (string)$servicioId,
+        ];
+        $env = array_merge($_ENV, [
+            'DB_HOST' => $host,
+            'DB_USER' => $user,
+            'DB_PASS' => $pass,
+            'DB_NAME' => $name,
+            'DB_PORT' => (string)$port,
+        ]);
+        $spec = [
+            0 => ['pipe', 'r'],
+            1 => ['pipe', 'w'],
+            2 => ['pipe', 'w'],
+        ];
+
+        $proc = proc_open('php ' . escapeshellarg($workerScript) . ' ' . escapeshellarg(json_encode($cfg)), $spec, $pipes, null, $env);
+        $this->assertIsResource($proc);
+
+        // Esperar READY del worker
+        $lineaReady = fgets($pipes[2]);
+        $this->assertSame("READY\n", $lineaReady, 'El worker de reserva debe reportar READY');
+
+        // Disparar GO para que el worker proceda con la reserva
+        fwrite($pipes[0], "GO\n");
+        fflush($pipes[0]);
+        fclose($pipes[0]);
+
+        // Margen suficiente para que el worker concrete la reserva
+        $stdout = stream_get_contents($pipes[1]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        $exitCode = proc_close($proc);
+
+        $this->assertSame(0, $exitCode, 'El proceso worker debe finalizar con código 0');
+        $resWorker = json_decode(trim((string)$stdout), true);
+        $this->assertSame(200, $resWorker['httpCode'], 'La reserva en vuelo debe ser exitosa: ' . json_encode($resWorker));
+
+        // Inmediatamente después, el administrador intenta crear un bloqueo de agenda incompatible sobre ese mismo intervalo (11:00 - 12:00)
+        $resBloqueo = self::$profesionalService->crearBloqueo($profId, [
+            'fecha' => $fecha,
+            'hora_inicio' => '10:30',
+            'hora_fin' => '11:30',
+            'motivo' => 'Reunión de última hora'
+        ]);
+
+        // Debe ser rechazado con 422 por colisión con la cita confirmada
+        $this->assertSame(ProfesionalService::STATUS_INVALID, $resBloqueo['status']);
+        $this->assertSame('colision_citas_confirmadas', $resBloqueo['codigo']);
+        $this->assertSame(422, $resBloqueo['httpCode']);
+        $this->assertFalse($resBloqueo['resultado']);
+
+        // Comprobar que la cita del cliente quedó registrada y confirmada
+        $totalCitas = (int)self::$db->query("SELECT COUNT(*) AS total FROM citas WHERE profesionalId = {$profId} AND estado = 'confirmada'")->fetch_assoc()['total'];
+        $this->assertSame(1, $totalCitas, 'La cita reservada debe conservarse intacta');
+    }
 }
+

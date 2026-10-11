@@ -690,4 +690,74 @@ class PagoRepository
             throw new PersistenceException('Error inesperado al actualizar estado_pago en cita.', 0, $e);
         }
     }
+
+    /**
+     * Retorna todos los pagos registrados para una cita específica ordenados por ID.
+     *
+     * @return list<Pago>
+     */
+    public function findTodosPorCitaId(int $citaId, bool $forUpdate = false): array
+    {
+        $db = $this->resolveDb();
+        $sql = "SELECT * FROM pagos WHERE cita_id = ? OR cita_referencia_id = ? ORDER BY id ASC";
+        if ($forUpdate) {
+            $sql .= " FOR UPDATE";
+        }
+
+        try {
+            $stmt = $db->prepare($sql);
+            if (!$stmt) {
+                throw new PersistenceException('Error al preparar consulta de todos los pagos de cita: ' . $db->error);
+            }
+            $stmt->bind_param('ii', $citaId, $citaId);
+            if (!$stmt->execute()) {
+                $err = $stmt->error;
+                $stmt->close();
+                throw new PersistenceException('Error al ejecutar consulta de todos los pagos de cita: ' . $err);
+            }
+            $res = $stmt->get_result();
+            $pagos = [];
+            while ($fila = $res->fetch_assoc()) {
+                $pagos[] = new Pago($fila);
+            }
+            $stmt->close();
+            return $pagos;
+        } catch (PersistenceException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            error_log('[PagoRepository::findTodosPorCitaId] Excepción: ' . $e->getMessage());
+            throw new PersistenceException('Error inesperado al consultar pagos de cita.', 0, $e);
+        }
+    }
+
+    /**
+     * Registra en payload_proveedor de un pago la auditoría de exceso y necesidad de conciliación manual.
+     */
+    public function registrarExcesoConciliacion(int $pagoId, float $exceso, float $totalPagado, float $totalCita): void
+    {
+        $db = $this->resolveDb();
+        $pago = $this->findById($pagoId);
+        if (!$pago) {
+            return;
+        }
+
+        $payload = $pago->obtenerPayloadProveedor();
+        $payload['conciliacion'] = [
+            'requiere_conciliacion' => true,
+            'motivo' => 'exceso_cobro_sobre_cita',
+            'exceso_monto' => round($exceso, 2),
+            'total_pagado_acumulado' => round($totalPagado, 2),
+            'total_cita_esperado' => round($totalCita, 2),
+            'detectado_at' => date('Y-m-d H:i:s'),
+        ];
+        $payloadJson = json_encode($payload, JSON_UNESCAPED_UNICODE);
+
+        $stmt = $db->prepare("UPDATE pagos SET payload_proveedor = ? WHERE id = ? LIMIT 1");
+        if ($stmt) {
+            $stmt->bind_param('si', $payloadJson, $pagoId);
+            $stmt->execute();
+            $stmt->close();
+        }
+    }
 }
+

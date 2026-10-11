@@ -35,6 +35,12 @@ El módulo de pagos establece la **infraestructura técnica segura de pagos** ba
      - Se prohíbe terminantemente instanciar o utilizar `MockPaymentGateway` (arroja `RuntimeException` con respuesta HTTP 500 de configuración).
      - Se rechazan secretos de webhook ausentes o con valores por defecto inseguros (`appsalon_mock_webhook_secret_2026`, `mock_secret_cambiar_en_produccion`).
    - Los importes de prueba se identifican explícitamente como simulados (`proveedor = 'mock'`).
+9. **Manejo de Reintentos Tardíos, Saldo Acumulado y Conciliación Trazable:**
+   - En situaciones donde una transacción $K_1$ falla inicialmente (timeout/fondos insuficientes), el cliente inicia un reintento $K_2$ y posteriormente ambas transacciones terminan siendo confirmadas exitosamente por la pasarela:
+     - **Conservación Integral de Cobros:** El sistema **conserva ambos registros de cobro** en la base de datos con sus referencias, montos, timestamps y firmas de webhook para garantizar auditoría contable completa.
+     - **Cálculo de Balance Acumulado:** El servidor computa el total pagado acumulado sumando todos los pagos en estado `completado` para la cita.
+     - **Detección de Exceso de Cobro:** Si `total_pagado_acumulado > total_cita_esperado`, el sistema detecta formalmente el excedente (`exceso_cobro = total_pagado_acumulado - total_cita_esperado`) y marca `requiere_conciliacion = true`.
+     - **Prohibición de Reembolsos Automáticos No Autorizados:** El sistema **NO dispara reembolsos automáticos** que pudieran ocasionar pérdidas de comisiones bancarias o revertir transacciones legítimas sin revisión humana. En su lugar, estampa una auditoría de conciliación en el campo `payload_proveedor` del pago excedente (`motivo: 'exceso_cobro_sobre_cita'`) e instruye conciliación manual por parte del administrador.
 
 ---
 

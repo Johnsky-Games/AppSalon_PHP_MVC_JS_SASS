@@ -581,9 +581,46 @@ class PagoService
                 $reembolsadoAt
             );
 
+            $requiereConciliacion = false;
+            $excesoCobro = 0.00;
+            $totalPagadoAcumulado = 0.00;
+            $totalCitaEsperado = 0.00;
+
             if ($pago->cita_id !== null) {
                 if ($nuevoEstado === Pago::ESTADO_COMPLETADO) {
                     $this->pagoRepository->actualizarEstadoPagoCita($pago->cita_id, 'pagado');
+
+                    // Calcular balance acumulado de todos los pagos completados para esta cita
+                    $todosPagos = $this->pagoRepository->findTodosPorCitaId((int)$pago->cita_id, true);
+                    foreach ($todosPagos as $pItem) {
+                        if ($pItem->estado === Pago::ESTADO_COMPLETADO) {
+                            $totalPagadoAcumulado = round($totalPagadoAcumulado + (float)$pItem->monto, 2);
+                        }
+                    }
+
+                    // Obtener el total esperado de la cita según servicios históricos
+                    $citaDetalle = $this->pagoRepository->obtenerCitaConImporteServidor((int)$pago->cita_id, false);
+                    if ($citaDetalle !== null) {
+                        $totalCitaEsperado = round((float)($citaDetalle['monto_servidor'] ?? 0), 2);
+                        if ($totalPagadoAcumulado > $totalCitaEsperado + 0.009) {
+                            $excesoCobro = round($totalPagadoAcumulado - $totalCitaEsperado, 2);
+                            $requiereConciliacion = true;
+                            // Registrar trazabilidad en el registro del pago sin emitir reembolso automático
+                            $this->pagoRepository->registrarExcesoConciliacion(
+                                (int)$pago->id,
+                                $excesoCobro,
+                                $totalPagadoAcumulado,
+                                $totalCitaEsperado
+                            );
+                            error_log(sprintf(
+                                "[PagoService::procesarWebhook] ALERTA CONCILIACIÓN: Cita #%d acumuló pagos por $%.2f superando el importe de la cita $%.2f (exceso: $%.2f). Ambos cobros preservados sin reembolso automático.",
+                                (int)$pago->cita_id,
+                                $totalPagadoAcumulado,
+                                $totalCitaEsperado,
+                                $excesoCobro
+                            ));
+                        }
+                    }
                 } elseif ($nuevoEstado === Pago::ESTADO_REEMBOLSADO) {
                     // Solo marcar la cita como reembolsada si no existen otros pagos que sigan activos/completados
                     $otrosCompletados = $this->pagoRepository->findCompletadoPorCitaId((int)$pago->cita_id, true);
@@ -607,6 +644,10 @@ class PagoService
                 'http_code' => 200,
                 'idempotente' => false,
                 'ya_procesado' => false,
+                'requiere_conciliacion' => $requiereConciliacion,
+                'exceso_cobro' => $excesoCobro,
+                'total_pagado_acumulado' => $totalPagadoAcumulado,
+                'total_cita_esperado' => $totalCitaEsperado,
                 'pago' => $pagoActualizado->toArray(),
             ];
         } catch (PersistenceException $e) {

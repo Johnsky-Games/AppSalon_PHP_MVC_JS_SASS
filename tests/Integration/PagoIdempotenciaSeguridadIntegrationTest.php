@@ -541,6 +541,19 @@ class PagoIdempotenciaSeguridadIntegrationTest extends TestCase
         $this->assertSame(PagoService::STATUS_OK, $resWebK2['status']);
         $this->assertSame(Pago::ESTADO_COMPLETADO, $resWebK2['pago']['estado']);
 
+        // Verificar detección de exceso y requerimiento de conciliación trazable sin reembolso automático
+        $this->assertTrue($resWebK2['requiere_conciliacion'], 'Debe detectar exceso al acumular pagos por encima del total de la cita');
+        $this->assertEquals(60.00, $resWebK2['exceso_cobro']);
+        $this->assertEquals(120.00, $resWebK2['total_pagado_acumulado']);
+        $this->assertEquals(60.00, $resWebK2['total_cita_esperado']);
+
+        // Verificar que en base de datos el pago K2 contiene la auditoría de conciliación en payload_proveedor
+        $rowK2Db = self::$db->query("SELECT payload_proveedor FROM pagos WHERE referencia_pago = '{$refK2}'")->fetch_assoc();
+        $payloadK2Db = json_decode((string)$rowK2Db['payload_proveedor'], true);
+        $this->assertIsArray($payloadK2Db);
+        $this->assertTrue($payloadK2Db['conciliacion']['requiere_conciliacion'] ?? false);
+        $this->assertEquals(60.00, $payloadK2Db['conciliacion']['exceso_monto'] ?? 0);
+
         // Verificar que ambos pagos K1 y K2 existen con su respectiva trazabilidad durable
         $resPagos = self::$db->query("SELECT estado FROM pagos WHERE cita_id = {$citaId} ORDER BY id ASC");
         $estadosPagos = [];

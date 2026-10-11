@@ -634,6 +634,35 @@ class ReporteService
                         $aplicaReembolsoEnRango = ($fechaReembolsoDia >= $fechaInicio && $fechaReembolsoDia <= $fechaFin);
                     }
 
+                    $importeCobroPeriodo = 0.00;
+                    $importeReembolsoPeriodo = 0.00;
+
+                    if ($estadoP === 'completado') {
+                        $tipoMovimiento = 'COBRO';
+                        if ($aplicaCobroEnRango) {
+                            $importeCobroPeriodo = $montoP;
+                        }
+                    } elseif ($estadoP === 'reembolsado') {
+                        $tipoMovimiento = 'REEMBOLSO';
+                        if ($criterioFecha === 'cobro') {
+                            if ($aplicaCobroEnRango) {
+                                $importeCobroPeriodo = $montoP;
+                            }
+                        }
+                        if ($aplicaReembolsoEnRango) {
+                            $importeReembolsoPeriodo = $montoP;
+                        }
+                    } else {
+                        $tipoMovimiento = strtoupper($estadoP);
+                    }
+
+                    $netoPeriodo = round($importeCobroPeriodo - $importeReembolsoPeriodo, 2);
+
+                    $movimientosFinancieros[$pId]['tipo_movimiento'] = $tipoMovimiento;
+                    $movimientosFinancieros[$pId]['importe_cobro_periodo'] = $importeCobroPeriodo;
+                    $movimientosFinancieros[$pId]['importe_reembolso_periodo'] = $importeReembolsoPeriodo;
+                    $movimientosFinancieros[$pId]['neto_periodo'] = $netoPeriodo;
+
                     if ($estadoP === 'completado') {
                         if ($aplicaCobroEnRango) {
                             $cobrosConfirmadosTotal = round($cobrosConfirmadosTotal + $montoP, 2);
@@ -1432,11 +1461,16 @@ class ReporteService
             $escribirFila([
                 'Pago ID',
                 'Referencia Pago',
+                'Tipo Movimiento',
                 'Proveedor',
                 'Es Simulado',
                 'Monto (USD)',
                 'Estado Pago',
                 'Fecha Cobro',
+                'Fecha Reembolso',
+                'Importe Cobro Periodo',
+                'Importe Reembolso Periodo',
+                'Neto Periodo',
                 'Cita Referencia ID',
                 'Estado Cita',
                 'Fecha Servicio',
@@ -1452,11 +1486,16 @@ class ReporteService
                 $escribirFila([
                     (int)($mov['pago_id'] ?? 0),
                     (string)($mov['referencia_pago'] ?? ''),
+                    (string)($mov['tipo_movimiento'] ?? strtoupper((string)($mov['estado'] ?? ''))),
                     (string)($mov['proveedor'] ?? ''),
                     !empty($mov['es_simulado']) ? 'SI (Mock)' : 'NO (Real)',
                     number_format((float)($mov['monto'] ?? 0), 2, '.', ''),
                     (string)($mov['estado'] ?? ''),
                     (string)($mov['fecha_cobro'] ?? ''),
+                    (string)($mov['fecha_reembolso'] ?? ''),
+                    number_format((float)($mov['importe_cobro_periodo'] ?? 0), 2, '.', ''),
+                    number_format((float)($mov['importe_reembolso_periodo'] ?? 0), 2, '.', ''),
+                    number_format((float)($mov['neto_periodo'] ?? 0), 2, '.', ''),
                     (int)($mov['cita_referencia_id'] ?? 0),
                     (string)($mov['cita_estado'] ?? ''),
                     (string)($mov['cita_fecha'] ?? ''),
