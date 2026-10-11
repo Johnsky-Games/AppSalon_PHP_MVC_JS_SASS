@@ -12,8 +12,9 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 ## Cierre Técnico: Consolidación de Seguridad, CI/CD, Docker, Respaldos y Operaciones
 
 - **Rama:** `feature/cierre-tecnico`
+- **Commit de Código Auditado:** `f33076c304e766239b1bfc13d9dde1927d749827`
 - **Commit Base (Fase 6C aprobada):** `ab3350ba6abf2d89ea4f38551b006aace97ae286` (`8178b830bc03197775fa653857e66ec74eb290db` + registro de auditoría Fase 6C)
-- **Estado General del Cierre Técnico:** **Implementado y Verificado por Desarrollador (Listo para Auditoría Final)**
+- **Estado General del Cierre Técnico:** **Completado y Auditado (`APROBADO` en `docs/AUDITORIA.md`)**
 
 ### 1. Alcance Consolidado del Cierre Técnico
 
@@ -64,6 +65,15 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 #### B. Verificación E2E en Navegador con JavaScript Habilitado (`tests/verificar_navegador.ps1` + `tests/browser_e2e_test.js`)
 - **RUN_ID:** `3d118172c3e6461b9b07a841bf7e5d5b` (Contenedores efímeros aislados, puerto dinámico `http://localhost:32800`, BD aislada `appsalon_browser_test`).
 - **Resultado:** 19/19 comprobaciones E2E superadas (`ADMIN-01` a `ADMIN-05`, `PROF-01`, `PROF-02`, `PRE-01`, `DISP-01`, `REC-01` a `REC-05`, `RES-01`, `REP-01`, `PAG-01`, `AUTH-01`, `NOTIF-01`), `0` errores de consola, `0` peticiones de red fallidas + verificación de persistencia en MySQL — Código de salida `0`.
+
+### 3. Validación Independiente de Auditoría (Subagente Auditor en `auditing_fase_4b_reservas`)
+
+- **Ronda 1 (`a1de022faf087dfd609e6acb72b737f12e20c34a`):** Veredicto `CORRECCIONES NECESARIAS`. Se identificó fuga de estado global en `BackupRestoreIntegrationTest.php` (`$_SERVER['REQUEST_URI'] = '/api/pagos/reembolsar'`) que causaba fallo en `CitaModuloIntegrationTest` durante ejecuciones limpias de PHPUnit sin caché.
+- **Ronda 2 (`f33076c304e766239b1bfc13d9dde1927d749827`):** Veredicto **`APROBADO`**.
+  - **Aislamiento verificado:** `stash@{0}` y recursos locales de OneDrive/Docker intactos.
+  - **PHPUnit 10.5.66 en contenedor aislado (`appsalon-auditct-r2-db`):** `vendor/bin/phpunit --do-not-cache-result --colors=never` ejecutado con éxito: `OK (172 tests, 2046 assertions)` — Código de salida `0`.
+  - **Suite Navegador E2E (`RUN_ID: c092a389eb3e480cb2659aa15529d4d6`):** 19/19 comprobaciones `[OK]`, `0` errores de consola, `0` solicitudes de red fallidas — Código de salida `0`.
+  - **Veredicto:** Registrado en `docs/AUDITORIA.md` autorizando la integración final de la rama `feature/cierre-tecnico`.
 
 ---
 

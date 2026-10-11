@@ -546,5 +546,218 @@ Tras proporcionar al auditor el contexto Docker del proyecto, el subagente audit
 - **Veredicto Final Fase 6C (`8178b830bc03197775fa653857e66ec74eb290db`):** **`APROBADO`**.
 - **Siguiente paso autorizado:** Cierre del hito de pagos y consolidación general del roadmap.
 
+---
+
+## Auditoría Final de Cierre Técnico (`a1de022faf087dfd609e6acb72b737f12e20c34a`)
+
+- **Fecha de Auditoría:** 2026-10-10
+- **Rol:** Subagente Auditor Independiente
+- **Worktree Exclusivo de Auditoría:** `C:\Users\jonat\.gemini\antigravity\worktrees\AppSalon_PHP_MVC_JS_SASS\auditing_fase_4b_reservas`
+- **SHA Auditado:** `a1de022faf087dfd609e6acb72b737f12e20c34a`
+- **Commit Base (Fase 6C aprobada):** `ab3350ba6abf2d89ea4f38551b006aace97ae286` (sobre código `8178b830bc03197775fa653857e66ec74eb290db`)
+- **Rama Asociada:** `feature/cierre-tecnico`
+- **Integridad de Stash:** `stash@{0}: On auditing_fase_4b_reservas: temp stash for checkout` verificado y preservado intacto.
+
+---
+
+### 1. Alcance Evaluado del Cierre Técnico
+
+El Cierre Técnico consolida el endurecimiento operativo, automatización de CI, entorno Docker desacoplado, utilidades de respaldo y restauración consistentes, cabeceras globales de seguridad y documentación de operaciones:
+
+1. **Auditoría de seguridad, rutas, permisos y cabeceras:** Emisión de `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy: strict-origin-when-cross-origin`; protección `isAdmin()` en rutas administrativas y `isAuth()` en usuario; validación CSRF y manejo de 404 seguro.
+2. **Revisión de dependencias y scripts (`composer.json`, `package.json`, `.gitignore`):** Scripts estandarizados en `composer.json`, compilación frontend reproducible y ausencia de secretos o archivos `.env` en control de versiones.
+3. **Revisión de consultas SQL, claves foráneas e índices:** Consistencia referencial de las 6 migraciones (`001` a `006`), índices (`idx_citas_estado_pago`, etc.) y documentación en `database/README.md`.
+4. **Flujo de Integración Continua (CI en GitHub Actions):** `.github/workflows/ci.yml` configurado con PHP 8.2, MySQL 8.0, migraciones, PHPUnit y prueba de backup/restore.
+5. **Entorno Docker reproducible y variables de entorno:** `includes/.env.example` documentando todas las variables operativas y `Dockerfile`/`docker-compose.yml`.
+6. **Scripts CLI de Respaldo y Restauración probados:** `scripts/backup_db.php` y `scripts/restore_db.php` (soporte `.sql` y `.sql.gz` con SHA-256 e integridad referencial) cubiertos por `tests/Integration/BackupRestoreIntegrationTest.php`.
+7. **Guía de Migración y Operaciones:** `docs/GUIA_MIGRACION_OPERACIONES.md` con requisitos, instalación, migraciones, tareas programadas (Cron y Task Scheduler) y procedimientos operativos.
+8. **Pruebas automatizadas y verificación general:** PHPUnit completo, verificación de sintaxis (`php -l`) y suite E2E en navegador.
+
+---
+
+### 2. Matriz de Evidencia Técnica de Criterios Auditados
+
+| Criterio | Archivo(s) | Líneas Clave | Evidencia Técnica Verificada | Estado |
+| :--- | :--- | :--- | :--- | :---: |
+| **1. Cabeceras HTTP, Rutas, Permisos y 404** | `includes/funciones.php`<br>`Router.php`<br>`public/index.php`<br>`controllers/PagoController.php` | `funciones.php:43-68,74`<br>`Router.php:22-24,40,47-49`<br>`index.php:55,85`<br>`PagoController.php:240-287` | Función `emitir_cabeceras_seguridad()` emite `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN` y `Referrer-Policy: strict-origin-when-cross-origin` en enrutador, vistas y sesiones. `Router.php` emite `http_response_code(404)` ante rutas inexistentes. Endpoint `POST /api/pagos/reembolsar` exige `isAdmin()` y `validar_csrf()` (403 si falta token) y delega a `PagoService::reembolsarPago`. | **CUMPLE** |
+| **2. Dependencias, Scripts y .gitignore** | `composer.json`<br>`package.json`<br>`.gitignore` | `composer.json:29-36`<br>`package.json:6-11`<br>`.gitignore:4-5` | `composer.json` define scripts estandarizados (`test`, `migrate:status`, `migrate:up`, `migrate:down`, `db:backup`, `db:restore`). `package.json` define scripts de build para Sass y JS. `.gitignore` incluye `includes/.env` y `storage/`. Cero archivos `.env` o secretos rastreados en Git (`git ls-files`). | **CUMPLE** |
+| **3. Consultas SQL, Claves Foráneas e Índices** | `database/migrations/006_base_pagos.sql`<br>`database/migrations/006_base_pagos_rollback.sql`<br>`database/README.md` | `006_base_pagos.sql:7-10`<br>`006_base_pagos_rollback.sql:9-11`<br>`README.md:12-17` | Migración `006` añade índice `idx_citas_estado_pago` sobre `citas(estado_pago)` y rollback lo elimina limpiamente. `database/README.md` documenta las 6 migraciones, claves foráneas `ON DELETE SET NULL`/`CASCADE`/`RESTRICT` e índices de búsqueda/unicidad. | **CUMPLE** |
+| **4. Integración Continua (CI en GitHub Actions)** | `.github/workflows/ci.yml` | `ci.yml:1-77` | Pipeline CI configurado en Ubuntu Latest con servicio `mysql:8.0` (`appsalon_ci_test`), PHP 8.2 con `mysqli`, `pdo_mysql`, `mbstring`, `zlib`, linter sintáctico (`php -l`), carga de `schema_base.sql`, migraciones `001-006`, ejecución de PHPUnit y validación de `backup_db.php` / `restore_db.php` con compresión `.sql.gz`. | **CUMPLE** |
+| **5. Docker Reproducible y Variables de Entorno** | `includes/.env.example`<br>`Dockerfile`<br>`docker-compose.yml` | `.env.example:1-41`<br>`Dockerfile:1-10`<br>`docker-compose.yml:1-69` | `.env.example` documenta todas las variables (`APP_ENV`, `APP_URL`, `APP_TIMEZONE`, `DB_*`, `EMAIL_*`, `NOTIFICACIONES_*`, `RESERVA_*`, `PAYMENT_*`). `Dockerfile` configura `php:8.2-apache` con extensiones y DocumentRoot `/public`. `docker-compose.yml` orquesta MySQL y Apache con nombres de contenedor y red parametrizables para evitar colisiones con entornos locales. | **CUMPLE** |
+| **6. Scripts CLI de Respaldo y Restauración** | `scripts/backup_db.php`<br>`scripts/restore_db.php`<br>`tests/Integration/BackupRestoreIntegrationTest.php` | `backup_db.php:1-220`<br>`restore_db.php:1-234`<br>`BackupRestoreIntegrationTest.php:79-310` | `backup_db.php` ejecuta snapshot consistente en InnoDB (`REPEATABLE READ` + `START TRANSACTION WITH CONSISTENT SNAPSHOT`), exporta DDL y datos en `utf8mb4`, soporta `.sql.gz` y genera hash SHA-256. `restore_db.php` autodetecta GZIP, parsea SQL respetando comillas y comentarios, valida cada sentencia y restaura integridad referencial. Cobertura probada en `BackupRestoreIntegrationTest.php`. | **CUMPLE** |
+| **7. Guía de Migración y Operaciones** | `docs/GUIA_MIGRACION_OPERACIONES.md` | `GUIA_MIGRACION_OPERACIONES.md:1-186` | Documentación completa con 6 secciones: requisitos de sistema, instalación desde cero, gestión de migraciones (001 a 006), tareas programadas (Linux Cron y Windows Task Scheduler para `scripts/procesar_notificaciones.php`), políticas de respaldo/restauración y matriz de seguridad de rutas. | **CUMPLE** |
+| **8. Verificación y Suites Automatizadas** | Código completo<br>`tests/Integration/BackupRestoreIntegrationTest.php` | `BackupRestoreIntegrationTest.php:330-336` | Sintaxis PHP: 100% OK (`php -l`). Navegador E2E: 19/19 checks `[OK]`. **HALLAZGO CRÍTICO EN PHPUNIT:** La prueba `BackupRestoreIntegrationTest::testAuditoriaIntegralDeCabecerasSeguridadRutasPermisosEIndices()` contamina variables superglobales (`$_SERVER['REQUEST_URI'] = '/api/pagos/reembolsar'`, `$_SERVER['HTTP_ACCEPT'] = 'application/json'`) sin restaurarlas en `tearDown()`, provocando 2 fallos en `CitaModuloIntegrationTest` y salida riesgosa en ejecuciones limpias de PHPUnit (`FAILURES! Tests: 172, Assertions: 2031, Failures: 2, Risky: 1`). | **NO CUMPLE (REQUIERE CORRECCIÓN)** |
+
+---
+
+### 3. Evidencia de Ejecución de Pruebas
+
+#### A. Verificación Sintáctica PHP (`php -l`)
+- **Comando:** `docker run --rm -v "C:/Users/...:/app" -w /app appsalon-php-test sh -c "find Router.php classes controllers database includes interfaces models public repositories scripts services tests views -name '*.php' -print0 | xargs -0 -n1 php -l"`
+- **Resultado:** 89 archivos analizados; 0 errores de sintaxis detectados.
+
+#### B. Suite Completa de Pruebas PHPUnit (Contenedor Aislado `appsalon-auditct-db`)
+- **Entorno de Auditoría:** Contenedor Docker aislado `appsalon-auditct-db` (`mysql:8.0`) en red `appsalon-auditct-net`, inicializado con `database/schema_base.sql` y migraciones `001` a `006` aplicadas mediante `migrador.php up`.
+- **Comando ejecutado:**
+  ```bash
+  docker run --rm --network appsalon-auditct-net -v "C:/Users/.../auditing_fase_4b_reservas:/app" -w /app \
+    -e DB_HOST=appsalon-auditct-db -e DB_PORT=3306 -e DB_USER=root -e DB_PASS=root -e DB_NAME=appsalon_audit_test \
+    appsalon-php-test php -d variables_order=EGPCS -d date.timezone=America/Guayaquil vendor/bin/phpunit --do-not-cache-result --colors=never
+  ```
+- **Resultado obtenido (Ejecución Limpia):**
+  - **Fallo:** `FAILURES! Tests: 172, Assertions: 2031, Failures: 2, Risky: 1.`
+  - **Código de salida:** `1`.
+  - **Detalle de los fallos:**
+    1. `Tests\Integration\CitaModuloIntegrationTest::testAdminControllerExigeRolAdministrador`: `Failed asserting that 403 is identical to 302.` (Test arriesgado: salida inesperada `{"resultado":false,"error":"Acceso denegado"}`).
+    2. `Tests\Integration\CitaModuloIntegrationTest::testApiEliminarManejaFalloSqlEnModalidadesHtmlYJsonConRollbackSinRedireccion302`: `Failed asserting that '{"resultado":false,"error":"No fue posible eliminar la cita debido a un error de base de datos."}' contains "Error 500: No fue posible eliminar la cita debido a un error de base de datos."`.
+  - **Análisis de Causa Raíz:**
+    En `tests/Integration/BackupRestoreIntegrationTest.php` (líneas 330-336), `testAuditoriaIntegralDeCabecerasSeguridadRutasPermisosEIndices()` sobrescribe:
+    ```php
+    $_SERVER['REQUEST_METHOD'] = 'POST';
+    $_SERVER['REQUEST_URI'] = '/api/pagos/reembolsar';
+    $_SERVER['HTTP_ACCEPT'] = 'application/json';
+    ```
+    Al no existir un método `tearDown()` ni un bloque `try ... finally` que restaure `$_SERVER`, el estado global permanece contaminado para las pruebas subsecuentes. Cuando `CitaModuloIntegrationTest` se ejecuta a continuación en el mismo proceso PHP, `es_peticion_json()` (`includes/funciones.php:90-99`) evalúa `true` debido a `str_starts_with($uri, '/api/')` (`$uri = '/api/pagos/reembolsar'`), forzando respuestas JSON en lugar de redirecciones o respuestas HTML tradicionales.
+    Esto provocará el fallo del workflow en GitHub Actions (`.github/workflows/ci.yml`), donde la suite se ejecuta en un clon limpio sin caché.
+
+#### C. Suite de Navegador Real E2E (Puppeteer)
+- **Comando ejecutado:**
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File tests/verificar_navegador.ps1
+  ```
+- **Resultado obtenido:**
+  - **Identificador de ejecución independiente (`RUN_ID`):** `9f82b8d9cba04f4cbfd0c7a48d0692f9`
+  - **19 comprobaciones E2E superadas (`[OK]`):**
+    - `ADMIN-01` a `ADMIN-04`: CRUD administrativo de servicios con duración.
+    - `PROF-01` y `PROF-02`: Gestión de profesionales, horarios, descansos y bloqueos.
+    - `PRE-01`: Login interactivo de cliente y redirección a `/cita`.
+    - `DISP-01`: Consulta autenticada en `GET /api/disponibilidad`.
+    - `REC-01` a `REC-04`: Flujo interactivo en `/cita`, accesibilidad, filtrado de profesionales, resumen y reserva SweetAlert2.
+    - `RES-01`: Reserva con profesional, descuento de ocupación, rechazo `409` por solapamiento y cancelación en `#mis-citas`.
+    - `ADMIN-05`: Consulta administrativa en `/admin?fecha=2026-10-12`, eliminación en `/api/eliminar` y liberación de ocupación.
+    - `REP-01`: Consulta de reportes administrativos en `/admin/reportes`, validación de KPIs globales, ocupación y exportación CSV.
+    - `PAG-01`: Flujo completo de pagos con `MockPaymentGateway`: rechazo `422` ante datos de tarjeta, cálculo de importe en servidor ($195.00 ignorando $1.00 de cliente), bloqueo de confirmación por redirección del navegador en `/pago/resultado`, webhook con firma HMAC-SHA256, verificación de respuesta idempotente y actualización inmediata de `$195.00` pagado en `/admin/reportes`.
+    - `AUTH-01`: Ciclo de autenticación, rechazo de usuario sin confirmar y recuperación de cuenta sin enumeración.
+    - `NOTIF-01`: Despacho SMTP de correos transaccionales de confirmación y cancelación de citas en buzón de pruebas (8 correos capturados).
+    - `REC-05`: `Errores consola: 0, Solicitudes fallidas: 0`.
+  - **Persistencia verificada en MySQL (`appsalon_browser_test`):** Citas, servicios, horarios, notificaciones y pagos transaccionales validados.
+  - **Código de salida:** `0`.
+  - **Limpieza posterior:** Contenedores efímeros y `includes/.env` temporal eliminados; `git checkout -- tests/browser_test_report.json` ejecutado para mantener el worktree limpio.
+
+---
+
+### 4. Comparativa entre Reporte del Desarrollador y Verificación del Auditor
+
+| Aspecto | Reportado por Desarrollador (`comprehensive_project_audit_roadmap`) | Verificado Independientemente por Auditor (`auditing_fase_4b_reservas`) | Coincidencia / Discrepancia |
+| :--- | :--- | :--- | :--- |
+| **SHA evaluado** | `a1de022faf087dfd609e6acb72b737f12e20c34a` | `a1de022faf087dfd609e6acb72b737f12e20c34a` | Exacta |
+| **Versión PHPUnit / PHP** | PHPUnit `10.5.66` / PHP `8.2.34` | PHPUnit `10.5.66` / PHP `8.2.34` | Exacta |
+| **Resultado PHPUnit** | `OK (172 tests, 2046 assertions)` (Exit `0`) | `FAILURES! Tests: 172, Assertions: 2031, Failures: 2, Risky: 1` (Exit `1` en ejecución limpia sin caché) | **Discrepancia crítica:** Fuga de superglobales en `BackupRestoreIntegrationTest.php` contamina `CitaModuloIntegrationTest`. |
+| **Resultado Suite Navegador E2E** | 19 checks `[OK]` (`RUN_ID: 30c68b1df71949a2afca0130e3526507`), `0` errores consola, `0` fallos red (Exit `0`) | 19 checks `[OK]` (`RUN_ID: 9f82b8d9cba04f4cbfd0c7a48d0692f9`), `0` errores consola, `0` fallos red (Exit `0`) | Exacta |
+| **Aislamiento respecto a app local** | `appsalon-web`, `appsalon-db`, `appsalon-net`, `appsalon_mvc` y `.env` intactos | `appsalon-web`, `appsalon-db`, `appsalon-net`, `appsalon_mvc`, `.env` y `stash@{0}` intactos | Exacta |
+
+---
+
+### 5. Conclusión y Veredicto Final de Cierre Técnico
+
+- **Hallazgos bloqueantes detectados:**
+  1. En `tests/Integration/BackupRestoreIntegrationTest.php`, la prueba `testAuditoriaIntegralDeCabecerasSeguridadRutasPermisosEIndices()` muta variables superglobales (`$_SERVER['REQUEST_METHOD'] = 'POST'`, `$_SERVER['REQUEST_URI'] = '/api/pagos/reembolsar'`, `$_SERVER['HTTP_ACCEPT'] = 'application/json'`) sin restablecerlas en un método `tearDown()` o bloque `try ... finally`.
+  2. Debido a esta fuga de estado global, una ejecución limpia de PHPUnit (`vendor/bin/phpunit --colors=never`, exactamente como corre en GitHub Actions `.github/workflows/ci.yml`) falla con 2 errores y 1 prueba riesgosa en `CitaModuloIntegrationTest`.
+- **Acción requerida del desarrollador:**
+  - Agregar un método `tearDown()` o bloque `finally` en `tests/Integration/BackupRestoreIntegrationTest.php` que restablezca `$_SERVER['REQUEST_URI'] = '/'`, `$_SERVER['HTTP_ACCEPT'] = ''`, `$_SERVER['CONTENT_TYPE'] = ''`, `$_SERVER['REQUEST_METHOD'] = 'GET'`, `$_POST = []` y `$_SESSION = []`.
+  - Re-ejecutar `vendor/bin/phpunit --do-not-cache-result --colors=never` para confirmar que los 172 tests y 2046 aserciones pasan limpiamente con Exit 0 sin depender de caché previa.
+- **Veredicto Final Cierre Técnico (`a1de022faf087dfd609e6acb72b737f12e20c34a`):** **`CORRECCIONES NECESARIAS`**.
+
+---
+
+## Re-Auditoría de Cierre Técnico — Ronda 2 (`f33076c304e766239b1bfc13d9dde1927d749827`)
+
+- **Fecha de Re-Auditoría:** 2026-10-10
+- **Rol:** Subagente Auditor Independiente
+- **Worktree Exclusivo de Auditoría:** `C:\Users\jonat\.gemini\antigravity\worktrees\AppSalon_PHP_MVC_JS_SASS\auditing_fase_4b_reservas`
+- **SHA Auditado:** `f33076c304e766239b1bfc13d9dde1927d749827`
+- **Commit Previo (Ronda 1 con correcciones necesarias):** `a1de022faf087dfd609e6acb72b737f12e20c34a`
+- **Rama Asociada:** `feature/cierre-tecnico`
+- **Integridad de Stash:** `stash@{0}: On auditing_fase_4b_reservas: temp stash for checkout` verificado y preservado intacto.
+
+---
+
+### 1. Verificación de Correcciones Aplicadas en la Ronda 2
+
+El desarrollador atendió exhaustivamente el hallazgo bloqueante reportado en la Ronda 1 mediante los siguientes cambios:
+
+1. **Restauración de superglobales en `tests/Integration/BackupRestoreIntegrationTest.php`:**
+   - **Método `tearDown()` implementado (líneas 312-324):** Restablece explícitamente `$_SERVER['REQUEST_URI'] = '/'`, `$_SERVER['HTTP_ACCEPT'] = ''`, `$_SERVER['CONTENT_TYPE'] = ''`, `$_SERVER['REQUEST_METHOD'] = 'GET'`, `$_POST = []`, `$_GET = []`, `$_SESSION = []`, `PagoController::setPagoService(null)` y `PagoController::setRawJsonOverride(null)` tras cada prueba del caso.
+   - **Bloque defensivo `try ... finally` (líneas 337-389):** En `testAuditoriaIntegralDeCabecerasSeguridadRutasPermisosEIndices()`, la mutación temporal de `$_SERVER` y `$_SESSION` para validar el rechazo 403 de `/api/pagos/reembolsar` está envuelta en un bloque `try ... finally` que garantiza la limpieza inmediata de las variables superglobales incluso ante fallos imprevistos.
+2. **Desactivación explícita de caché de resultados en PHPUnit:**
+   - En `composer.json` (línea 30): `"test": "phpunit --do-not-cache-result --colors=never"`.
+   - En `.github/workflows/ci.yml` (línea 69): `run: php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --colors=never`.
+   - Garantiza que tanto los desarrolladores como el flujo de Integración Continua ejecuten siempre las pruebas desde un estado limpio y reproducible, sin depender de ordenamientos residuales de defectos pasados en `.phpunit.result.cache`.
+
+---
+
+### 2. Evidencia de Ejecución de Pruebas en Entorno Aislado
+
+#### A. Suite Completa de Pruebas PHPUnit (Contenedor Aislado `appsalon-auditct-r2-db`)
+- **Entorno de Auditoría:** Contenedor Docker aislado `appsalon-auditct-r2-db` (`mysql:8.0`) en red `appsalon-auditct-r2-net`, inicializado con `database/schema_base.sql` y migraciones `001` a `006` aplicadas mediante `migrador.php up`.
+- **Comando ejecutado:**
+  ```bash
+  docker run --rm --network appsalon-auditct-r2-net -v "C:/Users/.../auditing_fase_4b_reservas:/app" -w /app \
+    -e DB_HOST=appsalon-auditct-r2-db -e DB_PORT=3306 -e DB_USER=root -e DB_PASS=root -e DB_NAME=appsalon_audit_test \
+    appsalon-php-test php -d variables_order=EGPCS -d date.timezone=America/Guayaquil vendor/bin/phpunit --do-not-cache-result --colors=never
+  ```
+- **Resultado obtenido (Ejecución Limpia sin Caché):**
+  - **Versión:** PHPUnit `10.5.66` / PHP `8.2.34`.
+  - **Total de pruebas:** `172 tests, 2046 assertions`.
+  - **Estado:** `OK (172 tests, 2046 assertions)`.
+  - **Fallos:** `0`.
+  - **Pruebas riesgosas:** `0`.
+  - **Código de salida:** `0`.
+  - **Validación del fix:** Las pruebas `CitaModuloIntegrationTest::testAdminControllerExigeRolAdministrador` (302 redirect a `/`) y `CitaModuloIntegrationTest::testApiEliminarManejaFalloSqlEnModalidadesHtmlYJsonConRollbackSinRedireccion302` (error 500 HTML) pasaron de forma 100% limpia sin interferencias de `es_peticion_json()`.
+
+#### B. Suite de Navegador Real E2E (Puppeteer)
+- **Comando ejecutado:**
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File tests/verificar_navegador.ps1
+  ```
+- **Resultado obtenido:**
+  - **Identificador de ejecución independiente (`RUN_ID`):** `c092a389eb3e480cb2659aa15529d4d6`
+  - **19 comprobaciones E2E superadas (`[OK]`):**
+    - `ADMIN-01` a `ADMIN-04`: CRUD administrativo de servicios con duración.
+    - `PROF-01` y `PROF-02`: Gestión de profesionales, horarios, descansos y bloqueos.
+    - `PRE-01`: Login interactivo de cliente y redirección a `/cita`.
+    - `DISP-01`: Consulta autenticada en `GET /api/disponibilidad`.
+    - `REC-01` a `REC-04`: Flujo interactivo en `/cita`, accesibilidad, filtrado de profesionales, resumen y reserva SweetAlert2.
+    - `RES-01`: Reserva con profesional, descuento de ocupación, rechazo `409` por solapamiento y cancelación en `#mis-citas`.
+    - `ADMIN-05`: Consulta administrativa en `/admin?fecha=2026-10-12`, eliminación en `/api/eliminar` y liberación de ocupación.
+    - `REP-01`: Consulta de reportes administrativos en `/admin/reportes`, validación de KPIs globales, ocupación y exportación CSV.
+    - `PAG-01`: Flujo completo de pagos con `MockPaymentGateway`: rechazo `422` ante datos de tarjeta, cálculo de importe en servidor ($195.00 ignorando $1.00 cliente), bloqueo de confirmación por redirección del navegador en `/pago/resultado`, webhook con firma HMAC-SHA256, verificación de respuesta idempotente y actualización inmediata de `$195.00` pagado en `/admin/reportes`.
+    - `AUTH-01`: Ciclo de autenticación, rechazo de usuario sin confirmar y recuperación de cuenta sin enumeración.
+    - `NOTIF-01`: Despacho SMTP de correos transaccionales de confirmación y cancelación de citas en buzón de pruebas (8 correos capturados).
+    - `REC-05`: `Errores consola: 0, Solicitudes fallidas: 0`.
+  - **Persistencia verificada en MySQL (`appsalon_browser_test`):** Pago transaccional verificado: `cita_referencia_id = 3`, `estado = 'completado'`, `monto = 195.00 USD`, `citas.estado_pago = 'pagado'`.
+  - **Código de salida:** `0`.
+  - **Limpieza posterior:** Contenedores efímeros y `includes/.env` temporal eliminados; `git checkout -- tests/browser_test_report.json` ejecutado para mantener el worktree limpio.
+
+---
+
+### 3. Comparativa entre Reporte del Desarrollador y Verificación del Auditor (Ronda 2)
+
+| Aspecto | Reportado por Desarrollador (`comprehensive_project_audit_roadmap`) | Verificado Independientemente por Auditor (`auditing_fase_4b_reservas`) | Coincidencia |
+| :--- | :--- | :--- | :--- |
+| **SHA evaluado** | `f33076c304e766239b1bfc13d9dde1927d749827` | `f33076c304e766239b1bfc13d9dde1927d749827` | Exacta |
+| **Versión PHPUnit / PHP** | PHPUnit `10.5.66` / PHP `8.2.34` | PHPUnit `10.5.66` / PHP `8.2.34` | Exacta |
+| **Resultado PHPUnit (--do-not-cache-result)** | `OK (172 tests, 2046 assertions)` (Exit `0`) | `OK (172 tests, 2046 assertions)` (Exit `0`) | Exacta |
+| **Resultado Suite Navegador E2E** | 19 checks `[OK]` (`RUN_ID: 3d118172c3e6461b9b07a841bf7e5d5b`), `0` errores consola, `0` fallos red (Exit `0`) | 19 checks `[OK]` (`RUN_ID: c092a389eb3e480cb2659aa15529d4d6`), `0` errores consola, `0` fallos red (Exit `0`) | Exacta |
+| **Aislamiento respecto a app local** | `appsalon-web`, `appsalon-db`, `appsalon-net`, `appsalon_mvc` y `.env` intactos | `appsalon-web`, `appsalon-db`, `appsalon-net`, `appsalon_mvc`, `.env` y `stash@{0}` intactos | Exacta |
+
+---
+
+### 4. Conclusión y Veredicto Final de Cierre Técnico (Ronda 2)
+
+- **Pendientes bloqueantes:** Ninguno. Todos los 8 criterios del Cierre Técnico (seguridad y cabeceras HTTP, scripts estandarizados de Composer y frontend, consistencia referencial e índices en migraciones 001 a 006, CI reproducible en GitHub Actions con `--do-not-cache-result`, Docker Compose parametrizado, scripts CLI de backup y restore transaccionales con Gzip/SHA-256, guía de operaciones completa en `docs/GUIA_MIGRACION_OPERACIONES.md` y suites automatizadas con 172 tests PHPUnit y 19 comprobaciones Puppeteer E2E superadas) han sido verificados de forma independiente y exhaustiva.
+- **Veredicto Final Cierre Técnico (`f33076c304e766239b1bfc13d9dde1927d749827`):** **`APROBADO`**.
+- **Siguiente paso autorizado:** Integración final de la rama `feature/cierre-tecnico` hacia `main` y cierre del proyecto.
+
 
 
