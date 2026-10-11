@@ -1,0 +1,58 @@
+# Matriz de Aceptación de Negocio — AppSalon
+
+Este documento define la correspondencia estricta entre los requisitos de negocio, las reglas funcionales, los componentes de implementación, las pruebas automatizadas de verificación y el estado de aceptación del sistema.
+
+---
+
+## 1. Matriz Funcional y Técnica de Requisitos
+
+| Módulo | Requisito de Negocio | Regla Funcional / Validación | Implementación Backend / Frontend | Pruebas Automatizadas | Estado |
+| :--- | :--- | :--- | :--- | :--- | :---: |
+| **Registro** | Creación de cuenta de cliente | Nombres y apellidos válidos, teléfono de 10 dígitos, email único, password seguro (mín. 6 caracteres). Token generado para confirmación. | `Usuario`, `AuthService::registrar`, `AuthController::crear` | `AuthServiceTest::testRegistroExitoso`, `AuthServiceTest::testRegistroEmailDuplicado` | **Cumplido** |
+| **Confirmación** | Activación de cuenta por token | Token de 15 caracteres un solo uso. Usuario no confirmado no puede iniciar sesión. | `AuthService::confirmar`, `AuthController::confirmar` | `AuthServiceTest::testConfirmarCuentaExitoso`, `E2E AUTH-01` | **Cumplido** |
+| **Recuperación** | Reestablecimiento seguro de password | Si el email existe, genera token temporal de recuperación sin revelar la existencia o inexistencia del usuario en la respuesta. | `AuthService::solicitarRecuperacion`, `AuthController::olvide` | `AuthServiceTest::testRecuperacionSinEnumeracion`, `E2E AUTH-01` | **Cumplido** |
+| **Autenticación** | Inicio y cierre de sesión seguro | Verificación de hash password, confirmación activa. Sesión con `HttpOnly`, `SameSite=Lax`, regeneración de ID de sesión para prevenir fijación. | `iniciar_sesion_segura()`, `AuthController::login` | `AuthServiceTest::testLoginCredencialesValidas`, `SeguridadHeadersTest` | **Cumplido** |
+| **Permisos** | Control de acceso basado en roles | Rutas `/admin/*` y endpoints administrativos exigen `admin = 1`. Endpoints de cliente exigen sesión autenticada. Protección CSRF en todas las peticiones mutables (`POST`). | `isAuth()`, `isAdmin()`, `exigir_csrf()`, `validar_csrf()` | `CitaModuloIntegrationTest::testAdminControllerExigeRolAdministrador`, `SeguridadFrontendIntegrationTest` | **Cumplido** |
+| **Servicios** | Gestión de catálogo de servicios | Nombre no vacío, precio numérico positivo, duración en minutos (> 0). Duración obligatoria en catálogo. | `Servicio`, `ServicioService`, `ServicioRepository` | `ServicioServiceTest`, `E2E ADMIN-01 a 04` | **Cumplido** |
+| **Profesionales** | Gestión de equipo y servicios asignados | Profesionales con nombre, email, teléfono, estado activo/inactivo y asignación de servicios que pueden ejecutar. | `Profesional`, `ProfesionalService`, `ProfesionalRepository` | `ProfesionalServiceTest`, `E2E PROF-01` | **Cumplido** |
+| **Agenda** | Configuración de horarios y descansos | Horarios semanales por día y franja, descansos intermedios y bloqueos puntuales por profesional. | `ProfesionalRepository`, `ProfesionalService` | `ProfesionalHorariosTest`, `E2E PROF-02` | **Cumplido** |
+| **Integridad de Agenda** | No invalidar citas confirmadas | Cambios en horarios, descansos o bloqueos deben comprobar bajo bloqueo que no colisionen con reservas ya confirmadas. Si colisionan, se rechaza el cambio. | `ProfesionalService::guardarHorarios`, `guardarDescanso`, `guardarBloqueo` | `CitaCancelacionAgendaIntegrationTest::testCambioAgendaRechazaColisionConCitasConfirmadas` | **En corrección** |
+| **Disponibilidad** | Cálculo determinista de turnos libres | Cálculo en zona `America/Guayaquil` de intervalos disponibles `[inicio, fin)` basados en horarios netos menos descansos, bloqueos y citas confirmadas. | `DisponibilidadService::consultar` | `DisponibilidadServiceTest`, `DisponibilidadTest`, `E2E DISP-01` | **Cumplido** |
+| **Reservas** | Contratación de citas con profesional | Validación de profesional activo y compatible con todos los servicios. Cálculo estricto de duración total y precio en servidor. Prevención de reservas concurrentes (`FOR UPDATE`). | `CitaService::reservarConProfesional`, `CitaRepository` | `CitaServiceTest::testReservaConcurrenteConflict409`, `E2E RES-01` | **Cumplido** |
+| **Política Anti-Bypass** | Exigencia obligatoria de profesional | Si el servidor exige profesional (`RESERVA_EXIGIR_PROFESIONAL=1`), ninguna solicitud del cliente con `modo_reserva=clasico` o `legacy` puede evadir la regla. | `CitaService::debeUsarFlujoConProfesional` | `CitaCancelacionAgendaIntegrationTest::testServidorExigeProfesionalInvalidaClasicoLegacy` | **En corrección** |
+| **Cancelación** | Cancelación trazable de citas | Cancelación lógica que preserva el registro de la cita, sus servicios históricos y pagos asociados. Registra `estado = 'cancelada'`, `cancelado_por`, `cancelado_at` y `motivo`. Libera ocupación. | `CitaRepository::cancelarCitaLogica`, `CitaService::cancelarCita` | `CitaCancelacionAgendaIntegrationTest::testCancelacionLogicaPreservaHistorialYLiberaOcupacion`, `testCancelacionRepetidaIdempotente` | **En corrección** |
+| **Políticas de Citas** | Citas pasadas, canceladas o pagadas | Rechazo explícito en servidor de solicitudes de modificación/cancelación sobre citas pasadas, citas ya canceladas o citas con conflicto. | `CitaService::cancelarCita`, `CitaService::validarPoliticaCancelacion` | `CitaCancelacionAgendaIntegrationTest::testRechazoCancelacionCitaPasada` | **En corrección** |
+| **Históricos** | Inmutabilidad de datos históricos | Al reservar se captura snapshot de servicios (nombre, precio, duración). Al cancelar o modificar catálogo, las citas preservan sus datos históricos exactos. | `citasservicios` snapshot, `citas` | `Fase4BReservasSnapshotIntegrationTest`, `E2E ADMIN-05` | **Cumplido** |
+| **Seguridad Frontend** | Prevención de inyecciones XSS | Inserción de nombres de usuario y servicios mediante nodos DOM y `textContent`. Prohibición de interpolación cruda en `innerHTML`. | `src/js/app.js`, `public/build/js/app.js` | `SeguridadFrontendIntegrationTest::testNombresMaliciososRenderizadosComoTextoSinXSS` | **En corrección** |
+| **Notificaciones Outbox** | Resiliencia de notificaciones post-commit | Registro de eventos en `notificaciones_citas` dentro de la transacción de base de datos (patrón Outbox). Envío SMTP posterior mediante worker desacoplado. | `NotificacionService::registrarOutbox`, `CitaService` | `NotificacionesWorkerIntegrationTest::testEventoOutboxDurableDentroDeTransaccion` | **En corrección** |
+| **Workers de Notificación** | Arrendamiento y recuperación | Adquisición con `worker_lease_token` y `lease_expires_at`. Recuperación de tareas atascadas. Descarte de recordatorios vencidos y confirmaciones de citas canceladas. | `NotificacionService::adquirirParaEnvio`, `scripts/procesar_notificaciones.php` | `NotificacionesWorkerIntegrationTest::testRecuperacionWorkerAtascadoYDescarteRecordatorioVencido` | **En corrección** |
+| **Reportes Financieros** | Trazabilidad contable independiente | Separación entre reservas/ocupación y transacciones financieras efectivas (`pagos`). Desglose por fecha de cobro (`confirmado_at`). Citas canceladas no borran pagos confirmados. | `ReporteRepository`, `ReporteService` | `ReportesFinancierosIntegrationTest::testReporteConservaPagosDeCitasCanceladasOConServiciosEliminados` | **En corrección** |
+| **Pagos e Idempotencia** | Idempotencia acotada y máquina de estados | Clave de idempotencia validada contra la huella de la operación (usuario y cita). Replay de confirmación no puede revertir un reembolso. Rechazo de reembolsos parciales. | `PagoService`, `PagoRepository`, `PagoController` | `PagoIdempotenciaSeguridadIntegrationTest::testIdempotenciaAisladaPorUsuarioYCita`, `testReplayConfirmacionNoRevierteReembolso` | **En corrección** |
+| **Entorno y Secretos** | Seguridad de pasarela de pago | Prohibición estricta de `MockPaymentGateway` en entorno de producción. Rechazo de secretos vacíos o por defecto (`mock_secret_cambiar_en_produccion`). | `PagoController::obtenerGateway`, `PagoService` | `PagoIdempotenciaSeguridadIntegrationTest::testProduccionRechazaMockGatewayYSecretosDefault` | **En corrección** |
+| **Operaciones y Respaldos** | Integridad y validación de backups | Manifiesto con hash SHA-256 verificado antes de iniciar restauración. Restauración en base aislada y validación de tablas y registros antes de confirmar. | `scripts/backup_db.php`, `scripts/restore_db.php` | `BackupRestoreIntegridadIntegrationTest::testValidacionPreviaHashYAbortoAnteArchivoCorrupto` | **En corrección** |
+| **Configuración Apache** | Front Controller en Docker | Configuración explícita de `DocumentRoot /var/www/html/public`, `DirectoryIndex index.php` y `AllowOverride All` en `Dockerfile` oficial. | `Dockerfile`, `docker/apache.conf` | `DockerStackSmokeTest` | **En corrección** |
+
+---
+
+## 2. Decisiones de Negocio Pendientes del Propietario
+
+Las siguientes reglas operativas y comerciales han sido identificadas durante el análisis y **requieren definición explícita por parte del Propietario** antes de su pase definitivo a producción:
+
+1. **Selección e Integración del Proveedor Comercial de Pagos:**
+   - *Situación actual:* El sistema opera con una interfaz desacoplada (`PaymentGatewayInterface`) y un adaptador de pruebas (`MockPaymentGateway`).
+   - *Decisión requerida:* Definir la pasarela de pagos definitiva a contratar para el mercado ecuatoriano (ej. Payphone, Kushki, Datafast/Paymentez) y sus credenciales de producción.
+2. **Política de Anticipos y Pagos Parciales:**
+   - *Situación actual:* Se cobra el 100% del valor de los servicios al confirmar la cita. Se rechazan pagos parciales para evitar descuadres contables sin soporte.
+   - *Decisión requerida:* Determinar si se requiere esquema de seña/anticipo (ej. 50% al reservar y 50% en el local) o pago total obligatorio previo a la atención.
+3. **Ventana Límite de Cancelación por parte del Cliente:**
+   - *Situación actual:* El cliente puede cancelar citas futuras sin penalización hasta el momento de inicio.
+   - *Decisión requerida:* Establecer la antelación mínima permitida para cancelaciones autónomas (ej. mínimo 2 horas, 12 horas o 24 horas antes del turno).
+4. **Política Financiera ante Cancelaciones y Reembolsos:**
+   - *Situación actual:* La cancelación de una cita pagada libera el turno pero no emite un reembolso automático ni aplica retención económica, registrando la cita en estado cancelado para auditoría manual.
+   - *Decisión requerida:* Definir si la cancelación genera nota de crédito/saldo a favor, reembolso automático vía pasarela (con o sin deducción de comisión por pasarela), o requiere gestión administrativa manual.
+5. **Tratamiento de Inasistencia del Cliente (*No-Show*):**
+   - *Situación actual:* Las citas pasadas no atendidas quedan registradas como no modificables.
+   - *Decisión requerida:* Definir el estado operativo (*no-show*) y el impacto financiero sobre pagos cobrados.
+6. **Régimen Tributario y Facturación:**
+   - *Situación actual:* Los precios en catálogo representan el valor final cobrado en USD.
+   - *Decisión requerida:* Determinar si se integrará facturación electrónica autorizada por el SRI o emisión de comprobantes fuera de la plataforma.

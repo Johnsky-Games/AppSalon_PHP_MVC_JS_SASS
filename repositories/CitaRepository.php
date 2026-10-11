@@ -69,7 +69,8 @@ class CitaRepository
 
         try {
             $stmt = $db->prepare(
-                "SELECT id, fecha, hora, hora_inicio, hora_fin, duracion_total_minutos, usuarioId, profesionalId
+                "SELECT id, fecha, hora, hora_inicio, hora_fin, duracion_total_minutos, usuarioId, profesionalId,
+                        estado, cancelado_por, cancelado_at, motivo_cancelacion, estado_pago
                  FROM citas
                  WHERE id = ?
                  LIMIT 1"
@@ -185,9 +186,10 @@ class CitaRepository
 
         try {
             $stmt = $db->prepare(
-                "SELECT id, fecha, hora, hora_inicio, hora_fin, duracion_total_minutos, usuarioId, profesionalId
+                "SELECT id, fecha, hora, hora_inicio, hora_fin, duracion_total_minutos, usuarioId, profesionalId,
+                        estado, cancelado_por, cancelado_at, motivo_cancelacion, estado_pago
                  FROM citas
-                 WHERE profesionalId = ? AND fecha = ?
+                 WHERE profesionalId = ? AND fecha = ? AND estado = 'confirmada'
                  ORDER BY COALESCE(hora_inicio, hora) ASC, id ASC"
             );
             if (!$stmt) {
@@ -902,9 +904,10 @@ class CitaRepository
     private function cargarCitasProfesionalEnFechaForUpdate(mysqli $db, int $profesionalId, string $fecha): array
     {
         $stmt = $db->prepare(
-            "SELECT id, fecha, hora, hora_inicio, hora_fin, duracion_total_minutos, usuarioId, profesionalId
+            "SELECT id, fecha, hora, hora_inicio, hora_fin, duracion_total_minutos, usuarioId, profesionalId,
+                    estado, cancelado_por, cancelado_at, motivo_cancelacion, estado_pago
              FROM citas
-             WHERE profesionalId = ? AND fecha = ?
+             WHERE profesionalId = ? AND fecha = ? AND estado = 'confirmada'
              ORDER BY COALESCE(hora_inicio, hora) ASC, id ASC
              FOR UPDATE"
         );
@@ -1220,6 +1223,118 @@ class CitaRepository
     }
 
     /**
+     * Cancela lógicamente una cita preservando el registro de la cita, sus registros en `citasservicios`
+     * con sus snapshots históricos, y cualquier registro en `pagos`.
+     * Operación transaccional con bloqueo pesimista e idempotente ante llamadas repetidas.
+     *
+     * @param int $citaId Identificador entero positivo de la cita.
+     * @param string $actor Actor que cancela ('cliente', 'admin', 'sistema').
+     * @param string|null $motivo Motivo opcional de la cancelación.
+     * @param string|null $fechaHoraCancelacion Fecha/hora de cancelación (YYYY-MM-DD HH:MM:SS) o null para tiempo actual.
+     * @return bool True si la cita fue cancelada o ya estaba cancelada (idempotencia), false si no existe.
+     * @throws PersistenceException Si ocurre un fallo SQL o de conexión.
+     */
+    public function cancelarCitaLogica(
+        int $citaId,
+        string $actor = 'cliente',
+        ?string $motivo = null,
+        ?string $fechaHoraCancelacion = null
+    ): bool {
+        if ($citaId <= 0) {
+            return false;
+        }
+
+        $db = $this->resolveDb();
+
+        try {
+            if (!$db->begin_transaction()) {
+                throw new PersistenceException("No se pudo iniciar la transacción de cancelación.");
+            }
+        } catch (PersistenceException $e) {
+            error_log("[CitaRepository::cancelarCitaLogica] " . $e->getMessage());
+            throw $e;
+        } catch (\Throwable $e) {
+            error_log("[CitaRepository::cancelarCitaLogica] Fallo al iniciar transacción: " . $e->getMessage());
+            throw new PersistenceException("No se pudo iniciar la transacción de cancelación.", 0, $e);
+        }
+
+        try {
+            $stmt = $db->prepare("SELECT id, estado, profesionalId FROM citas WHERE id = ? LIMIT 1 FOR UPDATE");
+            if (!$stmt) {
+                throw new PersistenceException("Fallo al preparar bloqueo de cita para cancelación: " . $db->error);
+            }
+            $stmt->bind_param('i', $citaId);
+            if (!$stmt->execute()) {
+                $err = $stmt->error;
+                $stmt->close();
+                throw new PersistenceException("Fallo al bloquear cita para cancelación: " . $err);
+            }
+            $res = $stmt->get_result();
+            if ($res === false) {
+                $err = $stmt->error;
+                $stmt->close();
+                throw new PersistenceException("Fallo al obtener resultado de cita bloqueada: " . $err);
+            }
+            $fila = $res->fetch_assoc();
+            $res->free();
+            $stmt->close();
+
+            if (!$fila) {
+                $db->rollback();
+                return false;
+            }
+
+            // Idempotencia: Si ya está cancelada, devolver éxito sin duplicar acciones
+            if (isset($fila['estado']) && $fila['estado'] === 'cancelada') {
+                $db->commit();
+                return true;
+            }
+
+            $actorValido = in_array($actor, ['cliente', 'admin', 'sistema'], true) ? $actor : 'cliente';
+            $canceladoAt = $fechaHoraCancelacion ?? date('Y-m-d H:i:s');
+            $motivoValido = ($motivo !== null && trim($motivo) !== '') ? mb_substr(trim($motivo), 0, 255) : null;
+
+            $stmtUpdate = $db->prepare(
+                "UPDATE citas 
+                 SET estado = 'cancelada', 
+                     cancelado_por = ?, 
+                     cancelado_at = ?, 
+                     motivo_cancelacion = ? 
+                 WHERE id = ?"
+            );
+            if (!$stmtUpdate) {
+                throw new PersistenceException("Fallo al preparar actualización de cancelación: " . $db->error);
+            }
+            $stmtUpdate->bind_param('sssi', $actorValido, $canceladoAt, $motivoValido, $citaId);
+            if (!$stmtUpdate->execute()) {
+                $err = $stmtUpdate->error;
+                $stmtUpdate->close();
+                throw new PersistenceException("Fallo al ejecutar cancelación lógica: " . $err);
+            }
+            $stmtUpdate->close();
+
+            if (!$db->commit()) {
+                throw new PersistenceException("Fallo al confirmar transacción de cancelación lógica.");
+            }
+
+            return true;
+        } catch (\Throwable $e) {
+            try {
+                $db->rollback();
+            } catch (\Throwable $rollbackError) {
+                error_log("[CitaRepository::cancelarCitaLogica] Error adicional en rollback: " . $rollbackError->getMessage());
+            }
+
+            if ($e instanceof PersistenceException) {
+                throw $e;
+            }
+
+            error_log("[CitaRepository::cancelarCitaLogica] Error inesperado en cancelación: " . $e->getMessage());
+            throw new PersistenceException("Fallo en la persistencia al cancelar lógicamente la cita.", 0, $e);
+        }
+    }
+
+    /**
      * Consulta las citas y sus servicios asociados para una fecha específica (`AAAA-MM-DD`)
      * destinadas al panel de administración.
      * Utiliza `COALESCE` para priorizar los datos históricos capturados al reservar
@@ -1237,6 +1352,7 @@ class CitaRepository
 
         $consulta = "SELECT citas.id, citas.hora, citas.hora_inicio, citas.hora_fin, ";
         $consulta .= " citas.duracion_total_minutos, citas.profesionalId, ";
+        $consulta .= " citas.estado, citas.cancelado_por, citas.cancelado_at, citas.motivo_cancelacion, citas.estado_pago, ";
         $consulta .= " profesionales.nombre as profesional_nombre, ";
         $consulta .= " CONCAT(usuarios.nombre, ' ', usuarios.apellido) as cliente, ";
         $consulta .= " usuarios.email, usuarios.telefono, ";
@@ -1248,7 +1364,7 @@ class CitaRepository
         $consulta .= " LEFT OUTER JOIN profesionales ON citas.profesionalId = profesionales.id ";
         $consulta .= " LEFT OUTER JOIN citasservicios ON citasservicios.citaId = citas.id ";
         $consulta .= " LEFT OUTER JOIN servicios ON servicios.id = citasservicios.servicioId ";
-        $consulta .= " WHERE fecha = ? ";
+        $consulta .= " WHERE citas.fecha = ? AND citas.estado = 'confirmada' ";
         $consulta .= " ORDER BY citas.id ASC, citasservicios.id ASC ";
 
         try {
@@ -1308,6 +1424,7 @@ class CitaRepository
 
         $sql = "SELECT citas.id, citas.fecha, citas.hora, citas.hora_inicio, citas.hora_fin,
                        citas.duracion_total_minutos, citas.usuarioId, citas.profesionalId,
+                       citas.estado, citas.cancelado_por, citas.cancelado_at, citas.motivo_cancelacion, citas.estado_pago,
                        profesionales.nombre AS profesional_nombre,
                        citasservicios.id AS cita_servicio_id,
                        citasservicios.servicioId AS servicio_id,
@@ -1372,6 +1489,11 @@ class CitaRepository
                             ? trim((string)$fila['profesional_nombre'])
                             : null,
                         'es_historica_sin_profesional' => ($profId === null),
+                        'estado' => (string)($fila['estado'] ?? 'confirmada'),
+                        'cancelado_por' => $fila['cancelado_por'] ?? null,
+                        'cancelado_at' => $fila['cancelado_at'] ?? null,
+                        'motivo_cancelacion' => $fila['motivo_cancelacion'] ?? null,
+                        'estado_pago' => (string)($fila['estado_pago'] ?? 'pendiente'),
                         'servicios' => [],
                         'total' => 0.0,
                         'total_formateado' => '0.00',

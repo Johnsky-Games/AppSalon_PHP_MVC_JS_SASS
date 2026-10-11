@@ -417,6 +417,18 @@ class ProfesionalController
             } elseif (es_peticion_json()) {
                 http_response_code(422);
             }
+
+            if (es_peticion_json()) {
+                $code = ($resultadoAccion['status'] === ProfesionalService::STATUS_ERROR) ? 500 : 422;
+                http_response_code($code);
+                header('Content-Type: application/json; charset=utf-8');
+                echo json_encode([
+                    'resultado' => false,
+                    'error' => $alertas['error'][0] ?? 'Solicitud inválida'
+                ]);
+                detener_ejecucion($code);
+                return;
+            }
         }
 
         self::renderizarVistaHorarios($router, $service, $id, $alertas);

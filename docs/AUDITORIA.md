@@ -759,5 +759,15 @@ El desarrollador atendió exhaustivamente el hallazgo bloqueante reportado en la
 - **Veredicto Final Cierre Técnico (`f33076c304e766239b1bfc13d9dde1927d749827`):** **`APROBADO`**.
 - **Siguiente paso autorizado:** Integración final de la rama `feature/cierre-tecnico` hacia `main` y cierre del proyecto.
 
+---
 
+## 5. Acto de Reapertura Integral por Auditoría Externa de Código
 
+- **Fecha:** 2026-10-10
+- **Motivo:** Una auditoría externa integral de código identificó hallazgos de diseño, concurrencia, resiliencia y seguridad no cubiertos por las suites anteriores. La entrega previa NO está lista para `main`.
+- **Cierre Documental Previo Reportado (Revocado):** `d4124f27abcb46fb947f158cf4a44d04d481e6eb`.
+- **Código bajo revisión auditora:** `f33076c304e766239b1bfc13d9dde1927d749827`.
+- **Rama de Integración:** `feature/correcciones-auditoria-integral`.
+- **Estado de Aceptación:** **CIERRE REVOCADO — AUDITORÍA Y CORRECCIÓN MULTIDISCIPLINAR EN CURSO**.
+- **Matriz de Negocio:** Publicada en `docs/MATRIZ_ACEPTACION_NEGOCIO.md`.
+- **Metodología de Corrección:** Cada hallazgo debe ser reproducido con pruebas automatizadas que fallen en el código actual (`f33076c304e766239b1bfc13d9dde1927d749827`) y pasen tras la corrección. Ningún agente aprueba sus propias correcciones.

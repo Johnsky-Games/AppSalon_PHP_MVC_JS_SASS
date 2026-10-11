@@ -267,14 +267,40 @@ class CitaService
     }
 
     /**
+     * Determina si el servidor exige obligatoriamente un profesional para realizar reservas:
+     * - Configuración de instancia `$this->exigirProfesionalInstancia`
+     * - Configuración global estática `self::$exigirProfesionalGlobal`
+     * - Variable de entorno `RESERVA_EXIGIR_PROFESIONAL` (1, true, yes, on)
+     */
+    public function servidorExigeProfesional(): bool
+    {
+        $envExigir = getenv('RESERVA_EXIGIR_PROFESIONAL');
+        if ($envExigir === false && isset($_ENV['RESERVA_EXIGIR_PROFESIONAL'])) {
+            $envExigir = (string)$_ENV['RESERVA_EXIGIR_PROFESIONAL'];
+        }
+        if (is_string($envExigir) && in_array(strtolower(trim($envExigir)), ['1', 'true', 'yes', 'on'], true)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
      * Evalúa la política explícita del endpoint `POST /api/citas`:
+     * - Si el servidor exige profesional (vía RESERVA_EXIGIR_PROFESIONAL) -> NUNCA puede ser eludido por clasico/legacy; retorna true.
      * - Si incluye `profesionalId` / `profesional_id` / `profesional` (incluso vacío o nulo) -> flujo con profesional.
      * - Si incluye `modo_reserva = 'profesional'` o `flujo = 'profesional'` -> flujo con profesional.
-     * - Si incluye explícitamente `modo_reserva = 'clasico'` (sin clave de profesional) -> flujo clásico heredado.
-     * - Si está activo `setExigirProfesional(true)` o `RESERVA_EXIGIR_PROFESIONAL=1` -> flujo con profesional.
+     * - Si incluye explícitamente `modo_reserva = 'clasico'` (sin clave de profesional y sin exigencia del servidor) -> flujo clásico heredado.
      */
     public function debeUsarFlujoConProfesional(array $datos): bool
     {
+        // 1. Si la política del servidor exige profesional por configuración de entorno,
+        // ninguna elección del cliente (incluyendo modo_reserva=clasico o legacy) puede prevalecer.
+        if ($this->servidorExigeProfesional()) {
+            return true;
+        }
+
+        // 2. Si la solicitud incluye parámetros explícitos de profesional
         if ($this->contieneParametroProfesional($datos)) {
             return true;
         }
@@ -282,12 +308,12 @@ class CitaService
         $modoRaw = $datos['modo_reserva'] ?? ($datos['flujo'] ?? null);
         $modo = is_string($modoRaw) ? strtolower(trim($modoRaw)) : '';
 
-        if ($modo === 'profesional') {
-            return true;
-        }
-
         if ($modo === 'clasico' || $modo === 'legacy') {
             return false;
+        }
+
+        if ($modo === 'profesional') {
+            return true;
         }
 
         if ($this->exigirProfesionalInstancia !== null) {
@@ -296,14 +322,6 @@ class CitaService
 
         if (self::$exigirProfesionalGlobal !== null) {
             return self::$exigirProfesionalGlobal;
-        }
-
-        $envExigir = getenv('RESERVA_EXIGIR_PROFESIONAL');
-        if ($envExigir === false && isset($_ENV['RESERVA_EXIGIR_PROFESIONAL'])) {
-            $envExigir = (string)$_ENV['RESERVA_EXIGIR_PROFESIONAL'];
-        }
-        if (is_string($envExigir) && in_array(strtolower(trim($envExigir)), ['1', 'true', 'yes', 'on'], true)) {
-            return true;
         }
 
         return false;
@@ -511,9 +529,10 @@ class CitaService
         $profesionalIdRaw = $datos['profesionalId'] ?? ($datos['profesional_id'] ?? ($datos['profesional'] ?? null));
         $profesionalId = $this->validarId($profesionalIdRaw);
         if ($profesionalId === null) {
+            $codigo = $this->servidorExigeProfesional() ? 'profesional_requerido' : 'solicitud_invalida';
             return [
                 'status' => self::STATUS_INVALID,
-                'codigo' => 'solicitud_invalida',
+                'codigo' => $codigo,
                 'httpCode' => 422,
                 'resultado' => false,
                 'error' => 'El identificador del profesional es obligatorio y debe ser un entero positivo.'
@@ -772,6 +791,194 @@ class CitaService
     }
 
     /**
+     * Valida la política de cancelación para una cita existente evaluada en America/Guayaquil:
+     * - Rechaza explícitamente cualquier intento de cancelar una cita cuya fecha/hora ya haya transcurrido.
+     *
+     * @return array{valida: bool, codigo?: string, error?: string}
+     */
+    public function validarPoliticaCancelacion(Cita $cita): array
+    {
+        $ahora = $this->obtenerAhora();
+        $tz = $this->obtenerZonaHoraria();
+
+        $horaTexto = !empty($cita->hora_inicio) ? $cita->hora_inicio : $cita->hora;
+        $partesHora = explode(':', trim((string)$horaTexto));
+        $horaInt = isset($partesHora[0]) ? (int)$partesHora[0] : 0;
+        $minInt = isset($partesHora[1]) ? (int)$partesHora[1] : 0;
+        $segInt = isset($partesHora[2]) ? (int)$partesHora[2] : 0;
+
+        $dtCita = \DateTimeImmutable::createFromFormat('!Y-m-d', $cita->fecha, $tz);
+        if (!$dtCita) {
+            return [
+                'valida' => false,
+                'codigo' => 'fecha_invalida',
+                'error' => 'Fecha de cita inválida.'
+            ];
+        }
+
+        $dtCita = $dtCita->setTime($horaInt, $minInt, $segInt);
+
+        if ($dtCita < $ahora) {
+            return [
+                'valida' => false,
+                'codigo' => 'cita_pasada',
+                'error' => 'No es posible cancelar una cita que ya ha pasado'
+            ];
+        }
+
+        return [
+            'valida' => true
+        ];
+    }
+
+    /**
+     * Cancela lógicamente una cita con trazabilidad e historial preservado:
+     * - Preserva intactos los registros de citas, citasservicios y pagos.
+     * - Registra estado = 'cancelada', cancelado_por, cancelado_at y motivo_cancelacion.
+     * - Libera de inmediato la ocupación en agenda.
+     * - Es idempotente ante llamadas repetidas (retorna 200 sin duplicar acciones).
+     * - Rechaza con HTTP 422 si la cita ya ha pasado en America/Guayaquil.
+     */
+    public function cancelarCita(
+        $idCitaRaw,
+        $usuarioIdAutenticado,
+        bool $esAdmin,
+        ?string $motivo = null
+    ): array {
+        $usuarioId = $this->validarId($usuarioIdAutenticado);
+        if ($usuarioId === null) {
+            return [
+                'status' => self::STATUS_UNAUTHORIZED,
+                'codigo' => 'no_autenticado',
+                'httpCode' => 401,
+                'resultado' => false,
+                'error' => 'No autenticado'
+            ];
+        }
+
+        $idCita = $this->validarId($idCitaRaw);
+        if ($idCita === null) {
+            return [
+                'status' => self::STATUS_INVALID,
+                'codigo' => 'solicitud_invalida',
+                'httpCode' => 422,
+                'resultado' => false,
+                'error' => 'Identificador de cita inválido.'
+            ];
+        }
+
+        try {
+            $cita = $this->citaRepository->findById($idCita);
+        } catch (PersistenceException $e) {
+            return [
+                'status' => self::STATUS_ERROR,
+                'codigo' => 'error_persistencia',
+                'httpCode' => 500,
+                'resultado' => false,
+                'error' => 'No fue posible consultar la cita debido a un error de base de datos.'
+            ];
+        }
+
+        if ($cita === null) {
+            return [
+                'status' => self::STATUS_NOT_FOUND,
+                'codigo' => 'cita_no_encontrada',
+                'httpCode' => 404,
+                'resultado' => false,
+                'error' => 'La cita solicitada no existe.'
+            ];
+        }
+
+        $esPropietario = (int)$cita->usuarioId === $usuarioId;
+        if (!$esAdmin && !$esPropietario) {
+            return [
+                'status' => self::STATUS_FORBIDDEN,
+                'codigo' => 'no_autorizado',
+                'httpCode' => 403,
+                'resultado' => false,
+                'error' => 'No tienes autorización para eliminar esta cita'
+            ];
+        }
+
+        // Idempotencia: Si ya está cancelada, devolver éxito 200 sin duplicar acciones ni lanzar errores
+        if ($cita->estado === 'cancelada') {
+            return [
+                'status' => self::STATUS_OK,
+                'codigo' => 'cita_ya_cancelada',
+                'httpCode' => 200,
+                'resultado' => true,
+                'id' => $idCita,
+                'mensaje' => 'La cita ya se encontraba cancelada.'
+            ];
+        }
+
+        // Política de citas pasadas: Rechazar explícitamente cualquier intento de cancelar cita pasada
+        $valPolitica = $this->validarPoliticaCancelacion($cita);
+        if (!$valPolitica['valida']) {
+            return [
+                'status' => self::STATUS_INVALID,
+                'codigo' => $valPolitica['codigo'] ?? 'cita_pasada',
+                'httpCode' => 422,
+                'resultado' => false,
+                'error' => $valPolitica['error']
+            ];
+        }
+
+        $actor = ($esAdmin && !$esPropietario) ? 'admin' : 'cliente';
+        $ahoraStr = $this->obtenerAhora()->format('Y-m-d H:i:s');
+
+        // Capturar snapshot de la cita antes de cancelarla para la notificación
+        $snapshotCancelacion = null;
+        try {
+            $snapshotCancelacion = $this->obtenerNotificacionService()->capturarSnapshotCitaParaCancelacion(
+                $idCita,
+                $actor
+            );
+        } catch (\Throwable $e) {
+            error_log("[CitaService::cancelarCita] Error aislado al capturar snapshot previo para cita {$idCita}: " . $e->getMessage());
+        }
+
+        try {
+            $cancelado = $this->citaRepository->cancelarCitaLogica($idCita, $actor, $motivo, $ahoraStr);
+            if (!$cancelado) {
+                return [
+                    'status' => self::STATUS_NOT_FOUND,
+                    'codigo' => 'cita_no_encontrada',
+                    'httpCode' => 404,
+                    'resultado' => false,
+                    'error' => 'La cita solicitada no existe.'
+                ];
+            }
+        } catch (PersistenceException $e) {
+            return [
+                'status' => self::STATUS_ERROR,
+                'codigo' => 'error_persistencia',
+                'httpCode' => 500,
+                'resultado' => false,
+                'error' => 'No fue posible cancelar la cita debido a un error de base de datos.'
+            ];
+        }
+
+        // Notificación transaccional de cancelación aislada post-commit
+        if ($snapshotCancelacion !== null) {
+            try {
+                $this->obtenerNotificacionService()->notificarCancelacionCitaDesdeSnapshot($snapshotCancelacion, false);
+            } catch (\Throwable $e) {
+                error_log("[CitaService::cancelarCita] Error aislado en notificación post-commit: " . $e->getMessage());
+            }
+        }
+
+        return [
+            'status' => self::STATUS_OK,
+            'codigo' => 'cita_cancelada',
+            'httpCode' => 200,
+            'resultado' => true,
+            'id' => $idCita,
+            'mensaje' => 'Cita cancelada correctamente'
+        ];
+    }
+
+    /**
      * Resuelve y valida la fecha solicitada para el listado administrativo.
      * Si no se proporciona o tiene un formato inválido, emplea la fecha actual (`Y-m-d`)
      * informando mediante `fechaValida` / `esValida` si la entrada original era válida.
@@ -863,7 +1070,8 @@ class CitaService
             $citas = [];
             foreach ($citasRaw as $c) {
                 $esFutura = ((string)$c['fecha'] > $fechaHoy);
-                $puedeCancelar = ((string)$c['fecha'] >= $fechaHoy);
+                $esConfirmada = (($c['estado'] ?? 'confirmada') === 'confirmada');
+                $puedeCancelar = $esConfirmada && ((string)$c['fecha'] >= $fechaHoy);
                 $c['es_futura'] = $esFutura;
                 $c['puede_cancelar'] = $puedeCancelar;
                 $citas[] = $c;

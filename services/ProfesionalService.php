@@ -821,6 +821,18 @@ class ProfesionalService
                 'alertas' => []
             ];
         } catch (PersistenceException $e) {
+            if ($e->getCode() === 422) {
+                return [
+                    'status' => self::STATUS_INVALID,
+                    'codigo' => 'colision_citas_confirmadas',
+                    'httpCode' => 422,
+                    'resultado' => false,
+                    'horarios' => $entidadesPlanas,
+                    'alertas' => [
+                        'error' => [$e->getMessage()]
+                    ]
+                ];
+            }
             return [
                 'status' => self::STATUS_ERROR,
                 'resultado' => false,
@@ -997,6 +1009,18 @@ class ProfesionalService
                 'alertas' => []
             ];
         } catch (PersistenceException $e) {
+            if ($e->getCode() === 422) {
+                return [
+                    'status' => self::STATUS_INVALID,
+                    'codigo' => 'colision_citas_confirmadas',
+                    'httpCode' => 422,
+                    'resultado' => false,
+                    'id' => null,
+                    'alertas' => [
+                        'error' => [$e->getMessage()]
+                    ]
+                ];
+            }
             return [
                 'status' => self::STATUS_ERROR,
                 'resultado' => false,
@@ -1212,6 +1236,18 @@ class ProfesionalService
                 'alertas' => []
             ];
         } catch (PersistenceException $e) {
+            if ($e->getCode() === 422) {
+                return [
+                    'status' => self::STATUS_INVALID,
+                    'codigo' => 'colision_citas_confirmadas',
+                    'httpCode' => 422,
+                    'resultado' => false,
+                    'id' => null,
+                    'alertas' => [
+                        'error' => [$e->getMessage()]
+                    ]
+                ];
+            }
             return [
                 'status' => self::STATUS_ERROR,
                 'resultado' => false,
@@ -1368,6 +1404,30 @@ class ProfesionalService
                 'error' => 'No fue posible consultar el catálogo de profesionales.'
             ];
         }
+    }
+
+    /**
+     * Alias de guardarHorariosSemanales para coherencia con la nomenclatura del dominio.
+     */
+    public function guardarHorarios($profesionalIdRaw, array $filasRaw): array
+    {
+        return $this->guardarHorariosSemanales($profesionalIdRaw, $filasRaw);
+    }
+
+    /**
+     * Alias de crearDescanso para coherencia con la nomenclatura del dominio.
+     */
+    public function guardarDescanso($profesionalIdRaw, array $datos): array
+    {
+        return $this->crearDescanso($profesionalIdRaw, $datos);
+    }
+
+    /**
+     * Alias de crearBloqueo para coherencia con la nomenclatura del dominio.
+     */
+    public function guardarBloqueo($profesionalIdRaw, array $datos): array
+    {
+        return $this->crearBloqueo($profesionalIdRaw, $datos);
     }
 }
 

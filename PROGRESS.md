@@ -9,12 +9,33 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 
 ---
 
-## Cierre Técnico: Consolidación de Seguridad, CI/CD, Docker, Respaldos y Operaciones
+## Cierre Técnico: Consolidación de Seguridad, CI/CD, Docker, Respaldos y Operaciones (REABIERTO)
 
-- **Rama:** `feature/cierre-tecnico`
-- **Commit de Código Auditado:** `f33076c304e766239b1bfc13d9dde1927d749827`
-- **Commit Base (Fase 6C aprobada):** `ab3350ba6abf2d89ea4f38551b006aace97ae286` (`8178b830bc03197775fa653857e66ec74eb290db` + registro de auditoría Fase 6C)
-- **Estado General del Cierre Técnico:** **Completado y Auditado (`APROBADO` en `docs/AUDITORIA.md`)**
+- **Rama Base / Cierre Revocado:** `feature/cierre-tecnico` en `d4124f27abcb46fb947f158cf4a44d04d481e6eb` (cierre revocado por auditoría externa).
+- **Rama de Integración Activa:** `feature/correcciones-auditoria-integral`
+- **Código Auditado Externamente:** `f33076c304e766239b1bfc13d9dde1927d749827`
+- **Estado General:** **REAPERTURA POR AUDITORÍA EXTERNA — Ejecución Multidisciplinar y Correcciones Obligatorias en Curso**
+- **Matriz de Negocio:** Documentada en `docs/MATRIZ_ACEPTACION_NEGOCIO.md` con trazabilidad de requisitos, reglas, pruebas y decisiones pendientes del propietario.
+
+### 0. Entrega Especialista 1: Reservas, Estados de Citas y Agenda (Fase 4B)
+- **Migración de Esquema (`007_citas_estado_cancelacion.sql` y rollback):**
+  - Incorpora en tabla `citas`: `estado` (`ENUM('confirmada', 'cancelada') DEFAULT 'confirmada'`), `cancelado_por` (`ENUM('cliente', 'admin') NULL`), `cancelado_at` (`DATETIME NULL`), `motivo_cancelacion` (`VARCHAR(255) NULL`).
+  - Índices agregados: `idx_citas_estado (estado)` e `idx_citas_prof_fecha_estado (profesionalId, fecha, estado)`.
+- **Modelos y Entidades (`models/Cita.php`, `models/AdminCita.php`):**
+  - Mapeo completo de columnas de cancelación y estado, con inicialización coherente y getters/setters tipados.
+- **Capa de Persistencia (`repositories/CitaRepository.php`, `repositories/ProfesionalRepository.php`):**
+  - `CitaRepository::cancelarCitaLogica()` implementado con transacción InnoDB atómica, bloqueo pesimista `FOR UPDATE`, idempotencia garantizada (200), y preservación íntegra de filas en `citas`, `citasservicios` y `pagos`.
+  - Filtro estricto `estado = 'confirmada'` en consultas de ocupación (`findOcupacionByProfesionalEnFecha` y `cargarCitasProfesionalEnFechaForUpdate`), liberando el cupo automáticamente en agenda ante cancelaciones.
+  - `ProfesionalRepository`: `findCitasConfirmadasFuturasForUpdate()` y `findCitasConfirmadasEnRangoForUpdate()` para serialización con `FOR UPDATE`.
+  - Validación de colisiones contra citas confirmadas en `replaceHorarios()`, `createDescanso()` y `createBloqueo()`, lanzando `PersistenceException` con código 422 si se intenta modificar la agenda dejando citas confirmadas fuera o solapadas.
+- **Capa de Servicios y Controladores (`services/CitaService.php`, `services/ProfesionalService.php`, `controllers/ProfesionalController.php`, `controllers/APIController.php`):**
+  - `CitaService`: La política de servidor (`RESERVA_EXIGIR_PROFESIONAL=1`) no puede ser eludida por `modo_reserva=clasico` o `legacy` (rechazo 422 con código `profesional_requerido`). Validación de citas pasadas en cancelación con código 422 (`cita_pasada`).
+  - `ProfesionalService`: Mapeo de excepciones transaccionales de colisión hacia `STATUS_INVALID` (`colision_citas_confirmadas`, HTTP 422). Aliases `guardarHorarios()`, `guardarDescanso()` y `guardarBloqueo()`.
+  - `ProfesionalController`: Manejo de respuestas 422 para peticiones JSON y renderizado de alertas en formularios HTML.
+  - `APIController`: Enrutamiento transparente a cancelación lógica manteniendo compatibilidad hacia atrás en `/api/eliminar`.
+- **Verificación Automatizada:**
+  - Suite de integración `tests/Integration/CitaCancelacionAgendaIntegrationTest.php`: 6/6 tests superados (58 aserciones).
+  - Suite E2E de navegador real Chrome Headless (`tests/verificar_navegador.ps1`): Superada al 100% (cero errores en consola, cero peticiones fallidas).
 
 ### 1. Alcance Consolidado del Cierre Técnico
 

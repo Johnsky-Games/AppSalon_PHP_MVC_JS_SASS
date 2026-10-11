@@ -21,6 +21,11 @@ class AdminCita
     public $servicio;
     public $precio;
     public $duracion_minutos;
+    public $estado;
+    public $cancelado_por;
+    public $cancelado_at;
+    public $motivo_cancelacion;
+    public $estado_pago;
 
     public function __construct($args = [])
     {
@@ -51,5 +56,20 @@ class AdminCita
         $this->duracion_minutos = isset($args['duracion_minutos']) && is_scalar($args['duracion_minutos'])
             ? (string)$args['duracion_minutos']
             : null;
+        $this->estado = isset($args['estado']) && is_string($args['estado']) && trim($args['estado']) !== ''
+            ? trim($args['estado'])
+            : 'confirmada';
+        $this->cancelado_por = isset($args['cancelado_por']) && is_string($args['cancelado_por']) && trim($args['cancelado_por']) !== ''
+            ? trim($args['cancelado_por'])
+            : null;
+        $this->cancelado_at = isset($args['cancelado_at']) && is_string($args['cancelado_at']) && trim($args['cancelado_at']) !== ''
+            ? trim($args['cancelado_at'])
+            : null;
+        $this->motivo_cancelacion = isset($args['motivo_cancelacion']) && is_string($args['motivo_cancelacion']) && trim($args['motivo_cancelacion']) !== ''
+            ? trim($args['motivo_cancelacion'])
+            : null;
+        $this->estado_pago = isset($args['estado_pago']) && is_string($args['estado_pago']) && trim($args['estado_pago']) !== ''
+            ? trim($args['estado_pago'])
+            : 'pendiente';
     }
 }

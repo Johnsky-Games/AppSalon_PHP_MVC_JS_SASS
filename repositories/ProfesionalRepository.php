@@ -451,6 +451,157 @@ class ProfesionalRepository
     }
 
     /**
+     * Consulta con bloqueo exclusivo (`FOR UPDATE`) las citas confirmadas de un profesional a partir de una fecha determinada.
+     *
+     * @param int $profesionalId
+     * @param string $fechaDesde (AAAA-MM-DD)
+     * @param mysqli|null $dbOverride
+     * @return array<int, \Model\Cita>
+     * @throws PersistenceException
+     */
+    public function findCitasConfirmadasFuturasForUpdate(int $profesionalId, string $fechaDesde, ?mysqli $dbOverride = null): array
+    {
+        $db = $dbOverride ?? $this->resolveDb();
+
+        try {
+            $stmt = $db->prepare(
+                "SELECT id, fecha, hora, hora_inicio, hora_fin, duracion_total_minutos, usuarioId, profesionalId, estado
+                 FROM citas
+                 WHERE profesionalId = ? AND fecha >= ? AND estado = 'confirmada'
+                 ORDER BY fecha ASC, COALESCE(hora_inicio, hora) ASC
+                 FOR UPDATE"
+            );
+            if (!$stmt) {
+                throw new PersistenceException("Error al preparar bloqueo de citas confirmadas futuras: " . $db->error);
+            }
+
+            $stmt->bind_param('is', $profesionalId, $fechaDesde);
+            if (!$stmt->execute()) {
+                $err = $stmt->error;
+                $stmt->close();
+                throw new PersistenceException("Error al ejecutar bloqueo de citas confirmadas futuras: " . $err);
+            }
+
+            $res = $stmt->get_result();
+            if ($res === false) {
+                $err = $stmt->error;
+                $stmt->close();
+                throw new PersistenceException("Error al obtener citas confirmadas futuras: " . $err);
+            }
+
+            $citas = [];
+            while ($fila = $res->fetch_assoc()) {
+                $citas[] = new \Model\Cita($fila);
+            }
+            $res->free();
+            $stmt->close();
+
+            return $citas;
+        } catch (PersistenceException $e) {
+            error_log("[ProfesionalRepository::findCitasConfirmadasFuturasForUpdate] " . $e->getMessage());
+            throw $e;
+        } catch (\Throwable $e) {
+            error_log("[ProfesionalRepository::findCitasConfirmadasFuturasForUpdate] Excepción inesperada: " . $e->getMessage());
+            throw new PersistenceException("Fallo al consultar citas confirmadas futuras del profesional.", 0, $e);
+        }
+    }
+
+    /**
+     * Consulta con bloqueo exclusivo (`FOR UPDATE`) las citas confirmadas de un profesional en un rango de fechas.
+     *
+     * @param int $profesionalId
+     * @param string $fechaInicio (AAAA-MM-DD)
+     * @param string $fechaFin (AAAA-MM-DD)
+     * @param mysqli|null $dbOverride
+     * @return array<int, \Model\Cita>
+     * @throws PersistenceException
+     */
+    public function findCitasConfirmadasEnRangoForUpdate(int $profesionalId, string $fechaInicio, string $fechaFin, ?mysqli $dbOverride = null): array
+    {
+        $db = $dbOverride ?? $this->resolveDb();
+
+        try {
+            $stmt = $db->prepare(
+                "SELECT id, fecha, hora, hora_inicio, hora_fin, duracion_total_minutos, usuarioId, profesionalId, estado
+                 FROM citas
+                 WHERE profesionalId = ? AND fecha >= ? AND fecha <= ? AND estado = 'confirmada'
+                 ORDER BY fecha ASC, COALESCE(hora_inicio, hora) ASC
+                 FOR UPDATE"
+            );
+            if (!$stmt) {
+                throw new PersistenceException("Error al preparar bloqueo de citas confirmadas en rango: " . $db->error);
+            }
+
+            $stmt->bind_param('iss', $profesionalId, $fechaInicio, $fechaFin);
+            if (!$stmt->execute()) {
+                $err = $stmt->error;
+                $stmt->close();
+                throw new PersistenceException("Error al ejecutar bloqueo de citas confirmadas en rango: " . $err);
+            }
+
+            $res = $stmt->get_result();
+            if ($res === false) {
+                $err = $stmt->error;
+                $stmt->close();
+                throw new PersistenceException("Error al obtener citas confirmadas en rango: " . $err);
+            }
+
+            $citas = [];
+            while ($fila = $res->fetch_assoc()) {
+                $citas[] = new \Model\Cita($fila);
+            }
+            $res->free();
+            $stmt->close();
+
+            return $citas;
+        } catch (PersistenceException $e) {
+            error_log("[ProfesionalRepository::findCitasConfirmadasEnRangoForUpdate] " . $e->getMessage());
+            throw $e;
+        } catch (\Throwable $e) {
+            error_log("[ProfesionalRepository::findCitasConfirmadasEnRangoForUpdate] Excepción inesperada: " . $e->getMessage());
+            throw new PersistenceException("Fallo al consultar citas confirmadas en rango del profesional.", 0, $e);
+        }
+    }
+
+    /**
+     * Convierte una hora en formato "HH:MM" o "HH:MM:SS" a minutos transcurridos desde medianoche.
+     */
+    private static function horaAMinutos(string $hora): int
+    {
+        $partes = explode(':', trim($hora));
+        return ((int)($partes[0] ?? 0)) * 60 + ((int)($partes[1] ?? 0));
+    }
+
+    /**
+     * Extrae el intervalo [inicioMinutos, finMinutos] de una cita confirmada.
+     *
+     * @param \Model\Cita $cita
+     * @return array{0: int, 1: int}
+     */
+    private function extraerIntervaloMinutosCita(\Model\Cita $cita): array
+    {
+        $horaInicioStr = ($cita->hora_inicio !== null && trim((string)$cita->hora_inicio) !== '')
+            ? (string)$cita->hora_inicio
+            : (string)$cita->hora;
+
+        $normInicio = HorarioProfesional::normalizarHora($horaInicioStr);
+        $inicioMin = self::horaAMinutos($normInicio);
+
+        if ($cita->hora_fin !== null && trim((string)$cita->hora_fin) !== '') {
+            $normFin = HorarioProfesional::normalizarHora((string)$cita->hora_fin);
+            $finMin = self::horaAMinutos($normFin);
+        } else {
+            $dur = (int)($cita->duracion_total_minutos ?? 0);
+            if ($dur <= 0) {
+                $dur = 30;
+            }
+            $finMin = $inicioMin + $dur;
+        }
+
+        return [$inicioMin, $finMin];
+    }
+
+    /**
      * @param mysqli $db
      * @param int $profesionalId
      * @param array<int, int> $servicioIds
@@ -619,6 +770,39 @@ class ProfesionalRepository
             $inTransaction = true;
 
             $this->bloquearProfesionalParaMutacion($db, $profesionalId);
+
+            $fechaHoy = date('Y-m-d');
+            $citasConfirmadas = $this->findCitasConfirmadasFuturasForUpdate($profesionalId, $fechaHoy, $db);
+            if (!empty($citasConfirmadas)) {
+                $horariosPorDia = [];
+                foreach ($horarios as $h) {
+                    $dia = (int)$h->dia_semana;
+                    $ini = self::horaAMinutos(HorarioProfesional::normalizarHora((string)$h->hora_inicio));
+                    $fin = self::horaAMinutos(HorarioProfesional::normalizarHora((string)$h->hora_fin));
+                    $horariosPorDia[$dia][] = ['inicio' => $ini, 'fin' => $fin];
+                }
+
+                foreach ($citasConfirmadas as $cita) {
+                    $diaSemana = (int)date('N', strtotime((string)$cita->fecha));
+                    [$citaIni, $citaFin] = $this->extraerIntervaloMinutosCita($cita);
+
+                    $franjas = $horariosPorDia[$diaSemana] ?? [];
+                    $cabe = false;
+                    foreach ($franjas as $f) {
+                        if ($citaIni >= $f['inicio'] && $citaFin <= $f['fin']) {
+                            $cabe = true;
+                            break;
+                        }
+                    }
+
+                    if (!$cabe) {
+                        throw new PersistenceException(
+                            "No se pueden modificar los horarios: colisiona con la cita confirmada ID {$cita->id} del {$cita->fecha}.",
+                            422
+                        );
+                    }
+                }
+            }
 
             $stmtDel = $db->prepare("DELETE FROM horarios_profesionales WHERE profesionalId = ?");
             if (!$stmtDel) {
@@ -818,6 +1002,27 @@ class ProfesionalRepository
 
             $profId = (int)$descanso->profesionalId;
             $this->bloquearProfesionalParaMutacion($db, $profId);
+
+            $fechaHoy = date('Y-m-d');
+            $citasConfirmadas = $this->findCitasConfirmadasFuturasForUpdate($profId, $fechaHoy, $db);
+            if (!empty($citasConfirmadas)) {
+                $diaDescanso = (int)$descanso->dia_semana;
+                $descIni = self::horaAMinutos(HorarioProfesional::normalizarHora((string)$descanso->hora_inicio));
+                $descFin = self::horaAMinutos(HorarioProfesional::normalizarHora((string)$descanso->hora_fin));
+
+                foreach ($citasConfirmadas as $cita) {
+                    $diaCita = (int)date('N', strtotime((string)$cita->fecha));
+                    if ($diaCita === $diaDescanso) {
+                        [$citaIni, $citaFin] = $this->extraerIntervaloMinutosCita($cita);
+                        if (max($citaIni, $descIni) < min($citaFin, $descFin)) {
+                            throw new PersistenceException(
+                                "No se puede registrar el descanso: colisiona con la cita confirmada ID {$cita->id} del {$cita->fecha}.",
+                                422
+                            );
+                        }
+                    }
+                }
+            }
 
             $stmt = $db->prepare(
                 "INSERT INTO descansos_profesionales (profesionalId, dia_semana, hora_inicio, hora_fin, motivo)
@@ -1068,6 +1273,38 @@ class ProfesionalRepository
 
             $profId = (int)$bloqueo->profesionalId;
             $this->bloquearProfesionalParaMutacion($db, $profId);
+
+            $citasConfirmadas = $this->findCitasConfirmadasEnRangoForUpdate(
+                $profId,
+                (string)$bloqueo->fecha_inicio,
+                (string)$bloqueo->fecha_fin,
+                $db
+            );
+            if (!empty($citasConfirmadas)) {
+                $bloqueoTodoDia = ($bloqueo->hora_inicio === null || trim((string)$bloqueo->hora_inicio) === '' ||
+                                   $bloqueo->hora_fin === null || trim((string)$bloqueo->hora_fin) === '');
+
+                if ($bloqueoTodoDia) {
+                    $primera = reset($citasConfirmadas);
+                    throw new PersistenceException(
+                        "No se puede registrar el bloqueo: colisiona con la cita confirmada ID {$primera->id} del {$primera->fecha}.",
+                        422
+                    );
+                }
+
+                $bloqIni = self::horaAMinutos(HorarioProfesional::normalizarHora((string)$bloqueo->hora_inicio));
+                $bloqFin = self::horaAMinutos(HorarioProfesional::normalizarHora((string)$bloqueo->hora_fin));
+
+                foreach ($citasConfirmadas as $cita) {
+                    [$citaIni, $citaFin] = $this->extraerIntervaloMinutosCita($cita);
+                    if (max($citaIni, $bloqIni) < min($citaFin, $bloqFin)) {
+                        throw new PersistenceException(
+                            "No se puede registrar el bloqueo: colisiona con la cita confirmada ID {$cita->id} del {$cita->fecha}.",
+                            422
+                        );
+                    }
+                }
+            }
 
             $stmt = $db->prepare(
                 "INSERT INTO bloqueos_profesionales (profesionalId, fecha_inicio, fecha_fin, hora_inicio, hora_fin, motivo)

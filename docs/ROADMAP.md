@@ -30,7 +30,7 @@ Cada fase del proyecto se ejecuta bajo la coordinación de tres roles con respon
 | **Fase 6A** | `feature/fase-6a-notificaciones` | `4fe475c02cc3dcd38a79ad7ec4ce5ef48f9e58ec` | **Aprobada (`APROBADO`)** |
 | **Fase 6B** | `feature/fase-6b-reportes` | `fb82ec7f59571dca82bf738a30e79c2d19489894` | **Aprobada (`APROBADO`)** |
 | **Fase 6C** | `feature/fase-6c-base-pagos` | `8178b830bc03197775fa653857e66ec74eb290db` | **Aprobada (`APROBADO`)** |
-| **Cierre Técnico** | `feature/cierre-tecnico` | `f33076c304e766239b1bfc13d9dde1927d749827` | **Aprobada (`APROBADO`)** |
+| **Cierre Técnico (Reabierto)** | `feature/correcciones-auditoria-integral` | `d4124f27abcb46fb947f158cf4a44d04d481e6eb` (revocado) | **Reabierto por Auditoría Externa** |
 
 ---
 

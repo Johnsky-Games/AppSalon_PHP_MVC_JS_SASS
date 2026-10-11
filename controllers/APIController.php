@@ -374,6 +374,12 @@ class APIController
             $esAdmin = isset($_SESSION['admin']) && (string)$_SESSION['admin'] === '1';
             $esJsonExplicito = self::solicitaRespuestaJsonExplicita();
 
+            // Si la solicitud indica explícitamente cancelación lógica o motivo, procesar mediante cancelar()
+            if (isset($_POST['cancelar']) || isset($_POST['motivo']) || isset($_POST['motivo_cancelacion']) || isset($_POST['accion_cancelar'])) {
+                self::cancelar();
+                return;
+            }
+
             $resultado = self::obtenerCitaService()->eliminar(
                 $_POST['id'] ?? null,
                 $usuarioIdAutenticado,
@@ -460,6 +466,123 @@ class APIController
                     'status' => 'ok',
                     'id' => (int)($_POST['id'] ?? 0),
                     'mensaje' => 'Cita cancelada correctamente'
+                ]);
+                detener_ejecucion(200);
+                return;
+            }
+
+            $destino = $_SERVER['HTTP_REFERER'] ?? ($esAdmin ? '/admin' : '/cita');
+            header('Location: ' . $destino);
+            detener_ejecucion(302);
+            return;
+        }
+    }
+
+    /**
+     * Endpoint para cancelación lógica de citas:
+     * Valida autenticación y CSRF en el controlador, y delega a CitaService::cancelarCita.
+     */
+    public static function cancelar()
+    {
+        iniciar_sesion_segura();
+
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            exigir_csrf();
+            isAuth();
+
+            $usuarioIdAutenticado = $_SESSION['id'] ?? null;
+            $esAdmin = isset($_SESSION['admin']) && (string)$_SESSION['admin'] === '1';
+            $esJsonExplicito = self::solicitaRespuestaJsonExplicita();
+
+            $motivo = $_POST['motivo'] ?? ($_POST['motivo_cancelacion'] ?? null);
+            $resultado = self::obtenerCitaService()->cancelarCita(
+                $_POST['id'] ?? null,
+                $usuarioIdAutenticado,
+                $esAdmin,
+                $motivo
+            );
+
+            if ($resultado['status'] === CitaService::STATUS_INVALID) {
+                $httpCode = (int)($resultado['httpCode'] ?? 422);
+                if ($esJsonExplicito) {
+                    http_response_code($httpCode);
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode([
+                        'resultado' => false,
+                        'status' => 'invalid',
+                        'codigo' => $resultado['codigo'] ?? 'solicitud_invalida',
+                        'error' => $resultado['error'] ?? 'Identificador de cita inválido.'
+                    ]);
+                    detener_ejecucion($httpCode);
+                    return;
+                }
+                header('Location: /admin');
+                detener_ejecucion(302);
+                return;
+            }
+
+            if ($resultado['status'] === CitaService::STATUS_NOT_FOUND) {
+                if ($esJsonExplicito) {
+                    http_response_code(404);
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode([
+                        'resultado' => false,
+                        'status' => 'not_found',
+                        'codigo' => $resultado['codigo'] ?? 'cita_no_encontrada',
+                        'error' => $resultado['error'] ?? 'La cita solicitada no existe.'
+                    ]);
+                    detener_ejecucion(404);
+                    return;
+                }
+                header('Location: ' . ($_SERVER['HTTP_REFERER'] ?? '/admin'));
+                detener_ejecucion(302);
+                return;
+            }
+
+            if (
+                $resultado['status'] === CitaService::STATUS_FORBIDDEN
+                || $resultado['status'] === CitaService::STATUS_UNAUTHORIZED
+            ) {
+                http_response_code(403);
+                if (es_peticion_json()) {
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode([
+                        'resultado' => false,
+                        'status' => 'forbidden',
+                        'codigo' => $resultado['codigo'] ?? 'no_autorizado',
+                        'error' => $resultado['error'] ?? 'No tienes autorización para eliminar esta cita'
+                    ]);
+                } else {
+                    echo "Error 403: No tienes autorización para eliminar esta cita.";
+                }
+                detener_ejecucion(403);
+                return;
+            }
+
+            if ($resultado['status'] === CitaService::STATUS_ERROR) {
+                http_response_code(500);
+                $mensajeError = $resultado['error'] ?? 'No fue posible cancelar la cita';
+                if (es_peticion_json()) {
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode([
+                        'resultado' => false,
+                        'error' => $mensajeError
+                    ]);
+                } else {
+                    echo "Error 500: " . s((string)$mensajeError);
+                }
+                detener_ejecucion(500);
+                return;
+            }
+
+            if ($esJsonExplicito) {
+                http_response_code(200);
+                header('Content-Type: application/json; charset=utf-8');
+                echo json_encode([
+                    'resultado' => true,
+                    'status' => 'ok',
+                    'id' => (int)($_POST['id'] ?? 0),
+                    'mensaje' => $resultado['mensaje'] ?? 'Cita cancelada correctamente'
                 ]);
                 detener_ejecucion(200);
                 return;
