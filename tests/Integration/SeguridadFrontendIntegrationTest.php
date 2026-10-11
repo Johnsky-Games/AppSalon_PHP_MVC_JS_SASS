@@ -138,9 +138,9 @@ class SeguridadFrontendIntegrationTest extends TestCase
 
         // 5. Confirmar presencia de llamadas seguras de construcción DOM
         $this->assertStringContainsString('document.createTextNode(', $srcContent);
-        $this->assertStringContainsString('.textContent =', $srcContent);
+        $this->assertMatchesRegularExpression('/\.textContent\s*=/', $srcContent);
         $this->assertStringContainsString('document.createTextNode(', $buildContent);
-        $this->assertStringContainsString('.textContent =', $buildContent);
+        $this->assertMatchesRegularExpression('/\.textContent\s*=/', $buildContent);
     }
 
     /**
