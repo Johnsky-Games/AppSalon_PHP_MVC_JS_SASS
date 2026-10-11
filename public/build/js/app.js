@@ -166,7 +166,7 @@ async function cargarProfesionalesCompatiblesRemoto() {
 function mostrarServicios(servicios) {
     const contenedor = document.querySelector('#servicios');
     if (!contenedor) return;
-    contenedor.innerHTML = '';
+    contenedor.textContent = '';
 
     servicios.forEach(servicio => {
         const { id, nombre, precio } = servicio;
@@ -253,7 +253,7 @@ function actualizarEstadoDisponibilidadUI(estado, mensaje) {
 function limpiarContenedorHorarios() {
     const contenedor = document.querySelector('#contenedor-horarios-disponibles');
     if (contenedor) {
-        contenedor.innerHTML = '';
+        contenedor.textContent = '';
     }
     intervalosDisponiblesActuales = [];
 }
@@ -306,7 +306,11 @@ function actualizarSelectorProfesionales(dispararConsultaDisponibilidad = true) 
 
     if (cita.servicios.length === 0) {
         disponibilidadRequestId++;
-        selectProf.innerHTML = '<option value="">-- Selecciona primero al menos un servicio --</option>';
+        selectProf.textContent = '';
+        const optVacia = document.createElement('OPTION');
+        optVacia.value = '';
+        optVacia.textContent = '-- Selecciona primero al menos un servicio --';
+        selectProf.appendChild(optVacia);
         selectProf.disabled = true;
         cita.profesionalId = '';
         cita.profesionalNombre = '';
@@ -325,7 +329,11 @@ function actualizarSelectorProfesionales(dispararConsultaDisponibilidad = true) 
     const compatibles = obtenerProfesionalesCompatiblesEnMemoria();
     if (compatibles.length === 0) {
         disponibilidadRequestId++;
-        selectProf.innerHTML = '<option value="">-- Sin profesionales compatibles --</option>';
+        selectProf.textContent = '';
+        const optSinCompatibles = document.createElement('OPTION');
+        optSinCompatibles.value = '';
+        optSinCompatibles.textContent = '-- Sin profesionales compatibles --';
+        selectProf.appendChild(optSinCompatibles);
         selectProf.disabled = true;
         cita.profesionalId = '';
         cita.profesionalNombre = '';
@@ -345,7 +353,11 @@ function actualizarSelectorProfesionales(dispararConsultaDisponibilidad = true) 
     }
 
     selectProf.disabled = false;
-    selectProf.innerHTML = '<option value="">-- Selecciona un profesional --</option>';
+    selectProf.textContent = '';
+    const optDefault = document.createElement('OPTION');
+    optDefault.value = '';
+    optDefault.textContent = '-- Selecciona un profesional --';
+    selectProf.appendChild(optDefault);
     compatibles.forEach(prof => {
         const option = document.createElement('OPTION');
         option.value = String(prof.id);
@@ -599,7 +611,7 @@ async function consultarDisponibilidad() {
 function renderizarBotonesIntervalos(intervalos) {
     const contenedor = document.querySelector('#contenedor-horarios-disponibles');
     if (!contenedor) return;
-    contenedor.innerHTML = '';
+    contenedor.textContent = '';
 
     intervalos.forEach(intervalo => {
         const btn = document.createElement('BUTTON');
@@ -750,10 +762,16 @@ function mostrarResumen() {
         textoServicio.textContent = nombreSrv;
 
         const duracionP = document.createElement('P');
-        duracionP.innerHTML = `<span>Duración:</span> ${durServicio} min`;
+        const spanDuracion = document.createElement('SPAN');
+        spanDuracion.textContent = 'Duración:';
+        duracionP.appendChild(spanDuracion);
+        duracionP.appendChild(document.createTextNode(` ${durServicio} min`));
 
         const precioServicio = document.createElement('P');
-        precioServicio.innerHTML = `<span>Precio:</span> $ ${precio}`;
+        const spanPrecio = document.createElement('SPAN');
+        spanPrecio.textContent = 'Precio:';
+        precioServicio.appendChild(spanPrecio);
+        precioServicio.appendChild(document.createTextNode(` $ ${precio}`));
 
         contenedorServicio.appendChild(textoServicio);
         contenedorServicio.appendChild(duracionP);
@@ -767,28 +785,46 @@ function mostrarResumen() {
     resumen.appendChild(headingCita);
 
     const nombreClienteP = document.createElement('P');
-    nombreClienteP.innerHTML = `<span>Nombre:</span> ${nombre}`;
+    const spanNombre = document.createElement('SPAN');
+    spanNombre.textContent = 'Nombre:';
+    nombreClienteP.appendChild(spanNombre);
+    nombreClienteP.appendChild(document.createTextNode(` ${nombre}`));
 
     const profesionalCitaP = document.createElement('P');
     profesionalCitaP.classList.add('resumen-profesional');
-    profesionalCitaP.innerHTML = `<span>Profesional:</span> ${profesionalNombre}`;
+    const spanProfesional = document.createElement('SPAN');
+    spanProfesional.textContent = 'Profesional:';
+    profesionalCitaP.appendChild(spanProfesional);
+    profesionalCitaP.appendChild(document.createTextNode(` ${profesionalNombre}`));
 
     const fechaFormateada = formatearFechaEspanolGuayaquil(fecha);
     const fechaCitaP = document.createElement('P');
     fechaCitaP.classList.add('resumen-fecha');
-    fechaCitaP.innerHTML = `<span>Fecha:</span> ${fechaFormateada}`;
+    const spanFecha = document.createElement('SPAN');
+    spanFecha.textContent = 'Fecha:';
+    fechaCitaP.appendChild(spanFecha);
+    fechaCitaP.appendChild(document.createTextNode(` ${fechaFormateada}`));
 
     const horarioCitaP = document.createElement('P');
     horarioCitaP.classList.add('resumen-horario');
-    horarioCitaP.innerHTML = `<span>Horario:</span> ${hora} - ${hora_fin} Horas`;
+    const spanHorario = document.createElement('SPAN');
+    spanHorario.textContent = 'Horario:';
+    horarioCitaP.appendChild(spanHorario);
+    horarioCitaP.appendChild(document.createTextNode(` ${hora} - ${hora_fin} Horas`));
 
     const duracionTotalP = document.createElement('P');
     duracionTotalP.classList.add('resumen-duracion-total');
-    duracionTotalP.innerHTML = `<span>Duración Total:</span> ${duracionTotal} min`;
+    const spanDuracionTotal = document.createElement('SPAN');
+    spanDuracionTotal.textContent = 'Duración Total:';
+    duracionTotalP.appendChild(spanDuracionTotal);
+    duracionTotalP.appendChild(document.createTextNode(` ${duracionTotal} min`));
 
     const precioTotalP = document.createElement('P');
     precioTotalP.classList.add('resumen-precio-total');
-    precioTotalP.innerHTML = `<span>Total a Pagar:</span> $ ${precioTotal.toFixed(2)}`;
+    const spanPrecioTotal = document.createElement('SPAN');
+    spanPrecioTotal.textContent = 'Total a Pagar:';
+    precioTotalP.appendChild(spanPrecioTotal);
+    precioTotalP.appendChild(document.createTextNode(` $ ${precioTotal.toFixed(2)}`));
 
     const botonReservar = document.createElement('BUTTON');
     botonReservar.id = 'btn-reservar-cita';
@@ -924,7 +960,7 @@ async function cargarMisCitas() {
 
         const data = await res.json();
         const citasCliente = Array.isArray(data.citas) ? data.citas : [];
-        listadoEl.innerHTML = '';
+        listadoEl.textContent = '';
 
         if (citasCliente.length === 0) {
             estadoEl.textContent = 'No tienes citas registradas actualmente.';
@@ -949,15 +985,25 @@ async function cargarMisCitas() {
                 : `${item.hora}`;
 
             const pFecha = document.createElement('P');
-            pFecha.innerHTML = `Fecha: <span>${item.fecha}</span>`;
+            pFecha.appendChild(document.createTextNode('Fecha: '));
+            const spanFecha = document.createElement('SPAN');
+            spanFecha.textContent = item.fecha;
+            pFecha.appendChild(spanFecha);
 
             const pProf = document.createElement('P');
             pProf.classList.add('mi-cita-profesional');
-            pProf.innerHTML = `Profesional: <span>${textoProf}</span>`;
+            pProf.appendChild(document.createTextNode('Profesional: '));
+            const spanProf = document.createElement('SPAN');
+            spanProf.textContent = textoProf;
+            pProf.appendChild(spanProf);
 
             const pHorario = document.createElement('P');
             pHorario.classList.add('mi-cita-horario');
-            pHorario.innerHTML = `${tieneProf && item.hora_inicio && item.hora_fin ? 'Horario' : 'Hora'}: <span>${textoHorario}</span>`;
+            const etiquetaHorario = (tieneProf && item.hora_inicio && item.hora_fin) ? 'Horario: ' : 'Hora: ';
+            pHorario.appendChild(document.createTextNode(etiquetaHorario));
+            const spanHorario = document.createElement('SPAN');
+            spanHorario.textContent = textoHorario;
+            pHorario.appendChild(spanHorario);
 
             li.appendChild(pFecha);
             li.appendChild(pProf);
@@ -979,7 +1025,10 @@ async function cargarMisCitas() {
 
             const pTotal = document.createElement('P');
             pTotal.classList.add('total');
-            pTotal.innerHTML = `Total: <span>$ ${item.total_formateado || item.total}</span>`;
+            pTotal.appendChild(document.createTextNode('Total: '));
+            const spanTotal = document.createElement('SPAN');
+            spanTotal.textContent = `$ ${item.total_formateado || item.total}`;
+            pTotal.appendChild(spanTotal);
             li.appendChild(pTotal);
 
             if (item.puede_cancelar) {
