@@ -67,8 +67,9 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 - **Pruebas:** `tests/Integration/BackupRestoreIntegridadIntegrationTest.php` (7 tests, 84 aserciones, salida 0) y `tests/Integration/MigrationTest.php` (7 tests, 171 aserciones, salida 0).
 
 ### 1. Evidencia de Ejecución de Suites Automatizadas
-- **PHPUnit 10.5.66 en contenedor aislado (`appsalon-db-audit-exp`, PHP 8.2.34 + MySQL 8.0, orden aleatorio):**
-  - **Comando:** `vendor/bin/phpunit --do-not-cache-result --order-by=random --colors=never`
+- **PHPUnit 10.5.66 en contenedor aislado (PHP 8.2.34 + MySQL 8.0, orden aleatorio con semilla reproducible):**
+  - **Comando:** `vendor/bin/phpunit --do-not-cache-result --order-by=random --random-order-seed=1791756203 --colors=never`
+  - **Aislamiento de Sesión:** `tests/Unit/CsrfTest.php::setUp()` invoca `iniciar_sesion_segura()` garantizando estado activo antes de poblar `$_SESSION`, evitando sobreescritura accidental por `session_start()`.
   - **Resultado:** `OK (214 tests, 2660 assertions)` — 0 fallas, 0 errores, código de salida `0`.
 - **Suite de Navegador Real Headless Chrome (`tests/verificar_navegador.ps1`):**
   - **Comando:** `powershell -ExecutionPolicy Bypass -File tests/verificar_navegador.ps1`
