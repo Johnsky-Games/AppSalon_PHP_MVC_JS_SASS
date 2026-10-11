@@ -90,11 +90,20 @@ class Fase5InterfazReservasIntegrationTest extends TestCase
 
     protected function tearDown(): void
     {
+        $_SESSION = [];
+        $_POST = [];
+        $_GET = [];
+        $_SERVER['HTTP_X_CSRF_TOKEN'] = null;
+        $_SERVER['HTTP_REFERER'] = null;
+        unset($_SERVER['HTTP_ACCEPT'], $_SERVER['CONTENT_TYPE'], $_SERVER['HTTP_X_REQUESTED_WITH']);
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_SERVER['REQUEST_URI'] = '/';
         APIController::setServicioService(null);
         APIController::setCitaService(null);
         APIController::setDisponibilidadService(null);
         APIController::setProfesionalService(null);
         CitaService::setExigirProfesional(null);
+        http_response_code(200);
     }
 
     private function crearUsuario(

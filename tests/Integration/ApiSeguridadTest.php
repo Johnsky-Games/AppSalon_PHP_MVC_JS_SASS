@@ -47,8 +47,27 @@ class ApiSeguridadTest extends TestCase
         }
         $_SESSION = [];
         $_POST = [];
+        $_GET = [];
         $_SERVER['HTTP_X_CSRF_TOKEN'] = null;
+        $_SERVER['HTTP_REFERER'] = null;
+        unset($_SERVER['HTTP_ACCEPT'], $_SERVER['CONTENT_TYPE'], $_SERVER['HTTP_X_REQUESTED_WITH']);
         $_SERVER['REQUEST_METHOD'] = 'POST';
+        $_SERVER['REQUEST_URI'] = '/';
+        APIController::setServicioService(null);
+        APIController::setCitaService(null);
+        http_response_code(200);
+    }
+
+    protected function tearDown(): void
+    {
+        $_SESSION = [];
+        $_POST = [];
+        $_GET = [];
+        $_SERVER['HTTP_X_CSRF_TOKEN'] = null;
+        $_SERVER['HTTP_REFERER'] = null;
+        unset($_SERVER['HTTP_ACCEPT'], $_SERVER['CONTENT_TYPE'], $_SERVER['HTTP_X_REQUESTED_WITH']);
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_SERVER['REQUEST_URI'] = '/';
         APIController::setServicioService(null);
         APIController::setCitaService(null);
         http_response_code(200);
@@ -420,11 +439,14 @@ class ApiSeguridadTest extends TestCase
         $_POST['csrf_token'] = $token;
         $_POST['id'] = (string)$citaId;
 
+        ob_start();
         try {
             APIController::eliminar();
             $this->fail('Debe terminar con redirección 302');
         } catch (AppTerminationException $e) {
             $this->assertSame(302, $e->getStatusCode(), 'La eliminación exitosa debe redirigir con 302');
+        } finally {
+            ob_end_clean();
         }
 
         // Verificar que el commit persistió y la cita quedó cancelada preservando servicios asociados
