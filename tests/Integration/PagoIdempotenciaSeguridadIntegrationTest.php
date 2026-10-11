@@ -82,6 +82,14 @@ class PagoIdempotenciaSeguridadIntegrationTest extends TestCase
 
     protected function tearDown(): void
     {
+        $_SESSION = [];
+        $_POST = [];
+        $_GET = [];
+        $_SERVER['HTTP_X_CSRF_TOKEN'] = null;
+        $_SERVER['HTTP_REFERER'] = null;
+        unset($_SERVER['HTTP_ACCEPT'], $_SERVER['CONTENT_TYPE'], $_SERVER['HTTP_X_REQUESTED_WITH']);
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_SERVER['REQUEST_URI'] = '/';
         PagoController::setPagoService(null);
         PagoController::setRawJsonOverride(null);
         unset(
@@ -95,6 +103,7 @@ class PagoIdempotenciaSeguridadIntegrationTest extends TestCase
         putenv('PAYMENT_GATEWAY_PROVIDER=mock');
         putenv('PAYMENT_WEBHOOK_SECRET=test_safe_webhook_secret_2026');
         ActiveRecord::setDB(self::$db);
+        http_response_code(200);
     }
 
     private function crearUsuario(string $email, string $nombre = 'Test'): int

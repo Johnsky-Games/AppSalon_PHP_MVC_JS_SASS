@@ -101,10 +101,9 @@ class ReservaConcurrenciaIntegrationTest extends TestCase
         $_POST = [];
         $_SERVER['HTTP_X_CSRF_TOKEN'] = null;
         $_SERVER['HTTP_REFERER'] = null;
-        $_SERVER['HTTP_ACCEPT'] = null;
-        $_SERVER['CONTENT_TYPE'] = null;
-        $_SERVER['REQUEST_URI'] = null;
+        unset($_SERVER['HTTP_ACCEPT'], $_SERVER['CONTENT_TYPE'], $_SERVER['HTTP_X_REQUESTED_WITH']);
         $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_SERVER['REQUEST_URI'] = '/';
         APIController::setServicioService(null);
         APIController::setCitaService(null);
         APIController::setDisponibilidadService(null);
