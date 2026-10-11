@@ -424,51 +424,100 @@ class CitaCancelacionAgendaIntegrationTest extends TestCase
     }
 
     /**
-     * Caso 6: Concurrencia y serialización mediante bloqueos pesimistas InnoDB (`FOR UPDATE`).
+     * Caso 6: Concurrencia real multiproceso y serialización mediante bloqueos pesimistas InnoDB (`FOR UPDATE`).
+     * Un proceso administrador sostiene un bloqueo de agenda mientras un worker paralelo intenta
+     * reservar simultáneamente mediante barrera sincronizada READY/GO.
      */
     public function test_concurrencia_reserva_y_modificacion_agenda_bloqueo_pesimista(): void
     {
         $usuarioId = $this->crearUsuarioFixture();
-        $servicioId = $this->crearServicioFixture('Peinado', 30.00, 60);
+        $servicioId = $this->crearServicioFixture('Peinado Pro Concurrente', 35.00, 60);
         $profId = $this->crearProfesionalConHorarioFixture($servicioId);
         $fecha = $this->obtenerFechaHabilFutura();
 
-        // Reservar una primera cita confirmada
-        $res1 = self::$citaService->reservar($usuarioId, [
-            'fecha' => $fecha,
-            'hora' => '12:00',
-            'profesionalId' => $profId,
-            'servicios' => (string)$servicioId
-        ]);
-        $this->assertSame(CitaService::STATUS_OK, $res1['status']);
-
-        // Iniciar transacción en una segunda conexión para simular concurrencia
-        $host = getenv('DB_HOST') ?: 'test-db-esp1';
+        $host = getenv('DB_HOST') ?: 'appsalon-test-db';
         $user = getenv('DB_USER') ?: 'root';
         $pass = getenv('DB_PASS') ?: 'root';
         $name = getenv('DB_NAME') ?: 'appsalon_test';
         $port = (int)(getenv('DB_PORT') ?: 3306);
-        $db2 = new mysqli($host, $user, $pass, $name, $port);
-        $db2->set_charset('utf8mb4');
 
-        $repo2 = new CitaRepository($db2);
-        $profRepo2 = new ProfesionalRepository($db2);
-        $db2->begin_transaction();
+        // Conexión independiente para el hilo de administración
+        $connAdmin = new mysqli($host, $user, $pass, $name, $port);
+        $connAdmin->set_charset('utf8mb4');
 
-        // Adquirir bloqueo pesimista en db2
-        $citasBloqueadas = $profRepo2->findCitasConfirmadasFuturasForUpdate($profId, $fecha, $db2);
-        $this->assertCount(1, $citasBloqueadas);
-        $this->assertSame('confirmada', $citasBloqueadas[0]->estado);
-        $db2->commit();
+        $connAdmin->begin_transaction();
+        $stmtLock = $connAdmin->prepare("SELECT id FROM profesionales WHERE id = ? LIMIT 1 FOR UPDATE");
+        $stmtLock->bind_param('i', $profId);
+        $stmtLock->execute();
+        if ($resLock = $stmtLock->get_result()) {
+            $resLock->free();
+        }
+        $stmtLock->close();
 
-        // Cancelar la cita lógicamente dentro de db2
-        $canceladoExitoso = $repo2->cancelarCitaLogica((int)$res1['id'], 'admin', 'Cancelado en concurrencia');
-        $this->assertTrue($canceladoExitoso);
+        // El administrador inserta un bloqueo de 12:00 a 13:00 dentro de su transacción no confirmada
+        $stmtBloq = $connAdmin->prepare(
+            "INSERT INTO bloqueos_profesionales (profesionalId, fecha_inicio, fecha_fin, hora_inicio, hora_fin, motivo)
+             VALUES (?, ?, ?, '12:00:00', '13:00:00', 'Bloqueo administrativo concurrente')"
+        );
+        $stmtBloq->bind_param('iss', $profId, $fecha, $fecha);
+        $stmtBloq->execute();
+        $stmtBloq->close();
 
-        $db2->close();
+        // Lanzar worker concurrente que intentará reservar a las 12:00
+        $workerScript = __DIR__ . '/concurrent_reserva_worker.php';
+        $cfg = [
+            'accion' => 'reservar',
+            'usuarioId' => $usuarioId,
+            'profesionalId' => $profId,
+            'fecha' => $fecha,
+            'hora' => '12:00',
+            'servicios' => (string)$servicioId,
+        ];
+        $env = array_merge($_ENV, [
+            'DB_HOST' => $host,
+            'DB_USER' => $user,
+            'DB_PASS' => $pass,
+            'DB_NAME' => $name,
+            'DB_PORT' => (string)$port,
+        ]);
+        $spec = [
+            0 => ['pipe', 'r'],
+            1 => ['pipe', 'w'],
+            2 => ['pipe', 'w'],
+        ];
 
-        // En la conexión principal, verificar que la cita ahora figura cancelada y no bloquea disponibilidad
-        $citaConsultada = self::$citaRepository->findById((int)$res1['id']);
-        $this->assertSame('cancelada', $citaConsultada->estado);
+        $proc = proc_open('php ' . escapeshellarg($workerScript) . ' ' . escapeshellarg(json_encode($cfg)), $spec, $pipes, null, $env);
+        $this->assertIsResource($proc);
+
+        // Esperar señal READY del worker
+        $lineaReady = fgets($pipes[2]);
+        $this->assertSame("READY\n", $lineaReady, 'El worker paralelo debe reportar READY');
+
+        // Disparar GO al worker mientras el administrador retiene el lock pesimista
+        fwrite($pipes[0], "GO\n");
+        fflush($pipes[0]);
+        fclose($pipes[0]);
+
+        // Margen para que el worker entre a la contención del bloqueo InnoDB, luego confirmar el bloqueo
+        usleep(120000);
+        $connAdmin->commit();
+        $connAdmin->close();
+
+        $stdout = stream_get_contents($pipes[1]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        $exitCode = proc_close($proc);
+
+        $this->assertSame(0, $exitCode, 'El proceso worker debe finalizar limpiamente');
+        $resWorker = json_decode(trim((string)$stdout), true);
+        $this->assertIsArray($resWorker);
+
+        // La reserva debe rechazarse de forma controlada con HTTP 422 fuera_de_horario
+        $this->assertSame(422, $resWorker['httpCode'], 'La reserva paralela debe rechazarse con 422: ' . json_encode($resWorker));
+        $this->assertSame('fuera_de_horario', $resWorker['decoded']['codigo'] ?? null);
+
+        // Verificar que no se creó ninguna cita espuria en la base de datos
+        $totalCitas = (int)self::$db->query("SELECT COUNT(*) AS total FROM citas WHERE profesionalId = {$profId}")->fetch_assoc()['total'];
+        $this->assertSame(0, $totalCitas, 'No debe haberse registrado ninguna cita sobre el rango bloqueado');
     }
 }

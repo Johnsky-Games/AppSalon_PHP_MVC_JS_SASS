@@ -82,6 +82,24 @@ jobs:
           docker run --rm appsalon-web-ci php -m | grep -i mysqli
           docker run --rm appsalon-web-ci apache2ctl -M | grep rewrite_module
 
+      - name: Iniciar contenedor Apache oficial y validar endpoints HTTP contra MySQL
+        run: |
+          docker run -d --name appsalon-web-ci-instance \
+            -p 3000:80 \
+            -v "$GITHUB_WORKSPACE:/var/www/html" \
+            -e DB_HOST=172.17.0.1 \
+            -e DB_PORT=3306 \
+            -e DB_USER=root \
+            -e DB_PASS=root \
+            -e DB_NAME=appsalon_ci_test \
+            -e APP_ENV=testing \
+            -e APP_URL=http://localhost:3000 \
+            appsalon-web-ci
+          sleep 3
+          curl -f -I http://localhost:3000/ || curl -f -I http://127.0.0.1:3000/
+          docker logs appsalon-web-ci-instance
+          docker stop appsalon-web-ci-instance && docker rm appsalon-web-ci-instance
+
       - name: Ejecutar suite completa de PHPUnit (sin caché y orden aleatorio)
         run: php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --order-by=random --colors=never
 

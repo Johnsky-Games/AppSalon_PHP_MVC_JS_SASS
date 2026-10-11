@@ -433,23 +433,19 @@ class BackupRestoreIntegridadIntegrationTest extends TestCase
         $dbDst->query("CREATE TABLE `datos_criticos` (id INT AUTO_INCREMENT PRIMARY KEY, valor VARCHAR(100))");
         $dbDst->query("INSERT INTO `datos_criticos` (valor) VALUES ('valor_original_intacto_1'), ('valor_original_intacto_2')");
 
-        // Creamos un SQL con una sentencia sintácticamente válida pero que falla en la ejecución definitiva
-        // por un error forzado (ej. una tabla que intenta crear una clave foránea inválida hacia tabla inexistente,
-        // o un DROP condicionado). Sin embargo, para forzar que pase el staging y falle post-staging,
-        // creamos un script de SQL con una tabla que causa conflicto al crearse después del renombre.
-        // Específicamente: DROP TABLE IF EXISTS tabla1; CREATE TABLE tabla1...; INSERT INTO tabla1...;
-        // y una sentencia que falla: INSERT INTO tabla_inexistente VALUES (1);
-        // Nota: en staging fallaría si no es sintáctico. Pero si la sentencia falla en la última instrucción,
-        // tanto en staging como post-staging, restore_db no debe tocar la base.
-        // Si queremos que pase staging pero falle post-staging:
-        // Una sentencia que referencia una variable de sesión o un trigger que falle solo bajo condición,
-        // o simplemente probamos que un SQL con fallo garantizado en ejecución restaura las tablas respaldadas desde _bck_.
+        // Creamos un SQL que pasa al 100% la fase de staging pero falla exclusivamente
+        // en la ejecución post-staging sobre la base de datos destino definitiva.
+        // En staging (donde DATABASE() contiene 'staging'), se inserta 1 limpiamente.
+        // En destino (donde DATABASE() no contiene 'staging'), intenta insertar NULL
+        // en la clave primaria id, disparando error de integridad post-staging garantizado.
         $sqlContenido = <<<SQL
 -- AppSalon SQL Backup
 DROP TABLE IF EXISTS `nueva_tabla_test`;
 CREATE TABLE `nueva_tabla_test` (id INT PRIMARY KEY, nom VARCHAR(50));
 INSERT INTO `nueva_tabla_test` VALUES (1, 'ok');
-INSERT INTO `tabla_que_no_existe_para_forzar_error` VALUES (999);
+DROP TABLE IF EXISTS `control_error_post_staging`;
+CREATE TABLE `control_error_post_staging` (id INT PRIMARY KEY);
+INSERT INTO `control_error_post_staging` (id) VALUES (IF(DATABASE() LIKE '%_stg_%', 1, NULL));
 -- Fin del respaldo AppSalon
 SQL;
 
@@ -465,6 +461,7 @@ SQL;
 
             // Debe fallar con código de error (exitCode 1)
             $this->assertSame(1, $res['exitCode'], 'El script debe abortar con error.');
+            $this->assertStringContainsString('Error post-staging detectado', $res['stderr'], 'Debe registrar la activación de reversión post-staging');
 
             // Comprobar que los datos críticos de la base original se conservan intactos
             $resCheck = $dbDst->query("SELECT valor FROM `datos_criticos` ORDER BY id ASC");
@@ -475,7 +472,7 @@ SQL;
             }
             $this->assertSame(['valor_original_intacto_1', 'valor_original_intacto_2'], $filas);
 
-            // Comprobar que no quedaron tablas residuales de respaldo `_bck_`
+            // Comprobar que no quedaron tablas residuales de respaldo `_bck_` ni tablas nuevas fallidas
             $resTablas = $dbDst->query("SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'");
             $tablasRestantes = [];
             while ($tRow = $resTablas->fetch_row()) {
@@ -483,6 +480,7 @@ SQL;
             }
             $this->assertContains('datos_criticos', $tablasRestantes);
             $this->assertNotContains('nueva_tabla_test', $tablasRestantes);
+            $this->assertNotContains('control_error_post_staging', $tablasRestantes);
             foreach ($tablasRestantes as $tName) {
                 $this->assertStringStartsNotWith('_bck_', $tName);
             }

@@ -103,21 +103,36 @@ if (str_contains($sqlContenido, '-- AppSalon SQL Backup')) {
 // -----------------------------------------------------------------------------
 $hashCalculado = hash_file('sha256', $rutaEntrada);
 $hashEsperado = null;
+$datosMan = null;
+
+// Intentar cargar siempre el manifiesto si se especificó --manifest o si existe .manifest.json adyacente
+$rutaMan = null;
+if (isset($opciones['manifest']) && is_string($opciones['manifest']) && is_file($opciones['manifest'])) {
+    $rutaMan = $opciones['manifest'];
+} elseif (is_file($rutaEntrada . '.manifest.json')) {
+    $rutaMan = $rutaEntrada . '.manifest.json';
+}
+
+if ($rutaMan !== null) {
+    $rawMan = @file_get_contents($rutaMan);
+    $datosMan = $rawMan !== false ? json_decode($rawMan, true) : null;
+    if (is_array($datosMan) && isset($datosMan['sha256']) && is_string($datosMan['sha256'])) {
+        $hashEsperado = strtolower(trim($datosMan['sha256']));
+    }
+}
 
 if (isset($opciones['hash']) && is_string($opciones['hash']) && trim($opciones['hash']) !== '') {
-    $hashEsperado = strtolower(trim($opciones['hash']));
-} elseif (isset($opciones['manifest']) && is_string($opciones['manifest']) && is_file($opciones['manifest'])) {
-    $rawMan = @file_get_contents($opciones['manifest']);
-    $datosMan = $rawMan !== false ? json_decode($rawMan, true) : null;
-    if (is_array($datosMan) && isset($datosMan['sha256']) && is_string($datosMan['sha256'])) {
-        $hashEsperado = strtolower(trim($datosMan['sha256']));
+    $hashParam = strtolower(trim($opciones['hash']));
+    // Si ya teníamos hash del manifiesto y no coincide con el parámetro --hash, abortar por inconsistencia
+    if ($hashEsperado !== null && $hashEsperado !== $hashParam) {
+        fwrite(STDERR, sprintf(
+            "[ERROR] Verificación de integridad fallida: el hash provisto en --hash (%s) no coincide con el declarado en el manifiesto (%s).\n",
+            $hashParam,
+            $hashEsperado
+        ));
+        exit(1);
     }
-} elseif (is_file($rutaEntrada . '.manifest.json')) {
-    $rawMan = @file_get_contents($rutaEntrada . '.manifest.json');
-    $datosMan = $rawMan !== false ? json_decode($rawMan, true) : null;
-    if (is_array($datosMan) && isset($datosMan['sha256']) && is_string($datosMan['sha256'])) {
-        $hashEsperado = strtolower(trim($datosMan['sha256']));
-    }
+    $hashEsperado = $hashParam;
 }
 
 if (!isset($opciones['skip-hash-check']) && !isset($opciones['insecure'])) {
@@ -308,19 +323,57 @@ try {
 
         // Validación adicional contra manifiesto si existe
         if (isset($datosMan) && is_array($datosMan)) {
-            if (isset($datosMan['tablas']) && is_array($datosMan['tablas'])) {
-                $resStgTablas = $mysqli->query("SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'");
-                $tablasEnStaging = [];
-                if ($resStgTablas) {
-                    while ($filaT = $resStgTablas->fetch_row()) {
-                        $tablasEnStaging[] = $filaT[0];
-                    }
-                    $resStgTablas->free();
+            $resStgTablas = $mysqli->query("SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'");
+            $tablasEnStaging = [];
+            if ($resStgTablas) {
+                while ($filaT = $resStgTablas->fetch_row()) {
+                    $tablasEnStaging[] = (string)$filaT[0];
                 }
-                foreach ($datosMan['tablas'] as $nombreT => $infoT) {
-                    if (!in_array($nombreT, $tablasEnStaging, true)) {
-                        throw new RuntimeException("Validación de staging fallida: la tabla '{$nombreT}' declarada en el manifiesto no existe en staging.");
+                $resStgTablas->free();
+            }
+
+            // Validar que todas las tablas declaradas existan en staging (soporta array indexado o asociativo)
+            if (isset($datosMan['tablas']) && is_array($datosMan['tablas'])) {
+                foreach ($datosMan['tablas'] as $claveT => $valT) {
+                    $nombreTablaEsperada = is_string($claveT) && !is_numeric($claveT) ? $claveT : (string)$valT;
+                    if (!in_array($nombreTablaEsperada, $tablasEnStaging, true)) {
+                        throw new RuntimeException("Validación de staging fallida: la tabla '{$nombreTablaEsperada}' declarada en el manifiesto no existe en staging.");
                     }
+                }
+            }
+
+            // Validar conteo de filas por tabla si está declarado en el manifiesto
+            if (isset($datosMan['filas_por_tabla']) && is_array($datosMan['filas_por_tabla'])) {
+                foreach ($datosMan['filas_por_tabla'] as $tablaNom => $filasEsperadas) {
+                    $tablaNomStr = (string)$tablaNom;
+                    if (!in_array($tablaNomStr, $tablasEnStaging, true)) {
+                        throw new RuntimeException("Validación de staging fallida: la tabla '{$tablaNomStr}' para comprobación de filas no existe en staging.");
+                    }
+                    $tablaEsc = str_replace('`', '``', $tablaNomStr);
+                    $resCount = $mysqli->query("SELECT COUNT(*) AS total FROM `{$tablaEsc}`");
+                    if ($resCount) {
+                        $filasReales = (int)($resCount->fetch_assoc()['total'] ?? 0);
+                        $resCount->free();
+                        if ($filasReales !== (int)$filasEsperadas) {
+                            throw new RuntimeException("Validación de staging fallida: la tabla '{$tablaNomStr}' tiene {$filasReales} filas pero el manifiesto declara {$filasEsperadas}.");
+                        }
+                    }
+                }
+            }
+
+            // Validar total_filas si está declarado en el manifiesto
+            if (isset($datosMan['total_filas']) && is_numeric($datosMan['total_filas'])) {
+                $totalFilasStaging = 0;
+                foreach ($tablasEnStaging as $tStg) {
+                    $tStgEsc = str_replace('`', '``', $tStg);
+                    $resCnt = $mysqli->query("SELECT COUNT(*) AS total FROM `{$tStgEsc}`");
+                    if ($resCnt) {
+                        $totalFilasStaging += (int)($resCnt->fetch_assoc()['total'] ?? 0);
+                        $resCnt->free();
+                    }
+                }
+                if ($totalFilasStaging !== (int)$datosMan['total_filas']) {
+                    throw new RuntimeException("Validación de staging fallida: total de filas en staging ({$totalFilasStaging}) no coincide con el manifiesto ({$datosMan['total_filas']}).");
                 }
             }
         }

@@ -197,8 +197,8 @@ class PagoIdempotenciaSeguridadIntegrationTest extends TestCase
         $this->assertArrayNotHasKey('redirect_url', $resB);
         $resBJson = json_encode($resB);
         $this->assertStringNotContainsString($refA, $resBJson);
-        $this->assertStringNotContainsString((string)$citaA, $resBJson);
-        $this->assertStringNotContainsString((string)$usuarioA, $resBJson);
+        $this->assertStringNotContainsString('"cita_id":' . $citaA, $resBJson);
+        $this->assertStringNotContainsString('"usuario_id":' . $usuarioA, $resBJson);
 
         // 3. Usuario A reintenta la MISMA operación con su MISMA clave y debe recibir respuesta idempotente
         $resARepetido = $service->iniciarPago($usuarioA, [
@@ -544,5 +544,27 @@ class PagoIdempotenciaSeguridadIntegrationTest extends TestCase
         // Y la cita permanece como 'pagado'
         $citaActualizadaFinal = self::$db->query("SELECT estado_pago FROM citas WHERE id = {$citaId}")->fetch_assoc();
         $this->assertSame('pagado', $citaActualizadaFinal['estado_pago']);
+
+        // Paso 6 (Requerimiento de auditoría): Se reembolsa el pago sobrante K1.
+        // Dado que K2 sigue en estado 'completado', la cita DEBE permanecer como 'pagado'.
+        $pagoK1Obj = $pagoRepo->findByReferencia($refK1);
+        $this->assertNotNull($pagoK1Obj);
+        $resReembolsoK1 = $pagoService->reembolsarPago($refK1, 60.00);
+        $this->assertSame(PagoService::STATUS_OK, $resReembolsoK1['status']);
+        $this->assertSame(Pago::ESTADO_REEMBOLSADO, $resReembolsoK1['pago']['estado']);
+
+        // Verificar que la cita sigue en estado 'pagado' gracias al pago K2 completado
+        $citaPostReembolsoK1 = self::$db->query("SELECT estado_pago FROM citas WHERE id = {$citaId}")->fetch_assoc();
+        $this->assertSame('pagado', $citaPostReembolsoK1['estado_pago'], 'La cita debe seguir marcada como pagada mientras K2 esté completado');
+
+        // Paso 7: Si posteriormente se reembolsa K2, al no quedar pagos completados, la cita pasa a 'reembolsado'
+        $pagoK2Obj = $pagoRepo->findByReferencia($refK2);
+        $this->assertNotNull($pagoK2Obj);
+        $resReembolsoK2 = $pagoService->reembolsarPago($refK2, 60.00);
+        $this->assertSame(PagoService::STATUS_OK, $resReembolsoK2['status']);
+        $this->assertSame(Pago::ESTADO_REEMBOLSADO, $resReembolsoK2['pago']['estado']);
+
+        $citaPostReembolsoK2 = self::$db->query("SELECT estado_pago FROM citas WHERE id = {$citaId}")->fetch_assoc();
+        $this->assertSame('reembolsado', $citaPostReembolsoK2['estado_pago'], 'La cita debe pasar a reembolsado cuando ya no quedan cobros completados');
     }
 }

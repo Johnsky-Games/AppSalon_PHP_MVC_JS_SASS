@@ -297,4 +297,79 @@ class NotificacionesWorkerIntegrationTest extends TestCase
         $this->assertSame(NotificacionCita::ESTADO_DESCARTADA, $notifFinal->estado);
         $this->assertStringContainsString('Recordatorio descartado por cita ya transcurrida', (string)$notifFinal->ultimo_error);
     }
+
+    /**
+     * 6. Límites atómicos: adquirirParaEnvio rechaza registros que ya alcanzaron max_intentos.
+     */
+    public function testAdquirirParaEnvioRechazaRegistroQueAlcanzoMaxIntentos(): void
+    {
+        [$usuarioId, $profId, $servicioId] = $this->crearUsuarioYProfesional();
+
+        $clave = 'limit_max_intentos_' . bin2hex(random_bytes(8));
+        $evento = self::$notifService->registrarEventoOutbox([
+            'cita_id' => null,
+            'cita_referencia_id' => 106,
+            'usuario_id' => $usuarioId,
+            'tipo' => NotificacionCita::TIPO_CONFIRMACION,
+            'clave_idempotencia' => $clave,
+            'destinatario_email' => 'limite@example.com',
+            'destinatario_nombre' => 'Cliente Limite',
+            'asunto' => 'Confirmacion Limite',
+            'payload_json' => ['cita_id' => 106],
+            'max_intentos' => 3,
+        ]);
+        $idNotif = (int)$evento->id;
+
+        // Forzar a que intentos sea igual a max_intentos
+        self::$db->query("UPDATE notificaciones_citas SET intentos = 3, max_intentos = 3, estado = 'fallido' WHERE id = {$idNotif}");
+
+        $tokenWorker = 'worker_test_limite';
+        $adquirido = self::$notifRepo->adquirirParaEnvio($idNotif, $tokenWorker, 300);
+
+        $this->assertFalse($adquirido, 'adquirirParaEnvio debe rechazar atómicamente si intentos >= max_intentos');
+
+        $notifPost = self::$notifRepo->findById($idNotif);
+        $this->assertSame(3, (int)$notifPost->intentos, 'Los intentos no debieron incrementarse');
+        $this->assertSame('fallido', $notifPost->estado, 'El estado no debió cambiar a enviando');
+    }
+
+    /**
+     * 7. Límites atómicos: adquirirParaEnvio respeta el periodo de backoff (proximo_intento_at).
+     */
+    public function testAdquirirParaEnvioRespetaPeriodoDeBackoff(): void
+    {
+        [$usuarioId, $profId, $servicioId] = $this->crearUsuarioYProfesional();
+
+        $clave = 'backoff_test_' . bin2hex(random_bytes(8));
+        $evento = self::$notifService->registrarEventoOutbox([
+            'cita_id' => null,
+            'cita_referencia_id' => 107,
+            'usuario_id' => $usuarioId,
+            'tipo' => NotificacionCita::TIPO_CONFIRMACION,
+            'clave_idempotencia' => $clave,
+            'destinatario_email' => 'backoff@example.com',
+            'destinatario_nombre' => 'Cliente Backoff',
+            'asunto' => 'Confirmacion Backoff',
+            'payload_json' => ['cita_id' => 107],
+            'max_intentos' => 5,
+        ]);
+        $idNotif = (int)$evento->id;
+
+        // Caso A: Backoff activo en el futuro (NOW() + 1 hora)
+        self::$db->query("UPDATE notificaciones_citas SET estado = 'reintentando', intentos = 1, proximo_intento_at = DATE_ADD(NOW(), INTERVAL 1 HOUR) WHERE id = {$idNotif}");
+
+        $adquiridoFuturo = self::$notifRepo->adquirirParaEnvio($idNotif, 'worker_backoff_1', 300);
+        $this->assertFalse($adquiridoFuturo, 'No debe adquirir si proximo_intento_at se encuentra en el futuro');
+
+        // Caso B: Backoff vencido en el pasado (NOW() - 1 minuto)
+        self::$db->query("UPDATE notificaciones_citas SET proximo_intento_at = DATE_SUB(NOW(), INTERVAL 1 MINUTE) WHERE id = {$idNotif}");
+
+        $adquiridoPasado = self::$notifRepo->adquirirParaEnvio($idNotif, 'worker_backoff_2', 300);
+        $this->assertTrue($adquiridoPasado, 'Debe adquirir exitosamente si proximo_intento_at ya venció');
+
+        $notifAdquirida = self::$notifRepo->findById($idNotif);
+        $this->assertSame(NotificacionCita::ESTADO_ENVIANDO, $notifAdquirida->estado);
+        $this->assertSame('worker_backoff_2', $notifAdquirida->worker_token);
+        $this->assertSame(2, (int)$notifAdquirida->intentos);
+    }
 }

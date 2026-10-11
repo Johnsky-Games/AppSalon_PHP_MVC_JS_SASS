@@ -914,16 +914,28 @@ class NotificacionCitaService
             ];
         }
 
+        // Fuente canónica: utilizar el payload y datos persistidos en el registro de outbox
+        $payloadCanonico = $notificacion->obtenerPayload();
+        if (empty($payloadCanonico)) {
+            $payloadCanonico = $snapshot;
+        }
+
+        $destEmailFinal = trim((string)$notificacion->destinatario_email) !== '' ? (string)$notificacion->destinatario_email : $destEmail;
+        $destNombreFinal = trim((string)$notificacion->destinatario_nombre) !== '' ? (string)$notificacion->destinatario_nombre : $destNombre;
+        $asuntoFinal = trim((string)$notificacion->asunto) !== '' ? (string)$notificacion->asunto : ($mensaje['asunto'] ?? null);
+
+        $mensajeFinal = $this->construirContenidoHtml($tipo, $payloadCanonico, $asuntoFinal);
+
         $despacho = Email::despacharNotificacionCita(
             $tipo,
-            $destEmail,
-            $destNombre,
-            $mensaje['asunto'],
-            $mensaje['html'],
+            $destEmailFinal,
+            $destNombreFinal,
+            $mensajeFinal['asunto'],
+            $mensajeFinal['html'],
             [
                 'cita_id' => $citaId,
                 'clave_idempotencia' => $claveIdempotencia,
-                'enlace' => $mensaje['enlace'],
+                'enlace' => $mensajeFinal['enlace'],
                 'intento_numero' => $notificacion->intentos,
             ],
             $this->transport
