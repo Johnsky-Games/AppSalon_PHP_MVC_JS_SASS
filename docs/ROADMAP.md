@@ -29,7 +29,7 @@ Cada fase del proyecto se ejecuta bajo la coordinación de tres roles con respon
 | **Fase 5** | `feature/fase-5-interfaz-reservas` | `1fb3475fe2eec5ed4dc2f6afd22bc6b1bcaabb27` | **Aprobada (`APROBADO`)** |
 | **Fase 6A** | `feature/fase-6a-notificaciones` | `4fe475c02cc3dcd38a79ad7ec4ce5ef48f9e58ec` | **Aprobada (`APROBADO`)** |
 | **Fase 6B** | `feature/fase-6b-reportes` | `fb82ec7f59571dca82bf738a30e79c2d19489894` | **Aprobada (`APROBADO`)** |
-| **Fase 6C** | `feature/fase-6c-base-pagos` | *(en desarrollo)* | **En curso** |
+| **Fase 6C** | `feature/fase-6c-base-pagos` | *(pendiente de auditoría)* | **En auditoría** |
 | **Cierre Técnico** | `feature/cierre-tecnico` *(prevista)* | — | **Pendiente** |
 
 ---
@@ -69,13 +69,15 @@ Cada fase del proyecto se ejecuta bajo la coordinación de tres roles con respon
 - Filtros validados con respuesta `422` ante entradas inválidas, estados vacíos, exportación CSV segura (`GET /admin/reportes/exportar` con UTF-8 BOM y neutralización de *CSV formula injection* `=`, `+`, `-`, `@`, `\t`, `\r`, `\n`), permisos administrativos (`isAdmin()`).
 - Verificada por Desarrollador y Auditor independiente (`b7cab7d9-9fd1-466e-857a-25c0463a23ad` en `auditing_fase_4b_reservas` sobre `fb82ec7f59571dca82bf738a30e79c2d19489894`) con `PHPUnit 10.5.66` (`OK (161 tests, 1817 assertions)`, exit `0`) y suite E2E en navegador (`RUN_ID: 89a23c7e2ff64515b28c6a771a8f3839`, 18 comprobaciones `[OK]` incluyendo `REP-01`, `0` errores de consola, `0` peticiones fallidas, exit `0`). Ver detalle en `docs/AUDITORIA.md`.
 
-### Fase 6C — Base para Pagos
-- Estados de pago e interfaz sustituible de proveedor de pagos (*Payment Gateway Interface*).
-- Proveedor simulado (*mock/sandbox*) para pruebas automatizadas.
-- Cálculo de importes exclusivamente en servidor y generación de referencias únicas.
-- Idempotencia y validación de notificaciones/webhooks del proveedor.
-- Prohibición de almacenar datos de tarjetas o confirmar pagos únicamente por redirección del navegador.
-- Sin activación de cobros reales ni selección comercial definitiva; registro de decisiones de negocio pendientes sobre anticipos, cancelaciones y devoluciones.
+### Fase 6C — Base para Pagos (En Auditoría)
+- Migración incremental `006_base_pagos.sql` + `006_base_pagos_rollback.sql` (`citas.estado_pago` y tabla `pagos` con `cita_id` `ON DELETE SET NULL`, `cita_referencia_id`, y claves únicas `uq_pagos_referencia`, `uq_pagos_transaccion_externa`, `uq_pagos_idempotency_key`).
+- Estados de pago (`pendiente`, `completado`, `fallido`, `reembolsado`, `cancelado`) e interfaz sustituible de proveedor de pagos (`Interfaces\PaymentGatewayInterface` en `interfaces/PaymentGatewayInterface.php`).
+- Proveedor simulado (`Classes\MockPaymentGateway` en `classes/MockPaymentGateway.php`) para pruebas automatizadas de pagos aprobados, rechazados por fondos insuficientes, errores de comunicación y webhooks firmados con HMAC-SHA256 (`X-Mock-Signature`).
+- Cálculo de importes exclusivamente en servidor (`PagoRepository::obtenerCitaConImporteServidor` desde snapshots históricos `citasservicios`) y generación de referencias únicas (`PAY-YYYYMMDD-<16_HEX>` en `America/Guayaquil`).
+- Idempotencia transaccional con bloqueo `FOR UPDATE` en `POST /api/pagos/iniciar` y `POST /api/pagos/webhook`.
+- Prohibición estricta de almacenar o procesar datos sensibles de tarjetas (`PAN`, `CVV`, expiración) con rechazo HTTP `422` y sanitización antes de persistir, y prohibición de confirmar pagos únicamente por parámetros de redirección del navegador en `GET /pago/resultado`.
+- Integración con `ReporteRepository` y `ReporteService` para reflejar en `/admin/reportes` los ingresos efectivamente cobrados (`pagado`) y reembolsados (`reembolsado`), y registro de decisiones de negocio pendientes en `docs/DECISIONES_PAGOS.md`.
+- Verificada por Desarrollador en `comprehensive_project_audit_roadmap` con `PHPUnit 10.5.66` (`OK (170 tests, 1949 assertions)`, exit `0`) y suite E2E en navegador (`RUN_ID: 195d4b1980c34ed5bb8203d4ed1be696`, 19 comprobaciones `[OK]` incluyendo `PAG-01`, `0` errores de consola, `0` peticiones fallidas, exit `0`).
 
 ### Cierre Técnico
 - Auditoría integral de rutas, permisos, seguridad y manejo de errores.

@@ -125,6 +125,8 @@ class MigrationTest extends TestCase
         $this->assertStringContainsString('[OK] Migración 004_reservas_profesional_ocupacion_historico aplicada exitosamente.', $resUpgrade['stdout']);
         $this->assertStringContainsString('[+] Aplicando migración: 005_notificaciones_citas', $resUpgrade['stdout']);
         $this->assertStringContainsString('[OK] Migración 005_notificaciones_citas aplicada exitosamente.', $resUpgrade['stdout']);
+        $this->assertStringContainsString('[+] Aplicando migración: 006_base_pagos', $resUpgrade['stdout']);
+        $this->assertStringContainsString('[OK] Migración 006_base_pagos aplicada exitosamente.', $resUpgrade['stdout']);
 
         // 4. Demostrar preservación íntegra de los datos existentes completos
         $resUsuario = $upgradeDb->query("SELECT * FROM usuarios WHERE id = {$clienteId}")->fetch_assoc();
@@ -163,6 +165,7 @@ class MigrationTest extends TestCase
         $this->assertSame('11:00:00', $resCitas['hora']);
         $this->assertSame((string)$clienteId, (string)$resCitas['usuarioId']);
         $this->assertNull($resCitas['profesionalId'], 'Las citas históricas no deben recibir asignaciones inventadas de profesional');
+        $this->assertSame('pendiente', $resCitas['estado_pago']);
         $this->assertNull($resCitas['hora_inicio']);
         $this->assertNull($resCitas['hora_fin']);
         $this->assertNull($resCitas['duracion_total_minutos']);
@@ -192,6 +195,7 @@ class MigrationTest extends TestCase
         $this->assertStringContainsString('[+] Aplicando migración: 003_profesionales_duracion_y_horarios', $resFresh['stdout']);
         $this->assertStringContainsString('[+] Aplicando migración: 004_reservas_profesional_ocupacion_historico', $resFresh['stdout']);
         $this->assertStringContainsString('[+] Aplicando migración: 005_notificaciones_citas', $resFresh['stdout']);
+        $this->assertStringContainsString('[+] Aplicando migración: 006_base_pagos', $resFresh['stdout']);
 
         // 6. Comparar esquemas exactos entre ambas instalaciones: columnas, tipos, nulabilidad, defaults, índices y motores
         $tablas = [
@@ -206,7 +210,8 @@ class MigrationTest extends TestCase
             'horarios_profesionales',
             'descansos_profesionales',
             'bloqueos_profesionales',
-            'notificaciones_citas'
+            'notificaciones_citas',
+            'pagos'
         ];
         foreach ($tablas as $tabla) {
             $colsUpgrade = [];
@@ -427,6 +432,112 @@ class MigrationTest extends TestCase
         } finally {
             $db005->close();
             self::$db->query("DROP DATABASE IF EXISTS appsalon_mig005_test");
+        }
+    }
+
+    public function testMigracion006BasePagosUpIdempotenciaSetNullYRollback(): void
+    {
+        self::$db->query("DROP DATABASE IF EXISTS appsalon_mig006_test");
+        self::$db->query("CREATE DATABASE appsalon_mig006_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+        $db006 = new mysqli(self::$host, self::$user, self::$pass, 'appsalon_mig006_test', self::$port);
+
+        try {
+            $schemaBase = file_get_contents(__DIR__ . '/../../database/schema_base.sql');
+            $db006->multi_query($schemaBase);
+            while ($db006->more_results() && $db006->next_result()) {
+                if ($res = $db006->store_result()) {
+                    $res->free();
+                }
+            }
+
+            // 1. Aplicar todas las migraciones incluyendo 006_base_pagos
+            $resUp1 = $this->ejecutarMigrador('up', 'appsalon_mig006_test');
+            $this->assertSame(0, $resUp1['exitCode']);
+            $this->assertStringContainsString('[+] Aplicando migración: 006_base_pagos', $resUp1['stdout']);
+            $this->assertStringContainsString('[OK] Migración 006_base_pagos aplicada exitosamente.', $resUp1['stdout']);
+
+            // 2. Segunda ejecución debe ser idempotente
+            $resUp2 = $this->ejecutarMigrador('up', 'appsalon_mig006_test');
+            $this->assertSame(0, $resUp2['exitCode']);
+            $this->assertStringContainsString('[-] Migración ya aplicada: 006_base_pagos', $resUp2['stdout']);
+
+            // 3. Verificar restricciones UNIQUE (uq_pagos_referencia, uq_pagos_transaccion_externa, uq_pagos_idempotency_key)
+            //    y ON DELETE SET NULL en cita_id conservando cita_referencia_id
+            $hash = password_hash('clave123', PASSWORD_BCRYPT);
+            $db006->query("INSERT INTO usuarios (nombre, apellido, email, password, telefono, admin, confirmado) VALUES ('Luis', 'Vega', 'luis@test.local', '{$hash}', '0991112223', 0, 1)");
+            $uid = (int)$db006->insert_id;
+
+            $db006->query("INSERT INTO citas (fecha, hora, usuarioId) VALUES ('2026-12-15', '11:00:00', {$uid})");
+            $cid = (int)$db006->insert_id;
+
+            $filaCita = $db006->query("SELECT estado_pago FROM citas WHERE id = {$cid}")->fetch_assoc();
+            $this->assertSame('pendiente', $filaCita['estado_pago']);
+
+            $db006->query(
+                "INSERT INTO pagos
+                    (cita_id, cita_referencia_id, usuario_id, referencia_pago, proveedor, transaccion_externa_id, monto, moneda, estado, metodo_pago, idempotency_key)
+                 VALUES
+                    ({$cid}, {$cid}, {$uid}, 'PAY-20261215-ABCDEF01', 'mock', 'MOCK-TX-001', 125.00, 'USD', 'completado', 'tarjeta_mock', 'pago:cita:{$cid}:intento')"
+            );
+            $pid = (int)$db006->insert_id;
+            $this->assertGreaterThan(0, $pid);
+
+            // Duplicado en referencia_pago debe fallar por uq_pagos_referencia
+            try {
+                $okDupRef = @$db006->query(
+                    "INSERT INTO pagos
+                        (cita_id, cita_referencia_id, usuario_id, referencia_pago, proveedor, transaccion_externa_id, monto, moneda, estado, idempotency_key)
+                     VALUES
+                        ({$cid}, {$cid}, {$uid}, 'PAY-20261215-ABCDEF01', 'mock', 'MOCK-TX-002', 125.00, 'USD', 'pendiente', 'pago:cita:{$cid}:intento2')"
+                );
+            } catch (\mysqli_sql_exception $e) {
+                $okDupRef = false;
+            }
+            $this->assertFalse($okDupRef, 'uq_pagos_referencia debe impedir referencias duplicadas');
+
+            // Duplicado en idempotency_key debe fallar por uq_pagos_idempotency_key
+            try {
+                $okDupKey = @$db006->query(
+                    "INSERT INTO pagos
+                        (cita_id, cita_referencia_id, usuario_id, referencia_pago, proveedor, transaccion_externa_id, monto, moneda, estado, idempotency_key)
+                     VALUES
+                        ({$cid}, {$cid}, {$uid}, 'PAY-20261215-ABCDEF02', 'mock', 'MOCK-TX-003', 125.00, 'USD', 'pendiente', 'pago:cita:{$cid}:intento')"
+                );
+            } catch (\mysqli_sql_exception $e) {
+                $okDupKey = false;
+            }
+            $this->assertFalse($okDupKey, 'uq_pagos_idempotency_key debe impedir claves de idempotencia duplicadas');
+
+            // Eliminar la cita en `citas`: la fila en `pagos` debe permanecer con cita_id = NULL y cita_referencia_id = $cid
+            $db006->query("DELETE FROM citas WHERE id = {$cid}");
+            $filaPago = $db006->query("SELECT cita_id, cita_referencia_id, referencia_pago, estado FROM pagos WHERE id = {$pid}")->fetch_assoc();
+            $this->assertNotNull($filaPago, 'El registro de pago debe sobrevivir al borrado de la cita gracias a ON DELETE SET NULL');
+            $this->assertNull($filaPago['cita_id']);
+            $this->assertSame($cid, (int)$filaPago['cita_referencia_id']);
+            $this->assertSame('PAY-20261215-ABCDEF01', $filaPago['referencia_pago']);
+
+            // 4. Rollback de 006_base_pagos
+            $rollbackSql = file_get_contents(__DIR__ . '/../../database/migrations/006_base_pagos_rollback.sql');
+            $db006->multi_query($rollbackSql);
+            while ($db006->more_results() && $db006->next_result()) {
+                if ($res = $db006->store_result()) {
+                    $res->free();
+                }
+            }
+
+            $checkTabla = $db006->query("SHOW TABLES LIKE 'pagos'");
+            $this->assertSame(0, $checkTabla->num_rows, 'El rollback de 006 debe eliminar la tabla pagos');
+
+            $checkCol = $db006->query("SHOW COLUMNS FROM citas LIKE 'estado_pago'");
+            $this->assertSame(0, $checkCol->num_rows, 'El rollback de 006 debe eliminar la columna estado_pago de citas');
+
+            // 5. Reaplicar 006 tras rollback debe funcionar limpiamente
+            $resReup = $this->ejecutarMigrador('up', 'appsalon_mig006_test');
+            $this->assertSame(0, $resReup['exitCode']);
+            $this->assertStringContainsString('[+] Aplicando migración: 006_base_pagos', $resReup['stdout']);
+        } finally {
+            $db006->close();
+            self::$db->query("DROP DATABASE IF EXISTS appsalon_mig006_test");
         }
     }
 }

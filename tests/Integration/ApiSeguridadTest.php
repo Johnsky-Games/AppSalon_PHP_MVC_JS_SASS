@@ -252,8 +252,8 @@ class ApiSeguridadTest extends TestCase
         $_SESSION['csrf_token'] = $token;
         $_POST['csrf_token'] = $token;
 
-        // Intento de reservar para hoy
-        $_POST['fecha'] = date('Y-m-d');
+        // Intento de reservar para hoy (en zona horaria America/Guayaquil)
+        $_POST['fecha'] = (new \DateTimeImmutable('now', new \DateTimeZone('America/Guayaquil')))->format('Y-m-d');
         $_POST['hora'] = '11:00';
         $_POST['servicios'] = '1';
 

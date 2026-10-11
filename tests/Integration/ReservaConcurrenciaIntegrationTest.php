@@ -60,6 +60,7 @@ class ReservaConcurrenciaIntegrationTest extends TestCase
         validar_base_datos_prueba(self::$db);
 
         self::$db->query("DROP TRIGGER IF EXISTS test_fail_citasservicios_fase4b");
+        self::$db->query("DELETE FROM pagos");
         self::$db->query("DELETE FROM notificaciones_citas");
         self::$db->query("DELETE FROM citasservicios");
         self::$db->query("DELETE FROM citas");

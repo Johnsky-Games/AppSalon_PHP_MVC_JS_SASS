@@ -8,6 +8,7 @@
             "Controllers\\": "./controllers",
             "Model\\": "./models",
             "Classes\\": "./classes",
+            "Interfaces\\": "./interfaces",
             "Repositories\\": "./repositories",
             "Services\\": "./services"
         }

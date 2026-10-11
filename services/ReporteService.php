@@ -31,6 +31,7 @@ class ReporteService
 
     public const ESTADO_PAGO_PENDIENTE = 'pendiente';
     public const ESTADO_PAGO_PAGADO = 'pagado';
+    public const ESTADO_PAGO_REEMBOLSADO = 'reembolsado';
 
     private ReporteRepository $reporteRepository;
     private ?\DateTimeImmutable $ahoraReferencia;
@@ -274,8 +275,8 @@ class ReporteService
      * Evalúa el estado de pago de una cita distinguiendo explícitamente entre
      * importe reservado (comprometido) e ingreso efectivamente pagado.
      *
-     * En Fase 6B (previo a la pasarela de pagos de Fase 6C), si la cita no registra
-     * estado `'pagado'` confirmado, el ingreso pagado es estrictamente `0.00`.
+     * Si la cita registra pago confirmado (`'pagado'` / `'completado'`), retorna el monto pagado.
+     * En caso contrario (`'pendiente'`, `'reembolsado'`, etc.), el ingreso pagado es estrictamente `0.00`.
      *
      * @param array<string, mixed> $datosCita
      * @param float $importeReservado
@@ -284,7 +285,7 @@ class ReporteService
     public function evaluarEstadoPagoCita(array $datosCita, float $importeReservado): array
     {
         $estadoRaw = strtolower(trim((string)($datosCita['estado_pago'] ?? '')));
-        if ($estadoRaw === self::ESTADO_PAGO_PAGADO) {
+        if (in_array($estadoRaw, [self::ESTADO_PAGO_PAGADO, 'completado'], true)) {
             $montoPagado = isset($datosCita['monto_pagado']) && is_numeric($datosCita['monto_pagado'])
                 ? round(max(0.0, (float)$datosCita['monto_pagado']), 2)
                 : round(max(0.0, $importeReservado), 2);
@@ -293,6 +294,14 @@ class ReporteService
                 'estado_pago' => self::ESTADO_PAGO_PAGADO,
                 'etiqueta_estado_pago' => 'Pagado',
                 'ingreso_pagado' => $montoPagado,
+            ];
+        }
+
+        if ($estadoRaw === self::ESTADO_PAGO_REEMBOLSADO) {
+            return [
+                'estado_pago' => self::ESTADO_PAGO_REEMBOLSADO,
+                'etiqueta_estado_pago' => 'Reembolsado',
+                'ingreso_pagado' => 0.00,
             ];
         }
 
@@ -642,9 +651,14 @@ class ReporteService
                 $duracionCitaMinutos = $sumaDuracionServiciosCita;
             }
 
+            $montoPagadoEvaluar = $cita['monto_pagado_raw'];
+            if ($servicioIdFiltro !== null && $montoPagadoEvaluar !== null && is_numeric($montoPagadoEvaluar)) {
+                $montoPagadoEvaluar = min((float)$montoPagadoEvaluar, $importeAtribuible);
+            }
+
             $infoPago = $this->evaluarEstadoPagoCita([
                 'estado_pago' => $cita['estado_pago_raw'],
-                'monto_pagado' => $cita['monto_pagado_raw'],
+                'monto_pagado' => $montoPagadoEvaluar,
             ], $importeAtribuible);
 
             $ingresoPagadoCita = $infoPago['ingreso_pagado'];

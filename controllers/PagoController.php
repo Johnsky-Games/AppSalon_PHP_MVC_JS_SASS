@@ -1,0 +1,239 @@
+<?php
+
+namespace Controllers;
+
+use Classes\MockPaymentGateway;
+use Model\ActiveRecord;
+use MVC\Router;
+use Repositories\PagoRepository;
+use Services\PagoService;
+
+/**
+ * Controlador de Pagos (Fase 6C — Base para Pagos):
+ * - `POST /api/pagos/iniciar`: Autenticado (`isAuth`) y protegido con CSRF (`validar_csrf`).
+ *   Calcula el monto exclusivamente en el servidor e inicializa el intento con el gateway configurado.
+ * - `POST /api/pagos/webhook`: Endpoint asíncrono server-to-server para notificaciones del proveedor,
+ *   protegido mediante validación de firma HMAC-SHA256 (`X-Mock-Signature`) e idempotencia transaccional.
+ * - `GET /pago/resultado`: Vista informativa del estado del pago que consulta el estado real en MySQL,
+ *   ignorando cualquier parámetro manipulador en la query string del navegador.
+ */
+class PagoController
+{
+    private static ?PagoService $pagoService = null;
+
+    /**
+     * Cuerpo JSON inyectable para pruebas unitarias/integrales cuando no se usa `php://input`.
+     *
+     * @var array<string, mixed>|null
+     */
+    private static ?array $rawJsonOverride = null;
+
+    public static function setPagoService(?PagoService $service): void
+    {
+        self::$pagoService = $service;
+    }
+
+    /**
+     * @param array<string, mixed>|null $payload
+     */
+    public static function setRawJsonOverride(?array $payload): void
+    {
+        self::$rawJsonOverride = $payload;
+    }
+
+    private static function obtenerPagoService(): PagoService
+    {
+        if (self::$pagoService !== null) {
+            return self::$pagoService;
+        }
+
+        $db = ActiveRecord::getDB();
+        return new PagoService(
+            new PagoRepository($db),
+            new MockPaymentGateway()
+        );
+    }
+
+    /**
+     * Obtiene los datos de entrada combinando `$_POST` y cuerpo JSON si existe.
+     *
+     * @return array<string, mixed>
+     */
+    private static function leerDatosEntrada(): array
+    {
+        if (self::$rawJsonOverride !== null) {
+            return array_merge($_POST, self::$rawJsonOverride);
+        }
+
+        $datos = is_array($_POST) ? $_POST : [];
+        $rawInput = file_get_contents('php://input');
+        if (is_string($rawInput) && trim($rawInput) !== '') {
+            $decoded = json_decode($rawInput, true);
+            if (is_array($decoded)) {
+                $datos = array_merge($datos, $decoded);
+            }
+        }
+
+        return $datos;
+    }
+
+    /**
+     * Extrae cabeceras HTTP relevantes desde `$_SERVER`.
+     *
+     * @return array<string, string>
+     */
+    private static function extraerCabeceras(): array
+    {
+        $headers = [];
+        foreach ($_SERVER as $key => $val) {
+            if (!is_scalar($val)) {
+                continue;
+            }
+            $strVal = (string)$val;
+            if (str_starts_with($key, 'HTTP_')) {
+                $headers[$key] = $strVal;
+                $headerName = str_replace(' ', '-', ucwords(strtolower(str_replace('_', ' ', substr($key, 5)))));
+                $headers[$headerName] = $strVal;
+                $headers[strtolower($headerName)] = $strVal;
+            }
+        }
+        return $headers;
+    }
+
+    /**
+     * Endpoint autenticado `POST /api/pagos/iniciar`.
+     */
+    public static function iniciar(): void
+    {
+        iniciar_sesion_segura();
+        header('Content-Type: application/json; charset=utf-8');
+
+        $idSesion = $_SESSION['id'] ?? null;
+        $esIdValido = is_int($idSesion)
+            ? $idSesion >= 1
+            : (is_string($idSesion) && ctype_digit(trim($idSesion)) && (int)trim($idSesion) >= 1);
+
+        if (!isset($_SESSION['login']) || $_SESSION['login'] !== true || !$esIdValido) {
+            http_response_code(401);
+            echo json_encode([
+                'resultado' => false,
+                'status' => PagoService::STATUS_UNAUTHORIZED,
+                'error' => 'No autenticado',
+            ]);
+            detener_ejecucion(401);
+            return;
+        }
+
+        $datos = self::leerDatosEntrada();
+        // Si el token CSRF vino en el cuerpo JSON, sincronizarlo en $_POST para validar_csrf()
+        if (!isset($_POST['csrf_token']) && isset($datos['csrf_token']) && is_string($datos['csrf_token'])) {
+            $_POST['csrf_token'] = $datos['csrf_token'];
+        }
+
+        if (!validar_csrf()) {
+            http_response_code(403);
+            echo json_encode([
+                'resultado' => false,
+                'status' => PagoService::STATUS_FORBIDDEN,
+                'error' => 'Token CSRF inválido o ausente',
+            ]);
+            detener_ejecucion(403);
+            return;
+        }
+
+        if (!isset($datos['idempotency_key']) && isset($_SERVER['HTTP_X_IDEMPOTENCY_KEY'])) {
+            $datos['idempotency_key'] = (string)$_SERVER['HTTP_X_IDEMPOTENCY_KEY'];
+        }
+
+        $usuarioId = (int)$_SESSION['id'];
+        $esAdmin = isset($_SESSION['admin']) && (string)$_SESSION['admin'] === '1';
+
+        $resultado = self::obtenerPagoService()->iniciarPago($usuarioId, $datos, $esAdmin);
+        $httpCode = (int)($resultado['http_code'] ?? 200);
+        unset($resultado['http_code']);
+
+        $respuesta = array_merge([
+            'resultado' => $httpCode === 200 && ($resultado['status'] ?? '') === PagoService::STATUS_OK,
+        ], $resultado);
+
+        http_response_code($httpCode);
+        echo json_encode($respuesta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($httpCode !== 200) {
+            detener_ejecucion($httpCode);
+        }
+    }
+
+    /**
+     * Endpoint asíncrono `POST /api/pagos/webhook`.
+     * Valida firma criptográfica del proveedor y procesa la confirmación con idempotencia transaccional.
+     */
+    public static function webhook(): void
+    {
+        header('Content-Type: application/json; charset=utf-8');
+
+        $payload = self::leerDatosEntrada();
+        $headers = self::extraerCabeceras();
+
+        $resultado = self::obtenerPagoService()->procesarWebhook($payload, $headers);
+        $httpCode = (int)($resultado['http_code'] ?? 200);
+        unset($resultado['http_code']);
+
+        $respuesta = array_merge([
+            'resultado' => $httpCode === 200 && ($resultado['status'] ?? '') === PagoService::STATUS_OK,
+        ], $resultado);
+
+        http_response_code($httpCode);
+        echo json_encode($respuesta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($httpCode !== 200) {
+            detener_ejecucion($httpCode);
+        }
+    }
+
+    /**
+     * Vista informativa `GET /pago/resultado`.
+     * Consulta exclusivamente el estado real almacenado en base de datos, ignorando
+     * cualquier parámetro de estado enviado en el query string del navegador.
+     */
+    public static function resultado(Router $router): void
+    {
+        iniciar_sesion_segura();
+        isAuth();
+
+        $usuarioId = (int)($_SESSION['id'] ?? 0);
+        $esAdmin = isset($_SESSION['admin']) && (string)$_SESSION['admin'] === '1';
+
+        $resultado = self::obtenerPagoService()->consultarResultadoPago($_GET, $usuarioId, $esAdmin);
+        $httpCode = (int)($resultado['http_code'] ?? 200);
+
+        $accept = $_SERVER['HTTP_ACCEPT'] ?? '';
+        $quiereJson = str_contains($accept, 'application/json') || (($_GET['format'] ?? '') === 'json');
+
+        if ($quiereJson) {
+            header('Content-Type: application/json; charset=utf-8');
+            http_response_code($httpCode);
+            $copia = $resultado;
+            unset($copia['http_code']);
+            echo json_encode($copia, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            if ($httpCode !== 200) {
+                detener_ejecucion($httpCode);
+            }
+            return;
+        }
+
+        http_response_code($httpCode);
+        $alertas = [];
+        if (!empty($resultado['errores'])) {
+            $alertas['error'] = $resultado['errores'];
+        }
+
+        $router->render('pagos/resultado', [
+            'nombre' => $_SESSION['nombre'] ?? '',
+            'apellido' => $_SESSION['apellido'] ?? '',
+            'alertas' => $alertas,
+            'resultadoPago' => $resultado,
+            'pago' => $resultado['pago'] ?? null,
+            'cita' => $resultado['cita'] ?? null,
+            'advertenciaSeguridad' => $resultado['advertencia_seguridad'] ?? null,
+        ]);
+    }
+}

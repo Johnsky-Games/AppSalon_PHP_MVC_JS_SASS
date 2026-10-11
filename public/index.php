@@ -6,6 +6,7 @@ use Controllers\AdminController;
 use Controllers\CitaController;
 use Controllers\LoginController;
 use Controllers\APIController;
+use Controllers\PagoController;
 use Controllers\ProfesionalController;
 use Controllers\ReporteController;
 use Controllers\ServicioController;
@@ -46,6 +47,11 @@ $router->get('/api/profesionales', [APIController::class, 'profesionales']);
 $router->get('/api/disponibilidad', [APIController::class, 'disponibilidad']);
 $router->get('/api/mis-citas', [APIController::class, 'misCitas']);
 $router->post('/api/citas', [APIController::class, 'guardar']);
+
+//Base de Pagos (Fase 6C)
+$router->post('/api/pagos/iniciar', [PagoController::class, 'iniciar']);
+$router->post('/api/pagos/webhook', [PagoController::class, 'webhook']);
+$router->get('/pago/resultado', [PagoController::class, 'resultado']);
 
 //CRUD de Servicios
 $router->get('/servicios', [ServicioController::class, 'index']);

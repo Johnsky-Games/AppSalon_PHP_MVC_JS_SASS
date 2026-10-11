@@ -3,9 +3,78 @@
 Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerdo con la metodología de entregas auditables por **ChatGPT** (revisión estática de código) y ejecución/verificación por **Antigravity** (desarrollo y pruebas dinámicas automatizadas), sujeto a la aprobación final del **Propietario**.
 
 > **Roles y Criterios:**
-> - **Desarrollo y Pruebas Automatizadas (Antigravity):** Implementación de código y ejecución de la suite completa de pruebas unitarias e integrales (161 pruebas, 1817 aserciones en PHPUnit 10.5.66), escenarios funcionales HTTP y suite E2E en navegador real Headless Chrome (`tests/verificar_navegador.ps1` y `tests/browser_e2e_test.js`).
+> - **Desarrollo y Pruebas Automatizadas (Antigravity):** Implementación de código y ejecución de la suite completa de pruebas unitarias e integrales (170 pruebas, 1949 aserciones en PHPUnit 10.5.66), escenarios funcionales HTTP y suite E2E en navegador real Headless Chrome (`tests/verificar_navegador.ps1` y `tests/browser_e2e_test.js`).
 > - **Revisión Estática Externa (ChatGPT):** Auditoría independiente de código de aplicación, arquitectura por capas, contratos transaccionales y revisión estática de scripts Bash.
 > - **Aprobación Final y Despliegue (Propietario):** Decisión formal sobre fusiones hacia `main` y despliegues en producción.
+
+---
+
+## Fase 6C: Base para Pagos
+
+- **Rama:** `feature/fase-6c-base-pagos`
+- **Commit Base (Fase 6B aprobada):** `70a186dadf0d89d93d7f8b7c24572f39cc0ff3df` (`fb82ec7f59571dca82bf738a30e79c2d19489894` + registro de auditoría Fase 6B)
+- **Estado General de Fase 6C:** **Implementada y Verificada por Desarrollador (Lista para Auditoría)**
+
+### 1. Diseño Arquitectónico, Interfaz de Pasarela Sustituible, Cálculo en Servidor, Idempotencia y Prohibición de Datos de Tarjeta
+
+1. **Migraciones Incrementales y Reversibles (`database/migrations/006_base_pagos.sql` y `006_base_pagos_rollback.sql`):**
+   - Añade la columna `estado_pago VARCHAR(20) NOT NULL DEFAULT 'pendiente'` e índice `idx_citas_estado_pago` en `citas` de manera idempotente.
+   - Crea la tabla `pagos` (`InnoDB`, `utf8mb4_unicode_ci`) con `cita_id INT NULL` (`ON DELETE SET NULL`), `cita_referencia_id INT NOT NULL` (para preservar la trazabilidad histórica incluso si la cita es eliminada), `usuario_id INT NULL` (`ON DELETE SET NULL`), `referencia_pago VARCHAR(64) NOT NULL`, `proveedor VARCHAR(50) NOT NULL`, `transaccion_externa_id VARCHAR(120) NULL`, `idempotency_key VARCHAR(100) NULL`, `monto DECIMAL(10, 2) NOT NULL`, `moneda CHAR(3) NOT NULL DEFAULT 'USD'`, `estado VARCHAR(20) NOT NULL DEFAULT 'pendiente'`, `payload_resumen TEXT NULL`, `error_detalle VARCHAR(255) NULL`, `intentos_notificacion INT NOT NULL DEFAULT 0`, `confirmado_at DATETIME NULL`, `reembolsado_at DATETIME NULL`, `created_at` y `updated_at`.
+   - Restricciones únicas: `UNIQUE KEY uq_pagos_referencia (referencia_pago)`, `UNIQUE KEY uq_pagos_transaccion_externa (transaccion_externa_id)` y `UNIQUE KEY uq_pagos_idempotency_key (idempotency_key)`.
+   - Script de reversión limpia e idempotente en `006_base_pagos_rollback.sql` verificado en `MigrationTest::testMigracion006BasePagosUpIdempotenciaSetNullYRollback`.
+
+2. **Interfaz Sustituible de Pasarela (`Interfaces\PaymentGatewayInterface`) y Proveedor Simulado (`Classes\MockPaymentGateway`):**
+   - **`interfaces/PaymentGatewayInterface.php`:** Define el contrato desacoplado de proveedor de pagos (`obtenerNombreProveedor`, `iniciarPago`, `verificarPago`, `procesarNotificacionWebhook`, `reembolsarPago`) permitiendo conectar en el futuro cualquier pasarela comercial (Payphone, Kushki, Datafast/Paymentez, Stripe) sin modificar controladores ni servicios.
+   - **`classes/MockPaymentGateway.php`:** Implementación simulada determinista para desarrollo y pruebas automatizadas que soporta escenarios de aprobación (`aprobado`), rechazo por fondos insuficientes (`fondos_insuficientes`), error de comunicación (`error_comunicacion`), verificación de firma HMAC-SHA256 en cabecera `X-Mock-Signature` (`PAYMENT_WEBHOOK_SECRET`), y detección/sanitización estricta contra datos sensibles de tarjeta (`contieneDatosTarjetaSensibles` y `sanearPayloadSinDatosTarjeta`).
+   - **Resolución PSR-4 (`composer.json` e `includes/app.php`):** Registra el namespace `"Interfaces\\": "./interfaces"` en `composer.json` y un autoloader PSR-4 de respaldo en `includes/app.php` para garantizar compatibilidad inmediata en cualquier worktree.
+
+3. **Arquitectura por Capas (`Controller -> Service -> Repository`):**
+   - **`Model\Pago` (`models/Pago.php`):** Entidad de dominio con constantes explícitas de estado de transacción (`ESTADO_PENDIENTE`, `ESTADO_COMPLETADO`, `ESTADO_FALLIDO`, `ESTADO_REEMBOLSADO`, `ESTADO_CANCELADO`) y de estado de pago de la cita (`CITA_ESTADO_PENDIENTE`, `CITA_ESTADO_PAGADO`, `CITA_ESTADO_FALLIDO`, `CITA_ESTADO_REEMBOLSADO`).
+   - **`Repositories\PagoRepository` (`repositories/PagoRepository.php`):** Consultas y escrituras exclusivamente mediante sentencias preparadas y `PersistenceException`:
+     - `obtenerCitaConImporteServidor(int $citaId, bool $forUpdate)`: Calcula el importe total en servidor sumando `COALESCE(cs.precio_servicio, s.precio, 0)` desde `citasservicios` (snapshot histórico inmutable).
+     - Operaciones con bloqueo pesimista `FOR UPDATE` (`findByReferencia`, `findByIdempotencyKey`, `findPagoActivoPorCita`) y actualización sincronizada de `citas.estado_pago` (`actualizarEstadoPagoCita`).
+   - **`Services\PagoService` (`services/PagoService.php`):**
+     - **Prohibición estricta de datos de tarjeta:** Rechaza de inmediato (`STATUS_INVALID` / HTTP `422`) cualquier intento de enviar números de tarjeta (`PAN` de 13 a 19 dígitos o claves como `card_number`, `numero_tarjeta`, `pan`, `cvv`, `cvc`, `fecha_expiracion`, `track_data`) y sanea `payload_resumen` antes de persistir en MySQL.
+     - **Cálculo de importes exclusivamente en servidor:** Ignora cualquier `monto`, `total`, `precio`, `amount` o `moneda` enviados por el cliente; determina el importe únicamente en el servidor a partir de los servicios históricos de la cita (`obtenerCitaConImporteServidor`) y genera una referencia única (`PAY-YYYYMMDD-<16_HEX>`) en zona horaria `America/Guayaquil`.
+     - **Idempotencia al iniciar pago (`iniciarPagoCita`):** Dentro de transacción MySQL con `FOR UPDATE`, reutiliza el pago existente si se repite `idempotency_key` o si ya existe un pago `pendiente` para la cita, y rechaza (`409`) iniciar un nuevo cobro si la cita ya figura como `pagado` (`completado`).
+     - **Prohibición de confirmar pagos por redirección del navegador (`consultarResultadoRetorno`):** `GET /pago/resultado` ignora cualquier parámetro de query string manipulable (`?status=approved`, `?estado=completado`, `?pagado=1`) y devuelve exclusivamente el estado persistido en servidor (reconciliado únicamente vía webhook firmado o consulta servidor-a-servidor al proveedor).
+     - **Idempotencia y validación de firma en webhooks (`procesarWebhookProveedor`):** Verifica la firma criptográfica HMAC-SHA256 del proveedor (`401` si es inválida) y procesa la transición de estado dentro de una transacción con bloqueo `FOR UPDATE`. Si una notificación `completado` o `fallido` llega repetida, responde de forma idempotente (`idempotente = true`, `ya_procesado = true`) sin duplicar efectos ni alterar `confirmado_at`, y protege un pago ya `completado` frente a notificaciones tardías de `fallido`.
+     - **Reembolso administrativo (`reembolsarPagoCita`):** Permite a un administrador reembolsar un pago `completado`, actualizando `pagos.estado = 'reembolsado'` y `citas.estado_pago = 'reembolsado'` de forma idempotente.
+   - **`Controllers\PagoController` (`controllers/PagoController.php`) y Rutas (`public/index.php`):**
+     - `POST /api/pagos/iniciar` (requiere sesión autenticada + CSRF válido).
+     - `POST /api/pagos/webhook` (endpoint de notificación firmada servidor-a-servidor).
+     - `GET /pago/resultado` (vista segura `views/pagos/resultado.php` que alerta cuando se detectan parámetros manipulados en la URL y muestra únicamente el estado real del servidor).
+     - `POST /api/pagos/reembolsar` (requiere `isAdmin()` + CSRF válido).
+   - **Integración con Reportes Administrativos (`repositories/ReporteRepository.php`, `services/ReporteService.php`):**
+     - `ReporteRepository::obtenerFilasReservasEnRango()` incorpora `c.estado_pago` y el `ultimo_pago_estado` de `pagos`, permitiendo que `ReporteService::evaluarEstadoPagoCita()` refleje automáticamente en `/admin/reportes` y en la exportación CSV los ingresos efectivamente cobrados (`estado_pago = 'pagado'`) y los reembolsos (`estado_pago = 'reembolsado'`, con ingreso neto pagado `$0.00`).
+   - **Documentación de Decisiones de Negocio Pendientes (`docs/DECISIONES_PAGOS.md`):**
+     - Registra explícitamente las decisiones comerciales abiertas que debe definir el propietario antes de activar cobros reales en producción: (1) cobro total vs. anticipo/seña, (2) ventana de cancelación sin penalización y política de devoluciones, (3) absorción o traslado de comisiones de pasarela, (4) criterios de selección del proveedor comercial en Ecuador sin *vendor lock-in*, y (5) manejo de expiración de intentos de pago pendientes.
+
+### 2. Validación Ejecutada en Fase 6C (Desarrollador)
+
+#### A. Suite Completa PHPUnit (Ejecutada en Docker PHP 8.2.34 + MySQL 8.0 Aislado)
+- **Versión efectiva:** `PHPUnit 10.5.66 by Sebastian Bergmann and contributors.` (`Runtime: PHP 8.2.34`, `Configuration: /app/phpunit.xml`).
+- **Comando ejecutado:**
+  `docker run --rm --name appsalon-web-phpunit-f6c --network appsalon-net-phpunit-f6c -v "${PWD}:/app" -w /app -e APP_ENV=testing -e DB_HOST=appsalon-db-phpunit-f6c -e DB_PORT=3306 -e DB_USER=root -e DB_PASS=root -e DB_NAME=appsalon_f6c_test appsalon-php-test php -d variables_order=EGPCS vendor/bin/phpunit --colors=never`
+- **Resultado:** `OK (170 tests, 1949 assertions)` (`Time: 00:34.375, Memory: 16.00 MB`) — Código de salida `0`.
+- **Cobertura añadida en Fase 6C:**
+  - `Tests\Integration\MigrationTest::testMigracion006BasePagosUpIdempotenciaSetNullYRollback` (`tests/Integration/MigrationTest.php`): verifica la aplicación idempotente de `006_base_pagos.sql`, la preservación de `cita_referencia_id` con `cita_id = NULL` (`ON DELETE SET NULL`) al eliminar una cita, y el rollback limpio con `006_base_pagos_rollback.sql`.
+  - `Tests\Unit\PagoServiceTest` (`tests/Unit/PagoServiceTest.php` — 4 pruebas unitarias):
+    1. `testIniciarPagoCalculaImporteExclusivamenteEnServidorIgnorandoMontoDelCliente`: verifica que el importe cobrado (`$80.00`) proviene únicamente del servidor ignorando `monto = 0.01` y `moneda = EUR` enviados por el cliente, y que la referencia cumple el formato `PAY-YYYYMMDD-<16_HEX>`.
+    2. `testRechazaAlmacenarOProcesarDatosDeTarjetaSensibles`: verifica que cualquier payload con `numero_tarjeta`/`cvv` o PAN en metadatos es rechazado con `STATUS_INVALID` (`422`) sin invocar la pasarela ni persistir en BD, y que `sanearPayloadSinDatosTarjeta` redacta cualquier dato sensible.
+    3. `testRetornoDeNavegadorIgnoraQueryParamsManipuladosYNoConfirmaPago`: verifica que `consultarResultadoRetorno()` con `?status=approved&estado=completado&pagado=1` nunca confirma el pago si la pasarela no lo reporta pagado en el servidor.
+    4. `testWebhookRechazaFirmaInvalidaYProcesaNotificacionDuplicadaConIdempotencia`: verifica rechazo `401` ante firma HMAC inválida, transición única a `completado` con firma válida, e idempotencia ante webhooks repetidos o notificaciones tardías de fallo.
+  - `Tests\Integration\Fase6CBasePagosIntegrationTest` (`tests/Integration/Fase6CBasePagosIntegrationTest.php` — 4 pruebas de integración con MySQL real y HTTP aisladas):
+    1. `testFlujoCompletoDePagoCalculoServidorIdempotenciaEIntegracionConReportes`: verifica contra MySQL real el inicio de pago (calculando `$80.00` desde `citasservicios` e ignorando `$0.50` del cliente), reutilización idempotente por `idempotency_key`, bloqueo de confirmación por redirect, confirmación vía webhook firmado, idempotencia ante segundo webhook idéntico, actualización de `ingreso_pagado_total` (`$80.00`) en `ReporteService`, y reembolso administrativo que regresa el ingreso neto pagado a `$0.00`.
+    2. `testEscenariosProveedorSimuladoRechazoFondosYErrorComunicacion`: verifica el manejo de `fondos_insuficientes` (`estado = 'fallido'`, `citas.estado_pago = 'fallido'`), reintento posterior con nueva referencia, y `error_comunicacion` (`502`).
+    3. `testSeguridadProhibicionDeDatosDeTarjetaYControlDeAccesoEntreUsuarios`: verifica que nunca se persisten PAN ni CVV en la tabla `pagos` y que un cliente no puede iniciar ni consultar pagos de citas ajenas (`403`).
+    4. `testEndpointsHttpDePagosIniciacionRetornoSeguroyWebhookFirmado`: verifica por HTTP real (`POST /api/pagos/iniciar`, `GET /pago/resultado`, `POST /api/pagos/webhook`) el rechazo `422` de tarjeta, la creación `201` con monto de servidor, la resistencia de `/pago/resultado` frente a `?status=approved&pagado=1`, el rechazo `401` de webhook sin firma válida y la confirmación idempotente `200` con firma HMAC válida.
+
+#### B. Verificación E2E en Navegador con JavaScript Habilitado (`tests/verificar_navegador.ps1` + `tests/browser_e2e_test.js`)
+- **Ejecución del Desarrollador (`comprehensive_project_audit_roadmap`):**
+  - **RUN_ID:** `195d4b1980c34ed5bb8203d4ed1be696` (Contenedores efímeros `appsalon-db-test-195d4b1980c34ed5bb8203d4ed1be696`, `appsalon-smtp-test-195d4b1980c34ed5bb8203d4ed1be696` y `appsalon-web-test-195d4b1980c34ed5bb8203d4ed1be696`, puerto dinámico `http://localhost:32796`, BD aislada `appsalon_browser_test`).
+  - **Resultado:** 19/19 comprobaciones E2E superadas (`ADMIN-01` a `ADMIN-05`, `PROF-01`, `PROF-02`, `PRE-01`, `DISP-01`, `REC-01` a `REC-05`, `RES-01`, `REP-01`, `PAG-01`, `AUTH-01`, `NOTIF-01`) + verificación de persistencia en MySQL — Código de salida `0`.
+  - **Detalle de `PAG-01`:** Verifica en navegador real el rechazo `422` al intentar enviar datos de tarjeta en `POST /api/pagos/iniciar`, la creación de la orden de pago `PAY-20261010-176A7B2550635E17` calculada en servidor por `$195.00` (ignorando `$1.00` enviado por el cliente), la protección de `GET /pago/resultado?referencia=...&status=approved&estado=completado&pagado=1` manteniendo el estado `pendiente` y mostrando la alerta de advertencia, la confirmación e idempotencia mediante `POST /api/pagos/webhook` con firma HMAC-SHA256 válida, y la actualización de `/admin/reportes` reflejando `$195.00` en `#kpi-ingreso-pagado`.
 
 ---
 
@@ -588,7 +657,7 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 | **Fase 4B** | Integración de disponibilidad con citas existentes, bloqueo transaccional y prevención de reservas simultáneas | `Completada` |
 | **Fase 5** | Interfaz accesible de reservas y panel administrativo | `Completada` |
 | **Fase 6A** | Notificaciones transaccionales de citas, recordatorios configurables y cola de reintentos idempotente | `Completada` |
-| **Fase 6B** | Reportes administrativos de reservas, ocupación por profesional, importes históricos y exportación CSV segura | `Completada (En Auditoría)` |
-| **Fase 6C** | Base para pagos (*Payment Gateway Interface*, proveedor simulado e idempotencia de notificaciones) | `Pendiente` |
+| **Fase 6B** | Reportes administrativos de reservas, ocupación por profesional, importes históricos y exportación CSV segura | `Completada` |
+| **Fase 6C** | Base para pagos (*Payment Gateway Interface*, proveedor simulado e idempotencia de notificaciones) | `Completada (En Auditoría)` |
 
 

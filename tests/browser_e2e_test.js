@@ -11,6 +11,7 @@
 
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 
 function consultarHorariosEnMySql(diaSemana) {
@@ -1216,6 +1217,148 @@ async function runBrowserTests() {
 
         recordTest('REP-01', 'Reportes administrativos (/admin/reportes y /admin/reportes/exportar): ocupación sobre horas disponibles, importe reservado histórico vs ingreso pagado y exportación CSV', true,
             `Valeria Castro 16.67% (90/540 min), Sofía Andrade 0.00% (0/390 min); reservado $195.00 vs pagado $0.00; filtro servicio #4 ($115.00) y exportación CSV verificados.`);
+
+        // ------------------------------------------------------------------
+        // BLOQUE FASE 6C (PAG-01): Base para Pagos (Mock Gateway, Prohibición Tarjetas/Redirect, Webhook Idempotente y Reportes)
+        // ------------------------------------------------------------------
+        console.log('\n>>> [FASE 6C - PAGOS] Flujo de pago con MockPaymentGateway, rechazo de datos de tarjeta y redirect falso, webhook firmado idempotente y actualización en /admin/reportes...');
+
+        const cookiesAdminPagos = await page.cookies();
+        const cookieHeaderAdminPagos = cookiesAdminPagos.map(c => `${c.name}=${c.value}`).join('; ');
+        const csrfTokenAdminPagos = await page.$eval('.barra form[action="/logout"] input[name="csrf_token"]', el => el.value);
+
+        // 1. Verificar prohibición de enviar datos sensibles de tarjeta (HTTP 422)
+        const rTarjetaProhibida = await fetch(`${BASE_URL}/api/pagos/iniciar`, {
+            method: 'POST',
+            headers: {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json',
+                'Cookie': cookieHeaderAdminPagos
+            },
+            body: JSON.stringify({
+                csrf_token: csrfTokenAdminPagos,
+                cita_id: citaIdCreada,
+                numero_tarjeta: '4111222233334444',
+                cvv: '123',
+                fecha_expiracion: '12/29'
+            })
+        });
+        if (rTarjetaProhibida.status !== 422) {
+            throw new Error(`Se esperaba HTTP 422 al enviar datos sensibles de tarjeta a /api/pagos/iniciar, obtenido: ${rTarjetaProhibida.status}`);
+        }
+
+        // 2. Iniciar pago enviando monto manipulado ($1.00) -> servidor debe calcular $195.00
+        const rIniciarPago = await fetch(`${BASE_URL}/api/pagos/iniciar`, {
+            method: 'POST',
+            headers: {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json',
+                'Cookie': cookieHeaderAdminPagos
+            },
+            body: JSON.stringify({
+                csrf_token: csrfTokenAdminPagos,
+                cita_id: citaIdCreada,
+                monto: '1.00',
+                metodo_pago: 'tarjeta_mock'
+            })
+        });
+        const bodyIniciarPago = await rIniciarPago.json();
+        if (
+            rIniciarPago.status !== 200 ||
+            !bodyIniciarPago.resultado ||
+            bodyIniciarPago.monto_cliente_ignorado !== true ||
+            Number(bodyIniciarPago.monto_calculado_servidor) !== 195 ||
+            !bodyIniciarPago.pago ||
+            bodyIniciarPago.pago.estado !== 'pendiente'
+        ) {
+            throw new Error(`Respuesta inesperada en POST /api/pagos/iniciar: HTTP ${rIniciarPago.status}, body=${JSON.stringify(bodyIniciarPago)}`);
+        }
+        const referenciaPagoE2E = bodyIniciarPago.pago.referencia_pago;
+
+        // 3. Visitar GET /pago/resultado con parámetros manipulados (?status=completado&estado=pagado) -> debe permanecer en 'pendiente'
+        await page.goto(`${BASE_URL}/pago/resultado?referencia=${encodeURIComponent(referenciaPagoE2E)}&status=completado&estado=pagado&aprobado=1`, { waitUntil: 'networkidle0' });
+        const estadoTrasRedirect = await page.evaluate(() => ({
+            estadoAttr: document.querySelector('#pago-estado-real')?.getAttribute('data-estado') || '',
+            advertencia: document.querySelector('#pago-advertencia-redirect')?.textContent.trim() || ''
+        }));
+        if (estadoTrasRedirect.estadoAttr !== 'pendiente' || !estadoTrasRedirect.advertencia.includes('nunca se realiza mediante parámetros en la URL')) {
+            throw new Error(`GET /pago/resultado no bloqueó confirmación por redirección del navegador: ${JSON.stringify(estadoTrasRedirect)}`);
+        }
+
+        // 4. Enviar webhook firmado con HMAC-SHA256 (y repetirlo para verificar idempotencia)
+        const webhookSecret = process.env.PAYMENT_WEBHOOK_SECRET || 'appsalon_mock_webhook_secret_2026';
+        const firmaWebhook = crypto
+            .createHmac('sha256', webhookSecret)
+            .update(`${referenciaPagoE2E}|payment.succeeded|completado|195.00`)
+            .digest('hex');
+
+        const payloadWebhookE2E = {
+            referencia_pago: referenciaPagoE2E,
+            evento: 'payment.succeeded',
+            estado: 'completado',
+            monto: 195.00
+        };
+
+        const rWebhook1 = await fetch(`${BASE_URL}/api/pagos/webhook`, {
+            method: 'POST',
+            headers: {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json',
+                'X-Mock-Signature': firmaWebhook
+            },
+            body: JSON.stringify(payloadWebhookE2E)
+        });
+        const bodyWh1 = await rWebhook1.json();
+
+        const rWebhook2 = await fetch(`${BASE_URL}/api/pagos/webhook`, {
+            method: 'POST',
+            headers: {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json',
+                'X-Mock-Signature': firmaWebhook
+            },
+            body: JSON.stringify(payloadWebhookE2E)
+        });
+        const bodyWh2 = await rWebhook2.json();
+
+        if (
+            rWebhook1.status !== 200 ||
+            !bodyWh1.resultado ||
+            bodyWh1.idempotente !== false ||
+            bodyWh1.pago?.estado !== 'completado' ||
+            rWebhook2.status !== 200 ||
+            bodyWh2.idempotente !== true ||
+            bodyWh2.ya_procesado !== true
+        ) {
+            throw new Error(`Fallo en confirmación o idempotencia de POST /api/pagos/webhook: wh1=${JSON.stringify(bodyWh1)}, wh2=${JSON.stringify(bodyWh2)}`);
+        }
+
+        // 5. Verificar en navegador GET /pago/resultado y actualización de ingreso_pagado_total en /admin/reportes
+        await page.goto(`${BASE_URL}/pago/resultado?referencia=${encodeURIComponent(referenciaPagoE2E)}`, { waitUntil: 'networkidle0' });
+        const estadoConfirmadoDom = await page.evaluate(() => ({
+            estadoAttr: document.querySelector('#pago-estado-real')?.getAttribute('data-estado') || '',
+            montoTexto: document.querySelector('#pago-monto-servidor')?.textContent.trim() || ''
+        }));
+        if (estadoConfirmadoDom.estadoAttr !== 'completado' || !estadoConfirmadoDom.montoTexto.includes('$195.00')) {
+            throw new Error(`GET /pago/resultado no mostró estado completado tras webhook: ${JSON.stringify(estadoConfirmadoDom)}`);
+        }
+
+        await page.goto(`${BASE_URL}/admin/reportes?fecha_inicio=${encodeURIComponent(validDate)}&fecha_fin=${encodeURIComponent(validDate)}`, { waitUntil: 'networkidle0' });
+        const kpiTrasPago = await page.evaluate(() => ({
+            importeReservado: document.querySelector('#kpi-importe-reservado')?.textContent.trim() || '',
+            ingresoPagado: document.querySelector('#kpi-ingreso-pagado')?.textContent.trim() || '',
+            textoDetalle: document.querySelector('#listado-reservas-reporte')?.textContent.replace(/\s+/g, ' ').trim() || ''
+        }));
+        if (
+            kpiTrasPago.importeReservado !== '$195.00' ||
+            kpiTrasPago.ingresoPagado !== '$195.00' ||
+            !kpiTrasPago.textoDetalle.includes('Pagado')
+        ) {
+            throw new Error(`/admin/reportes no reflejó el ingreso efectivamente pagado ($195.00) tras confirmar el pago: ${JSON.stringify(kpiTrasPago)}`);
+        }
+
+        recordTest('PAG-01', 'Flujo de pago con MockPaymentGateway (/api/pagos/iniciar, /pago/resultado, /api/pagos/webhook) y reflejo de ingreso pagado en /admin/reportes', true,
+            `Referencia ${referenciaPagoE2E} calculada en servidor ($195.00 ignorando $1.00 cliente); rechazo 422 de tarjeta y bloqueo de redirect verificados; webhook HMAC idempotente y /admin/reportes actualizado a $195.00 pagado.`);
 
         // ------------------------------------------------------------------
         // BLOQUE FASE 2C (AUTH-01): Registro, Login no confirmado, Reenvío y Olvidé

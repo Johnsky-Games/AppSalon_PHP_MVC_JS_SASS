@@ -90,7 +90,7 @@ class CitaServiceTest extends TestCase
     public function testResolverFechaConsultaAdminValidaFormatoYCalendarioConFallbackAHoy(): void
     {
         $service = new CitaService();
-        $hoy = date('Y-m-d');
+        $hoy = $service->obtenerAhora()->format('Y-m-d');
 
         $resValida = $service->resolverFechaConsultaAdmin('2026-11-18');
         $this->assertSame('2026-11-18', $resValida['fecha']);
@@ -145,7 +145,7 @@ class CitaServiceTest extends TestCase
 
         // Mismo día y fecha pasada
         $resHoy = $service->reservar(1, [
-            'fecha' => date('Y-m-d'),
+            'fecha' => $service->obtenerAhora()->format('Y-m-d'),
             'hora' => '11:00',
             'servicios' => '1'
         ]);

@@ -252,6 +252,17 @@ try {
     }
     Write-Host " -> Notificaciones de citas verificadas en BD (confirmaciones enviadas | cancelaciones enviadas con historial preservado): $notifOutput" -ForegroundColor Green
 
+    $pagoSql = "SELECT p.cita_referencia_id, p.estado, p.monto, p.moneda, c.estado_pago FROM pagos p INNER JOIN citas c ON c.id = p.cita_id WHERE p.cita_id = $citaId LIMIT 1;"
+    $pagoOutput = docker exec $DbContainer mysql -uroot -proot -N -e "$pagoSql" $DbName 2>$null
+    if (-not $pagoOutput) {
+        throw "No se encontro registro de pago en la tabla 'pagos' para la cita ID $citaId."
+    }
+    $pagoCols = -split $pagoOutput
+    if ($pagoCols[1] -ne "completado" -or [decimal]$pagoCols[2] -ne 195.00 -or $pagoCols[3] -ne "USD" -or $pagoCols[4] -ne "pagado") {
+        throw "Inconsistencia en pago persistido en BD (cita_ref | estado | monto | moneda | cita_estado_pago): $pagoOutput"
+    }
+    Write-Host " -> Pago transaccional verificado en BD (cita_ref | estado | monto | moneda | cita_estado_pago): $pagoOutput" -ForegroundColor Green
+
     $testSuccess = $true
     $testExitCode = 0
 

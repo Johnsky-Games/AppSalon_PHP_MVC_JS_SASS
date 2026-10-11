@@ -367,6 +367,31 @@ class ReporteRepository
                     c.duracion_total_minutos AS cita_duracion_total_minutos,
                     c.usuarioId AS usuario_id,
                     c.profesionalId AS profesional_id,
+                    CASE
+                        WHEN c.estado_pago IN ('pagado', 'completado')
+                             OR EXISTS (
+                                SELECT 1 FROM pagos pg_e
+                                WHERE (pg_e.cita_id = c.id OR pg_e.cita_referencia_id = c.id)
+                                  AND pg_e.estado = 'completado'
+                             )
+                        THEN 'pagado'
+                        WHEN c.estado_pago = 'reembolsado'
+                             OR EXISTS (
+                                SELECT 1 FROM pagos pg_r
+                                WHERE (pg_r.cita_id = c.id OR pg_r.cita_referencia_id = c.id)
+                                  AND pg_r.estado = 'reembolsado'
+                             )
+                        THEN 'reembolsado'
+                        ELSE c.estado_pago
+                    END AS estado_pago,
+                    (
+                        SELECT pg.monto
+                        FROM pagos pg
+                        WHERE (pg.cita_id = c.id OR pg.cita_referencia_id = c.id)
+                          AND pg.estado = 'completado'
+                        ORDER BY pg.id DESC
+                        LIMIT 1
+                    ) AS monto_pagado,
                     p.nombre AS profesional_nombre,
                     p.activo AS profesional_activo,
                     u.nombre AS cliente_nombre,
