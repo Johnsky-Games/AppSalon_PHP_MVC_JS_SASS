@@ -442,4 +442,109 @@ Tras proporcionar al auditor el contexto Docker del proyecto, el subagente audit
 - **Veredicto Final Fase 6B (`fb82ec7f59571dca82bf738a30e79c2d19489894`):** **`APROBADO`**.
 - **Siguiente paso autorizado:** Inicio de la Fase 6C (`feature/fase-6c-pagos` — Pagos y Cobros) a partir del commit aprobado de la Fase 6B.
 
+---
+
+## Auditoría de Fase 6C: Base para Pagos
+
+### 1. Metadatos de la Revisión
+
+| Campo | Detalle |
+| :--- | :--- |
+| **Fase Auditada** | Fase 6C — Base para Pagos (`/api/pagos/iniciar`, `/api/pagos/webhook`, `/pago/resultado`) |
+| **Rama Evaluada** | `feature/fase-6c-base-pagos` |
+| **SHA Auditado** | `8178b830bc03197775fa653857e66ec74eb290db` |
+| **SHA Base (Fase 6B aprobada)** | `70a186dadf0d89d93d7f8b7c24572f39cc0ff3df` (sobre código `fb82ec7f59571dca82bf738a30e79c2d19489894`) |
+| **Worktree del Auditor** | `C:\Users\jonat\.gemini\antigravity\worktrees\AppSalon_PHP_MVC_JS_SASS\auditing_fase_4b_reservas` |
+| **Subagente Auditor** | Auditor Independiente |
+| **Fecha de Auditoría** | `2026-10-10` |
+| **Stash preservado intacto** | `stash@{0}: On auditing_fase_4b_reservas: temp stash for checkout` |
+| **Veredicto Final** | **`APROBADO`** |
+
+---
+
+### 2. Verificación de Aislamiento y Stash Local (`stash@{0}`)
+
+- **`git rev-parse HEAD`:** `8178b830bc03197775fa653857e66ec74eb290db`.
+- **Verificación de `stash@{0}`:** `stash@{0}: On auditing_fase_4b_reservas: temp stash for checkout` verificado y preservado intacto sin aplicar (`pop`) ni eliminar (`drop`).
+- **Aislamiento de entorno:** No se modificó el código de negocio auditado ni se interactuó con `appsalon-web`, `appsalon-db`, `appsalon-net`, `appsalon_mvc`, `includes/.env` ni la copia local en OneDrive.
+
+---
+
+### 3. Revisión Estática Exhaustiva de los 9 Criterios Obligatorios de Fase 6C
+
+| # | Criterio de Auditoría (Fase 6C) | Estado | Evidencia Técnica en el SHA `8178b830bc03197775fa653857e66ec74eb290db` |
+| :-: | :--- | :---: | :--- |
+| **1** | **Migración incremental `006_base_pagos.sql` y rollback `006_base_pagos_rollback.sql`:** tabla `pagos` con `cita_id` (`ON DELETE SET NULL`), `cita_referencia_id`, `referencia_pago` única, `transaccion_externa_id` única, `idempotency_key` única, estados tipados, y columna `citas.estado_pago`. | **CUMPLE** | `database/migrations/006_base_pagos.sql`: líneas 7–9 incorpora `citas.estado_pago VARCHAR(20) NOT NULL DEFAULT 'pendiente'`; líneas 11–42 crea la tabla `pagos` (`ENGINE=InnoDB`) con `referencia_pago`, `transaccion_externa_id`, `idempotency_key`, `estado`, `monto DECIMAL(8,2)`, `payload_proveedor JSON`, `UNIQUE KEY` para cada identificador y FKs con `ON DELETE SET NULL ON UPDATE CASCADE`. `006_base_pagos_rollback.sql`: líneas 7–12 revierte limpiamente `pagos`, la columna en `citas` y el registro en `migraciones`. `tests/Integration/MigrationTest.php`: líneas 447–542 (`testMigracion006BasePagosUpIdempotenciaSetNullYRollback`) valida aplicación, restricciones únicas, persistencia tras borrar cita con `cita_id = NULL` y `cita_referencia_id` intacto, rollback y reaplicación. |
+| **2** | **Interfaz de pasarela y mock/sandbox (`PaymentGatewayInterface`, `MockPaymentGateway`):** desacoplamiento de pasarela, soporte de modos simulados y validación de firma webhook (`PAYMENT_WEBHOOK_SECRET` / HMAC-SHA256). | **CUMPLE** | `interfaces/PaymentGatewayInterface.php`: líneas 16–97 define contrato neutro (`iniciarPago`, `verificarPago`, `procesarNotificacionWebhook`, `reembolsarPago`). `classes/MockPaymentGateway.php`: líneas 17–105 implementa modos `aprobado`, `fondos_insuficientes` y `error_comunicacion`; líneas 60–78 resuelve `PAYMENT_WEBHOOK_SECRET`; líneas 178–250 (`generarFirmaWebhook` y `verificarFirmaWebhook`) valida firmas HMAC-SHA256 con `hash_equals()`. `tests/Unit/PagoServiceTest.php`: líneas 193–272 valida modos simulados y rechazo `401` ante firmas HMAC inválidas. |
+| **3** | **Prohibición estricta de almacenar datos de tarjeta:** verificación en código de que NUNCA se persistan números de tarjeta (PAN), CVV ni fechas de vencimiento en `pagos` ni en base de datos. | **CUMPLE** | `classes/MockPaymentGateway.php`: líneas 28–58 (`CAMPOS_TARJETA_PROHIBIDOS`), líneas 108–141 (`contieneDatosTarjetaSensibles` con regex PAN `(?:\d[ -]*?){13,19}`), líneas 150–176 (`sanearPayloadSinDatosTarjeta` con `[REDACTED_PAN]`). `repositories/PagoRepository.php`: líneas 88–115 (`serializarPayloadSeguro` garantiza que jamás se guarde PAN/CVV en MySQL). `services/PagoService.php`: líneas 115–124 rechaza con `422 (PCI-DSS)` en `iniciarPago()`, y líneas 353–361 en webhooks. `tests/Unit/PagoServiceTest.php`: líneas 82–133. `tests/Integration/Fase6CBasePagosIntegrationTest.php`: líneas 190–216 (rechazo 422 y 0 filas insertadas en `pagos`). |
+| **4** | **Prohibición estricta de confirmación por redirección del navegador:** el retorno del cliente en `/pago/resultado` solo consulta el estado verificado en base de datos en servidor, ignorando cualquier parámetro manipulable en la URL (`?status=approved`, etc.). | **CUMPLE** | `controllers/PagoController.php`: líneas 193–238 (`resultado`) solo consulta el estado verificado en MySQL mediante `PagoService::consultarResultadoPago()`. `services/PagoService.php`: líneas 510–581 detecta parámetros sospechosos en URL (`status`, `estado`, `pagado`, `aprobado`, `success`, `payment_status`), los ignora por completo, no modifica la base de datos y emite `advertencia_seguridad`. `views/pagos/resultado.php`: líneas 7–16 y 23–27 muestra el estado real del servidor y la advertencia. `tests/Unit/PagoServiceTest.php`: líneas 135–191. `tests/Integration/Fase6CBasePagosIntegrationTest.php`: líneas 279–304. `tests/browser_e2e_test.js`: líneas 1278–1286. |
+| **5** | **Cálculo de montos exclusivamente en servidor:** el importe a pagar se obtiene desde los snapshots históricos de `citasservicios` en base de datos, ignorando cualquier monto manipulado por el cliente. | **CUMPLE** | `repositories/PagoRepository.php`: líneas 126–232 (`obtenerCitaConImporteServidor` suma `COALESCE(cs.precio_servicio, s.precio)`). `services/PagoService.php`: líneas 186–203 obtiene `$montoServidor`, detecta montos enviados por el cliente (`$montoClienteIgnorado = true`) y usa estrictamente el importe calculado en servidor para persistir e invocar la pasarela. `tests/Unit/PagoServiceTest.php`: líneas 16–80 (cliente envía `$0.01`, servidor cobra y persiste `$195.00`). `tests/Integration/Fase6CBasePagosIntegrationTest.php`: líneas 217–244 (cliente envía `$0.50`, MySQL persiste `$195.00`). |
+| **6** | **Idempotencia transaccional y webhooks seguros:** bloqueo transaccional (`FOR UPDATE`), respuesta idempotente sin duplicar cobros ante webhooks repetidos o desordenados, y sincronización de `citas.estado_pago`. | **CUMPLE** | `services/PagoService.php`: líneas 164–294 (`iniciarPago` usa transacciones InnoDB con `FOR UPDATE`), líneas 205–244 (idempotencia por cita pagada y por `idempotency_key`), líneas 383–482 (`procesarWebhook` con `FOR UPDATE`, validación `AMOUNT_MISMATCH`, e idempotencia que responde `200` ante webhooks repetidos sin duplicar registros ni degradar estados finales), líneas 470–478 actualiza `citas.estado_pago`. `tests/Integration/Fase6CBasePagosIntegrationTest.php`: líneas 330–360 (webhook repetido es `200 idempotente` con exactamente 1 fila en `pagos`). |
+| **7** | **Integración con reportes (`ReporteService`):** coherencia entre citas con pago completado y el `ingreso_pagado_total` en `/admin/reportes`. | **CUMPLE** | `repositories/ReporteRepository.php`: líneas 370–394 consulta la tabla `pagos` para proyectar `estado_pago` y `monto_pagado` de pagos completados o reembolsados. `services/ReporteService.php`: líneas 275–306 (`evaluarEstadoPagoCita` reconoce pagos completados y reembolsos), líneas 654–665 (atribuye el monto pagado respetando filtros por servicio). `tests/Integration/Fase6CBasePagosIntegrationTest.php`: líneas 377–467 (verifica actualización en `/admin/reportes` de `$0.00` a `$195.00` tras pago y retorno a `$0.00` tras reembolso). `tests/browser_e2e_test.js`: líneas 1346–1358. |
+| **8** | **Documentación de decisiones comerciales pendientes:** registro explícito en `docs/DECISIONES_PAGOS.md` y `PROGRESS.md` sobre anticipos, cancelaciones, reembolsos y comisiones sin lock-in comercial. | **CUMPLE** | `docs/DECISIONES_PAGOS.md`: líneas 1–50 documenta detalladamente las 4 definiciones comerciales pendientes (política de cobro total vs anticipo/seña al reservar, ventana de cancelación y política de reembolsos/no-shows, absorción de comisiones bancarias e impuestos locales, selección comercial de pasarela en Ecuador/LatAm sin lock-in técnico). `PROGRESS.md`: líneas 18–34 y 62–74 refleja el estado de la arquitectura base de pagos. |
+| **9** | **Pruebas automatizadas y suite E2E:** cobertura completa con `MigrationTest`, `PagoServiceTest`, `Fase6CBasePagosIntegrationTest` y escenario E2E `PAG-01` en Puppeteer. | **CUMPLE** | `tests/Integration/MigrationTest.php` (`testMigracion006BasePagosUpIdempotenciaSetNullYRollback`). `tests/Unit/PagoServiceTest.php` (4 pruebas unitarias de cálculo en servidor, prohibición de tarjetas, bloqueo de redirect y webhooks HMAC). `tests/Integration/Fase6CBasePagosIntegrationTest.php` (4 pruebas de integración MySQL 8 real de cálculo e inmutabilidad, flujo webhook e idempotencia, sincronización con reportes y seguridad auth/csrf/ownership). `tests/browser_e2e_test.js`: líneas 1222–1362 (`PAG-01` interactivo en navegador headless comprobando rechazo de tarjetas 422, cálculo servidor, bloqueo de redirect falso, webhook HMAC y actualización en `/admin/reportes`). |
+
+---
+
+### 4. Pruebas Ejecutadas en Docker Aislado y Comparativa Desarrollador vs. Auditor
+
+#### A. Suite Completa PHPUnit (Contenedor Aislado del Auditor `appsalon-audit6c-db` / `appsalon-audit6c-net`)
+
+- **Entorno creado por el auditor:**
+  - Red Docker: `appsalon-audit6c-net`
+  - Contenedor MySQL 8.0: `appsalon-audit6c-db` (base de datos `appsalon_audit_test`, inicializada con `database/schema_base.sql` + `php database/migrador.php up`, aplicando migraciones `001` a `006`).
+- **Comando ejecutado:**
+  ```powershell
+  docker run --rm --network appsalon-audit6c-net -v "C:/Users/jonat/.gemini/antigravity/worktrees/AppSalon_PHP_MVC_JS_SASS/auditing_fase_4b_reservas:/app" -w /app -e DB_HOST=appsalon-audit6c-db -e DB_PORT=3306 -e DB_USER=root -e DB_PASS=root -e DB_NAME=appsalon_audit_test appsalon-php-test php -d variables_order=EGPCS -d date.timezone=America/Guayaquil vendor/bin/phpunit --colors=never
+  ```
+- **Resultado obtenido:**
+  - `PHPUnit 10.5.66 by Sebastian Bergmann and contributors.` (`Runtime: PHP 8.2.34`)
+  - **`OK (170 tests, 1949 assertions)`** (`Time: 00:33.570, Memory: 16.00 MB`)
+  - **Código de salida:** `0`
+- **Limpieza posterior verificada:** Contenedor `appsalon-audit6c-db` detenido y eliminado, y red `appsalon-audit6c-net` eliminada al finalizar.
+
+#### B. Suite E2E en Navegador Real Headless Chrome (`tests/verificar_navegador.ps1`)
+
+- **Comando ejecutado en worktree del auditor:**
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File tests/verificar_navegador.ps1
+  ```
+- **Resultado obtenido:**
+  - **Identificador de ejecución independiente (`RUN_ID`):** `8effe3d0db0e46bebc3ee51779558903`
+  - **19 comprobaciones E2E superadas (`[OK]`):**
+    - `ADMIN-01` a `ADMIN-04`: CRUD administrativo de servicios con duración.
+    - `PROF-01` y `PROF-02`: Gestión de profesionales, horarios, descansos y bloqueos.
+    - `PRE-01`: Login interactivo de cliente y redirección a `/cita`.
+    - `DISP-01`: Consulta autenticada en `GET /api/disponibilidad`.
+    - `REC-01` a `REC-04`: Flujo interactivo en `/cita`, accesibilidad, filtrado de profesionales, resumen y reserva SweetAlert2.
+    - `RES-01`: Reserva con profesional, descuento de ocupación, rechazo `409` por solapamiento y cancelación en `#mis-citas`.
+    - `ADMIN-05`: Consulta administrativa en `/admin?fecha=2026-10-12`, eliminación en `/api/eliminar` y liberación de ocupación.
+    - `REP-01`: Consulta de reportes administrativos en `/admin/reportes`, validación de KPIs globales, ocupación y exportación CSV.
+    - `PAG-01`: Flujo completo de pagos: rechazo `422` ante envío de número de tarjeta/CVV, cálculo de importe en servidor ($195.00 ignorando $1.00 enviado por cliente), bloqueo de confirmación por redirección del navegador en `/pago/resultado`, procesamiento de webhook con firma HMAC-SHA256, verificación de respuesta idempotente sin duplicar cobros y actualización inmediata de `$195.00` pagado en `/admin/reportes`.
+    - `AUTH-01`: Ciclo de autenticación, rechazo de usuario sin confirmar y recuperación de cuenta sin enumeración.
+    - `NOTIF-01`: Despacho SMTP de correos transaccionales de confirmación y cancelación en buzón de pruebas (8 correos capturados).
+    - `REC-05`: `Errores consola: 0, Solicitudes fallidas: 0`.
+  - **Persistencia verificada en MySQL (`appsalon_browser_test`):** Pago transaccional verificado: `cita_referencia_id = 3`, `estado = 'completado'`, `monto = 195.00 USD`, `citas.estado_pago = 'pagado'`.
+  - **Código de salida:** `0`.
+  - **Limpieza posterior:** Contenedores efímeros y `includes/.env` temporal eliminados; `git checkout -- tests/browser_test_report.json` ejecutado para mantener el worktree limpio.
+
+#### C. Comparativa entre Reporte del Desarrollador y Verificación del Auditor
+
+| Aspecto | Reportado por Desarrollador (`comprehensive_project_audit_roadmap`) | Verificado Independientemente por Auditor (`auditing_fase_4b_reservas`) | Coincidencia |
+| :--- | :--- | :--- | :--- |
+| **SHA evaluado** | `8178b830bc03197775fa653857e66ec74eb290db` | `8178b830bc03197775fa653857e66ec74eb290db` | Exacta |
+| **Versión PHPUnit / PHP** | PHPUnit `10.5.66` / PHP `8.2.34` | PHPUnit `10.5.66` / PHP `8.2.34` | Exacta |
+| **Resultado PHPUnit** | `OK (170 tests, 1949 assertions)` (Exit `0`) | `OK (170 tests, 1949 assertions)` (Exit `0`) | Exacta |
+| **Resultado Suite Navegador E2E** | 19 checks `[OK]` (`RUN_ID: 195d4b1980c34ed5bb8203d4ed1be696`), `0` errores consola, `0` fallos red (Exit `0`) | 19 checks `[OK]` (`RUN_ID: 8effe3d0db0e46bebc3ee51779558903`), `0` errores consola, `0` fallos red (Exit `0`) | Exacta |
+| **Aislamiento respecto a app local** | `appsalon-web`, `appsalon-db`, `appsalon-net`, `appsalon_mvc` y `.env` intactos | `appsalon-web`, `appsalon-db`, `appsalon-net`, `appsalon_mvc`, `.env` y `stash@{0}` intactos | Exacta |
+
+---
+
+### 5. Conclusión y Veredicto de Cierre de Fase 6C
+
+- **Pendientes bloqueantes en Fase 6C:** Ninguno. Los 9 criterios de alcance de la Fase 6C (migración `006_base_pagos` + rollback con `ON DELETE SET NULL`, `PaymentGatewayInterface` desacoplada con `MockPaymentGateway` para pruebas sin cargos reales, cumplimiento estricto PCI-DSS sin almacenar datos de tarjeta, prohibición de confirmación por redirección del navegador, cálculo de importes exclusivamente en el servidor, idempotencia transaccional con `FOR UPDATE` y webhooks con firma HMAC-SHA256, sincronización con `ReporteService`, documentación de decisiones comerciales en `docs/DECISIONES_PAGOS.md` y suite completa de pruebas unitarias, de integración y E2E `PAG-01`) están implementados y verificados exhaustivamente.
+- **Veredicto Final Fase 6C (`8178b830bc03197775fa653857e66ec74eb290db`):** **`APROBADO`**.
+- **Siguiente paso autorizado:** Cierre del hito de pagos y consolidación general del roadmap.
+
+
 

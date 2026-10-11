@@ -12,8 +12,9 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 ## Fase 6C: Base para Pagos
 
 - **Rama:** `feature/fase-6c-base-pagos`
+- **Commit de Código Auditado:** `8178b830bc03197775fa653857e66ec74eb290db`
 - **Commit Base (Fase 6B aprobada):** `70a186dadf0d89d93d7f8b7c24572f39cc0ff3df` (`fb82ec7f59571dca82bf738a30e79c2d19489894` + registro de auditoría Fase 6B)
-- **Estado General de Fase 6C:** **Implementada y Verificada por Desarrollador (Lista para Auditoría)**
+- **Estado General de Fase 6C:** **Completada y Auditada (`APROBADO` en `docs/AUDITORIA.md`)**
 
 ### 1. Diseño Arquitectónico, Interfaz de Pasarela Sustituible, Cálculo en Servidor, Idempotencia y Prohibición de Datos de Tarjeta
 
