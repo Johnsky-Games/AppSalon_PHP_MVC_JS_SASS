@@ -1,3 +1,5 @@
+> Estado actual: el dictamen histórico de este archivo no autoriza una fusión automática. Las correcciones de Codex y sus validaciones están registradas en PROGRESS.md. Restore ahora admite únicamente bases nuevas/vacías; las afirmaciones anteriores de sustitución transaccional por `_bck_` quedan sustituidas por ese contrato.
+
 # Registro de Auditorías Independientes — AppSalon (`Johnsky-Games/AppSalon_PHP_MVC_JS_SASS`)
 
 Este documento registra las auditorías técnicas independientes ejecutadas por el subagente **Auditor** sobre commits cerrados por SHA en su worktree separado (`C:\Users\jonat\.gemini\antigravity\worktrees\AppSalon_PHP_MVC_JS_SASS\auditing_fase_4b_reservas`), empleando contenedores Docker aislados sin tocar la copia local de la aplicación (`http://localhost:3000`, `appsalon-web`, `appsalon-db`, `appsalon_mvc`).

@@ -12,7 +12,7 @@ Este documento describe los procedimientos operativos oficiales para instalar, c
 | **MySQL** | `8.0.x` | Motor `InnoDB` obligatorio (transacciones ACID y bloqueos `FOR UPDATE`), juego de caracteres `utf8mb4` y colación `utf8mb4_unicode_ci`. |
 | **Servidor Web** | Apache `2.4+` o Nginx | En Apache deben estar habilitados `mod_rewrite` y `mod_headers`, apuntando `DocumentRoot` a `/public`. La directiva `<Directory /var/www/html/public>` debe contar con `AllowOverride All` y `DirectoryIndex index.php`. Las reglas de reescritura residen en `public/.htaccess` y `docker/apache.conf`. |
 | **Composer** | `2.x` | Gestión de dependencias PHP (`vlucas/phpdotenv`, `phpmailer/phpmailer`, `phpunit/phpunit`) y autoloading PSR-4. |
-| **Node.js / NPM** | Node `18+` / NPM `9+` | Compilación reproducible de hojas de estilo Sass (`src/scss`), scripts JS (`src/js`) e imágenes (`gulpfile.js` -> `public/build`). |
+| **Node.js / NPM** | Node `24.x` / NPM compatible | Compilación reproducible de hojas de estilo Sass (`src/scss`), scripts JS (`src/js`) e imágenes (`gulpfile.js` -> `public/build`). |
 | **Docker (Opcional / Recomendado)** | Docker Engine `24+` y Docker Compose `v2` | Permite despliegue y ejecución de pruebas en contenedores aislados (`Dockerfile`, `Dockerfile.test`, `docker-compose.yml`). |
 
 ---
@@ -29,7 +29,7 @@ Este documento describe los procedimientos operativos oficiales para instalar, c
    - **Base de Datos MySQL:** `DB_HOST`, `DB_PORT=3306`, `DB_USER`, `DB_PASS`, `DB_NAME=appsalon_mvc`.
    - **Servidor SMTP:** `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_USER`, `EMAIL_PASS`, `EMAIL_FROM`, `EMAIL_FROM_NAME`.
    - **Recordatorios y Reservas:** `NOTIFICACIONES_RECORDATORIO_HORAS=24`, `RESERVA_EXIGIR_PROFESIONAL=1`.
-   - **Pasarela de Pagos:** `PAYMENT_GATEWAY_PROVIDER=mock`, `PAYMENT_WEBHOOK_SECRET=<secreto_hex_32_bytes>`.
+   - **Pasarela de Pagos:** `PAYMENT_GATEWAY_PROVIDER=mock` únicamente en desarrollo/pruebas, con `APP_ENV=development` o `testing` y un secreto de webhook propio. En producción el adaptador mock está bloqueado: falta seleccionar e implementar el proveedor comercial; véase `docs/DECISIONES_PAGOS.md`.
 
 > **Seguridad:** El archivo `includes/.env` está excluido en `.gitignore`. Jamás versione secretos ni credenciales en el repositorio.
 
@@ -56,7 +56,7 @@ El contenedor `db` (`mysql:8.0`) carga automáticamente `database/schema_base.sq
 
 El proyecto evoluciona su esquema mediante un esquema inicial (`database/schema_base.sql`) seguido de migraciones incrementales versionadas en `database/migrations/`, registradas en la tabla de control `migraciones`.
 
-### 3.1. Catálogo de Migraciones (`001` a `008`)
+### 3.1. Catálogo de Migraciones (`001` a `009`)
 
 | Migración | Archivo | Cambios Principales |
 | :---: | :--- | :--- |
@@ -68,6 +68,8 @@ El proyecto evoluciona su esquema mediante un esquema inicial (`database/schema_
 | **005** | `005_notificaciones_citas.sql` | Crea `notificaciones_citas` con `uq_notificaciones_clave_idempotencia`, `idx_notificaciones_estado_proximo` y claves foráneas `ON DELETE SET NULL` hacia `citas` y `usuarios` (conservando `cita_referencia_id`). |
 | **006** | `006_base_pagos.sql` | Añade `estado_pago` (`idx_citas_estado_pago`) a `citas` y crea `pagos` con `uq_pagos_referencia`, `uq_pagos_transaccion_externa`, `uq_pagos_idempotency_key` y claves foráneas `ON DELETE SET NULL` hacia `citas` y `usuarios`. |
 | **007** | `007_citas_estado_cancelacion.sql` | Añade `estado` (`confirmada`, `cancelada`), `cancelado_por`, `cancelado_at` y `motivo_cancelacion` a `citas` con índices `idx_citas_estado` e `idx_citas_prof_fecha_estado`. |
+| **008** | `008_notificaciones_outbox_lease.sql` | Añade `worker_token`, `lease_expires_at` e índice de arrendamiento a `notificaciones_citas` para recuperar trabajos abandonados. |
+| **009** | `009_pagos_reembolsos_fecha.sql` | Añade `reembolsado_at` e índice a `pagos` para atribuir los reembolsos a su periodo real. |
 
 ### 3.2. Comandos de Migración y Rollback
 ```bash

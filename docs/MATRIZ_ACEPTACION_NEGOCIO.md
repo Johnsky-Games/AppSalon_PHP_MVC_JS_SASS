@@ -2,6 +2,8 @@
 
 Este documento define la correspondencia estricta entre los requisitos de negocio, las reglas funcionales, los componentes de implementación, las pruebas automatizadas de verificación y el estado de aceptación del sistema.
 
+> Evidencia de cierre técnico: `85fe920bc87032b778b6f89e6f1825d75b4ccd34`, [CI aprobada](https://github.com/Johnsky-Games/AppSalon_PHP_MVC_JS_SASS/actions/runs/38184440904), 218 pruebas / 2727 aserciones y 19 comprobaciones E2E. Los pagos comprobados usan el simulador; las decisiones comerciales siguientes siguen pendientes. Restore admite únicamente destinos nuevos/vacíos.
+
 ---
 
 ## 1. Matriz Funcional y Técnica de Requisitos
@@ -29,7 +31,7 @@ Este documento define la correspondencia estricta entre los requisitos de negoci
 | **Reportes Financieros** | Trazabilidad contable independiente y CSV conciliable | Movimientos históricos independientes de cobro y reembolso con fecha propia. Soporte de netos negativos sin `max(0)`. Separación de pagos simulados y reales. Exportación CSV y vista con columnas conciliables (`Tipo Movimiento`, `Fecha Reembolso`, montos de periodo y neto) imputando en el periodo del movimiento. | `ReporteRepository`, `ReporteService`, migración 009 `reembolsado_at` | `ReportesFinancierosIntegrationTest::testCobroEnOctubreYReembolsoEnNoviembreMuestraReembolsoEnNoviembreSinAtribuirAOctubre`, `testReporteConservaPagosDeCitasCanceladasOConServiciosEliminados` | **Cumplido** |
 | **Pagos e Idempotencia** | Idempotencia acotada, sobrepago y máquina de estados | Clave de idempotencia validada contra huella. Conciliación ante callbacks cruzados (K1 falla -> K2 inicia -> K1 éxito tardío -> K2 éxito). Detección de exceso (`total_pagado > total_cita`) con registro auditable en `payload_proveedor` sin reembolsos automáticos no autorizados. | `PagoService`, `PagoRepository`, `PagoController` | `PagoIdempotenciaSeguridadIntegrationTest::testIdempotenciaAisladaPorUsuarioYCita`, `testSecuenciaK1FallaK2IniciaExitoTardioK1ExitoK2ConciliacionRobusta` | **Cumplido** |
 | **Entorno y Secretos** | Seguridad de pasarela de pago | Prohibición estricta de `MockPaymentGateway` en entorno de producción. Rechazo de secretos vacíos o por defecto (`mock_secret_cambiar_en_produccion`). | `PagoController::obtenerGateway`, `PagoService` | `PagoIdempotenciaSeguridadIntegrationTest::testProduccionRechazaMockGatewayYSecretosDefault` | **Cumplido** |
-| **Operaciones y Respaldos** | Recuperación sin reemplazo destructivo | Destino explícito nuevo/vacío; hash, staging, tablas, filas y migraciones comprobados. Bases pobladas rechazadas sin alterar originales. | `scripts/backup_db.php`, `scripts/restore_db.php` | `BackupRestoreIntegridadIntegrationTest` | **En validación** |
+| **Operaciones y Respaldos** | Recuperación sin reemplazo destructivo | Destino explícito nuevo/vacío; hash, staging, tablas, filas y migraciones comprobados. Bases pobladas rechazadas sin alterar originales. | `scripts/backup_db.php`, `scripts/restore_db.php` | `BackupRestoreIntegridadIntegrationTest` | **Cumplido** |
 | **Configuración Apache** | Front Controller en Docker | Instalación real de extensión `mbstring` en `Dockerfile`. Validación de rutas MVC y E2E sobre imagen oficial construida. Concurrencia real multiproceso con barreras y timeouts. | `Dockerfile`, `docker/apache.conf`, `.github/workflows/ci.yml` | `ReservaConcurrenciaIntegrationTest::testDosReservasSimultaneasSobreMismoProfesionalEIntervaloSolapadoEnProcesosParalelosUna200YOtra409` | **Cumplido** |
 
 ---
@@ -42,7 +44,7 @@ Las siguientes reglas operativas y comerciales han sido identificadas durante el
    - *Situación actual:* El sistema opera con una interfaz desacoplada (`PaymentGatewayInterface`) y un adaptador de pruebas (`MockPaymentGateway`).
    - *Decisión requerida:* Definir la pasarela de pagos definitiva a contratar para el mercado ecuatoriano (ej. Payphone, Kushki, Datafast/Paymentez) y sus credenciales de producción.
 2. **Política de Anticipos y Pagos Parciales:**
-   - *Situación actual:* Se cobra el 100% del valor de los servicios al confirmar la cita. Se rechazan pagos parciales para evitar descuadres contables sin soporte.
+   - *Situación actual:* La reserva puede crearse sin pago previo y queda pendiente de pago. Al iniciar el pago se solicita el 100% del importe histórico; los pagos parciales no están implementados.
    - *Decisión requerida:* Determinar si se requiere esquema de seña/anticipo (ej. 50% al reservar y 50% en el local) o pago total obligatorio previo a la atención.
 3. **Ventana Límite de Cancelación por parte del Cliente:**
    - *Situación actual:* El cliente puede cancelar citas futuras sin penalización hasta el momento de inicio.

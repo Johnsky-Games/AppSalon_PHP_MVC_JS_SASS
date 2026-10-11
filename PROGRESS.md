@@ -1,3 +1,23 @@
+# Estado actual — correcciones de Codex (2026-10-11)
+
+Código publicado: `85fe920bc87032b778b6f89e6f1825d75b4ccd34` en `feature/correcciones-auditoria-integral`.
+
+- Restore exige destino nuevo/vacío explícito, rechaza bases pobladas y opciones de omisión, valida staging y destino, y conserva un destino nuevo fallido para diagnóstico. Se retiró el reemplazo por renombres/DROP FK.
+- Build utiliza Terser moderno. `npm ci` y `npm run build` pasaron con instalación limpia.
+- E2E Linux utiliza Apache oficial, MySQL y SMTP mock aislados, mailbox por ejecución, worker real, aserciones obligatorias de persistencia y artefactos de diagnóstico.
+- Historial de conciliación preservado frente a cambios de payload y reembolsos; resolución registrada sin borrar la detección original.
+- Pruebas de sesión y sincronización del login corregidas sin cambiar controles de producción ni reducir aserciones. La comprobación de `textContent` admite los espacios variables de la minificación, manteniendo la prohibición de `innerHTML`.
+- Validación local: PHP 8.3.6 + MySQL 8.0.46, **218 pruebas y 2727 aserciones**, exit 0 con semillas `1791756203` y `1791751792`.
+- Validación oficial PHP 8.2/MySQL 8/Apache: [GitHub Actions #38184440904](https://github.com/Johnsky-Games/AppSalon_PHP_MVC_JS_SASS/actions/runs/38184440904), **success** sobre el SHA indicado: instalación limpia, build, linter PHP, migraciones 001–009, imagen Docker, **19 comprobaciones E2E**, **218 pruebas / 2727 aserciones** en orden aleatorio, y ciclo backup/restore de 13 tablas con SHA-256.
+- E2E usa navegador real y SMTP mock con worker real; se comprobaron datos persistidos y no hubo errores de consola ni peticiones fallidas.
+- Los cambios documentales posteriores no modifican el código validado. La guía incluye Node 24, migraciones 008/009 y el bloqueo de pagos mock en producción.
+
+La instalación del usuario y `main` no se modificaron. Las decisiones comerciales de pagos/facturación mantienen el alcance documentado; los pagos E2E utilizan el simulador.
+
+## Historial de reportes anteriores
+
+Los registros siguientes describen las rondas previas y sus resultados informados. Las garantías antiguas de reemplazo automático `_bck_` fueron retiradas y no representan el comportamiento actual del restore.
+
 # Registro de Progreso del Proyecto AppSalon
 
 Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerdo con la metodología de entregas auditables por **ChatGPT** (revisión estática de código) y ejecución/verificación por **Antigravity** (desarrollo y pruebas dinámicas automatizadas), sujeto a la aprobación final del **Propietario**.
