@@ -84,7 +84,8 @@ class LoginController
                 $_SESSION['rol'] = $acceso['rol'];
 
                 if ($acceso['rol'] !== 'cliente') {
-                    $_SESSION['admin'] = '1';
+                    if (in_array($acceso['rol'], ['propietario','gerente'], true)) { $_SESSION['admin'] = '1'; }
+                    else { unset($_SESSION['admin']); }
                     $destino = $acceso['rol'] === 'profesional' ? '/agenda' : ($acceso['rol'] === 'finanzas' ? '/admin/finanzas' : '/admin');
                     header('Location: ' . $destino);
                 } else {

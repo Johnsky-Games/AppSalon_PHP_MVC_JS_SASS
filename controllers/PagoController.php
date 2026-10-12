@@ -160,6 +160,9 @@ class PagoController
             return;
         }
 
+        // Revocación, cuenta activa y versión de sesión comprobadas antes de cualquier pago.
+        isAuth();
+
         $datos = self::leerDatosEntrada();
         // Si el token CSRF vino en el cuerpo JSON, sincronizarlo en $_POST para validar_csrf()
         if (!isset($_POST['csrf_token']) && isset($datos['csrf_token']) && is_string($datos['csrf_token'])) {
@@ -182,7 +185,7 @@ class PagoController
         }
 
         $usuarioId = (int)$_SESSION['id'];
-        $esAdmin = isset($_SESSION['admin']) && (string)$_SESSION['admin'] === '1';
+        $esAdmin = puede('finanzas.gestionar');
 
         try {
             $service = self::obtenerPagoService();
@@ -266,7 +269,7 @@ class PagoController
         isAuth();
 
         $usuarioId = (int)($_SESSION['id'] ?? 0);
-        $esAdmin = isset($_SESSION['admin']) && (string)$_SESSION['admin'] === '1';
+        $esAdmin = puede('finanzas.gestionar');
 
         $accept = $_SERVER['HTTP_ACCEPT'] ?? '';
         $quiereJson = str_contains($accept, 'application/json') || (($_GET['format'] ?? '') === 'json');

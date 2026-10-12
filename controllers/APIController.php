@@ -147,6 +147,8 @@ class APIController
             return;
         }
 
+        isAuth();
+
         $resultado = self::obtenerProfesionalService()->consultarParaReserva($_GET);
         $httpCode = (int)($resultado['httpCode'] ?? 200);
         unset($resultado['httpCode']);
@@ -186,6 +188,8 @@ class APIController
             detener_ejecucion(401);
             return;
         }
+
+        isAuth();
 
         $resultado = self::obtenerCitaService()->consultarCitasCliente($_SESSION['id'], false);
         $httpCode = (int)($resultado['httpCode'] ?? 200);
@@ -239,6 +243,8 @@ class APIController
             return;
         }
 
+        isAuth();
+
         $resultado = self::obtenerDisponibilidadService()->consultarDesdeParametros($_GET);
         $httpCode = (int)($resultado['httpCode'] ?? 200);
         unset($resultado['httpCode']);
@@ -272,6 +278,8 @@ class APIController
             detener_ejecucion(401);
             return;
         }
+
+        isAuth();
 
         // 2. Verificación de CSRF
         if (!validar_csrf()) {
@@ -371,7 +379,7 @@ class APIController
             isAuth();
 
             $usuarioIdAutenticado = $_SESSION['id'] ?? null;
-            $esAdmin = isset($_SESSION['admin']) && (string)$_SESSION['admin'] === '1';
+            $esAdmin = puede('agenda.gestionar');
             $esJsonExplicito = self::solicitaRespuestaJsonExplicita();
 
             // Toda cancelación pública (cliente o administrador, con o sin flags de cancelación)
@@ -394,7 +402,7 @@ class APIController
             isAuth();
 
             $usuarioIdAutenticado = $_SESSION['id'] ?? null;
-            $esAdmin = isset($_SESSION['admin']) && (string)$_SESSION['admin'] === '1';
+            $esAdmin = puede('agenda.gestionar');
             $esJsonExplicito = self::solicitaRespuestaJsonExplicita();
 
             $motivo = $_POST['motivo'] ?? ($_POST['motivo_cancelacion'] ?? null);

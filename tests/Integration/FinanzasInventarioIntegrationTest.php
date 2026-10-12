@@ -109,4 +109,42 @@ final class FinanzasInventarioIntegrationTest extends TestCase
         self::assertSame('anulada',$this->db->query("SELECT estado FROM comisiones_movimientos WHERE pago_id={$pago3->id}")->fetch_row()[0]);
     }
 
+    public function testReintentoAcotadoRevierteCadaIntentoSql(): void
+    {
+        $repo=new OperacionRepository($this->db);
+        $intentos=0;$sku='retry-'.bin2hex(random_bytes(6));
+        $resultado=$repo->transaccion(function() use($repo,&$intentos,$sku) {
+            $intentos++;
+            $repo->consulta("INSERT INTO inventario_productos (sku,nombre,unidad) VALUES (?,'Retry QA','unidad')",'s',[$sku]);
+            if ($intentos<3) { throw new \Repositories\PersistenceException('Fallo SQL recuperable de prueba.', $intentos===1 ? 1213 : 1205); }
+            return 'confirmado';
+        });
+        self::assertSame(3,$intentos);self::assertSame('confirmado',$resultado);
+        self::assertSame(1,count($repo->consulta('SELECT id FROM inventario_productos WHERE sku=?','s',[$sku])));
+        $intentos=0;$sku='exhaust-'.bin2hex(random_bytes(6));
+        try {
+            $repo->transaccion(function() use($repo,&$intentos,$sku) {
+                $intentos++;
+                $repo->consulta("INSERT INTO inventario_productos (sku,nombre,unidad) VALUES (?,'Retry exhausted QA','unidad')",'s',[$sku]);
+                throw new \Repositories\PersistenceException('Deadlock persistente de prueba.',1213);
+            });
+            self::fail('La tercera excepción debe propagarse.');
+        } catch (\Repositories\PersistenceException $e) { self::assertSame(1213,$e->getCode()); }
+        self::assertSame(3,$intentos);
+        self::assertSame([], $repo->consulta('SELECT id FROM inventario_productos WHERE sku=?','s',[$sku]));
+    }
+    public function testErrorSqlNoRecuperableNoSeReintenta(): void
+    {
+        $repo=new OperacionRepository($this->db);$intentos=0;
+        try {
+            $repo->transaccion(function() use($repo,&$intentos) {
+                $intentos++;$repo->consulta('SELECT * FROM tabla_inexistente_finanzas_qa');
+            });
+            self::fail('Consulta inválida debe fallar.');
+        } catch (\Throwable $e) {
+            self::assertSame(1146,(int)$e->getCode());
+        }
+        self::assertSame(1,$intentos);
+    }
+
 }

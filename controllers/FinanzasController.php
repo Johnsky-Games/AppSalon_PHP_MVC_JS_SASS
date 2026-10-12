@@ -25,7 +25,7 @@ final class FinanzasController
     public static function guardar(Router $router): void
     {
         iniciar_sesion_segura(); exigir_permiso('finanzas.gestionar');
-        if (!validar_csrf()) { detener_ejecucion(403); }
+        exigir_csrf();
         try {
             $service=new FinanzasService();
             if (($_POST['accion'] ?? '')==='configurar_comision') { (new ComisionService())->configurar((int)$_SESSION['id'],$_POST); }

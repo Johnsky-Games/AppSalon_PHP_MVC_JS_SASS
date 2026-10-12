@@ -15,7 +15,7 @@ class CrecimientoServiceTest extends TestCase
     {
         $s=$this->service();$p=$s->validarPreguntas([['etiqueta'=>' Preferencia ','tipo'=>'select','opciones'=>['Silencio','Conversación'],'requerida'=>true]]);
         $this->assertSame('Preferencia',$p[0]['etiqueta']);$this->assertSame('p0',$p[0]['id']);
-        $this->assertSame(['p0'=>'Silencio'],$s->validarRespuestas($p,['p0'=>'Silencio','admin'=>'1']));
+        $this->assertSame(['p0'=>'Silencio'],$s->validarRespuestas($p,['p0'=>'Silencio']));
         $this->expectException(\InvalidArgumentException::class);$s->validarRespuestas($p,['p0'=>'Inyectado']);
     }
     public function testConsentimientoObligatorioNoSeAceptaPorOmisión(): void
@@ -47,5 +47,15 @@ class CrecimientoServiceTest extends TestCase
     {
         $r=$this->createMock(CrecimientoRepository::class);$r->expects($this->once())->method('crearFormulario')->with(7,'Ficha', [['id'=>'p0','etiqueta'=>'Ambiente','tipo'=>'select','requerida'=>false,'opciones'=>['Calma','Conversación']]]);
         $s=new CrecimientoService($r);$this->assertSame('Formulario publicado.',$s->accionAdmin(7,['accion'=>'formulario','titulo'=>'Ficha','preguntas'=>[['etiqueta'=>'Ambiente','tipo'=>'select','opciones'=>'Calma, Conversación'],['etiqueta'=>'','tipo'=>'texto']]]));
+    }
+    public function testRespuestasRechazanPreguntasDesconocidas(): void
+    {
+        $s=$this->service();$p=$s->validarPreguntas([['etiqueta'=>'Preferencia','tipo'=>'texto']]);
+        $this->expectException(\InvalidArgumentException::class);$s->validarRespuestas($p,['p0'=>'Silencio','otro'=>'No publicada']);
+    }
+    public function testEditorNoConvierteArraysEnEtiquetas(): void
+    {
+        $r=$this->createMock(CrecimientoRepository::class);$r->expects($this->never())->method('crearFormulario');
+        $this->expectException(\InvalidArgumentException::class);(new CrecimientoService($r))->accionAdmin(1,['accion'=>'formulario','titulo'=>'Ficha','preguntas'=>[['etiqueta'=>['no texto']]]]);
     }
 }

@@ -1,6 +1,13 @@
 <?php
 $uiAutenticado = !empty($_SESSION['id']);
 $uiAdmin = !empty($_SESSION['admin']);
+$uiNombreComercial = 'App Salón';
+$uiContacto = '';
+try {
+    $uiAjustes = (new \Repositories\CrecimientoRepository())->ajustes();
+    $uiNombreComercial = trim((string)($uiAjustes['nombre_comercial'] ?? '')) ?: $uiNombreComercial;
+    $uiContacto = trim((string)($uiAjustes['contacto'] ?? ''));
+} catch (\Throwable $e) { /* La identidad predeterminada permite renderizar ante fallo de consulta. */ }
 $uiRuta = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
 $uiEnlaces = [['/perfil', 'Mi Perfil', 'users']];
 if (puede('agenda.gestionar')) $uiEnlaces[] = ['/admin', 'Ver Citas', 'calendar'];
@@ -38,7 +45,7 @@ $uiIconos = [
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#123b42">
-    <title>App Salón · Tu espacio de bienestar</title>
+    <title><?php echo s($uiNombreComercial); ?> · Tu espacio de bienestar</title>
     <link rel="icon" href="/build/img/avatar-professional.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/build/vendor/sweetalert2.min.css">
     <link rel="stylesheet" href="/build/vendor/toastify.css">
@@ -51,7 +58,7 @@ $uiIconos = [
         <aside class="ui-sidebar" aria-label="Navegación principal">
             <a class="ui-brand" href="<?php echo $uiAdmin ? '/admin' : '/cita'; ?>" aria-label="App Salón, inicio">
                 <span class="ui-brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 3c0 6-9 6-9 12a9 9 0 0 0 18 0c0-6-9-6-9-12Z"/><path d="M12 10v11m-5-7 5 4 5-4"/></svg></span>
-                <span>App Salón<small>El arte de cuidarte</small></span>
+                <span><?php echo s($uiNombreComercial); ?><small>El arte de cuidarte</small></span>
             </a>
             <p class="ui-nav-label"><?php echo $uiAdmin ? 'TU ESPACIO DE GESTIÓN' : 'TU MOMENTO, A TU RITMO'; ?></p>
             <nav class="ui-main-nav" aria-label="Secciones">
@@ -69,14 +76,14 @@ $uiIconos = [
         </aside>
         <?php } else { ?>
         <aside class="imagen ui-auth-hero" aria-label="Bienvenida a App Salón">
-            <a class="ui-brand" href="/"><span class="ui-brand-mark" aria-hidden="true">✦</span><span>App Salón<small>El arte de cuidarte</small></span></a>
+            <a class="ui-brand" href="/"><span class="ui-brand-mark" aria-hidden="true">✦</span><span><?php echo s($uiNombreComercial); ?><small>El arte de cuidarte</small></span></a>
             <div class="ui-auth-story"><span class="ui-eyebrow">UN MOMENTO SOLO PARA TI</span><h2>Sentirte bien.<br>Verte increíble.</h2><p>Tu próximo cambio empieza aquí. Conecta con profesionales y reserva a tu ritmo.</p><div class="ui-hero-chips"><span>Reserva fácil</span><span>Atención personal</span></div></div>
             <p class="ui-auth-caption">Tu tiempo es valioso. Hazlo tuyo.</p>
         </aside>
         <?php } ?>
         <main class="app" id="contenido-principal" tabindex="-1">
             <?php echo $contenido; ?>
-            <footer class="ui-content-footer"><span>App Salón</span><span>Diseñado para cuidar de tu tiempo.</span></footer>
+            <footer class="ui-content-footer"><span><?php echo s($uiNombreComercial); ?></span><span><?php echo s($uiContacto ?: 'Diseñado para cuidar de tu tiempo.'); ?></span></footer>
         </main>
     </div>
     <div id="ui-notifications" class="ui-visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>

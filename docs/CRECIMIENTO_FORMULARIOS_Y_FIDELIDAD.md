@@ -9,6 +9,8 @@
 ## Fidelidad
 Cada cita con estado `completada` da 10 puntos. Actualizar puntos vuelve a consultar citas reales y crea un movimiento único por cita. El canje cuesta 100 puntos y usa clave de idempotencia por cliente. El bloqueo de la fila del cliente serializa canjes y evita saldo negativo. Recepción registra entrega una sola vez, con actor y fecha. El beneficio es manual, configurable y no representa un descuento de cobro automático. Cambiar el texto futuro no altera movimientos ya registrados.
 
+Los puntos reconocen asistencia, no son dinero ni una devolución: un reembolso financiero posterior no revierte los puntos de una visita efectivamente completada.
+
 ## Lista de espera
 Fecha estricta de próximos 180 días, servicio existente, profesional activo que ofrezca ese servicio. Una solicitud por cliente/servicio/día evita duplicados. Recepción gestiona contacto/cierre; no se bloquean horas ni se crea una cita automáticamente. Cancelación cliente limitada al propietario.
 

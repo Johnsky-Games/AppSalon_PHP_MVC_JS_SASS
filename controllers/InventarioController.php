@@ -16,7 +16,7 @@ final class InventarioController
     public static function guardar(Router $router): void
     {
         iniciar_sesion_segura(); exigir_permiso('inventario.gestionar');
-        if (!validar_csrf()) { detener_ejecucion(403); }
+        exigir_csrf();
         try {
             $service=new InventarioService();
             if (($_POST['accion'] ?? '')==='crear') { $service->crear($_POST); }

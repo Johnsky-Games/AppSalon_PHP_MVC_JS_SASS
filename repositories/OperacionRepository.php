@@ -10,7 +10,7 @@ class OperacionRepository
     public function consulta(string $sql, string $tipos = '', array $valores = []): array
     {
         $stmt = $this->db->prepare($sql);
-        if (!$stmt) { throw new PersistenceException('No se pudo preparar la operación.'); }
+        if (!$stmt) { throw new PersistenceException('No se pudo preparar la operación.', $this->db->errno); }
         try {
             if ($tipos !== '') { $stmt->bind_param($tipos, ...$valores); }
             if (!$stmt->execute()) { throw new PersistenceException('No se pudo ejecutar la operación.', $stmt->errno); }
@@ -18,11 +18,35 @@ class OperacionRepository
             return $resultado ? $resultado->fetch_all(MYSQLI_ASSOC) : [];
         } finally { $stmt->close(); }
     }
+    /**
+     * Solo closures de base de datos: ninguna llamada externa ni despacho de correo.
+     * InnoDB puede elegir esta operación como víctima; revierte completamente y
+     * reintenta solo deadlocks (1213) y esperas agotadas (1205), como máximo 3 veces.
+     */
     public function transaccion(callable $operacion): mixed
     {
-        if (!$this->db->begin_transaction()) { throw new PersistenceException('No se pudo iniciar la operación.'); }
-        try { $resultado = $operacion(); if (!$this->db->commit()) { throw new PersistenceException('No se pudo confirmar la operación.'); } return $resultado; }
-        catch (\Throwable $e) { $this->db->rollback(); throw $e; }
+        for ($intento = 1; $intento <= 3; $intento++) {
+            try {
+                if (!$this->db->begin_transaction()) {
+                    throw new PersistenceException('No se pudo iniciar la operación.', $this->db->errno);
+                }
+                $resultado = $operacion();
+                if (!$this->db->commit()) {
+                    throw new PersistenceException('No se pudo confirmar la operación.', $this->db->errno);
+                }
+                return $resultado;
+            } catch (\Throwable $e) {
+                try { $this->db->rollback(); }
+                catch (\Throwable $rollbackError) { throw $e; }
+                $falloSql = $e instanceof PersistenceException || $e instanceof \mysqli_sql_exception;
+                if (!$falloSql || !in_array((int)$e->getCode(), [1213, 1205], true) || $intento === 3) {
+                    throw $e;
+                }
+                // Jitter acotado (10–60 ms): evita que ambas víctimas compitan otra vez juntas.
+                usleep(random_int(10000, 30000) * $intento);
+            }
+        }
+        throw new PersistenceException('No se pudo completar la operación.');
     }
     public static function ahora(): string { return (new \DateTimeImmutable('now',new \DateTimeZone('America/Guayaquil')))->format('Y-m-d H:i:s'); }
     public function caja(string $inicio, string $fin, int $pagina = 1): array

@@ -34,6 +34,8 @@ class CrecimientoService
     public function validarRespuestas(array $preguntas, mixed $valores): array
     {
         if (!is_array($valores)) { throw new \InvalidArgumentException('Respuestas inválidas.'); }
+        $ids=array_column($preguntas,'id');
+        if(array_diff(array_keys($valores),$ids)){throw new \InvalidArgumentException('Hay preguntas que no pertenecen a este formulario.');}
         $r=[];
         foreach($preguntas as $p) {
             $v=$valores[$p['id']]??'';
@@ -80,8 +82,8 @@ class CrecimientoService
             case 'formulario':
                 $preguntas=$datos['preguntas']??[];
                 if(!is_array($preguntas)){throw new \InvalidArgumentException('Preguntas inválidas.');}
-                $preguntas=array_values(array_filter($preguntas,static fn($p)=>is_array($p)&&trim((string)($p['etiqueta']??''))!==''));
-                foreach($preguntas as &$p){if(($p['tipo']??'')==='select'&&is_string($p['opciones']??null)){$p['opciones']=array_map('trim',explode(',', $p['opciones']));}}unset($p);
+                $preguntas=array_values(array_filter($preguntas,static fn($p)=>!is_array($p)||!is_string($p['etiqueta']??null)||trim($p['etiqueta'])!==''));
+                foreach($preguntas as &$p){if(is_array($p)&&($p['tipo']??'')==='select'&&is_string($p['opciones']??null)){$p['opciones']=array_map('trim',explode(',', $p['opciones']));}}unset($p);
                 $this->repo->crearFormulario($autor,$this->texto($datos['titulo']??'',120),$this->validarPreguntas($preguntas)); return 'Formulario publicado.';
             case 'archivar': $this->repo->archivarFormulario($this->id($datos['id']??null)); return 'Formulario archivado; se conservan sus respuestas.';
             case 'espera_estado':

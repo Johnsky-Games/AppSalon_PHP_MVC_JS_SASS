@@ -87,6 +87,7 @@ done
 [[ $ready == 1 ]] || { echo 'SMTP mock E2E no está listo.' >&2; exit 1; }
 
 # Private uploads are the sole writable app directory; ephemeral volume never touches user portraits.
+mkdir -p "$repo_dir/storage/private/perfiles"
 docker volume create "$profile_volume" >/dev/null
 docker run --rm -v "$profile_volume:/profiles" "$image" sh -c 'chown www-data:www-data /profiles && chmod 700 /profiles'
 

@@ -113,6 +113,35 @@ module.exports = async function verifyPlatform({ browser, baseUrl, recordTest, s
         if (response.status() !== 403) throw new Error('Client must not access team management.');
         recordTest('PLAT-04','Perfil, consentimiento, upload real y privacidad entre clientes',true,'Opt-in/out en fuente única; PNG HTTP reencodificado JPEG; fotoajena404/perfilajeno403/equipo403.');
 
+        await owner.goto(`${baseUrl}/admin/ajustes`,{waitUntil:'networkidle0'});
+        const businessName=`Salón E2E ${crypto.randomBytes(6).toString('hex')}`;
+        await fill(owner,'.growth-card form',{nombre_comercial:businessName,contacto:'Recepción E2E',beneficio_fidelidad:'Beneficio de prueba en recepción'});
+        await submit(owner,'.growth-card form');
+        if (query("SELECT valor FROM negocio_ajustes WHERE clave='nombre_comercial'") !== businessName) throw new Error('Business settings POST must persist with the rendered CSRF field.');
+        await owner.goto(`${baseUrl}/admin/crecimiento`,{waitUntil:'networkidle0'});
+        await owner.click('[data-modal-open="formulario-modal"]');
+        await owner.waitForFunction(() => document.querySelector('#formulario-modal').open);
+        const formTitle=`Ficha E2E ${crypto.randomBytes(6).toString('hex')}`;
+        await fill(owner,'#formulario-modal form',{titulo:formTitle,'preguntas[0][etiqueta]':'Preferencia de atención','preguntas[0][tipo]':'texto','preguntas[0][requerida]':'1'});
+        await submit(owner,'#formulario-modal form');
+        const formId=query(`SELECT id FROM formularios_cliente WHERE titulo='${formTitle}'`);
+        if (!/^\d+$/.test(formId)) throw new Error('Published form must persist from the modal.');
+        await client.goto(`${baseUrl}/mi-bienestar`,{waitUntil:'networkidle0'});
+        await responsive(client,'wellness');
+        const answer='<img src=x onerror="window.__platformXss=true">Preferencia literal';
+        const answerForm=`form:has(input[name="formulario_id"][value="${formId}"])`;
+        await client.$eval(answerForm,form => form.closest('details').open=true);
+        await fill(client,answerForm,{'respuestas[p0]':answer});
+        await submit(client,answerForm);
+        const stored=query(`SELECT JSON_UNQUOTE(JSON_EXTRACT(respuestas,'$.p0')) FROM formulario_respuestas WHERE formulario_id=${formId} AND usuario_id=${profileId}`);
+        if (stored !== answer) throw new Error('Client answer POST must preserve literal content in private SQL storage.');
+        if (await client.evaluate(() => window.__platformXss === true || !!document.querySelector('img[src="x"]'))) throw new Error('Client form response was interpreted as HTML.');
+        await owner.goto(`${baseUrl}/admin/crecimiento?formulario_id=${formId}`,{waitUntil:'networkidle0'});
+        if (!await owner.evaluate(value => document.body.textContent.includes(value) && window.__platformXss !== true && !document.querySelector('img[src="x"]'),answer)) throw new Error('Authorized response rendering must remain escaped.');
+        await other.goto(`${baseUrl}/mi-bienestar`,{waitUntil:'networkidle0'});
+        if (await other.evaluate(value => document.body.textContent.includes(value),answer)) throw new Error('Another client must not see the saved private answer.');
+        recordTest('PLAT-06','Ajustes y formularios: modales, POST con CSRF, persistencia y escaping',true,'Nombre comercial guardado; ficha publicada; cliente responde; respuesta literal SQL y admin escapada, otro cliente no accede.');
+
         const reception = await login('recepcion@platform.test');
         response = await reception.goto(`${baseUrl}/agenda`,{waitUntil:'networkidle0'});
         if (response.status() !== 200) throw new Error('Reception agenda must be permitted.');

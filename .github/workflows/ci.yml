@@ -76,6 +76,9 @@ jobs:
           php database/migrador.php up
           php database/migrador.php status
 
+      - name: Ejecutar suite completa de PHPUnit (sin caché y orden aleatorio)
+        run: php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --order-by=random --colors=never
+
       - name: Construir y verificar imagen Docker oficial (Apache + PHP 8.2 + mbstring)
         run: |
           docker build -t appsalon-web-ci .
@@ -97,9 +100,6 @@ jobs:
           name: apache-browser-e2e
           path: ${{ runner.temp }}/appsalon-e2e
           if-no-files-found: ignore
-
-      - name: Ejecutar suite completa de PHPUnit (sin caché y orden aleatorio)
-        run: php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --order-by=random --colors=never
 
       - name: Verificar ciclo completo de respaldo y restauración con validación SHA-256
         run: |
