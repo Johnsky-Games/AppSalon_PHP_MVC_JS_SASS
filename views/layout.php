@@ -61,7 +61,8 @@ $uiIconos = [
                 <span><?php echo s($uiNombreComercial); ?><small>El arte de cuidarte</small></span>
             </a>
             <p class="ui-nav-label"><?php echo $uiAdmin ? 'TU ESPACIO DE GESTIÓN' : 'TU MOMENTO, A TU RITMO'; ?></p>
-            <nav class="ui-main-nav" aria-label="Secciones">
+            <button class="ui-nav-toggle" type="button" data-nav-toggle aria-expanded="false" aria-controls="ui-main-navigation">Menú</button>
+            <nav class="ui-main-nav" id="ui-main-navigation" aria-label="Secciones">
                 <?php foreach ($uiEnlaces as [$uiHref, $uiTexto, $uiIcono]) {
                     $uiActiva = $uiRuta === $uiHref || ($uiHref === '/profesionales' && str_starts_with($uiRuta, '/profesionales/')) || ($uiHref === '/servicios' && $uiRuta === '/servicios/actualizar');
                 ?>

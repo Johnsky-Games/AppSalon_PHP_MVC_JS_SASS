@@ -40,6 +40,15 @@ module.exports = async function verifyPlatform({ browser, baseUrl, recordTest, s
     async function responsive(page, label) {
         for (const width of [320,390,768,1280]) {
             await page.setViewport({width,height:900});
+            if (width <= 640) {
+                const toggle = await page.$('[data-nav-toggle]');
+                if (!toggle) throw new Error('Missing accessible mobile menu control.');
+                await toggle.click();
+                if (!await page.$eval('[data-nav-toggle]', button => button.getAttribute('aria-expanded') === 'true')) throw new Error('Mobile menu must announce its expanded state.');
+                if (!await page.$eval('#ui-main-navigation', nav => getComputedStyle(nav).display !== 'none')) throw new Error('Expanded mobile navigation must be available.');
+                await toggle.click();
+                if (!await page.$eval('[data-nav-toggle]', button => button.getAttribute('aria-expanded') === 'false')) throw new Error('Mobile menu must return to its collapsed state.');
+            }
             const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth+1);
             if (overflow) throw new Error(`Platform horizontal overflow: ${label} at ${width}px`);
             await page.screenshot({path:path.join(screenshotDir, `platform-${label}-${width}.png`)});

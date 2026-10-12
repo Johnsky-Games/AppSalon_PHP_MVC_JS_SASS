@@ -17,3 +17,9 @@ dialog {
 .ui-integral-table { width: 100%; border-collapse: collapse; th,td { padding: 1.2rem; border-bottom: 1px solid #d9e4df; text-align: left; } }
 .ui-table-scroll { overflow-x: auto; max-width: 100%; }
 @media(prefers-reduced-motion:reduce) { dialog[open] { animation: none; } }
+
+.ui-nav-toggle { display: none; }
+@media (max-width: 640px) {
+  .ui-navigation-ready .ui-nav-toggle { display: block; width: 100%; min-height: 4.4rem; margin-top: 1rem; padding: 1rem; border: 1px solid #b8d5ca; border-radius: 1.2rem; color: #fff; background: #ffffff12; font-weight: 600; cursor: pointer; }
+  .ui-navigation-ready .ui-sidebar .ui-main-nav:not(.is-open) { display: none; }
+}

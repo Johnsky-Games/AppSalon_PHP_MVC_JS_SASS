@@ -21,6 +21,16 @@
     }
     window.AppSalonUI = Object.freeze({ notify });
     document.addEventListener('DOMContentLoaded', () => {
+        const navigation = document.getElementById('ui-main-navigation');
+        const navigationToggle = document.querySelector('[data-nav-toggle]');
+        if (navigation && navigationToggle) {
+            document.body.classList.add('ui-navigation-ready');
+            navigationToggle.addEventListener('click', () => {
+                const open = navigation.classList.toggle('is-open');
+                navigationToggle.setAttribute('aria-expanded', String(open));
+                navigationToggle.textContent = open ? 'Cerrar menú' : 'Menú';
+            });
+        }
         document.querySelectorAll('[data-modal-open]').forEach(button => {
             button.addEventListener('click', () => {
                 const modal = document.getElementById(button.dataset.modalOpen);
