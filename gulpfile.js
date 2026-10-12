@@ -8,7 +8,7 @@ const concat = require('gulp-concat');
 const { Transform } = require('node:stream');
 const { minify } = require('terser');
 const rename = require('gulp-rename');
-const imagemin = require('gulp-imagemin'); // Minificar imagenes 
+const imagemin = require('gulp-imagemin'); // Minificar imagenes
 const notify = require('gulp-notify');
 const cache = require('gulp-cache');
 const clean = require('gulp-clean');
@@ -66,15 +66,30 @@ function versionWebp() {
 }
 
 
+function vendor() {
+    return src([
+        'node_modules/sweetalert2/dist/sweetalert2.all.min.js',
+        'node_modules/sweetalert2/dist/sweetalert2.min.css',
+        'node_modules/toastify-js/src/toastify.js',
+        'node_modules/toastify-js/src/toastify.css',
+        'node_modules/sweetalert2/LICENSE',
+        'node_modules/toastify-js/LICENSE'
+    ]).pipe(new Transform({ objectMode: true, transform(file, encoding, callback) {
+        if (file.basename === 'LICENSE') file.basename = file.path.includes('sweetalert2') ? 'sweetalert2.LICENSE' : 'toastify.LICENSE';
+        callback(null, file);
+    }})).pipe(dest('public/build/vendor'));
+}
+
 function watchArchivos() {
     watch( paths.scss, css );
     watch( paths.js, javascript );
     watch( paths.imagenes, imagenes );
     watch( paths.imagenes, versionWebp );
 }
-  
+
 exports.css = css;
 exports.javascript = javascript;
 exports.watchArchivos = watchArchivos;
-exports.default = parallel(css, javascript,  imagenes, versionWebp,  watchArchivos ); 
-exports.build = parallel(css, javascript,  imagenes, versionWebp );
+exports.default = parallel(css, javascript, vendor, imagenes, versionWebp, watchArchivos);
+exports.build = parallel(css, javascript, vendor, imagenes, versionWebp);
+exports.vendor = vendor;

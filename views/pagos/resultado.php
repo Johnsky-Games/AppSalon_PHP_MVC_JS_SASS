@@ -15,6 +15,7 @@ $etiquetaEstado = match ($estadoPago) {
 };
 ?>
 
+<p class="ui-eyebrow">TU RESERVA, CON TRANSPARENCIA</p>
 <h1 class="nombre-pagina">Estado del Pago</h1>
 <p class="descripcion-pagina">Información verificada directamente en el servidor de AppSalon</p>
 

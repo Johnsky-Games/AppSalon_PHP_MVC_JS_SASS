@@ -1,4 +1,4 @@
-<h1 class="nombre-pagina">Crear Nueva Cita</h1>
+<div class="booking-hero ui-page-header"><div><p class="ui-eyebrow">TU MOMENTO, A TU RITMO</p><h1 class="nombre-pagina">Crear Nueva Cita</h1></div><img class="ui-avatar" src="/build/img/avatar-client.svg" alt="Avatar ilustrado de cliente" width="64" height="64"></div>
 <p class="descripcion-pagina">Elige tus servicios, profesional y horario disponible</p>
 <?php
 include_once __DIR__ . '/../templates/barra.php';
@@ -8,14 +8,15 @@ $fechaMinimaInput = isset($fechaMinima) && is_string($fechaMinima) && $fechaMini
 ?>
 <div id="app">
     <nav class="tabs" aria-label="Pasos para crear tu cita">
-        <button class="actual" type="button" data-paso="1">Servicios</button>
-        <button type="button" data-paso="2">Información Citas</button>
-        <button type="button" data-paso="3">Resumen</button>
+        <button class="actual" type="button" data-paso="1"><span class="step-number" aria-hidden="true">01</span> Servicios</button>
+        <button type="button" data-paso="2"><span class="step-number" aria-hidden="true">02</span> Información Citas</button>
+        <button type="button" data-paso="3"><span class="step-number" aria-hidden="true">03</span> Resumen</button>
     </nav>
+    <div class="booking-selection ui-card" id="booking-selection" aria-live="polite">Selecciona tus servicios para comenzar.</div>
     <div id="paso-1" class="seccion">
         <h2>Servicios</h2>
         <p class="text-center">Elige tus servicios a continuación</p>
-        <div id="servicios" class="listado-servicios" role="group" aria-label="Catálogo de servicios disponibles"></div>
+        <div id="servicios" class="listado-servicios" role="group" aria-label="Catálogo de servicios disponibles" aria-busy="true"><p class="estado-disponibilidad estado-loading">Cargando el catálogo de servicios…</p></div>
     </div>
     <div id="paso-2" class="seccion">
         <h2>Tus datos y cita</h2>
@@ -33,6 +34,7 @@ $fechaMinimaInput = isset($fechaMinima) && is_string($fechaMinima) && $fechaMini
                     <option value="">-- Selecciona primero al menos un servicio --</option>
                 </select>
             </div>
+            <aside class="professional-preview ui-card" id="professional-preview" hidden><img src="/build/img/avatar-professional.svg" alt="Avatar ilustrado de profesional" width="48" height="48"><div><small>Te atenderá</small><strong id="professional-preview-name"></strong></div></aside>
             <p id="estado-profesionales" class="estado-profesionales ocultar" aria-live="polite"></p>
 
             <div class="campo">
@@ -76,8 +78,6 @@ $fechaMinimaInput = isset($fechaMinima) && is_string($fechaMinima) && $fechaMini
 
 <?php
 $script = "
-<link href='https://cdn.jsdelivr.net/npm/@sweetalert2/theme-dark@4/dark.css' rel='stylesheet'>
-<script src='https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.js'></script>
-<script src='build/js/app.js'></script>
+<script src='/build/js/app.js'></script>
 ";
-?>
+?>

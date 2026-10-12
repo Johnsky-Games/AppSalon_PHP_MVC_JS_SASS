@@ -1,8 +1,8 @@
-<h1 class="nombre-pagina">Agenda y Horarios</h1>
+<header class="ui-page-header"><p class="ui-eyebrow">Disponibilidad del equipo</p><h1 class="nombre-pagina">Agenda y Horarios</h1>
 <p class="descripcion-pagina">
     Profesional: <strong><?php echo s($profesional->nombre); ?></strong>
     (Zona horaria: <span><?php echo s($zonaHoraria ?? 'America/Guayaquil'); ?></span>)
-</p>
+</p></header>
 
 <?php
 include __DIR__ . '/../templates/barra.php';
@@ -10,12 +10,12 @@ $alertas = $alertas ?? [];
 include __DIR__ . '/../templates/alertas.php';
 ?>
 
-<div class="acciones" style="margin-bottom: 2rem;">
+<div class="acciones">
     <a class="boton" href="/profesionales">Volver a Profesionales</a>
 </div>
 
-<h2>1. Horario Semanal</h2>
-<form action="/profesionales/horarios?id=<?php echo s($profesional->id); ?>" method="POST" class="formulario" id="form-horarios-semanales">
+<h2 class="ui-section-title">1. Horario Semanal</h2><p class="ui-form-help">Activa los días de atención. Añade varias franjas para organizar jornadas divididas.</p>
+<form action="/profesionales/horarios?id=<?php echo s($profesional->id); ?>" method="POST" class="formulario ui-card" id="form-horarios-semanales">
     <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
     <input type="hidden" name="accion" value="guardar_horarios">
     <input type="hidden" name="profesionalId" value="<?php echo s($profesional->id); ?>">
@@ -28,7 +28,7 @@ include __DIR__ . '/../templates/alertas.php';
         }
         $filasRenderizar = !empty($franjasDia) ? array_values($franjasDia) : [null];
     ?>
-    <div class="horario-dia-grupo" data-dia="<?php echo $numDiaInt; ?>" data-next-index="<?php echo count($filasRenderizar); ?>">
+    <div class="horario-dia-grupo ui-schedule-day" data-dia="<?php echo $numDiaInt; ?>" data-next-index="<?php echo count($filasRenderizar); ?>">
         <div class="horario-dia-cabecera" style="display: flex; align-items: center; justify-content: space-between; margin: 1rem 0 0.5rem 0;">
             <strong><?php echo s($nombreDia); ?></strong>
             <button
@@ -66,6 +66,7 @@ include __DIR__ . '/../templates/alertas.php';
                 <input
                     type="time"
                     class="horario-inicio-input"
+                    aria-label="Hora de inicio de <?php echo s($nombreDia); ?>, franja <?php echo $idxInt + 1; ?>"
                     name="horarios[<?php echo $claveFila; ?>][hora_inicio]"
                     id="horario_inicio_<?php echo $sufijoDom; ?>"
                     value="<?php echo s($horaInicioVal); ?>"
@@ -74,6 +75,7 @@ include __DIR__ . '/../templates/alertas.php';
                 <input
                     type="time"
                     class="horario-fin-input"
+                    aria-label="Hora de fin de <?php echo s($nombreDia); ?>, franja <?php echo $idxInt + 1; ?>"
                     name="horarios[<?php echo $claveFila; ?>][hora_fin]"
                     id="horario_fin_<?php echo $sufijoDom; ?>"
                     value="<?php echo s($horaFinVal); ?>"
@@ -151,6 +153,7 @@ include __DIR__ . '/../templates/alertas.php';
             const inputInicio = document.createElement('input');
             inputInicio.type = 'time';
             inputInicio.className = 'horario-inicio-input';
+            inputInicio.setAttribute('aria-label', 'Hora de inicio de ' + nombreDia + ', franja ' + (idx + 1));
             inputInicio.name = 'horarios[' + claveFila + '][hora_inicio]';
             inputInicio.id = 'horario_inicio_' + sufijoDom;
             inputInicio.value = '14:00';
@@ -161,6 +164,7 @@ include __DIR__ . '/../templates/alertas.php';
             const inputFin = document.createElement('input');
             inputFin.type = 'time';
             inputFin.className = 'horario-fin-input';
+            inputFin.setAttribute('aria-label', 'Hora de fin de ' + nombreDia + ', franja ' + (idx + 1));
             inputFin.name = 'horarios[' + claveFila + '][hora_fin]';
             inputFin.id = 'horario_fin_' + sufijoDom;
             inputFin.value = '18:00';
@@ -208,8 +212,8 @@ include __DIR__ . '/../templates/alertas.php';
 
 <hr>
 
-<h2>2. Descansos Semanales</h2>
-<form action="/profesionales/descansos/crear?id=<?php echo s($profesional->id); ?>" method="POST" class="formulario" id="form-crear-descanso">
+<h2 class="ui-section-title">2. Descansos Semanales</h2><p class="ui-form-help">Reserva tiempo para almuerzos y pausas recurrentes; no se ofrecerán citas en estos intervalos.</p>
+<form action="/profesionales/descansos/crear?id=<?php echo s($profesional->id); ?>" method="POST" class="formulario ui-card" id="form-crear-descanso">
     <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
     <input type="hidden" name="accion" value="crear_descanso">
     <input type="hidden" name="profesionalId" value="<?php echo s($profesional->id); ?>">
@@ -238,9 +242,10 @@ include __DIR__ . '/../templates/alertas.php';
     <input type="submit" value="Añadir Descanso" class="boton">
 </form>
 
-<ul class="servicios descansos-lista">
+<?php if (empty($descansos)) { ?><p class="ui-empty">No hay descansos registrados para este profesional.</p><?php } ?>
+<ul class="servicios descansos-lista ui-grid">
     <?php foreach (($descansos ?? []) as $desc) { ?>
-    <li data-descanso-id="<?php echo s($desc->id); ?>">
+    <li class="ui-card" data-descanso-id="<?php echo s($desc->id); ?>">
         <p>Día: <span><?php echo s($desc->nombreDia()); ?></span></p>
         <p>Intervalo: <span><?php echo s($desc->hora_inicio); ?> - <?php echo s($desc->hora_fin); ?></span></p>
         <?php if ($desc->motivo !== null) { ?>
@@ -261,8 +266,8 @@ include __DIR__ . '/../templates/alertas.php';
 
 <hr>
 
-<h2>3. Bloqueos por Fecha o Intervalo</h2>
-<form action="/profesionales/bloqueos/crear?id=<?php echo s($profesional->id); ?>" method="POST" class="formulario" id="form-crear-bloqueo">
+<h2 class="ui-section-title">3. Bloqueos por Fecha o Intervalo</h2><p class="ui-form-help">Marca vacaciones o ausencias puntuales. Deja las horas vacías para bloquear el día completo.</p>
+<form action="/profesionales/bloqueos/crear?id=<?php echo s($profesional->id); ?>" method="POST" class="formulario ui-card" id="form-crear-bloqueo">
     <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
     <input type="hidden" name="accion" value="crear_bloqueo">
     <input type="hidden" name="profesionalId" value="<?php echo s($profesional->id); ?>">
@@ -291,9 +296,10 @@ include __DIR__ . '/../templates/alertas.php';
     <input type="submit" value="Añadir Bloqueo" class="boton">
 </form>
 
-<ul class="servicios bloqueos-lista">
+<?php if (empty($bloqueos)) { ?><p class="ui-empty">No hay bloqueos registrados para este profesional.</p><?php } ?>
+<ul class="servicios bloqueos-lista ui-grid">
     <?php foreach (($bloqueos ?? []) as $bloq) { ?>
-    <li data-bloqueo-id="<?php echo s($bloq->id); ?>">
+    <li class="ui-card" data-bloqueo-id="<?php echo s($bloq->id); ?>">
         <p>Fecha:
             <span>
                 <?php

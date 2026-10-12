@@ -13,3 +13,4 @@
     <input type="number" name="duracion_minutos" id="duracion_minutos" placeholder="Duración en minutos (ej. 30)" min="1" step="1"
         value="<?php echo s($servicio->duracion_minutos); ?>">
 </div>
+<p class="ui-form-help">La duración ayuda a calcular la disponibilidad de la agenda. El precio se muestra en dólares.</p>

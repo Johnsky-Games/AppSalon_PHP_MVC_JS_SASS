@@ -1,3 +1,4 @@
+<p class="ui-eyebrow">BIENVENIDO A APPSALÓN</p>
 <h1 class="nombre-pagina">Crear Cuenta</h1>
 <p class="descripcion-pagina">Llena el siguiente formulario para crear una cuenta</p>
 
@@ -23,8 +24,8 @@
         <input type="email" id="email" name="email" placeholder="Tu Email" value="<?php echo s($usuario->email); ?>">
     </div>
     <div class="campo">
-        <label for="password">Password</label>
-        <input type="password" id="password" name="password" placeholder="Tu Password">
+        <label for="password">Contraseña</label>
+        <input type="password" autocomplete="new-password" id="password" name="password" placeholder="Tu contraseña">
     </div>
 
     <input type="submit" value="Crear Cuenta" class="boton">
@@ -32,6 +33,6 @@
 
 
 <div class="acciones">
-    <a href="/">¿Ya tienes una cuenta? Iniciar Sessión</a>
-    <a href="/olvide">¿Olvidaste tu password?</a>
+    <a href="/">¿Ya tienes una cuenta? Iniciar Sesión</a>
+    <a href="/olvide">¿Olvidaste tu contraseña?</a>
 </div>

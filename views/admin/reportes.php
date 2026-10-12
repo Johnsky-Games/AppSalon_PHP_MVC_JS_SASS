@@ -1,4 +1,4 @@
-<h1 class="nombre-pagina">Reportes Administrativos</h1>
+<header class="ui-page-header"><p class="ui-eyebrow">Decisiones con información</p><h1 class="nombre-pagina">Reportes Administrativos</h1><p class="descripcion-pagina">Agenda, ocupación y movimientos financieros en una vista clara.</p></header>
 
 <?php
 include __DIR__ . '/../templates/barra.php';
@@ -29,8 +29,8 @@ $queryExportar = http_build_query([
 ]);
 ?>
 
-<h2>Filtrar Reporte de Reservas, Ocupación y Movimientos Financieros</h2>
-<div class="busqueda reportes-filtros">
+<h2 class="ui-section-title">Filtrar Reporte de Reservas, Ocupación y Movimientos Financieros</h2><p class="ui-form-help">Elige un periodo y compara la agenda por fecha de servicio o los ingresos por fecha de cobro.</p>
+<div class="busqueda reportes-filtros ui-card">
     <form action="/admin/reportes" method="GET" class="formulario" id="form-filtros-reportes">
         <div class="campo">
             <label for="fecha_inicio">Desde</label>
@@ -116,7 +116,7 @@ $queryExportar = http_build_query([
     </p>
 
     <div class="reportes-kpis">
-        <article class="reporte-kpi" data-kpi="total-citas">
+        <article class="reporte-kpi ui-card ui-stat" data-kpi="total-citas">
             <h3>Total Citas Reservadas</h3>
             <p class="kpi-valor" id="kpi-total-citas"><?php echo s((string)($resumenGlobal['total_citas'] ?? 0)); ?></p>
             <p class="kpi-detalle">
@@ -128,7 +128,7 @@ $queryExportar = http_build_query([
             </p>
         </article>
 
-        <article class="reporte-kpi" data-kpi="ocupacion-global">
+        <article class="reporte-kpi ui-card ui-stat" data-kpi="ocupacion-global">
             <h3>Ocupación sobre Horas Disponibles</h3>
             <p class="kpi-valor" id="kpi-ocupacion-global">
                 <?php echo s(number_format((float)($resumenGlobal['porcentaje_ocupacion_global'] ?? 0), 2, '.', '')); ?>%
@@ -141,7 +141,7 @@ $queryExportar = http_build_query([
             </p>
         </article>
 
-        <article class="reporte-kpi" data-kpi="importe-reservado">
+        <article class="reporte-kpi ui-card ui-stat" data-kpi="importe-reservado">
             <h3>Importe Reservado (Comprometido)</h3>
             <p class="kpi-valor" id="kpi-importe-reservado">
                 $<?php echo s(number_format((float)($resumenGlobal['importe_reservado_total'] ?? 0), 2, '.', '')); ?>
@@ -154,7 +154,7 @@ $queryExportar = http_build_query([
             </p>
         </article>
 
-        <article class="reporte-kpi" data-kpi="ingreso-pagado">
+        <article class="reporte-kpi ui-card ui-stat" data-kpi="ingreso-pagado">
             <h3>Cobros Confirmados (Recaudado)</h3>
             <p class="kpi-valor" id="kpi-ingreso-pagado">
                 $<?php echo s(number_format((float)($resumenGlobal['ingreso_pagado_total'] ?? 0), 2, '.', '')); ?>
@@ -167,7 +167,7 @@ $queryExportar = http_build_query([
             </p>
         </article>
 
-        <article class="reporte-kpi" data-kpi="reembolsos">
+        <article class="reporte-kpi ui-card ui-stat" data-kpi="reembolsos">
             <h3>Reembolsos (Devoluciones)</h3>
             <p class="kpi-valor" id="kpi-reembolsos">
                 $<?php echo s(number_format((float)($resumenGlobal['reembolsos_total'] ?? 0), 2, '.', '')); ?>
@@ -177,7 +177,7 @@ $queryExportar = http_build_query([
             </p>
         </article>
 
-        <article class="reporte-kpi" data-kpi="neto-cobrado">
+        <article class="reporte-kpi ui-card ui-stat" data-kpi="neto-cobrado">
             <h3>Neto Cobrado</h3>
             <p class="kpi-valor" id="kpi-neto-cobrado">
                 $<?php echo s(number_format((float)($resumenGlobal['neto_cobrado_total'] ?? 0), 2, '.', '')); ?>
@@ -189,12 +189,72 @@ $queryExportar = http_build_query([
     </div>
 </section>
 
+<?php
+$datosFinancierosUi = [
+    'Importe reservado' => (float)($resumenGlobal['importe_reservado_total'] ?? 0),
+    'Cobros confirmados' => (float)($resumenGlobal['ingreso_pagado_total'] ?? 0),
+    'Reembolsos' => (float)($resumenGlobal['reembolsos_total'] ?? 0),
+    'Neto cobrado' => (float)($resumenGlobal['neto_cobrado_total'] ?? 0),
+];
+$escalaFinancieraUi = max(array_map('abs', array_values($datosFinancierosUi)));
+$serviciosGraficaUi = $resumenServicios;
+usort($serviciosGraficaUi, static function ($a, $b) { return (int)$b['total_reservas'] <=> (int)$a['total_reservas']; });
+$serviciosGraficaUi = array_slice($serviciosGraficaUi, 0, 6);
+$escalaServiciosUi = empty($serviciosGraficaUi) ? 0 : max(array_map(static function ($fila) { return (int)$fila['total_reservas']; }, $serviciosGraficaUi));
+?>
+<div class="ui-toolbar"><button type="button" class="boton ui-button-quiet" data-chart-switch="graficas-periodo" aria-controls="graficas-periodo" aria-expanded="true">Mostrar u ocultar gráficas <span aria-hidden="true">↕</span></button></div>
+<section id="graficas-periodo" class="ui-grid ui-report-charts" aria-label="Gráficas del periodo seleccionado">
+    <figure class="ui-card ui-chart">
+        <figcaption><h2 class="ui-section-title">Panorama financiero</h2><p class="ui-form-help">Valores del periodo en dólares. Barras comparativas por magnitud; el signo del neto se muestra en su valor.</p></figcaption>
+        <?php foreach ($datosFinancierosUi as $etiquetaUi => $valorUi) {
+            $anchoUi = $escalaFinancieraUi > 0 ? min(100, abs($valorUi) / $escalaFinancieraUi * 100) : 0;
+        ?>
+        <div class="ui-chart-row">
+            <span class="ui-chart-label"><?php echo s($etiquetaUi); ?></span>
+            <span class="ui-chart-track" aria-hidden="true"><span class="ui-chart-bar<?php echo $valorUi < 0 ? ' ui-chart-bar-negative' : ''; ?>" style="width: <?php echo number_format($anchoUi, 2, '.', ''); ?>%"></span></span>
+            <strong class="ui-chart-value">$<?php echo s(number_format($valorUi, 2, '.', '')); ?></strong>
+        </div>
+        <?php } ?>
+        <?php if ($escalaFinancieraUi === 0.0) { ?><p class="ui-form-help">Sin importes registrados para este periodo.</p><?php } ?>
+    </figure>
+    <figure class="ui-card ui-chart">
+        <figcaption><h2 class="ui-section-title">Servicios más reservados</h2><p class="ui-form-help">Hasta seis servicios por número de reservas en el rango seleccionado.</p></figcaption>
+        <?php if (empty($serviciosGraficaUi)) { ?><p class="ui-empty">Aún no hay servicios reservados para graficar.</p><?php } ?>
+        <?php foreach ($serviciosGraficaUi as $filaGraficaUi) {
+            $cantidadUi = (int)$filaGraficaUi['total_reservas'];
+            $anchoUi = $escalaServiciosUi > 0 ? min(100, max(0, $cantidadUi) / $escalaServiciosUi * 100) : 0;
+        ?>
+        <div class="ui-chart-row">
+            <span class="ui-chart-label"><?php echo s((string)$filaGraficaUi['servicio_nombre']); ?></span>
+            <span class="ui-chart-track" aria-hidden="true"><span class="ui-chart-bar" style="width: <?php echo number_format($anchoUi, 2, '.', ''); ?>%"></span></span>
+            <strong class="ui-chart-value"><?php echo $cantidadUi; ?> reservas</strong>
+        </div>
+        <?php } ?>
+    </figure>
+</section>
+
 <section class="reportes-seccion" id="seccion-ocupacion-profesionales">
     <h2>Ocupación e Importes por Profesional</h2>
     <?php if (empty($resumenProfesionales)) { ?>
-        <p class="reportes-vacio">No hay profesionales registrados para el criterio seleccionado.</p>
+        <p class="reportes-vacio ui-empty">No hay profesionales registrados para el criterio seleccionado.</p>
     <?php } else { ?>
-        <div class="tabla-contenedor">
+        <div class="ui-card ui-chart" aria-label="Ocupación por profesional">
+            <h3>Disponibilidad utilizada</h3>
+            <?php foreach ($resumenProfesionales as $filaOcupacionUi) {
+                if (!empty($filaOcupacionUi['es_historico_sin_profesional'])) { continue; }
+                $disponiblesUi = (float)($filaOcupacionUi['minutos_disponibles'] ?? 0);
+                $ocupadosUi = (float)($filaOcupacionUi['minutos_ocupados'] ?? 0);
+                $porcentajeUi = $disponiblesUi > 0 ? $ocupadosUi / $disponiblesUi * 100 : null;
+            ?>
+            <div class="ui-chart-row">
+                <span class="ui-chart-label"><?php echo s((string)$filaOcupacionUi['profesional_nombre']); ?></span>
+                <?php if ($porcentajeUi !== null) { ?><span class="ui-chart-track" aria-hidden="true"><span class="ui-chart-bar" style="width: <?php echo number_format(min(100, max(0, $porcentajeUi)), 2, '.', ''); ?>%"></span></span><?php } ?>
+                <strong class="ui-chart-value"><?php echo $porcentajeUi === null ? 'Sin horas disponibles' : s(number_format($porcentajeUi, 2, '.', '')) . '%'; ?></strong>
+            </div>
+            <?php } ?>
+            <p class="ui-form-help">Ocupación = minutos ocupados / minutos disponibles. Las barras llegan hasta 100%; el valor conserva cualquier exceso.</p>
+        </div>
+        <div class="tabla-contenedor ui-table-scroll" tabindex="0" role="region" aria-label="Tabla de reporte; desplaza horizontalmente para ver todas las columnas">
             <table class="tabla-reportes" id="tabla-ocupacion-profesionales">
                 <thead>
                     <tr>
@@ -255,11 +315,11 @@ $queryExportar = http_build_query([
 <section class="reportes-seccion" id="seccion-desglose-servicios">
     <h2>Desglose por Servicio (Datos Históricos de Reserva)</h2>
     <?php if (empty($resumenServicios)) { ?>
-        <p class="reportes-vacio" id="estado-vacio-servicios">
+        <p class="reportes-vacio ui-empty" id="estado-vacio-servicios">
             No se registraron servicios reservados en el rango y filtros seleccionados.
         </p>
     <?php } else { ?>
-        <div class="tabla-contenedor">
+        <div class="tabla-contenedor ui-table-scroll" tabindex="0" role="region" aria-label="Tabla de reporte; desplaza horizontalmente para ver todas las columnas">
             <table class="tabla-reportes" id="tabla-desglose-servicios">
                 <thead>
                     <tr>
@@ -302,7 +362,7 @@ $queryExportar = http_build_query([
 <?php if (!empty($movimientosFinancieros)) { ?>
 <section class="reportes-seccion" id="seccion-movimientos-financieros">
     <h2>Historial de Movimientos Financieros (Desacoplado de la Agenda)</h2>
-    <div class="tabla-contenedor">
+    <div class="tabla-contenedor ui-table-scroll" tabindex="0" role="region" aria-label="Tabla de reporte; desplaza horizontalmente para ver todas las columnas">
         <table class="tabla-reportes" id="tabla-movimientos-financieros">
             <thead>
                 <tr>
@@ -355,7 +415,7 @@ $queryExportar = http_build_query([
 <section class="reportes-seccion" id="seccion-detalle-reservas">
     <h2>Listado Detallado de Reservas</h2>
     <?php if (empty($reservas)) { ?>
-        <p class="reportes-vacio" id="estado-vacio-reportes">
+        <p class="reportes-vacio ui-empty" id="estado-vacio-reportes">
             No se encontraron reservas para el rango de fechas y filtros seleccionados.
         </p>
     <?php } else { ?>

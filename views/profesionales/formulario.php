@@ -19,8 +19,8 @@
 </div>
 
 <div class="campo">
-    <label>Servicios que puede realizar</label>
-    <div class="listado-servicios-checks">
+    <p class="ui-section-title">Servicios que puede realizar</p><p class="ui-form-help">Selecciona las especialidades para las que este profesional estará disponible.</p>
+    <div class="listado-servicios-checks ui-grid">
         <?php foreach (($serviciosDisponibles ?? []) as $srv) {
             $idSrv = (int)$srv->id;
             $checked = in_array($idSrv, $profesional->servicioIds ?? [], true) ? 'checked' : '';
@@ -40,3 +40,5 @@
         <?php } ?>
     </div>
 </div>
+
+<?php if (empty($serviciosDisponibles)) { ?><p class="ui-empty">Aún no hay servicios en el catálogo. Añádelos desde Servicios para poder asignarlos.</p><?php } ?>

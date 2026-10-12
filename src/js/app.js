@@ -38,6 +38,7 @@ function iniciarApp() {
     sleccionarHora();
 
     consultarAPI();
+    actualizarSeleccionVisual();
     cargarMisCitas();
 
     mostrarResumen();
@@ -59,6 +60,10 @@ function mostrarSeccion() {
         tabAnterior.classList.remove('actual');
     }
 
+    document.querySelectorAll('.tabs button').forEach(button => {
+        if (Number(button.dataset.paso) === paso) button.setAttribute('aria-current', 'step');
+        else button.removeAttribute('aria-current');
+    });
     const tab = document.querySelector(`[data-paso="${paso}"]`);
     if (tab) {
         tab.classList.add('actual');
@@ -141,7 +146,8 @@ async function consultarAPI() {
 
         actualizarSelectorProfesionales();
     } catch (error) {
-        console.log(error);
+        const container = document.querySelector('#servicios');
+        if (container) { container.textContent = 'No se pudo cargar el catálogo. Recarga la página para intentar nuevamente.'; container.setAttribute('aria-busy', 'false'); }
     }
 }
 
@@ -167,6 +173,8 @@ function mostrarServicios(servicios) {
     const contenedor = document.querySelector('#servicios');
     if (!contenedor) return;
     contenedor.textContent = '';
+    contenedor.setAttribute('aria-busy', 'false');
+    if (!servicios.length) contenedor.textContent = 'Estamos preparando nuestro catálogo. Vuelve a consultar pronto.';
 
     servicios.forEach(servicio => {
         const { id, nombre, precio } = servicio;
@@ -202,6 +210,11 @@ function mostrarServicios(servicios) {
             }
         });
 
+        const icon = document.createElement('span');
+        icon.className = 'service-icon';
+        icon.setAttribute('aria-hidden', 'true');
+        icon.textContent = '✦';
+        servicioDiv.appendChild(icon);
         servicioDiv.appendChild(nombreServicio);
         servicioDiv.appendChild(duracionServicio);
         servicioDiv.appendChild(precioServicio);
@@ -227,6 +240,7 @@ function calcularPrecioTotalServicios() {
 function invalidarHorarioSeleccionado() {
     cita.hora = '';
     cita.hora_fin = '';
+    actualizarSeleccionVisual();
     cita.duracion_total_minutos = calcularDuracionTotalServicios();
 
     const inputHora = document.querySelector('#hora');
@@ -280,6 +294,7 @@ function seleccionarServicio(servicio) {
     // Al cambiar servicios, invalidar inmediatamente cualquier horario previo y recalcular profesionales compatibles
     invalidarHorarioSeleccionado();
     actualizarSelectorProfesionales(true);
+    actualizarSeleccionVisual();
 }
 
 function obtenerProfesionalesCompatiblesEnMemoria() {
@@ -314,6 +329,7 @@ function actualizarSelectorProfesionales(dispararConsultaDisponibilidad = true) 
         selectProf.disabled = true;
         cita.profesionalId = '';
         cita.profesionalNombre = '';
+        actualizarSeleccionVisual();
         if (estadoProf) {
             estadoProf.textContent = '';
             estadoProf.classList.add('ocultar');
@@ -337,6 +353,7 @@ function actualizarSelectorProfesionales(dispararConsultaDisponibilidad = true) 
         selectProf.disabled = true;
         cita.profesionalId = '';
         cita.profesionalNombre = '';
+        actualizarSeleccionVisual();
         const msgIncomp = 'Ningún profesional activo realiza simultáneamente todos los servicios seleccionados.';
         if (estadoProf) {
             estadoProf.textContent = msgIncomp;
@@ -371,6 +388,7 @@ function actualizarSelectorProfesionales(dispararConsultaDisponibilidad = true) 
         selectProf.value = profPrevioId;
         cita.profesionalId = String(profObj.id);
         cita.profesionalNombre = profObj.nombre;
+        actualizarSeleccionVisual();
         if (dispararConsultaDisponibilidad && cita.fecha) {
             consultarDisponibilidad();
         }
@@ -378,6 +396,7 @@ function actualizarSelectorProfesionales(dispararConsultaDisponibilidad = true) 
         disponibilidadRequestId++;
         cita.profesionalId = '';
         cita.profesionalNombre = '';
+        actualizarSeleccionVisual();
         selectProf.value = '';
         limpiarContenedorHorarios();
         if (profPrevioId !== '') {
@@ -394,6 +413,17 @@ function actualizarSelectorProfesionales(dispararConsultaDisponibilidad = true) 
     }
 }
 
+function actualizarSeleccionVisual() {
+    const summary = document.querySelector('#booking-selection');
+    if (summary) summary.textContent = cita.servicios.length
+        ? `${cita.servicios.length} servicio${cita.servicios.length === 1 ? '' : 's'} · ${calcularDuracionTotalServicios()} min · $${calcularPrecioTotalServicios().toFixed(2)} estimados`
+        : 'Selecciona tus servicios para comenzar.';
+    const preview = document.querySelector('#professional-preview');
+    const name = document.querySelector('#professional-preview-name');
+    if (preview) preview.hidden = !cita.profesionalNombre;
+    if (name) name.textContent = cita.profesionalNombre;
+}
+
 function seleccionarProfesional() {
     const selectProf = document.querySelector('#profesional');
     if (!selectProf) return;
@@ -405,6 +435,7 @@ function seleccionarProfesional() {
             disponibilidadRequestId++;
             cita.profesionalId = '';
             cita.profesionalNombre = '';
+        actualizarSeleccionVisual();
             limpiarContenedorHorarios();
             actualizarEstadoDisponibilidadUI(
                 'idle',
@@ -416,6 +447,7 @@ function seleccionarProfesional() {
         const opcion = e.target.options[e.target.selectedIndex];
         cita.profesionalId = valor;
         cita.profesionalNombre = opcion ? opcion.textContent.trim() : '';
+        actualizarSeleccionVisual();
 
         if (cita.fecha && cita.servicios.length > 0) {
             consultarDisponibilidad();
@@ -973,6 +1005,12 @@ async function cargarMisCitas() {
 
         citasCliente.forEach(item => {
             const li = document.createElement('LI');
+            const avatar = document.createElement('img');
+            avatar.src = '/build/img/avatar-professional.svg';
+            avatar.alt = 'Avatar ilustrado de profesional';
+            avatar.className = 'ui-avatar';
+            avatar.width = 48; avatar.height = 48;
+            li.appendChild(avatar);
             li.classList.add('mi-cita-item');
             li.dataset.citaId = String(item.id);
 

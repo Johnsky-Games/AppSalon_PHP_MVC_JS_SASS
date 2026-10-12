@@ -1,3 +1,4 @@
+<p class="ui-eyebrow">BIENVENIDO A APPSALÓN</p>
 <h1 class="nombre-pagina">Confirmar Cuenta</h1>
 
 <?php

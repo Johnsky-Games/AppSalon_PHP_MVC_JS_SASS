@@ -1,38 +1,23 @@
-@use 'base/variables' as v;
-@use 'base/mixins' as m;
-
-.formulario {
-    margin-top: 5rem;
-    width: 100%;
-}
-
-.campo {
-    display: flex;
-    margin-bottom: 2rem;
-    margin-right: 2rem;
-    align-items: center;
-
-    label {
-        flex: 0 0 10rem;
-    }
-
-    input,
-    select {
-        flex: 1;
-        border: none;
-        padding: calc(v.$separacion / 4);
-        border-radius: 1rem;
-        background-color: v.$blanco;
-        color: v.$negro;
-
-        &:focus-visible {
-            outline: 3px solid v.$azul;
-            outline-offset: 2px;
-        }
-
-        &:disabled {
-            background-color: lighten(v.$negro , 30%);
-            color: v.$blanco;
-        }
-    }
-}
+.formulario { width: 100%; margin: 2rem 0; }
+.campo { display: flex; flex-direction: column; gap: .7rem; margin-bottom: 2rem; min-width: 0; }
+.campo label { display: block; color: var(--ui-ink); font-size: 1.25rem; font-weight: 650; line-height: 1.5; }
+.campo input:not([type=hidden]):not([type=checkbox]):not([type=radio]), .campo select, .campo textarea { min-width: 0; width: 100%; min-height: 4.8rem; padding: 1.1rem 1.4rem; border: 1px solid #dce4e1; border-radius: 1.1rem; background: #fafcf9; color: var(--ui-ink); box-shadow: 0 1px 2px rgba(24,52,62,.02); transition: border-color .2s, box-shadow .2s; }
+.campo input::placeholder, .campo textarea::placeholder { color: #7e8e8c; }
+.campo input:focus, .campo select:focus, .campo textarea:focus { border-color: var(--ui-accent); box-shadow: 0 0 0 3px rgba(22,118,108,.1); }
+.campo input:disabled, .campo select:disabled { background: #edf2ee; color: #6b7c77; cursor: not-allowed; opacity: 1; }
+.campo input[type=checkbox], .campo input[type=radio] { accent-color: var(--ui-accent); width: 1.8rem; height: 1.8rem; vertical-align: middle; margin: 0 .7rem 0 0; flex-shrink: 0; }
+.campo label:has(input[type=checkbox]), .campo label:has(input[type=radio]) { min-height: 4.4rem; display: flex; align-items: center; padding: .6rem 0; }
+.ui-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr)); gap: 0 2rem; }
+.ui-password { position: relative; }
+.campo .ui-password input { padding-right: 5.5rem !important; }
+.ui-password-toggle { position: absolute; right: .4rem; top: .3rem; min-width: 4.4rem; min-height: 4.2rem; border: 0; border-radius: .8rem; background: transparent; color: #506860; display: grid; place-items: center; cursor: pointer; }
+.ui-password-toggle:hover { background: #e7f0e8; }
+.ui-password-toggle svg { width: 2rem; height: 2rem; }
+.horario-dia-grupo { padding: 1.4rem; border: 1px solid var(--ui-border); background: #f8faf7; border-radius: 1.2rem; margin-bottom: 1.4rem; }
+.horario-dia-cabecera { gap: 1rem; flex-wrap: wrap; }
+.horario-franja-fila { display: grid; grid-template-columns: minmax(10rem,1fr) minmax(9rem,1fr) auto minmax(9rem,1fr) auto; align-items: center; gap: 1rem; padding-top: 1rem; margin-bottom: 1rem; }
+.horario-franja-fila input[type=hidden] { display: none; }
+.horario-franja-fila label { margin: 0; }
+.horario-franja-fila .boton-eliminar { font-size: 1.1rem !important; min-height: 4.4rem; margin: 0 !important; }
+@media (max-width: 1100px) { .horario-franja-fila { grid-template-columns: minmax(8rem, 1fr) minmax(8rem, 1fr) auto minmax(8rem, 1fr); } .horario-franja-fila .btn-retirar-franja { grid-column: 1/-1; justify-self: start; } }
+@media (max-width: 500px) { .horario-franja-fila { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); } .horario-franja-fila label { grid-column: 1/-1; } .campo { gap: .8rem; } }

@@ -139,6 +139,91 @@ async function runBrowserTests() {
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 800 });
 
+    const responsiveResults = [];
+    const screenshotDir = path.join(
+        process.env.TEST_BROWSER_REPORT_PATH ? path.dirname(path.resolve(process.env.TEST_BROWSER_REPORT_PATH)) : path.resolve(__dirname, '../storage/e2e'),
+        'screens'
+    );
+    fs.mkdirSync(screenshotDir, { recursive: true });
+
+    // Check the rendered document rather than stylesheet breakpoints. Tables may
+    // scroll inside their own wrapper, but the whole document must fit the screen.
+    async function verifyResponsivePage(name) {
+        for (const width of [320, 390, 768, 1440]) {
+            await page.setViewport({ width, height: 900 });
+            await page.evaluate(async () => {
+                await document.fonts.ready;
+                await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            });
+            const geometry = await page.evaluate(() => ({
+                viewport: document.documentElement.clientWidth,
+                document: Math.max(document.documentElement.scrollWidth, document.body.scrollWidth),
+                overflowing: [...document.querySelectorAll('main *')].filter(el => {
+                    const r = el.getBoundingClientRect();
+                    return r.width > 0 && r.right > innerWidth + 1 && getComputedStyle(el).position !== 'fixed';
+                }).slice(0, 6).map(el => `${el.tagName}.${el.className}`)
+            }));
+            const screenshot = path.join(screenshotDir, `${name}-${width}.png`);
+            await page.screenshot({ path: screenshot, fullPage: false });
+            if (geometry.document > geometry.viewport + 1) {
+                throw new Error(`Overflow horizontal en ${name} (${width}px): ${JSON.stringify(geometry)}. Captura: ${screenshot}`);
+            }
+            responsiveResults.push({ page: name, width, screenshot: path.basename(screenshot), ...geometry });
+        }
+        await page.setViewport({ width: 1280, height: 800 });
+    }
+
+    async function verifyAccessibleLogin() {
+        await page.waitForSelector('.ui-password-toggle', { timeout: 5000 });
+        const before = page.url();
+        await page.type('#password', 'UiTest123!');
+        await page.click('.ui-password-toggle');
+        const shown = await page.$eval('#password', input => ({ type: input.type, value: input.value }));
+        const pressed = await page.$eval('.ui-password-toggle', button => button.getAttribute('aria-pressed'));
+        if (shown.type !== 'text' || shown.value !== 'UiTest123!' || pressed !== 'true' || page.url() !== before) {
+            throw new Error('Mostrar contraseña debe revelar el mismo valor y actualizar aria-pressed sin enviar el formulario.');
+        }
+        await page.click('.ui-password-toggle');
+        const hidden = await page.$eval('#password', input => input.type);
+        if (hidden !== 'password' || await page.$eval('.ui-password-toggle', button => button.getAttribute('aria-pressed')) !== 'false') {
+            throw new Error('Ocultar contraseña no restauró el campo y el estado accesible.');
+        }
+        await page.$eval('#password', input => input.value = '');
+        await page.goto(`${BASE_URL}/`, { waitUntil: 'networkidle0' });
+        await page.keyboard.press('Tab');
+        const skipFocused = await page.evaluate(() => document.activeElement?.matches('a[href="#contenido-principal"]'));
+        if (!skipFocused) throw new Error('El primer Tab debe enfocar el enlace Saltar al contenido.');
+        await page.keyboard.press('Enter');
+        if (!await page.evaluate(() => document.activeElement?.id === 'contenido-principal')) {
+            throw new Error('El enlace de salto no trasladó el foco al contenido principal.');
+        }
+        await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
+        await page.goto(`${BASE_URL}/`, { waitUntil: 'networkidle0' });
+        await page.waitForSelector('.ui-password-toggle');
+        const reduced = await page.$eval('.ui-password-toggle', el => {
+            const style = getComputedStyle(el);
+            const seconds = value => Math.max(...value.split(',').map(v => v.trim().endsWith('ms') ? parseFloat(v) / 1000 : parseFloat(v)));
+            return matchMedia('(prefers-reduced-motion: reduce)').matches && seconds(style.transitionDuration) <= 0.01 && seconds(style.animationDuration) <= 0.01;
+        });
+        if (!reduced) throw new Error('El botón conserva movimiento al solicitar prefers-reduced-motion.');
+        const notification = '<strong>Prueba segura de notificación</strong>';
+        await page.evaluate(text => window.AppSalonUI.notify(text), notification);
+        await page.waitForSelector('.toastify');
+        const notice = await page.evaluate(() => ({
+            text: document.querySelector('.toastify')?.textContent,
+            markup: document.querySelector('.toastify strong'),
+            announced: document.querySelector('#ui-notifications')?.textContent,
+            live: document.querySelector('#ui-notifications')?.getAttribute('aria-live')
+        }));
+        if (!notice.text?.includes(notification) || notice.markup || notice.announced !== notification || !['polite', 'assertive'].includes(notice.live)) {
+            throw new Error('La notificación debe mostrar texto literal y anunciarse mediante la región aria-live.');
+        }
+        await page.emulateMediaFeatures([]);
+        await page.goto(`${BASE_URL}/`, { waitUntil: 'networkidle0' });
+        recordTest('UI-02', 'Controles accesibles: contraseña, salto por teclado, movimiento reducido y notificación segura', true,
+            'Mostrar/ocultar conserva el valor; primer Tab y Enter enfocan main; reduced-motion limita animaciones; Toastify no interpreta HTML y anuncia texto.');
+    }
+
     // Monitorización estricta de consola y red
     page.on('console', msg => {
         if (msg.type() === 'error') {
@@ -160,6 +245,8 @@ async function runBrowserTests() {
         // ------------------------------------------------------------------
         console.log('>>> [FASE 2A - ADMIN] Autenticación de Administrador y CRUD de Servicios...');
         await page.goto(`${BASE_URL}/`, { waitUntil: 'networkidle0' });
+        await verifyResponsivePage('login');
+        await verifyAccessibleLogin();
 
         await page.waitForSelector('input[name="email"]', { timeout: 5000 });
         await page.type('input[name="email"]', 'admin@appsalon.com');
@@ -179,6 +266,8 @@ async function runBrowserTests() {
             page.waitForNavigation({ waitUntil: 'networkidle0' }),
             page.click('a[href="/servicios"]')
         ]);
+
+        await verifyResponsivePage('servicios-admin');
 
         const itemsIniciales = await page.$$('ul.servicios li');
         if (itemsIniciales.length !== 3) {
@@ -593,6 +682,10 @@ async function runBrowserTests() {
             throw new Error(`Fallo en login interactivo: URL actual es ${currentUrl}, se esperaba /cita`);
         }
         recordTest('PRE-01', 'Login interactivo de cliente y redirección autorizada a /cita', true, `URL: ${currentUrl}`);
+        await page.waitForSelector('.ui-avatar');
+        const avatarLoaded = await page.$eval('.ui-avatar', img => img.complete && img.naturalWidth > 0);
+        if (!avatarLoaded) throw new Error('El avatar de cliente no se cargó correctamente.');
+        await verifyResponsivePage('cita-cliente');
 
         // ------------------------------------------------------------------
         // FASE 4A - DISPONIBILIDAD: Endpoint autenticado GET /api/disponibilidad
@@ -1138,6 +1231,14 @@ async function runBrowserTests() {
             throw new Error(`Se esperaba navegación a /admin/reportes, URL actual: ${page.url()}`);
         }
 
+        await page.click('[data-chart-switch="graficas-periodo"]');
+        if (!await page.$eval('#graficas-periodo', node => node.hidden)) throw new Error('El control de gráficas no ocultó el panel.');
+        await page.click('[data-chart-switch="graficas-periodo"]');
+        if (!await page.$eval('#graficas-periodo', node => !node.hidden)) throw new Error('El control de gráficas no restauró el panel.');
+        await verifyResponsivePage('reportes-admin');
+        recordTest('UI-01', 'Diseño responsivo sin desbordamiento horizontal en cuatro pantallas', true,
+            'Login, servicios, cita y reportes probados a 320, 390, 768 y 1440px; 16 capturas PNG y avatar local cargado.');
+
         // 1. Filtrar rango exacto [validDate, validDate] sin filtro de profesional ni servicio
         await page.evaluate((fechaRango) => {
             document.querySelector('#fecha_inicio').value = fechaRango;
@@ -1521,6 +1622,7 @@ async function runBrowserTests() {
             fechaReservaEsperada: validDate,
             fechaRechazoFinDeSemana: weekendDate,
             testResults,
+            responsiveResults,
             consoleErrors,
             failedRequests
         };

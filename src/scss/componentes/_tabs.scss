@@ -1,33 +1,7 @@
-@use 'base/variables' as v;
-@use 'base/mixins' as m;
-
-.tabs {
-
-    @include m.tablet {
-        display: flex;
-
-    }
-
-    button {
-        background-color: v.$azul;
-        border: none;
-        color: v.$blanco;
-        padding: 1rem;
-        display: block;
-        width: 100%;
-        margin-bottom: 1rem;
-        text-transform: uppercase;
-        font-weight: v.$bold;
-        transition: background-color 300ms ease;
-
-        &:hover {
-            cursor: pointer;
-            background-color: darken(v.$azul, 10%);
-        }
-
-        &.actual {
-            background-color: v.$blanco;
-            color: v.$azul;
-        }
-    }
-}
+.tabs { display: flex; gap: .8rem; padding: .7rem; background: #eaf0eb; border-radius: 1.5rem; counter-reset: booking-step; }
+.tabs button { flex: 1; min-height: 5.2rem; min-width: 0; display: flex; align-items: center; justify-content: center; gap: .8rem; border: 1px solid transparent; border-radius: 1rem; padding: 1rem 1.2rem; background: transparent; color: #657c71; font-weight: 650; font-size: 1.25rem; cursor: pointer; transition: background .2s, box-shadow .2s, color .2s; }
+.tabs button:hover { background: rgba(255,255,255,.6); color: var(--ui-accent); }
+.tabs button.actual { color: #123b42; background: #fff; box-shadow: 0 2px 8px rgba(24,52,62,.07); }
+.step-number { display: inline-grid; place-items: center; flex-shrink: 0; width: 2.5rem; height: 2.5rem; border-radius: 50%; background: #d9e6de; font-size: 1.1rem; }
+.tabs button.actual .step-number { color: #fff; background: var(--ui-accent); }
+@media (max-width: 500px) { .tabs { gap: .3rem; padding: .5rem; } .tabs button { flex-direction: column; gap: .5rem; padding: .8rem .4rem; font-size: 1.05rem; min-height: 7rem; } }

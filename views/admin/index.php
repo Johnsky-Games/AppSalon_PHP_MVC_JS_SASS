@@ -1,12 +1,33 @@
-<h1 class="nombre-pagina">Panel de Administración</h1>
+<header class="ui-page-header"><p class="ui-eyebrow">Tu salón, en orden</p><h1 class="nombre-pagina">Panel de Administración</h1><p class="descripcion-pagina">Una vista clara de la agenda para acompañar cada experiencia.</p></header>
 
 <?php
 include __DIR__ . '/../templates/barra.php';
 $alertas = $alertas ?? [];
 include __DIR__ . '/../templates/alertas.php';
 ?>
-<h2>Buscar Citas</h2>
-<div class="busqueda">
+<?php
+$citasUnicasUi = [];
+$clientesUnicosUi = [];
+$importeAgendaUi = 0.0;
+foreach ($citas as $filaUi) {
+    $citasUnicasUi[(string)$filaUi->id] = true;
+    $clientesUnicosUi[(string)($filaUi->email ?? $filaUi->cliente)] = true;
+    $importeAgendaUi += (float)($filaUi->precio ?? 0);
+}
+?>
+<div class="ui-grid ui-dashboard-stats" aria-label="Resumen de la fecha seleccionada">
+    <article class="ui-card ui-stat"><p>Citas en agenda</p><strong><?php echo count($citasUnicasUi); ?></strong><small>Fecha seleccionada</small></article>
+    <article class="ui-card ui-stat"><p>Clientes en agenda</p><strong><?php echo count($clientesUnicosUi); ?></strong><small>Clientes únicos por correo</small></article>
+    <article class="ui-card ui-stat"><p>Importe de servicios</p><strong>$<?php echo s(number_format($importeAgendaUi, 2, '.', '')); ?></strong><small>Importe listado; no equivale a cobros</small></article>
+</div>
+<nav class="ui-quick-links" aria-label="Accesos de administración">
+    <a class="boton" href="/profesionales">Gestionar equipo <span aria-hidden="true">↗</span></a>
+    <a class="boton" href="/servicios">Ver servicios <span aria-hidden="true">↗</span></a>
+    <a class="boton" href="/admin/reportes">Explorar reportes <span aria-hidden="true">↗</span></a>
+</nav>
+<h2 class="ui-section-title">Buscar Citas</h2>
+<p class="ui-form-help">Elige una fecha para consultar las citas y sus servicios.</p>
+<div class="busqueda ui-card">
     <form action="" class="formulario" method="">
         <div class="campo">
             <label for="fecha">Fecha</label>
@@ -16,7 +37,7 @@ include __DIR__ . '/../templates/alertas.php';
 </div>
 
 <?php if (empty($alertas['error']) && count($citas) === 0) {
-    echo "<h2>No se registra citas para la fecha seleccionada</h2>";
+    echo '<div class="ui-empty"><h2>No se registra citas para la fecha seleccionada</h2><p>Prueba otra fecha para consultar la agenda.</p></div>';
 } ?>
 
 <div class="citas-admin">
@@ -35,8 +56,8 @@ include __DIR__ . '/../templates/alertas.php';
                     ? substr(trim((string)$cita->hora_fin), 0, 5)
                     : null;
                 ?>
-        <li data-cita-id="<?php echo s((string)$cita->id); ?>" data-tipo-cita="<?php echo $tieneProfesional ? 'con-profesional' : 'historica'; ?>">
-            <p>ID: <span><?php echo s((string)$cita->id); ?></span></p>
+        <li class="ui-card" data-cita-id="<?php echo s((string)$cita->id); ?>" data-tipo-cita="<?php echo $tieneProfesional ? 'con-profesional' : 'historica'; ?>">
+            <div class="ui-person-card"><img class="ui-avatar" src="/build/img/avatar-client.svg" alt="" width="56" height="56"><div><p class="ui-eyebrow">Reserva</p><p>ID: <span><?php echo s((string)$cita->id); ?></span></p></div></div>
             <?php if ($tieneProfesional) { ?>
             <p class="cita-profesional">Profesional: <span><?php echo s((string)($cita->profesional_nombre ?? ('Profesional #' . $cita->profesionalId))); ?></span></p>
             <?php if ($horaFinTexto !== null) { ?>
@@ -53,7 +74,7 @@ include __DIR__ . '/../templates/alertas.php';
             <h3>Servicios</h3>
             <?php
                     $idCita = $cita->id;
-            } // End If 
+            } // End If
             $total += (float)($cita->precio ?? 0);
             $duracionServicioTexto = ($cita->duracion_minutos !== null && $cita->duracion_minutos !== '')
                 ? ' (' . s((string)$cita->duracion_minutos) . ' min)'
@@ -64,12 +85,13 @@ include __DIR__ . '/../templates/alertas.php';
                 $actual = $cita->id;
                 $proximo = $citas[$key + 1]->id ?? 0;
                 if (esUltimo($actual, $proximo)) { ?>
-            <p class="total">Total: <span>$ <?php echo $total; ?></span></p>
+            <p class="total">Total: <span>$ <?php echo s(number_format($total, 2, '.', '')); ?></span></p>
             <form action="/api/eliminar" method="POST">
                 <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
                 <input type="hidden" name="id" value="<?php echo s((string)$cita->id); ?>">
                 <input type="submit" class="boton-eliminar" value="Eliminar">
             </form>
+        </li>
             <?php } //End If ?>
             <?php } //End foreach ?>
     </ul>
@@ -78,4 +100,4 @@ include __DIR__ . '/../templates/alertas.php';
 <?php
 $script = "<script src='build/js/buscador.js'></script>";
 ?>
-
+
