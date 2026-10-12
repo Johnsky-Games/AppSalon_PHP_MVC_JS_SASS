@@ -113,6 +113,7 @@ class ReportesFinancierosIntegrationTest extends TestCase
     {
         $_SESSION['login'] = true;
         $_SESSION['id'] = 1;
+        \Tests\ensureActiveIdentity(1, true);
         $_SESSION['nombre'] = 'Admin';
         $_SESSION['apellido'] = 'General';
         $_SESSION['admin'] = '1';

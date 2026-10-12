@@ -17,6 +17,7 @@ db="appsalon-e2e-db-$run_id"
 smtp="appsalon-e2e-smtp-$run_id"
 web="appsalon-e2e-web-$run_id"
 worker="appsalon-e2e-worker-$run_id"
+profile_volume="appsalon-e2e-profiles-$run_id"
 image=${E2E_WEB_IMAGE:-appsalon-web-e2e}
 artifacts=${E2E_ARTIFACT_DIR:-"$repo_dir/storage/e2e/$run_id"}
 mkdir -p "$artifacts"
@@ -34,6 +35,7 @@ cleanup() {
         docker logs "$container" > "$artifacts/$container.log" 2>&1 || true
         docker rm -f "$container" >/dev/null 2>&1 || true
     done
+    docker volume rm "$profile_volume" >/dev/null 2>&1 || true
     docker network rm "$net" >/dev/null 2>&1 || true
     printf 'E2E_EXIT_CODE=%s\nArtefactos: %s\n' "$result" "$artifacts"
     exit "$result"
@@ -84,11 +86,15 @@ for ((attempt=1; attempt<=30; attempt++)); do
 done
 [[ $ready == 1 ]] || { echo 'SMTP mock E2E no está listo.' >&2; exit 1; }
 
+# Private uploads are the sole writable app directory; ephemeral volume never touches user portraits.
+docker volume create "$profile_volume" >/dev/null
+docker run --rm -v "$profile_volume:/profiles" "$image" sh -c 'chown www-data:www-data /profiles && chmod 700 /profiles'
+
 # Elegir un puerto libre sin reutilizar el 3000 de la aplicación del usuario.
 port=$(node -e 'const s=require("net").createServer();s.listen(0,"127.0.0.1",()=>{console.log(s.address().port);s.close();});')
 app_url="http://127.0.0.1:$port"
 docker run -d --name "$web" --network "$net" -p "127.0.0.1:$port:80" \
-    -v "$repo_dir:/var/www/html:ro" "${common_env[@]}" -e APP_URL="$app_url" "$image" >/dev/null
+    -v "$repo_dir:/var/www/html:ro" -v "$profile_volume:/var/www/html/storage/private/perfiles" "${common_env[@]}" -e APP_URL="$app_url" "$image" >/dev/null
 ready=0
 for ((attempt=1; attempt<=30; attempt++)); do
     if curl --silent --fail "$app_url/crear-cuenta" >/dev/null; then

@@ -26,6 +26,8 @@ class SeguridadFrontendIntegrationTest extends TestCase
     private array $sessionBackup = [];
     private array $postBackup = [];
     private array $getBackup = [];
+    private ?\mysqli $identityDb = null;
+    private ?\mysqli $previousDb = null;
 
     protected function setUp(): void
     {
@@ -47,6 +49,11 @@ class SeguridadFrontendIntegrationTest extends TestCase
 
     protected function tearDown(): void
     {
+        if ($this->identityDb) {
+            $this->identityDb->query('DELETE FROM usuarios WHERE id=2000000000');
+            $this->identityDb->close();
+            \Model\ActiveRecord::setDB($this->previousDb);
+        }
         $_SERVER = $this->serverBackup;
         $_SESSION = $this->sessionBackup;
         $_POST = $this->postBackup;
@@ -329,6 +336,11 @@ class SeguridadFrontendIntegrationTest extends TestCase
      */
     public function testRutasMutablesExigenProteccionCsrf(): void
     {
+        $this->previousDb = \Model\ActiveRecord::getDB();
+        $this->identityDb = new \mysqli(getenv('DB_HOST') ?: 'appsalon-test-db', getenv('DB_USER') ?: 'root', getenv('DB_PASS') ?: 'root', getenv('DB_NAME') ?: 'appsalon_test', (int)(getenv('DB_PORT') ?: 3306));
+        \Model\ActiveRecord::setDB($this->identityDb);
+        \Tests\ensureActiveIdentity(2000000000, true);
+
         // 1. Comprobación directa de función central validar_csrf()
         $_SESSION['csrf_token'] = 'token_secreto_valido_12345';
 
@@ -371,7 +383,7 @@ class SeguridadFrontendIntegrationTest extends TestCase
 
         // A. Logout
         $_SESSION['login'] = true;
-        $_SESSION['id'] = 1;
+        $_SESSION['id'] = 2000000000;
         $_SESSION['csrf_token'] = 'token_sesion';
         $_POST['csrf_token'] = 'token_invalido';
         $_SERVER['REQUEST_METHOD'] = 'POST';
@@ -387,7 +399,7 @@ class SeguridadFrontendIntegrationTest extends TestCase
 
         // B. API Crear Cita (POST /api/citas)
         $_SESSION['login'] = true;
-        $_SESSION['id'] = 1;
+        $_SESSION['id'] = 2000000000;
         $_SESSION['csrf_token'] = 'token_sesion';
         $_POST['csrf_token'] = 'token_invalido';
         $_SERVER['REQUEST_METHOD'] = 'POST';
@@ -456,7 +468,7 @@ class SeguridadFrontendIntegrationTest extends TestCase
 
         // F. Pagos Iniciar (POST /api/pagos/iniciar)
         $_SESSION['login'] = true;
-        $_SESSION['id'] = 1;
+        $_SESSION['id'] = 2000000000;
         $_SESSION['csrf_token'] = 'token_sesion';
         $_POST['csrf_token'] = 'token_invalido';
         $_SERVER['REQUEST_METHOD'] = 'POST';

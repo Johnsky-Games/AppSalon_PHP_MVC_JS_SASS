@@ -53,7 +53,7 @@ class ServicioController
     public static function index(Router $router)
     {
         iniciar_sesion_segura();
-        isAdmin();
+        exigir_permiso('servicios.gestionar');
 
         $resultado = self::obtenerServicioService()->listar();
         if ($resultado['status'] === ServicioService::STATUS_ERROR) {
@@ -71,7 +71,7 @@ class ServicioController
     public static function crear(Router $router)
     {
         iniciar_sesion_segura();
-        isAdmin();
+        exigir_permiso('servicios.gestionar');
 
         $servicio = new Servicio();
         $alertas = [];
@@ -107,7 +107,7 @@ class ServicioController
     public static function actualizar(Router $router)
     {
         iniciar_sesion_segura();
-        isAdmin();
+        exigir_permiso('servicios.gestionar');
 
         $service = self::obtenerServicioService();
         $id = $service->validarId($_GET['id'] ?? null);
@@ -168,7 +168,7 @@ class ServicioController
     public static function eliminar(?Router $router = null)
     {
         iniciar_sesion_segura();
-        isAdmin();
+        exigir_permiso('servicios.gestionar');
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exigir_csrf();

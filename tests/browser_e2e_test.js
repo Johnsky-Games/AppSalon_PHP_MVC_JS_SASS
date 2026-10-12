@@ -1089,7 +1089,10 @@ async function runBrowserTests() {
             page.click(`#listado-mis-citas .btn-cancelar-cita[data-cita-id="${citaCancelarClienteId}"]`)
         ]);
         await page.waitForFunction(
-            (idBorrado) => !document.querySelector(`#listado-mis-citas li[data-cita-id="${idBorrado}"]`),
+            (idBorrado) => {
+                const item = document.querySelector(`#listado-mis-citas li[data-cita-id="${idBorrado}"]`);
+                return item && /cancelada/i.test(item.textContent) && !item.querySelector('.btn-cancelar-cita');
+            },
             { timeout: 5000 },
             citaCancelarClienteId
         );
@@ -1618,6 +1621,8 @@ async function runBrowserTests() {
 
         recordTest('NOTIF-01', 'Despacho SMTP de correos transaccionales de confirmación y cancelación de citas en buzón de pruebas', true,
             `${correosCapturados.length} correos capturados en buzón SMTP mock; confirmación de cita #${citaIdCreada} (Valeria Castro, 11:30 - 13:00) y cancelaciones verificadas.`);
+
+        await require('./platform_e2e_checks')({ browser, baseUrl: BASE_URL, recordTest, screenshotDir });
 
         // ------------------------------------------------------------------
         // RECORRIDO 5: Ausencia de Errores de Consola y Fallos de Red

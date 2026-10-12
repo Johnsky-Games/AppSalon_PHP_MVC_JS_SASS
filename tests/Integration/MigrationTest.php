@@ -70,6 +70,61 @@ class MigrationTest extends TestCase
         ];
     }
 
+    private function revertirPosteriores(mysqli $db, int $version): void
+    {
+        $archivos = glob(__DIR__ . '/../../database/migrations/*_rollback.sql');
+        rsort($archivos);
+        foreach ($archivos as $archivo) {
+            if ((int)substr(basename($archivo), 0, 3) <= $version) { continue; }
+            $nombre = basename($archivo, '_rollback.sql');
+            $registro = $db->prepare('SELECT id FROM migraciones WHERE migracion=?');
+            $registro->bind_param('s', $nombre); $registro->execute();
+            $aplicada = $registro->get_result()->num_rows > 0; $registro->close();
+            if (!$aplicada) { continue; }
+            $this->assertTrue($db->multi_query((string)file_get_contents($archivo)), "Rollback {$nombre}");
+            do {
+                if ($resultado = $db->store_result()) { $resultado->free(); }
+                if (!$db->more_results()) { break; }
+                $this->assertTrue($db->next_result(), "Every rollback statement must succeed: {$nombre}");
+            } while (true);
+            $registro = $db->prepare('DELETE FROM migraciones WHERE migracion=?');
+            $registro->bind_param('s', $nombre); $this->assertTrue($registro->execute()); $registro->close();
+        }
+    }
+
+    public function testMigracionesPlataformaReaplicablesYPreservanUsuarioLegado(): void
+    {
+        $nombreDb = 'appsalon_plataforma_migraciones_test';
+        self::$db->query("DROP DATABASE IF EXISTS {$nombreDb}");
+        self::$db->query("CREATE DATABASE {$nombreDb} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+        $db = new mysqli(self::$host, self::$user, self::$pass, $nombreDb, self::$port);
+        try {
+            $db->multi_query((string)file_get_contents(__DIR__ . '/../../database/schema_base.sql'));
+            do {
+                if ($resultado = $db->store_result()) { $resultado->free(); }
+                if (!$db->more_results()) { break; }
+                $this->assertTrue($db->next_result());
+            } while (true);
+            $hash = password_hash('LegacySeguro123!', PASSWORD_BCRYPT);
+            $stmt = $db->prepare("INSERT INTO usuarios(nombre,apellido,email,password,telefono,admin,confirmado) VALUES ('Legacy','Dueño','legacy@plataforma.test',?,'0991234567',1,1)");
+            $stmt->bind_param('s', $hash); $this->assertTrue($stmt->execute()); $id = (int)$db->insert_id; $stmt->close();
+            $esperado = $db->query("SELECT nombre,apellido,email,password,telefono,admin,confirmado FROM usuarios WHERE id={$id}")->fetch_assoc();
+            foreach (['up', 'up'] as $comando) {
+                $res = $this->ejecutarMigrador($comando, $nombreDb);
+                $this->assertSame(0, $res['exitCode'], $res['stdout'] . $res['stderr']);
+            }
+            $tablas = array_column($db->query("SHOW FULL TABLES WHERE Table_type='BASE TABLE'")->fetch_all(MYSQLI_NUM), 0);
+            foreach (['usuario_accesos','perfil_fotos','agenda_eventos','caja_movimientos','inventario_productos','formularios_cliente'] as $tabla) { $this->assertContains($tabla, $tablas); }
+            $this->revertirPosteriores($db, 9);
+            $this->assertSame(9, (int)$db->query('SELECT COUNT(*) total FROM migraciones')->fetch_assoc()['total']);
+            $this->assertSame($esperado, $db->query("SELECT nombre,apellido,email,password,telefono,admin,confirmado FROM usuarios WHERE id={$id}")->fetch_assoc());
+            $res = $this->ejecutarMigrador('up', $nombreDb);
+            $this->assertSame(0, $res['exitCode'], $res['stdout'] . $res['stderr']);
+            $this->assertSame($esperado, $db->query("SELECT nombre,apellido,email,password,telefono,admin,confirmado FROM usuarios WHERE id={$id}")->fetch_assoc());
+            $this->assertSame('propietario', $db->query("SELECT rol FROM usuario_accesos WHERE usuario_id={$id}")->fetch_assoc()['rol']);
+        } finally { $db->close(); self::$db->query("DROP DATABASE IF EXISTS {$nombreDb}"); }
+    }
+
     public function testActualizacionDesdeInstalacionPreviaPreservaDatosYGeneraMismoEsquemaQueFresh(): void
     {
         // 1. Preparar base con instalación previa y esquema de cc4e133 (001 ya aplicada)
@@ -198,21 +253,23 @@ class MigrationTest extends TestCase
         $this->assertStringContainsString('[+] Aplicando migración: 006_base_pagos', $resFresh['stdout']);
 
         // 6. Comparar esquemas exactos entre ambas instalaciones: columnas, tipos, nulabilidad, defaults, índices y motores
-        $tablas = [
-            'usuarios',
-            'servicios',
-            'citas',
-            'citasservicios',
-            'intentos_login',
-            'migraciones',
-            'profesionales',
-            'profesionales_servicios',
-            'horarios_profesionales',
-            'descansos_profesionales',
-            'bloqueos_profesionales',
-            'notificaciones_citas',
-            'pagos'
-        ];
+        // Compare every migrated table, including newly added platform modules.
+        $tablas = array_column($freshDb->query("SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'")->fetch_all(MYSQLI_NUM), 0);
+        $tablasUpgrade = array_column($upgradeDb->query("SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'")->fetch_all(MYSQLI_NUM), 0);
+        sort($tablas);
+        sort($tablasUpgrade);
+        $this->assertSame($tablas, $tablasUpgrade, 'Fresh and upgrade must contain exactly the same complete table set');
+        $this->assertContains('usuarios', $tablas);
+        $this->assertContains('pagos', $tablas);
+        $migracionesEsperadas = array_map(static fn(string $file): string => basename($file, '.sql'), array_filter(
+            glob(__DIR__ . '/../../database/migrations/[0-9][0-9][0-9]_*.sql'),
+            static fn(string $file): bool => !str_ends_with($file, '_rollback.sql')
+        ));
+        sort($migracionesEsperadas);
+        foreach ([$freshDb, $upgradeDb] as $conexion) {
+            $aplicadas = array_column($conexion->query('SELECT migracion FROM migraciones ORDER BY migracion')->fetch_all(MYSQLI_NUM), 0);
+            $this->assertSame($migracionesEsperadas, $aplicadas, 'Every migration file must be applied and recorded exactly once');
+        }
         foreach ($tablas as $tabla) {
             $colsUpgrade = [];
             $resColsU = $upgradeDb->query("SHOW FULL COLUMNS FROM {$tabla}");
@@ -266,6 +323,21 @@ class MigrationTest extends TestCase
             $motorF = $freshDb->query("SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'appsalon_fresh_migrador_test' AND TABLE_NAME = '{$tabla}'")->fetch_assoc();
             $this->assertSame('InnoDB', $motorF['ENGINE'], "Motor en fresh para {$tabla} debe ser InnoDB");
         }
+
+        // Compare referential actions too: columns/index parity alone misses CASCADE/SET NULL regressions.
+        $foreignKeys = static function (mysqli $conexion, string $schema): array {
+            $stmt = $conexion->prepare("SELECT k.TABLE_NAME, k.CONSTRAINT_NAME, k.ORDINAL_POSITION, k.COLUMN_NAME,
+                k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME, r.UPDATE_RULE, r.DELETE_RULE
+                FROM information_schema.KEY_COLUMN_USAGE k
+                JOIN information_schema.REFERENTIAL_CONSTRAINTS r ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME AND r.TABLE_NAME = k.TABLE_NAME
+                WHERE k.CONSTRAINT_SCHEMA = ? ORDER BY k.TABLE_NAME, k.CONSTRAINT_NAME, k.ORDINAL_POSITION");
+            $stmt->bind_param('s', $schema);
+            $stmt->execute();
+            $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+            $stmt->close();
+            return $rows;
+        };
+        $this->assertSame($foreignKeys($freshDb, 'appsalon_fresh_migrador_test'), $foreignKeys($upgradeDb, 'appsalon_upgrade_data_test'));
 
         $upgradeDb->close();
         $freshDb->close();
@@ -414,6 +486,7 @@ class MigrationTest extends TestCase
             $this->assertSame("cita:{$cid}:confirmacion", $filaNotif['clave_idempotencia']);
 
             // 4. Rollback de 005_notificaciones_citas
+            $this->revertirPosteriores($db005, 5);
             $rollbackSql = file_get_contents(__DIR__ . '/../../database/migrations/005_notificaciones_citas_rollback.sql');
             $db005->multi_query($rollbackSql);
             while ($db005->more_results() && $db005->next_result()) {
@@ -517,6 +590,7 @@ class MigrationTest extends TestCase
             $this->assertSame('PAY-20261215-ABCDEF01', $filaPago['referencia_pago']);
 
             // 4. Rollback de 006_base_pagos
+            $this->revertirPosteriores($db006, 6);
             $rollbackSql = file_get_contents(__DIR__ . '/../../database/migrations/006_base_pagos_rollback.sql');
             $db006->multi_query($rollbackSql);
             while ($db006->more_results() && $db006->next_result()) {
@@ -581,6 +655,7 @@ class MigrationTest extends TestCase
             $this->assertNotNull($checkMotivo, 'Columna motivo_cancelacion debe existir en citas tras 007');
 
             // Rollback de 007
+            $this->revertirPosteriores($db007, 7);
             $rollbackSql = file_get_contents(__DIR__ . '/../../database/migrations/007_citas_estado_cancelacion_rollback.sql');
             $db007->multi_query($rollbackSql);
             while ($db007->more_results() && $db007->next_result()) {
@@ -630,6 +705,7 @@ class MigrationTest extends TestCase
             $this->assertNotNull($checkLease, 'Columna lease_expires_at debe existir tras 008');
 
             // Rollback de 008
+            $this->revertirPosteriores($db008, 8);
             $rollbackSql = file_get_contents(__DIR__ . '/../../database/migrations/008_notificaciones_outbox_lease_rollback.sql');
             $db008->multi_query($rollbackSql);
             while ($db008->more_results() && $db008->next_result()) {

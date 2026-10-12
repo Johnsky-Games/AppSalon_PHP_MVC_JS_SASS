@@ -236,7 +236,7 @@ class SecurityIntegrationTest extends TestCase
         $this->assertNotNull($usuarioLeido);
 
         // 2. Simular que el token expira antes del envío del POST
-        self::$db->query("UPDATE usuarios SET token_expira = DATE_SUB(NOW(), INTERVAL 5 SECOND) WHERE id = {$usuario->id}");
+        self::$db->query("UPDATE usuarios SET token_expira = DATE_SUB(UTC_TIMESTAMP(), INTERVAL 5 SECOND) WHERE id = {$usuario->id}");
 
         // 3. Paso 2 (POST): Se intenta la actualización atómica
         $hashNuevo = password_hash('password_lucia_nuevo', PASSWORD_BCRYPT);
@@ -381,6 +381,8 @@ class SecurityIntegrationTest extends TestCase
     {
         $token = bin2hex(random_bytes(32));
         $_SESSION['login'] = true;
+        ActiveRecord::setDB(self::$db);
+        \Tests\ensureActiveIdentity(1, false);
         $_SESSION['id'] = 1;
         $_SESSION['csrf_token'] = $token;
 

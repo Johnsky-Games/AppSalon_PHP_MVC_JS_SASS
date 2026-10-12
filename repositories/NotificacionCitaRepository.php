@@ -45,6 +45,16 @@ class NotificacionCitaRepository
      *
      * @throws PersistenceException
      */
+    public function recordatoriosPermitidos(int $usuarioId): bool
+    {
+        $stmt = $this->resolveDb()->prepare('SELECT COALESCE(p.recordatorios,1) permitido FROM usuarios u LEFT JOIN perfiles_usuario p ON p.usuarioId=u.id WHERE u.id=?');
+        if (!$stmt) { throw new PersistenceException('No se pudo comprobar la preferencia de recordatorios.'); }
+        $stmt->bind_param('i',$usuarioId);
+        if (!$stmt->execute()) { $stmt->close(); throw new PersistenceException('No se pudo comprobar la preferencia de recordatorios.'); }
+        $row=$stmt->get_result()->fetch_assoc(); $stmt->close();
+        return $row !== null && (int)$row['permitido'] === 1;
+    }
+
     public function findById(int $id): ?NotificacionCita
     {
         if ($id <= 0) {
@@ -1356,11 +1366,13 @@ class NotificacionCitaRepository
                        COALESCE(cs.duracion_minutos, s.duracion_minutos) AS servicio_duracion
                 FROM citas c
                 INNER JOIN usuarios u ON u.id = c.usuarioId
+                LEFT JOIN perfiles_usuario preferencias ON preferencias.usuarioId = u.id
                 LEFT JOIN profesionales p ON p.id = c.profesionalId
                 LEFT JOIN citasservicios cs ON cs.citaId = c.id
                 LEFT JOIN servicios s ON s.id = cs.servicioId
                 WHERE c.fecha BETWEEN ? AND ?
-                  AND (c.estado IS NULL OR c.estado != 'cancelada')
+                  AND (c.estado IS NULL OR c.estado NOT IN ('cancelada','completada','no_asistio'))
+                  AND COALESCE(preferencias.recordatorios,1)=1
                 ORDER BY c.fecha ASC, COALESCE(c.hora_inicio, c.hora) ASC, c.id ASC, cs.id ASC";
 
         try {

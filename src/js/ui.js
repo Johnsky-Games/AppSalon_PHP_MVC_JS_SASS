@@ -21,6 +21,22 @@
     }
     window.AppSalonUI = Object.freeze({ notify });
     document.addEventListener('DOMContentLoaded', () => {
+        document.querySelectorAll('[data-modal-open]').forEach(button => {
+            button.addEventListener('click', () => {
+                const modal = document.getElementById(button.dataset.modalOpen);
+                if (modal instanceof HTMLDialogElement && !modal.open) modal.showModal();
+            });
+        });
+        document.querySelectorAll('[data-modal-close]').forEach(button => {
+            button.addEventListener('click', () => button.closest('dialog')?.close());
+        });
+        document.querySelectorAll('dialog').forEach(modal => {
+            modal.addEventListener('click', event => {
+                if (event.target !== modal) return;
+                const rect = modal.getBoundingClientRect();
+                if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) modal.close();
+            });
+        });
         document.querySelectorAll('input[type="password"]').forEach(input => {
             const holder = document.createElement('div');
             holder.className = 'ui-password';

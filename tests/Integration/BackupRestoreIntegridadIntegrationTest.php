@@ -342,6 +342,9 @@ class BackupRestoreIntegridadIntegrationTest extends TestCase
 
             $dbSrc->query("INSERT INTO intentos_login (tipo, identificador, primera_peticion, ultima_peticion, intentos, bloqueado_hasta) VALUES ('ip', '127.0.0.1', NOW(), NOW(), 1, NULL)");
 
+            $tablasOrigen = array_column($dbSrc->query("SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'")->fetch_all(MYSQLI_NUM), 0);
+            sort($tablasOrigen);
+
             // 1. Ejecutar respaldo
             $resBackup = $this->ejecutarScriptCli(
                 'scripts/backup_db.php',
@@ -357,10 +360,14 @@ class BackupRestoreIntegridadIntegrationTest extends TestCase
             $manData = json_decode($manContent, true);
             $this->assertIsArray($manData);
             $this->assertSame('America/Guayaquil', $manData['timezone']);
-            $this->assertSame(13, $manData['total_tablas']);
+            $this->assertSame(count($tablasOrigen), $manData['total_tablas']);
             $this->assertSame(hash_file('sha256', $archivoGz), $manData['sha256']);
-            $this->assertCount(13, $manData['tablas']);
-            $this->assertCount(13, $manData['filas_por_tabla']);
+            $tablasManifiesto = $manData['tablas'];
+            sort($tablasManifiesto);
+            $this->assertSame($tablasOrigen, $tablasManifiesto);
+            $tablasConteos = array_keys($manData['filas_por_tabla']);
+            sort($tablasConteos);
+            $this->assertSame($tablasOrigen, $tablasConteos);
 
             // 2. Restaurar en base limpia
             $resRestore = $this->ejecutarScriptCli(
@@ -375,21 +382,9 @@ class BackupRestoreIntegridadIntegrationTest extends TestCase
             $dbDst = new mysqli(self::$host, self::$user, self::$pass, $dstDb, self::$port);
             $dbDst->set_charset('utf8mb4');
 
-            $tablasEsperadas = [
-                'bloqueos_profesionales',
-                'citas',
-                'citasservicios',
-                'descansos_profesionales',
-                'horarios_profesionales',
-                'intentos_login',
-                'migraciones',
-                'notificaciones_citas',
-                'pagos',
-                'profesionales',
-                'profesionales_servicios',
-                'servicios',
-                'usuarios',
-            ];
+            $tablasEsperadas = array_column($dbSrc->query("SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'")->fetch_all(MYSQLI_NUM), 0);
+            sort($tablasEsperadas);
+            $this->assertGreaterThanOrEqual(13, count($tablasEsperadas), 'The complete legacy schema must remain present');
 
             foreach ($tablasEsperadas as $tabla) {
                 $countSrc = (int)$dbSrc->query("SELECT COUNT(*) AS c FROM `{$tabla}`")->fetch_assoc()['c'];

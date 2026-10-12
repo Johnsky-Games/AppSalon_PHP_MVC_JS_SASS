@@ -231,21 +231,9 @@ class BackupRestoreIntegrationTest extends TestCase
             $this->assertSame(0, $resRestoreGz['exitCode'], 'restore_db.php (.sql.gz) debe terminar con código 0: ' . $resRestoreGz['stderr']);
 
             // 5. Verificar integridad total de tablas, conteos de filas, datos complejos y relaciones en ambas bases restauradas
-            $tablasEsperadas = [
-                'bloqueos_profesionales',
-                'citas',
-                'citasservicios',
-                'descansos_profesionales',
-                'horarios_profesionales',
-                'intentos_login',
-                'migraciones',
-                'notificaciones_citas',
-                'pagos',
-                'profesionales',
-                'profesionales_servicios',
-                'servicios',
-                'usuarios',
-            ];
+            $tablasEsperadas = array_column($dbSrc->query("SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'")->fetch_all(MYSQLI_NUM), 0);
+            sort($tablasEsperadas);
+            $this->assertGreaterThanOrEqual(13, count($tablasEsperadas), 'The complete legacy schema must remain present');
 
             foreach ([$dstPlainDb, $dstGzipDb] as $targetDbName) {
                 $dbDst = new mysqli(self::$host, self::$user, self::$pass, $targetDbName, self::$port);
@@ -257,7 +245,7 @@ class BackupRestoreIntegrationTest extends TestCase
                     $tablasRestauradas[] = (string)$rowT[0];
                 }
                 sort($tablasRestauradas);
-                $this->assertSame($tablasEsperadas, $tablasRestauradas, "Las 13 tablas del esquema deben existir en {$targetDbName}");
+                $this->assertSame($tablasEsperadas, $tablasRestauradas, "Todas las tablas del esquema deben existir en {$targetDbName}");
 
                 foreach ($tablasEsperadas as $tabla) {
                     $countSrc = (int)$dbSrc->query("SELECT COUNT(*) AS c FROM `{$tabla}`")->fetch_assoc()['c'];
@@ -342,6 +330,7 @@ class BackupRestoreIntegrationTest extends TestCase
                 'login' => true,
                 'csrf_token' => 'token_csrf_cierre_tecnico',
             ];
+            \Tests\ensureActiveIdentity(999, false);
             $_SERVER['REQUEST_METHOD'] = 'POST';
             $_SERVER['REQUEST_URI'] = '/api/pagos/reembolsar';
             $_SERVER['HTTP_ACCEPT'] = 'application/json';
@@ -365,6 +354,7 @@ class BackupRestoreIntegrationTest extends TestCase
 
             // Admin sin CSRF válido -> 403
             $_SESSION['admin'] = '1';
+            \Tests\ensureActiveIdentity(999, true);
             $_POST['csrf_token'] = 'token_invalido';
             ob_start();
             try {

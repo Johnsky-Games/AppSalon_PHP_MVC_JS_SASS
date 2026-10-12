@@ -136,6 +136,7 @@ class PagoRepository
                         c.usuarioId,
                         c.profesionalId,
                         c.estado_pago,
+                        c.estado,
                         p.nombre AS profesional_nombre,
                         u.nombre AS cliente_nombre,
                         u.apellido AS cliente_apellido,
@@ -220,6 +221,7 @@ class PagoRepository
                 'cliente_nombre' => trim(((string)($filaCita['cliente_nombre'] ?? '')) . ' ' . ((string)($filaCita['cliente_apellido'] ?? ''))),
                 'cliente_email' => (string)($filaCita['cliente_email'] ?? ''),
                 'estado_pago' => (string)($filaCita['estado_pago'] ?? 'pendiente'),
+                'estado' => (string)($filaCita['estado'] ?? 'confirmada'),
                 'monto_servidor' => round($montoTotal, 2),
                 'servicios' => $servicios,
             ];

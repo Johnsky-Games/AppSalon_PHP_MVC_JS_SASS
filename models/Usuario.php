@@ -75,7 +75,7 @@ class Usuario
         $permitidos = ['nombre', 'apellido', 'email', 'password', 'telefono'];
         foreach ($permitidos as $campo) {
             if (isset($args[$campo]) && is_string($args[$campo])) {
-                $this->$campo = trim($args[$campo]);
+                $this->$campo = $campo === 'password' ? $args[$campo] : trim($args[$campo]);
             }
         }
         // Inmutables desde el cliente:
@@ -117,9 +117,13 @@ class Usuario
         if (!$this->password) {
             self::$alertas['error'][] = 'El password es obligatorio';
         }
-        if (strlen((string)$this->password) < 6) {
-            self::$alertas['error'][] = 'El password debe tener al menos 6 caracteres';
+        if (strlen((string)$this->password) < 8) {
+            self::$alertas['error'][] = 'El password debe tener al menos 8 caracteres';
         }
+        if (strlen($this->nombre) > 60 || strlen($this->apellido) > 60) { self::$alertas['error'][] = 'Nombre y apellido admiten hasta 60 bytes'; }
+        if ($this->email && (!filter_var($this->email, FILTER_VALIDATE_EMAIL) || strlen($this->email) > 60)) { self::$alertas['error'][] = 'Introduce un email válido de hasta 60 caracteres'; }
+        if ($this->telefono && !preg_match('/^[0-9]{7,10}$/', $this->telefono)) { self::$alertas['error'][] = 'El teléfono debe contener entre 7 y 10 dígitos'; }
+        if (strlen($this->password) > 72) { self::$alertas['error'][] = 'El password admite hasta 72 bytes'; }
         return self::$alertas;
     }
 
@@ -141,6 +145,7 @@ class Usuario
         if (!$this->email || !is_string($this->email)) {
             self::$alertas['error'][] = 'El email es obligatorio';
         }
+        if ($this->email && (!filter_var($this->email, FILTER_VALIDATE_EMAIL) || strlen($this->email) > 60)) { self::$alertas['error'][] = 'Introduce un email válido de hasta 60 caracteres'; }
         return self::$alertas;
     }
 
@@ -149,9 +154,10 @@ class Usuario
         self::$alertas = [];
         if (!$this->password || !is_string($this->password)) {
             self::$alertas['error'][] = 'El password es obligatorio';
-        } elseif (strlen($this->password) < 6) {
-            self::$alertas['error'][] = 'El password debe tener al menos 6 caracteres';
+        } elseif (strlen($this->password) < 8) {
+            self::$alertas['error'][] = 'El password debe tener al menos 8 caracteres';
         }
+        if (strlen($this->password) > 72) { self::$alertas['error'][] = 'El password admite hasta 72 bytes'; }
         return self::$alertas;
     }
 
@@ -171,7 +177,7 @@ class Usuario
         $this->token = null; // No almacenar token en texto plano
         $this->token_hash = hash('sha256', $tokenRaw);
         $this->token_tipo = $tipo;
-        $this->token_expira = date('Y-m-d H:i:s', time() + ($horasExpiracion * 3600));
+        $this->token_expira = gmdate('Y-m-d H:i:s', time() + ($horasExpiracion * 3600));
 
         return $tokenRaw;
     }

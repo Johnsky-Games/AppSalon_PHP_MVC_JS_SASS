@@ -87,6 +87,8 @@ class DisponibilidadIntegrationTest extends TestCase
     private function autenticarCliente(): string
     {
         $_SESSION['login'] = true;
+        ActiveRecord::setDB(self::$db);
+        \Tests\ensureActiveIdentity(10, false);
         $_SESSION['id'] = 10;
         $_SESSION['nombre'] = 'Cliente';
         $_SESSION['apellido'] = 'Prueba';

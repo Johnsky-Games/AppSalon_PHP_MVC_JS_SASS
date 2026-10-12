@@ -48,7 +48,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: "8.2"
-          extensions: mysqli, pdo_mysql, mbstring, zlib
+          extensions: mysqli, pdo_mysql, mbstring, zlib, gd, fileinfo
           ini-values: variables_order=EGPCS
           coverage: none
 
@@ -70,7 +70,7 @@ jobs:
         run: |
           find Router.php classes controllers database includes interfaces models public repositories scripts services tests views -name "*.php" -print0 | xargs -0 -n1 php -l
 
-      - name: Cargar esquema base y aplicar migraciones incrementales (001 a 009)
+      - name: Cargar esquema base y aplicar todas las migraciones incrementales
         run: |
           mysql -h 127.0.0.1 -P 3306 -uroot -proot appsalon_ci_test < database/schema_base.sql
           php database/migrador.php up
@@ -81,6 +81,7 @@ jobs:
           docker build -t appsalon-web-ci .
           docker run --rm appsalon-web-ci php -m | grep -i mbstring
           docker run --rm appsalon-web-ci php -m | grep -i mysqli
+          docker run --rm appsalon-web-ci php -m | grep -i gd
           docker run --rm appsalon-web-ci apache2ctl -M | grep rewrite_module
 
       - name: Recorrido E2E aislado en Apache, MySQL y SMTP mock

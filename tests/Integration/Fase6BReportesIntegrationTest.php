@@ -106,6 +106,7 @@ class Fase6BReportesIntegrationTest extends TestCase
     {
         $_SESSION['login'] = true;
         $_SESSION['id'] = 1;
+        \Tests\ensureActiveIdentity(1, true);
         $_SESSION['nombre'] = 'Admin';
         $_SESSION['apellido'] = 'Salon';
         $_SESSION['email'] = 'admin@appsalon.com';
@@ -224,6 +225,7 @@ class Fase6BReportesIntegrationTest extends TestCase
             'apellido' => 'NoAdmin',
             'admin' => '0',
         ];
+        \Tests\ensureActiveIdentity(15, false);
         $_SERVER['HTTP_ACCEPT'] = 'application/json';
 
         ob_start();

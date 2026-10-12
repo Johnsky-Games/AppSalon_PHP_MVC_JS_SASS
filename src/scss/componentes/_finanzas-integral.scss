@@ -1,0 +1,8 @@
+.ops-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:1.2rem; margin:2rem 0; }
+.ops-filter { display:flex; flex-wrap:wrap; gap:1.6rem; align-items:end; .campo { flex:1 1 18rem; } }
+.ops-table-wrap { max-width:100%; overflow-x:auto; border-radius:1.5rem; background:#fff; box-shadow:0 5px 25px #16332a08; }
+.ops-table { border-collapse:collapse; width:100%; text-align:left; min-width:55rem; caption { text-align:left; padding:1.5rem; font-weight:700; } td,th { padding:1.5rem; border-bottom:1px solid #e6ede9; } th { background:#f1f7f4; } small { display:block; } }
+.ops-badge { border-radius:2rem; padding:.5rem 1rem; background:#e5f4ed; color:#235f4a; white-space:nowrap; &--warning { background:#fff0d4; color:#705013; } }
+.ops-modal { border:0; border-radius:2rem; padding:3rem; width:min(60rem,calc(100% - 3rem)); max-height:90dvh; overflow:auto; color:#18352b; box-shadow:0 25px 90px #09271e35; &::backdrop { background:#16332a88; backdrop-filter:blur(4px); } p { line-height:1.6; } }
+.ops-modal-close { float:right; border:0; background:#f1f7f4; border-radius:50%; width:4rem; height:4rem; font-size:2.5rem; cursor:pointer; }
+@media(max-width:600px) { .ops-modal { padding:2rem; } .ops-toolbar .boton { width:100%; } }

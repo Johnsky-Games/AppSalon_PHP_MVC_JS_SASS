@@ -173,7 +173,7 @@ class ProfesionalController
     public static function index(Router $router)
     {
         iniciar_sesion_segura();
-        isAdmin();
+        exigir_permiso('profesionales.gestionar');
 
         $resultado = self::obtenerProfesionalService()->listar(false);
         if ($resultado['status'] === ProfesionalService::STATUS_ERROR) {
@@ -191,7 +191,7 @@ class ProfesionalController
     public static function crear(Router $router)
     {
         iniciar_sesion_segura();
-        isAdmin();
+        exigir_permiso('profesionales.gestionar');
 
         $profesional = new Profesional();
         $alertas = [];
@@ -234,7 +234,7 @@ class ProfesionalController
     public static function actualizar(Router $router)
     {
         iniciar_sesion_segura();
-        isAdmin();
+        exigir_permiso('profesionales.gestionar');
 
         $service = self::obtenerProfesionalService();
         $id = $service->validarId($_GET['id'] ?? null);
@@ -307,7 +307,7 @@ class ProfesionalController
     public static function cambiarEstado(?Router $router = null)
     {
         iniciar_sesion_segura();
-        isAdmin();
+        exigir_permiso('profesionales.gestionar');
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exigir_csrf();
@@ -367,7 +367,7 @@ class ProfesionalController
     public static function horarios(Router $router)
     {
         iniciar_sesion_segura();
-        isAdmin();
+        exigir_permiso('profesionales.gestionar');
 
         $service = self::obtenerProfesionalService();
         $idRaw = $_GET['id'] ?? ($_POST['profesionalId'] ?? null);

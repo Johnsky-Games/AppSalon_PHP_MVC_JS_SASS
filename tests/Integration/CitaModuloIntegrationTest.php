@@ -497,12 +497,14 @@ class CitaModuloIntegrationTest extends TestCase
 
         $dbCerrada = new mysqli($host, $user, $pass, $name, $port);
         $dbCerrada->close();
-        ActiveRecord::setDB($dbCerrada);
+        // Fallo de persistencia de citas, manteniendo disponible la autorización real.
+        AdminController::setCitaService(new CitaService(new CitaRepository($dbCerrada), new ServicioRepository(self::$db)));
 
         $_GET = ['fecha' => $fechaConCita];
         ob_start();
         AdminController::index($router);
         $htmlFalloSql = ob_get_clean();
+        AdminController::setCitaService(null);
 
         $this->assertSame(500, http_response_code(), 'Un fallo SQL en /admin debe devolver HTTP 500');
         $this->assertStringContainsString('No fue posible consultar las citas para la fecha seleccionada', $htmlFalloSql);
@@ -515,6 +517,8 @@ class CitaModuloIntegrationTest extends TestCase
         $router = new Router();
 
         // Cliente autenticado no administrador accediendo vía navegador HTML
+        ActiveRecord::setDB(self::$db);
+        \Tests\ensureActiveIdentity(10, false);
         $_SESSION = ['login' => true, 'id' => 10, 'admin' => '0'];
         $_SERVER['REQUEST_METHOD'] = 'GET';
         $_SERVER['REQUEST_URI'] = '/admin';
@@ -527,7 +531,7 @@ class CitaModuloIntegrationTest extends TestCase
             AdminController::index($router);
             $this->fail('Cliente sin rol admin debe ser redirigido de /admin');
         } catch (AppTerminationException $e) {
-            $this->assertSame(302, $e->getStatusCode());
+            $this->assertSame(403, $e->getStatusCode());
         } finally {
             ob_end_clean();
         }

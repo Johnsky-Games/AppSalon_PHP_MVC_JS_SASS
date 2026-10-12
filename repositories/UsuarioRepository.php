@@ -285,7 +285,7 @@ class UsuarioRepository
 
     /**
      * Busca un usuario por token en texto plano validando su hash SHA-256, propósito (`token_tipo`)
-     * y vigencia temporal (`token_expira >= NOW()`).
+     * y vigencia temporal (`token_expira >= UTC_TIMESTAMP()`).
      *
      * @param string $tokenRaw Token en texto plano recibido del usuario.
      * @param string $tipo Propósito esperado ('confirmacion' o 'recuperacion').
@@ -305,7 +305,7 @@ class UsuarioRepository
         try {
             $sql = "SELECT id, nombre, apellido, email, password, telefono, admin, confirmado, token, token_hash, token_tipo, token_expira
                     FROM usuarios
-                    WHERE token_hash = ? AND token_tipo = ? AND token_expira >= NOW()
+                    WHERE token_hash = ? AND token_tipo = ? AND token_expira >= UTC_TIMESTAMP()
                     LIMIT 1";
             $stmt = $db->prepare($sql);
             if (!$stmt) {
@@ -366,7 +366,7 @@ class UsuarioRepository
         try {
             $sql = "UPDATE usuarios
                     SET confirmado = '1', token = NULL, token_hash = NULL, token_tipo = NULL, token_expira = NULL
-                    WHERE token_hash = ? AND token_tipo = ? AND token_expira >= NOW()
+                    WHERE token_hash = ? AND token_tipo = ? AND token_expira >= UTC_TIMESTAMP()
                     LIMIT 1";
             $stmt = $db->prepare($sql);
             if (!$stmt) {
@@ -415,8 +415,8 @@ class UsuarioRepository
 
         try {
             $sql = "UPDATE usuarios
-                    SET password = ?, token = NULL, token_hash = NULL, token_tipo = NULL, token_expira = NULL
-                    WHERE token_hash = ? AND token_tipo = ? AND token_expira >= NOW()
+                    SET password = ?, version_sesion = version_sesion + 1, token = NULL, token_hash = NULL, token_tipo = NULL, token_expira = NULL
+                    WHERE token_hash = ? AND token_tipo = ? AND token_expira >= UTC_TIMESTAMP()
                     LIMIT 1";
             $stmt = $db->prepare($sql);
             if (!$stmt) {

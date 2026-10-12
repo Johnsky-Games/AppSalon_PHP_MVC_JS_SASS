@@ -70,7 +70,7 @@ class InMemoryUsuarioRepositoryStub extends UsuarioRepository
                 $u->token_hash === $hash &&
                 $u->token_tipo === $tipo &&
                 $u->token_expira !== null &&
-                strtotime($u->token_expira) >= time()
+                strtotime($u->token_expira . ' UTC') >= time()
             ) {
                 return clone $u;
             }
@@ -87,7 +87,7 @@ class InMemoryUsuarioRepositoryStub extends UsuarioRepository
                 $u->token_hash === $hash &&
                 $u->token_tipo === 'confirmacion' &&
                 $u->token_expira !== null &&
-                strtotime($u->token_expira) >= time()
+                strtotime($u->token_expira . ' UTC') >= time()
             ) {
                 $u->confirmado = '1';
                 $u->token = null;
@@ -110,7 +110,7 @@ class InMemoryUsuarioRepositoryStub extends UsuarioRepository
                 $u->token_hash === $hash &&
                 $u->token_tipo === 'recuperacion' &&
                 $u->token_expira !== null &&
-                strtotime($u->token_expira) >= time()
+                strtotime($u->token_expira . ' UTC') >= time()
             ) {
                 $u->password = $nuevoPasswordHash;
                 $u->token = null;

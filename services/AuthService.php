@@ -144,7 +144,7 @@ class AuthService
      * @param array $datos Datos del formulario de registro.
      * @return array Resultado estructurado con `status`, `resultado`, `id`, `usuario`, `token` y `alertas`.
      */
-    public function registrar(array $datos): array
+    public function registrar(array $datos, ?string $ip = null): array
     {
         Usuario::limpiarAlertas();
 
@@ -163,6 +163,15 @@ class AuthService
         }
 
         try {
+            // El transporte público siempre suministra IP; llamadas de dominio existentes conservan compatibilidad.
+            if ($ip !== null) {
+                $admision = RateLimiter::admitirDosVectores($this->repository->getDb(), 'ip_register', $ip, 'email_register', strtolower((string)$usuario->email), 10, 3);
+                if (!$admision['admitido']) {
+                    return $this->construirRespuesta(self::STATUS_RATE_LIMITED, false, $usuario,
+                        ['error' => ['Demasiadas solicitudes de registro. Intenta más tarde.']],
+                        ['segundos_restantes' => max(1,(int)$admision['segundos_restantes']), 'id' => null, 'token' => null]);
+                }
+            }
             if ($this->repository->existsByEmail((string)$usuario->email)) {
                 return $this->construirRespuesta(
                     self::STATUS_CONFLICT,

@@ -542,6 +542,9 @@ class NotificacionCitaService
                 continue;
             }
 
+            // Revalidate after claiming the lease so reschedules/preferences changed during acquisition cannot use a stale payload.
+            $vigenciaDespacho = $this->verificarVigenciaParaDespacho($candidata->tipo,$citaRefId,$idNotif,$workerTokenActual);
+            if (!$vigenciaDespacho['valido']) { $omitidos++; continue; }
             $procesadas++;
             $payload = $candidata->obtenerPayload();
             $mensaje = $this->construirContenidoHtml($candidata->tipo, $payload, $candidata->asunto);
@@ -888,6 +891,24 @@ class NotificacionCitaService
                 'motivo' => $citaInexistente ? 'cita_no_encontrada' : 'cita_cancelada',
                 'cita' => $cita
             ];
+        }
+
+        try {
+            $notificacion = $notificacionId > 0 ? $this->notificacionRepository->findById($notificacionId) : null;
+            $payload = $notificacion ? $notificacion->obtenerPayload() : [];
+            $horarioCambiado = isset($payload['fecha']) && isset($payload['hora_inicio']) && (
+                (string)($payload['fecha'] ?? '') !== (string)$cita->fecha ||
+                substr((string)($payload['hora_inicio'] ?? $payload['hora'] ?? ''),0,5) !== substr((string)($cita->hora_inicio ?: $cita->hora),0,5)
+            );
+            $terminada = in_array($cita->estado,['completada','no_asistio'],true);
+            $optout = $tipo === NotificacionCita::TIPO_RECORDATORIO && !$this->notificacionRepository->recordatoriosPermitidos((int)$cita->usuarioId);
+            if ($horarioCambiado || $terminada || $optout) {
+                $motivo = $horarioCambiado ? 'horario_reprogramado' : ($terminada ? 'cita_finalizada' : 'recordatorios_desactivados');
+                if ($notificacionId > 0) { $this->notificacionRepository->descartarNotificacion($notificacionId,$motivo,$workerToken,NotificacionCita::ESTADO_DESCARTADA); }
+                return ['valido'=>false,'status'=>self::STATUS_OMITIDO,'motivo'=>$motivo,'cita'=>$cita];
+            }
+        } catch (\Throwable $e) {
+            return ['valido'=>false,'status'=>self::STATUS_FALLIDO,'motivo'=>'error_comprobacion_preferencias','cita'=>$cita];
         }
 
         return ['valido' => true, 'status' => self::STATUS_OK, 'motivo' => '', 'cita' => $cita];

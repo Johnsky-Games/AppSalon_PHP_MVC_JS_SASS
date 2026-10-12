@@ -818,7 +818,7 @@ class CitaService
 
         $dtCita = $dtCita->setTime($horaInt, $minInt, $segInt);
 
-        if ($dtCita < $ahora) {
+        if ($dtCita <= $ahora) {
             return [
                 'valida' => false,
                 'codigo' => 'cita_pasada',
@@ -910,6 +910,10 @@ class CitaService
                 'id' => $idCita,
                 'mensaje' => 'La cita ya se encontraba cancelada.'
             ];
+        }
+
+        if ($cita->estado !== 'confirmada') {
+            return ['status' => self::STATUS_CONFLICT, 'httpCode' => 409, 'resultado' => false, 'error' => 'Esta cita ya no permite cancelación.'];
         }
 
         // Política de citas pasadas: Rechazar explícitamente cualquier intento de cancelar cita pasada
@@ -1072,7 +1076,8 @@ class CitaService
             foreach ($citasRaw as $c) {
                 $esFutura = ((string)$c['fecha'] > $fechaHoy);
                 $esConfirmada = (($c['estado'] ?? 'confirmada') === 'confirmada');
-                $puedeCancelar = $esConfirmada && ((string)$c['fecha'] >= $fechaHoy);
+                $instante = \DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', $c['fecha'] . ' ' . substr((string)($c['hora_inicio'] ?: $c['hora']), 0, 5) . ':00', $this->obtenerZonaHoraria());
+                $puedeCancelar = $esConfirmada && $instante && $instante > $this->obtenerAhora();
                 $c['es_futura'] = $esFutura;
                 $c['puede_cancelar'] = $puedeCancelar;
                 $citas[] = $c;
@@ -1096,5 +1101,26 @@ class CitaService
             ];
         }
     }
-}
+    /** Valida formatos y delega alcance y conflicto bajo el mismo bloqueo de escritura. */
+    public function actualizarAgenda($idRaw, $actorRaw, bool $gestiona, bool $profesionalPropio, string $operacion, array $datos): array
+    {
+        $id = $this->validarId($idRaw); $actor = $this->validarId($actorRaw);
+        if (!$actor) return ['resultado' => false, 'httpCode' => 401, 'error' => 'No autenticado.'];
+        if (!$id) return ['resultado' => false, 'httpCode' => 422, 'error' => 'Identificador inválido.'];
+        if ($operacion === 'reprogramar') {
+            $fecha = is_string($datos['fecha'] ?? null) ? $datos['fecha'] : '';
+            $hora = is_string($datos['hora'] ?? null) ? $datos['hora'] : '';
+            $dia = $this->obtenerDiaSemanaIso($fecha);
+            if (!$dia || $fecha <= $this->obtenerAhora()->format('Y-m-d') || !preg_match('/^(?:[01]\d|2[0-3]):[0-5]\d$/D', $hora)) {
+                return ['resultado' => false, 'httpCode' => 422, 'error' => 'Selecciona fecha futura y hora válida.'];
+            }
+            $datos = ['fecha' => $fecha, 'hora' => $hora, 'dia' => $dia];
+        } elseif ($operacion === 'estado') {
+            if (!is_string($datos['estado'] ?? null) || !in_array($datos['estado'], ['en_servicio', 'completada', 'no_asistio'], true)) {
+                return ['resultado' => false, 'httpCode' => 422, 'error' => 'Estado inválido.'];
+            }
+        } else return ['resultado' => false, 'httpCode' => 422, 'error' => 'Operación inválida.'];
+        return $this->citaRepository->mutarAgenda($id, $actor, $gestiona, $profesionalPropio, $operacion, $datos, $this->obtenerAhora()->format('Y-m-d H:i:s'));
+    }
 
+}

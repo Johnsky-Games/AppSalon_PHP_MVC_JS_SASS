@@ -417,6 +417,14 @@ function actualizarSeleccionVisual() {
     const name = document.querySelector('#professional-preview-name');
     if (preview) preview.hidden = !cita.profesionalNombre;
     if (name) name.textContent = cita.profesionalNombre;
+    const portrait = preview?.querySelector('img');
+    const selected = catalogoProfesionales.find(prof => String(prof.id) === String(cita.profesionalId));
+    const publicPhoto = typeof selected?.foto_url === 'string' && /^\/perfil\/foto\?id=[1-9][0-9]*$/.test(selected.foto_url) ? selected.foto_url : '';
+    if (portrait) {
+        portrait.src = publicPhoto || '/build/img/avatar-professional.svg';
+        portrait.alt = publicPhoto ? 'Retrato del profesional seleccionado' : 'Avatar ilustrado de profesional';
+        portrait.onerror = () => { portrait.onerror = null; portrait.src = '/build/img/avatar-professional.svg'; };
+    }
 }
 
 function seleccionarProfesional() {
@@ -1039,6 +1047,11 @@ async function cargarMisCitas() {
             pHorario.appendChild(spanHorario);
 
             li.appendChild(pFecha);
+            const pEstado = document.createElement('P');
+            pEstado.className = 'mi-cita-estado';
+            const estadosCita = { confirmada: 'Confirmada', en_servicio: 'En atención', completada: 'Completada', no_asistio: 'No asistió', cancelada: 'Cancelada' };
+            pEstado.textContent = 'Estado: ' + (estadosCita[item.estado] || 'Confirmada');
+            li.appendChild(pEstado);
             li.appendChild(pProf);
             li.appendChild(pHorario);
 

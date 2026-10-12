@@ -2,13 +2,27 @@
 $uiAutenticado = !empty($_SESSION['id']);
 $uiAdmin = !empty($_SESSION['admin']);
 $uiRuta = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
-$uiEnlaces = $uiAdmin ? [
-    ['/admin', 'Ver Citas', 'calendar'],
-    ['/servicios', 'Servicios', 'sparkles'],
-    ['/servicios/crear', 'Nuevo Servicio', 'plus'],
-    ['/profesionales', 'Profesionales', 'users'],
-    ['/admin/reportes', 'Ver Reportes', 'chart'],
-] : [['/cita', 'Reservar Cita', 'calendar'], ['/cita#mis-citas', 'Mis Citas', 'check']];
+$uiEnlaces = [['/perfil', 'Mi Perfil', 'users']];
+if (puede('agenda.gestionar')) $uiEnlaces[] = ['/admin', 'Ver Citas', 'calendar'];
+if (puede('agenda.gestionar') || puede('agenda.ver_propia')) $uiEnlaces[] = ['/agenda', 'Agenda', 'calendar'];
+if (puede('servicios.gestionar')) {
+    $uiEnlaces[] = ['/servicios', 'Servicios', 'sparkles'];
+    $uiEnlaces[] = ['/servicios/crear', 'Nuevo Servicio', 'plus'];
+}
+foreach ([
+    ['profesionales.gestionar','/profesionales','Profesionales','users'],
+    ['equipo.gestionar','/admin/equipo','Equipo y Permisos','users'],
+    ['finanzas.gestionar','/admin/finanzas','Caja y Cobros','chart'],
+    ['inventario.gestionar','/admin/inventario','Inventario','check'],
+    ['reportes.ver','/admin/reportes','Ver Reportes','chart'],
+    ['marketing.gestionar','/admin/crecimiento','Clientes y Fidelidad','sparkles'],
+    ['ajustes.gestionar','/admin/ajustes','Ajustes','check'],
+] as [$permiso,$href,$texto,$icono]) if (puede($permiso)) $uiEnlaces[] = [$href,$texto,$icono];
+if (!$uiAdmin && rol_actual() === 'cliente') {
+    $uiEnlaces[] = ['/cita','Reservar Cita','calendar'];
+    $uiEnlaces[] = ['/mis-citas','Mis Citas','check'];
+    $uiEnlaces[] = ['/mi-bienestar','Mi Bienestar','sparkles'];
+}
 $uiIconos = [
     'calendar' => '<rect x="3" y="5" width="18" height="16" rx="3"/><path d="M16 3v4M8 3v4M3 11h18m-13 4h2m4 0h2"/>',
     'sparkles' => '<path d="m12 3 2.7 6.3L21 12l-6.3 2.7L12 21l-2.7-6.3L3 12l6.3-2.7Z"/>',

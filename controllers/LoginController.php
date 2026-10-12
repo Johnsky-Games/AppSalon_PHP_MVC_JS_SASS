@@ -73,10 +73,20 @@ class LoginController
                 $_SESSION['apellido'] = $usuario->apellido;
                 $_SESSION['email'] = $usuario->email;
                 $_SESSION['login'] = true;
+                $acceso = (new \Services\AuthorizationService())->contexto((int)$usuario->id);
+                if (!$acceso || (int)$acceso['activo'] !== 1) {
+                    $_SESSION = [];
+                    http_response_code(403);
+                    echo 'Cuenta de acceso inactiva.';
+                    detener_ejecucion(403);
+                }
+                $_SESSION['version_sesion'] = (int)$acceso['version_sesion'];
+                $_SESSION['rol'] = $acceso['rol'];
 
-                if ((string)$usuario->admin === '1') {
+                if ($acceso['rol'] !== 'cliente') {
                     $_SESSION['admin'] = '1';
-                    header('Location: /admin');
+                    $destino = $acceso['rol'] === 'profesional' ? '/agenda' : ($acceso['rol'] === 'finanzas' ? '/admin/finanzas' : '/admin');
+                    header('Location: ' . $destino);
                 } else {
                     unset($_SESSION['admin']);
                     header('Location: /cita');
@@ -265,7 +275,7 @@ class LoginController
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exigir_csrf();
 
-            $resultado = self::obtenerAuthService()->registrar($_POST);
+            $resultado = self::obtenerAuthService()->registrar($_POST, RateLimiter::obtenerIP());
             if ($resultado['usuario'] instanceof Usuario) {
                 $usuario = $resultado['usuario'];
             }
@@ -275,9 +285,12 @@ class LoginController
                 header('Location: /mensaje');
                 detener_ejecucion(302);
                 return;
+            } elseif ($resultado['status'] === AuthService::STATUS_RATE_LIMITED) {
+                http_response_code(429);
+                header('Retry-After: ' . max(1,(int)($resultado['segundos_restantes'] ?? 900)));
             } elseif ($resultado['status'] === AuthService::STATUS_ERROR) {
                 http_response_code(500);
-            }
+            } else { http_response_code(422); }
         }
 
         $router->render('auth/crear-cuenta', [

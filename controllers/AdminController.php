@@ -33,7 +33,7 @@ class AdminController
     public static function index(Router $router)
     {
         iniciar_sesion_segura();
-        isAdmin();
+        exigir_permiso('agenda.gestionar');
 
         $fechaParam = $_GET['fecha'] ?? $_GET['fecha_'] ?? null;
         $resultado = self::obtenerCitaService()->consultarCitasAdmin($fechaParam);

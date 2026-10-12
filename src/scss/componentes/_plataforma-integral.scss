@@ -1,0 +1,19 @@
+dialog {
+  width: min(62rem, calc(100vw - 3rem));
+  max-height: calc(100dvh - 4rem);
+  overflow: auto;
+  padding: clamp(1.8rem, 4vw, 3.2rem);
+  border: 1px solid #d9e4df;
+  border-radius: 2rem;
+  color: #123b42;
+  background: #fffefa;
+  box-shadow: 0 2rem 8rem #123b4233;
+  &::backdrop { background: #123b4280; backdrop-filter: blur(4px); }
+  &[open] { animation: ui-dialog-enter .18s ease-out; }
+  h2, h3 { margin-top: 0; }
+  [data-modal-close] { min-height: 4.4rem; }
+}
+.ui-integral-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 28rem), 1fr)); gap: 2rem; }
+.ui-integral-table { width: 100%; border-collapse: collapse; th,td { padding: 1.2rem; border-bottom: 1px solid #d9e4df; text-align: left; } }
+.ui-table-scroll { overflow-x: auto; max-width: 100%; }
+@media(prefers-reduced-motion:reduce) { dialog[open] { animation: none; } }

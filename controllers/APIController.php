@@ -187,7 +187,7 @@ class APIController
             return;
         }
 
-        $resultado = self::obtenerCitaService()->consultarCitasCliente($_SESSION['id']);
+        $resultado = self::obtenerCitaService()->consultarCitasCliente($_SESSION['id'], false);
         $httpCode = (int)($resultado['httpCode'] ?? 200);
         unset($resultado['httpCode']);
 

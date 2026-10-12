@@ -58,3 +58,5 @@ function validar_base_datos_funcional(\mysqli $db): string
     return $dbActual;
 }
 
+
+require_once __DIR__ . "/IdentityFixture.php";

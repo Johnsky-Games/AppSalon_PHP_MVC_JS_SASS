@@ -80,6 +80,30 @@ $router->post('/profesionales/bloqueos/eliminar', [ProfesionalController::class,
 $router->get('/admin/reportes', [ReporteController::class, 'index']);
 $router->get('/admin/reportes/exportar', [ReporteController::class, 'exportarCsv']);
 
+// Plataforma integral: identidad, operación y gestión comercial.
+$router->get('/admin/equipo', [\Controllers\EquipoController::class, 'index']);
+$router->post('/admin/equipo/crear', [\Controllers\EquipoController::class, 'crear']);
+$router->post('/admin/equipo/actualizar', [\Controllers\EquipoController::class, 'actualizar']);
+$router->post('/admin/equipo/invitar', [\Controllers\EquipoController::class, 'invitar']);
+$router->get('/perfil', [\Controllers\ProfileController::class, 'index']);
+$router->post('/perfil', [\Controllers\ProfileController::class, 'index']);
+$router->get('/perfil/foto', [\Controllers\ProfileController::class, 'foto']);
+$router->post('/perfil/foto', [\Controllers\ProfileController::class, 'guardarFoto']);
+$router->get('/agenda', [\Controllers\AgendaController::class, 'index']);
+$router->get('/mis-citas', [\Controllers\AgendaController::class, 'historial']);
+$router->post('/agenda/estado', [\Controllers\AgendaController::class, 'estado']);
+$router->post('/agenda/reprogramar', [\Controllers\AgendaController::class, 'reprogramar']);
+$router->get('/admin/finanzas', [\Controllers\FinanzasController::class, 'index']);
+$router->post('/admin/finanzas', [\Controllers\FinanzasController::class, 'guardar']);
+$router->get('/admin/inventario', [\Controllers\InventarioController::class, 'index']);
+$router->post('/admin/inventario', [\Controllers\InventarioController::class, 'guardar']);
+$router->get('/admin/crecimiento', [\Controllers\CrecimientoController::class, 'index']);
+$router->post('/admin/crecimiento', [\Controllers\CrecimientoController::class, 'index']);
+$router->get('/mi-bienestar', [\Controllers\CrecimientoController::class, 'cliente']);
+$router->post('/mi-bienestar', [\Controllers\CrecimientoController::class, 'cliente']);
+$router->get('/admin/ajustes', [\Controllers\AjustesController::class, 'index']);
+$router->post('/admin/ajustes', [\Controllers\AjustesController::class, 'index']);
+
 // Comprueba y valida las rutas, que existan y les asigna las funciones del Controlador
 try {
     emitir_cabeceras_seguridad();

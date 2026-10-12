@@ -11,7 +11,7 @@ services:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
     ports:
-      - "${DB_EXTERNAL_PORT:-33060}:3306"
+      - "127.0.0.1:${DB_EXTERNAL_PORT:-33060}:3306"
     volumes:
       - appsalon_db_data:/var/lib/mysql
       - ./database/schema_base.sql:/docker-entrypoint-initdb.d/00_schema_base.sql:ro
@@ -32,7 +32,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    environment:
+    environment: &app_environment
       APP_ENV: ${APP_ENV:-production}
       APP_URL: ${APP_URL:-http://localhost:8085}
       APP_TIMEZONE: ${APP_TIMEZONE:-America/Guayaquil}
@@ -53,6 +53,24 @@ services:
       PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:-change_me_in_production_32_bytes_secret}
     ports:
       - "${WEB_EXTERNAL_PORT:-8085}:80"
+    volumes:
+      - ./:/var/www/html
+    networks:
+      - appsalon_network
+
+  notificaciones:
+    profiles: ["worker"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      <<: *app_environment
+      NOTIFICACIONES_INTERVALO_SEGUNDOS: ${NOTIFICACIONES_INTERVALO_SEGUNDOS:-60}
+    command: ["php", "scripts/notificaciones_worker.php"]
     volumes:
       - ./:/var/www/html
     networks:

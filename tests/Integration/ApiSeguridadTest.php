@@ -102,6 +102,8 @@ class ApiSeguridadTest extends TestCase
     {
         // Sesión válida pero CSRF ausente o alterado
         $_SESSION['login'] = true;
+        ActiveRecord::setDB(self::$db);
+        \Tests\ensureActiveIdentity(10, false);
         $_SESSION['id'] = 10;
         $_SESSION['csrf_token'] = 'token_sesion_valido';
         $_POST['csrf_token'] = 'token_falso_alterado';
@@ -268,6 +270,8 @@ class ApiSeguridadTest extends TestCase
     public function testGuardarRechazaReservaMismoDiaOFechaPasada(): void
     {
         $_SESSION['login'] = true;
+        ActiveRecord::setDB(self::$db);
+        \Tests\ensureActiveIdentity(1, false);
         $_SESSION['id'] = 1;
         $token = bin2hex(random_bytes(32));
         $_SESSION['csrf_token'] = $token;
@@ -297,6 +301,8 @@ class ApiSeguridadTest extends TestCase
     public function testGuardarRechazaHorarioInvalidoPasadoLimite(): void
     {
         $_SESSION['login'] = true;
+        ActiveRecord::setDB(self::$db);
+        \Tests\ensureActiveIdentity(1, false);
         $_SESSION['id'] = 1;
         $token = bin2hex(random_bytes(32));
         $_SESSION['csrf_token'] = $token;
@@ -363,6 +369,8 @@ class ApiSeguridadTest extends TestCase
         $idS = (new ServicioRepository(self::$db))->create($servicio);
 
         $_SESSION['login'] = true;
+        ActiveRecord::setDB(self::$db);
+        \Tests\ensureActiveIdentity(1, false);
         $_SESSION['id'] = 1;
         $token = bin2hex(random_bytes(32));
         $_SESSION['csrf_token'] = $token;

@@ -344,7 +344,7 @@ class PagoController
     {
         iniciar_sesion_segura();
         header('Content-Type: application/json; charset=utf-8');
-        isAdmin();
+        exigir_permiso('finanzas.gestionar');
 
         $datos = self::leerDatosEntrada();
         if (!isset($_POST['csrf_token']) && isset($datos['csrf_token']) && is_string($datos['csrf_token'])) {

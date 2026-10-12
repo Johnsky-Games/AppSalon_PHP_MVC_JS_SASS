@@ -467,7 +467,7 @@ class ProfesionalRepository
             $stmt = $db->prepare(
                 "SELECT id, fecha, hora, hora_inicio, hora_fin, duracion_total_minutos, usuarioId, profesionalId, estado
                  FROM citas
-                 WHERE profesionalId = ? AND fecha >= ? AND estado = 'confirmada'
+                 WHERE profesionalId = ? AND fecha >= ? AND estado IN ('confirmada', 'en_servicio', 'completada')
                  ORDER BY fecha ASC, COALESCE(hora_inicio, hora) ASC
                  FOR UPDATE"
             );
@@ -524,7 +524,7 @@ class ProfesionalRepository
             $stmt = $db->prepare(
                 "SELECT id, fecha, hora, hora_inicio, hora_fin, duracion_total_minutos, usuarioId, profesionalId, estado
                  FROM citas
-                 WHERE profesionalId = ? AND fecha >= ? AND fecha <= ? AND estado = 'confirmada'
+                 WHERE profesionalId = ? AND fecha >= ? AND fecha <= ? AND estado IN ('confirmada', 'en_servicio', 'completada')
                  ORDER BY fecha ASC, COALESCE(hora_inicio, hora) ASC
                  FOR UPDATE"
             );

@@ -16,7 +16,7 @@ use Repositories\NotificacionCitaRepository;
 
 /**
  * Repositorio para consultas y persistencia transaccional de `citas` y `citasservicios`,
- * incluyendo reservas con profesional bajo bloqueo pesimista InnoDB (`FOR UPDATE` / `FOR SHARE`),
+ * incluyendo reservas con profesional bajo bloqueo pesimista InnoDB (`FOR UPDATE` / `LOCK IN SHARE MODE`),
  * captura de snapshot histórico de servicios y proyección administrativa por fecha.
  */
 class CitaRepository
@@ -191,7 +191,7 @@ class CitaRepository
                 "SELECT id, fecha, hora, hora_inicio, hora_fin, duracion_total_minutos, usuarioId, profesionalId,
                         estado, cancelado_por, cancelado_at, motivo_cancelacion, estado_pago
                  FROM citas
-                 WHERE profesionalId = ? AND fecha = ? AND estado = 'confirmada'
+                 WHERE profesionalId = ? AND fecha = ? AND estado IN ('confirmada', 'en_servicio', 'completada')
                  ORDER BY COALESCE(hora_inicio, hora) ASC, id ASC"
             );
             if (!$stmt) {
@@ -495,9 +495,9 @@ class CitaRepository
      *
      * Orden consistente de bloqueo para evitar interbloqueos (deadlocks):
      * 1. `profesionales` (`FOR UPDATE`)
-     * 2. `servicios` (`FOR SHARE`, ordenados por `id ASC`)
-     * 3. `profesionales_servicios` (`FOR SHARE`)
-     * 4. `horarios_profesionales`, `descansos_profesionales`, `bloqueos_profesionales` (`FOR SHARE`)
+     * 2. `servicios` (`LOCK IN SHARE MODE`, ordenados por `id ASC`)
+     * 3. `profesionales_servicios` (`LOCK IN SHARE MODE`)
+     * 4. `horarios_profesionales`, `descansos_profesionales`, `bloqueos_profesionales` (`LOCK IN SHARE MODE`)
      * 5. `citas` del profesional en la fecha (`FOR UPDATE`)
      * 6. Escritura en `citas` y `citasservicios`
      *
@@ -575,7 +575,7 @@ class CitaRepository
                 ];
             }
 
-            // 2. Lectura actual con bloqueo compartido sobre servicios en orden ascendente de ID (`FOR SHARE`)
+            // 2. Lectura actual con bloqueo compartido sobre servicios en orden ascendente de ID (`LOCK IN SHARE MODE`)
             $serviciosPorId = $this->bloquearYCargarServiciosCatalogo($db, $idServicios);
 
             $duracionTotalMinutos = 0;
@@ -605,13 +605,13 @@ class CitaRepository
                 $duracionTotalMinutos += $duracionServicio;
             }
 
-            // 3. Lectura actual de compatibilidad profesional-servicios (`FOR SHARE`)
+            // 3. Lectura actual de compatibilidad profesional-servicios (`LOCK IN SHARE MODE`)
             $stmtRel = $db->prepare(
                 "SELECT servicioId
                  FROM profesionales_servicios
                  WHERE profesionalId = ?
                  ORDER BY servicioId ASC
-                 FOR SHARE"
+                 LOCK IN SHARE MODE"
             );
             if (!$stmtRel) {
                 throw new PersistenceException("Error al preparar verificación de servicios del profesional: " . $db->error);
@@ -649,7 +649,7 @@ class CitaRepository
                 }
             }
 
-            // 4. Lectura actual de horarios, descansos y bloqueos del profesional (`FOR SHARE`)
+            // 4. Lectura actual de horarios, descansos y bloqueos del profesional (`LOCK IN SHARE MODE`)
             $horariosDia = $this->cargarHorariosDiaForShare($db, $profesionalId, $diaSemanaIso);
             $descansosDia = $this->cargarDescansosDiaForShare($db, $profesionalId, $diaSemanaIso);
             $bloqueosFecha = $this->cargarBloqueosFechaForShare($db, $profesionalId, $fecha);
@@ -787,7 +787,7 @@ class CitaRepository
     }
 
     /**
-     * Lee y bloquea (`FOR SHARE`) los servicios solicitados en orden ascendente de ID.
+     * Lee y bloquea (`LOCK IN SHARE MODE`) los servicios solicitados en orden ascendente de ID.
      *
      * @param mysqli $db
      * @param array<int, int> $idServicios
@@ -803,7 +803,7 @@ class CitaRepository
             return [];
         }
 
-        $stmt = $db->prepare("SELECT id, nombre, precio, duracion_minutos FROM servicios WHERE id = ? LIMIT 1 FOR SHARE");
+        $stmt = $db->prepare("SELECT id, nombre, precio, duracion_minutos FROM servicios WHERE id = ? LIMIT 1 LOCK IN SHARE MODE");
         if (!$stmt) {
             throw new PersistenceException("Error al preparar bloqueo de servicio en catálogo: " . $db->error);
         }
@@ -845,7 +845,7 @@ class CitaRepository
              FROM horarios_profesionales
              WHERE profesionalId = ? AND dia_semana = ?
              ORDER BY hora_inicio ASC, id ASC
-             FOR SHARE"
+             LOCK IN SHARE MODE"
         );
         if (!$stmt) {
             throw new PersistenceException("Error al preparar lectura actual de horarios: " . $db->error);
@@ -882,7 +882,7 @@ class CitaRepository
              FROM descansos_profesionales
              WHERE profesionalId = ? AND dia_semana = ?
              ORDER BY hora_inicio ASC, id ASC
-             FOR SHARE"
+             LOCK IN SHARE MODE"
         );
         if (!$stmt) {
             throw new PersistenceException("Error al preparar lectura actual de descansos: " . $db->error);
@@ -919,7 +919,7 @@ class CitaRepository
              FROM bloqueos_profesionales
              WHERE profesionalId = ? AND fecha_inicio <= ? AND fecha_fin >= ?
              ORDER BY fecha_inicio ASC, hora_inicio ASC, id ASC
-             FOR SHARE"
+             LOCK IN SHARE MODE"
         );
         if (!$stmt) {
             throw new PersistenceException("Error al preparar lectura actual de bloqueos: " . $db->error);
@@ -955,7 +955,7 @@ class CitaRepository
             "SELECT id, fecha, hora, hora_inicio, hora_fin, duracion_total_minutos, usuarioId, profesionalId,
                     estado, cancelado_por, cancelado_at, motivo_cancelacion, estado_pago
              FROM citas
-             WHERE profesionalId = ? AND fecha = ? AND estado = 'confirmada'
+             WHERE profesionalId = ? AND fecha = ? AND estado IN ('confirmada', 'en_servicio', 'completada')
              ORDER BY COALESCE(hora_inicio, hora) ASC, id ASC
              FOR UPDATE"
         );
@@ -1338,6 +1338,10 @@ class CitaRepository
                 return true;
             }
 
+            if ($fila['estado'] !== 'confirmada') {
+                throw new PersistenceException('Esta cita ya no permite cancelación.');
+            }
+
             $actorValido = in_array($actor, ['cliente', 'admin', 'sistema'], true) ? $actor : 'cliente';
             $canceladoAt = $fechaHoraCancelacion ?? date('Y-m-d H:i:s');
             $motivoValido = ($motivo !== null && trim($motivo) !== '') ? mb_substr(trim($motivo), 0, 255) : null;
@@ -1613,5 +1617,111 @@ class CitaRepository
             throw new PersistenceException("Fallo en la capa de persistencia al consultar las citas del cliente.", 0, $e);
         }
     }
-}
+    /** Operaciones de agenda: bloqueo de profesional antes de cita, igual que una reserva. */
+    public function mutarAgenda(int $id, int $actorId, bool $gestiona, bool $profesionalPropio, string $operacion, array $datos, string $ahora): array
+    {
+        $db = $this->resolveDb();
+        $error = static fn(int $code, string $msg): array => ['resultado' => false, 'httpCode' => $code, 'error' => $msg];
+        try {
+            $previa = $this->findById($id);
+            if (!$previa) return $error(404, 'Cita no encontrada.');
+            if (!$db->begin_transaction()) throw new PersistenceException('No se pudo iniciar la operación.');
+            $prof = null;
+            if ($previa->profesionalId) {
+                $stmt = $db->prepare('SELECT id, activo, usuarioId FROM profesionales WHERE id = ? FOR UPDATE');
+                if (!$stmt) throw new PersistenceException('No se pudo bloquear el profesional.');
+                $pid = (int)$previa->profesionalId;
+                $stmt->bind_param('i', $pid); if (!$stmt->execute()) throw new PersistenceException('Fallo de escritura de agenda.');
+                $prof = $stmt->get_result()->fetch_assoc(); $stmt->close();
+            }
+            $stmt = $db->prepare('SELECT * FROM citas WHERE id = ? FOR UPDATE');
+            $stmt->bind_param('i', $id); if (!$stmt->execute()) throw new PersistenceException('Fallo de escritura de agenda.');
+            $fila = $stmt->get_result()->fetch_assoc(); $stmt->close();
+            if (!$fila) { $db->rollback(); return $error(404, 'Cita no encontrada.'); }
+            if ((string)$fila['profesionalId'] !== (string)$previa->profesionalId) { $db->rollback(); return $error(409, 'La cita cambió. Vuelve a intentarlo.'); }
+            $esCliente = (int)$fila['usuarioId'] === $actorId;
+            $esProfesional = $profesionalPropio && $prof && (int)$prof['usuarioId'] === $actorId;
+            if (!$gestiona && !(($operacion === 'reprogramar' && $esCliente) || ($operacion === 'estado' && $esProfesional))) {
+                $db->rollback(); return $error(403, 'No tienes permiso para modificar esta cita.');
+            }
+            $anterior = $fila['estado'];
+            $antes = json_encode(['estado' => $anterior, 'fecha' => $fila['fecha'], 'hora' => $fila['hora_inicio'] ?: $fila['hora']], JSON_THROW_ON_ERROR);
+            if ($operacion === 'estado') {
+                $nuevo = $datos['estado'] ?? '';
+                $transiciones = ['confirmada' => ['en_servicio', 'no_asistio'], 'en_servicio' => ['completada']];
+                if ($nuevo === $anterior) { if (!$db->commit()) throw new PersistenceException('No se pudo confirmar la operación.'); return ['resultado' => true, 'httpCode' => 200, 'mensaje' => 'Estado ya actualizado.']; }
+                if (!in_array($nuevo, $transiciones[$anterior] ?? [], true)) { $db->rollback(); return $error(409, 'Transición de estado no permitida.'); }
+                $inicio = $fila['fecha'] . ' ' . ($fila['hora_inicio'] ?: $fila['hora']);
+                if ($inicio > $ahora) { $db->rollback(); return $error(422, 'La atención todavía no ha comenzado.'); }
+                $stmt = $db->prepare('UPDATE citas SET estado = ? WHERE id = ?');
+                $stmt->bind_param('si', $nuevo, $id); if (!$stmt->execute()) throw new PersistenceException('Fallo de escritura de agenda.'); $stmt->close();
+                $despues = json_encode(['estado' => $nuevo], JSON_THROW_ON_ERROR);
+            } elseif ($operacion === 'reprogramar') {
+                if ($anterior !== 'confirmada') { $db->rollback(); return $error(409, 'Sólo se reprograman citas confirmadas.'); }
+                if (($fila['fecha'] . ' ' . ($fila['hora_inicio'] ?: $fila['hora'])) <= $ahora) { $db->rollback(); return $error(422, 'La cita ya comenzó.'); }
+                if (!$prof || (int)$prof['activo'] !== 1 || !(int)$fila['duracion_total_minutos']) { $db->rollback(); return $error(422, 'Esta cita histórica requiere gestión personalizada del salón.'); }
+                $fecha = $datos['fecha']; $hora = $datos['hora']; $dia = (int)$datos['dia'];
+                if ($fecha === $fila['fecha'] && $hora === substr($fila['hora_inicio'] ?: $fila['hora'], 0, 5)) { if (!$db->commit()) throw new PersistenceException('No se pudo confirmar la operación.'); return ['resultado' => true, 'httpCode' => 200, 'mensaje' => 'Horario ya actualizado.']; }
+                $inicioMin = $this->horaAMinutosInterno($hora);
+                $finMin = $inicioMin + (int)$fila['duracion_total_minutos'];
+                if ($finMin >= 1440 || !$this->cabeEnAgendaDelDia($inicioMin, $finMin, $dia, $fecha,
+                    $this->cargarHorariosDiaForShare($db, $pid, $dia), $this->cargarDescansosDiaForShare($db, $pid, $dia), $this->cargarBloqueosFechaForShare($db, $pid, $fecha))) {
+                    $db->rollback(); return $error(409, 'La duración histórica no cabe en el horario del profesional.');
+                }
+                foreach ($this->cargarCitasProfesionalEnFechaForUpdate($db, $pid, $fecha) as $ocupada) {
+                    if ((int)$ocupada->id === $id) continue;
+                    [$oi, $of] = $this->resolverIntervaloCitaOcupada($ocupada);
+                    if ($inicioMin < $of && $finMin > $oi) { $db->rollback(); return $error(409, 'El horario ya está ocupado.'); }
+                }
+                $fin = sprintf('%02d:%02d:00', intdiv($finMin, 60), $finMin % 60);
+                $stmt = $db->prepare('UPDATE citas SET fecha = ?, hora = ?, hora_inicio = ?, hora_fin = ? WHERE id = ?');
+                $stmt->bind_param('ssssi', $fecha, $hora, $hora, $fin, $id); if (!$stmt->execute()) throw new PersistenceException('Fallo de escritura de agenda.'); $stmt->close();
+                $despues = json_encode(['fecha' => $fecha, 'hora' => $hora, 'hora_fin' => $fin], JSON_THROW_ON_ERROR);
+                // Outbox durable dentro de la misma transacción; no se envía SMTP bajo bloqueo.
+                $stmt = $db->prepare("UPDATE notificaciones_citas SET estado = 'descartada', ultimo_error = 'Horario reemplazado por reprogramación', proximo_intento_at = NULL WHERE cita_id = ? AND tipo IN ('recordatorio', 'confirmacion') AND estado IN ('pendiente', 'fallido', 'reintentando')");
+                $stmt->bind_param('i', $id); if (!$stmt->execute()) throw new PersistenceException('No se pudo reemplazar el recordatorio.'); $stmt->close();
+                $notificaciones = new NotificacionCitaRepository($db);
+                $snapshot = $notificaciones->obtenerSnapshotCompletoCitaEnConexion($id, $db);
+                if ($snapshot) {
+                    $snapshot['tipo_notificacion'] = 'confirmacion';
+                    $snapshot['reprogramada'] = true;
+                    $snapshot['horario_anterior'] = json_decode($antes, true);
+                    $notificaciones->registrarEventoOutboxEnConexion([
+                        'cita_id' => $id, 'cita_referencia_id' => $id, 'usuario_id' => (int)$fila['usuarioId'],
+                        'tipo' => 'confirmacion', 'clave_idempotencia' => 'cita:' . $id . ':reprogramacion:' . bin2hex(random_bytes(16)),
+                        'destinatario_email' => $snapshot['cliente_email'], 'destinatario_nombre' => $snapshot['cliente_nombre'],
+                        'asunto' => 'Nuevo horario de tu cita #' . $id . ' — AppSalon', 'payload_json' => $snapshot,
+                    ], gmdate('Y-m-d H:i:s'), $db);
+                }
 
+            } else { $db->rollback(); return $error(422, 'Operación no permitida.'); }
+            $stmt = $db->prepare('INSERT INTO agenda_eventos (citaId, actorId, tipo, antes_json, despues_json, creado_en) VALUES (?, ?, ?, ?, ?, ?)');
+            $stmt->bind_param('iissss', $id, $actorId, $operacion, $antes, $despues, $ahora); if (!$stmt->execute()) throw new PersistenceException('Fallo de escritura de agenda.'); $stmt->close();
+            if (!$db->commit()) throw new PersistenceException('No se pudo confirmar la operación.');
+            return ['resultado' => true, 'httpCode' => 200, 'mensaje' => 'Cita actualizada correctamente.'];
+        } catch (\Throwable $e) {
+            try { $db->rollback(); } catch (\Throwable $rollbackError) { error_log('[Agenda] Conexión perdida durante rollback.'); }
+            error_log('[Agenda] Operación revertida: ' . $e->getMessage());
+            return $error(500, 'No se pudo actualizar la agenda. No se aplicaron cambios.');
+        }
+    }
+
+    /** Lista limitada de un período; el alcance profesional se aplica en SQL. */
+    public function listarAgenda(string $desde, string $hasta, ?int $profesionalUsuario = null): array
+    {
+        $db = $this->resolveDb();
+        $sql = "SELECT c.*, CONCAT(u.nombre, ' ', u.apellido) cliente, p.nombre profesional_nombre,
+                (SELECT GROUP_CONCAT(COALESCE(cs.nombre_servicio, s.nombre) SEPARATOR ', ') FROM citasservicios cs LEFT JOIN servicios s ON s.id = cs.servicioId WHERE cs.citaId = c.id) servicios
+                FROM citas c JOIN usuarios u ON u.id = c.usuarioId LEFT JOIN profesionales p ON p.id = c.profesionalId
+                WHERE c.fecha BETWEEN ? AND ?";
+        if ($profesionalUsuario !== null) $sql .= ' AND p.usuarioId = ?';
+        $sql .= ' ORDER BY c.fecha, c.hora, c.id LIMIT 500';
+        $stmt = $db->prepare($sql);
+        if (!$stmt) throw new PersistenceException('No se pudo consultar la agenda.');
+        if ($profesionalUsuario !== null) $stmt->bind_param('ssi', $desde, $hasta, $profesionalUsuario);
+        else $stmt->bind_param('ss', $desde, $hasta);
+        if (!$stmt->execute()) throw new PersistenceException('No se pudo consultar la agenda.');
+        $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC); $stmt->close(); return $rows;
+    }
+
+}

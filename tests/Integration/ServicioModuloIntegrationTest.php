@@ -89,6 +89,8 @@ class ServicioModuloIntegrationTest extends TestCase
     private function autenticarAdmin(): string
     {
         $_SESSION['login'] = true;
+        ActiveRecord::setDB(self::$db);
+        \Tests\ensureActiveIdentity(1, true);
         $_SESSION['id'] = 1;
         $_SESSION['nombre'] = 'Admin';
         $_SESSION['apellido'] = 'Principal';
@@ -399,28 +401,32 @@ class ServicioModuloIntegrationTest extends TestCase
 
         // 2. Cliente autenticado (no admin) es rechazado con 302 en GET y POST
         $_SESSION['login'] = true;
+        ActiveRecord::setDB(self::$db);
+        \Tests\ensureActiveIdentity(10, false);
         $_SESSION['id'] = 10;
         $_SESSION['admin'] = '0';
         $csrfCliente = bin2hex(random_bytes(32));
         $_SESSION['csrf_token'] = $csrfCliente;
 
         foreach (['index', 'crear', 'actualizar'] as $accion) {
+            ob_start();
             try {
                 ServicioController::$accion($router);
                 $this->fail("Cliente no admin debe ser rechazado en {$accion}");
             } catch (AppTerminationException $e) {
-                $this->assertSame(302, $e->getStatusCode());
-            }
+                $this->assertSame(403, $e->getStatusCode());
+            } finally { ob_end_clean(); }
         }
 
         $_SERVER['REQUEST_METHOD'] = 'POST';
         $_POST = ['csrf_token' => $csrfCliente, 'id' => '1'];
+        ob_start();
         try {
             ServicioController::eliminar($router);
             $this->fail('Cliente no admin debe ser rechazado en eliminar');
         } catch (AppTerminationException $e) {
-            $this->assertSame(302, $e->getStatusCode());
-        }
+            $this->assertSame(403, $e->getStatusCode());
+        } finally { ob_end_clean(); }
 
         // 3. Administrador sin CSRF válido es rechazado con 403 en POST crear, actualizar y eliminar
         $this->autenticarAdmin();

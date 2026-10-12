@@ -54,7 +54,7 @@ class AdminReporteController
     public static function index(Router $router): void
     {
         iniciar_sesion_segura();
-        isAdmin();
+        exigir_permiso('reportes.ver');
 
         $resultado = self::obtenerReporteService()->consultarReporte($_GET);
         $httpCode = (int)($resultado['http_code'] ?? 200);
@@ -81,7 +81,7 @@ class AdminReporteController
     public static function exportarCsv(Router $router): void
     {
         iniciar_sesion_segura();
-        isAdmin();
+        exigir_permiso('reportes.ver');
 
         $servicio = self::obtenerReporteService();
         $resultado = $servicio->consultarReporte($_GET);

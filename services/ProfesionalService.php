@@ -1354,6 +1354,8 @@ class ProfesionalService
 
         try {
             $activos = $this->profesionalRepository->findAll(true);
+            $dbFotos = $this->profesionalRepository->getDb();
+            $fotosPublicas = $dbFotos instanceof \mysqli ? (new \Repositories\ProfileRepository($dbFotos))->fotosProfesionalesPublicas() : [];
             $profesionales = [];
             $compatibles = [];
 
@@ -1376,6 +1378,7 @@ class ProfesionalService
                     'servicios' => $serviciosProf,
                     'servicios_nombres' => array_values($prof->serviciosNombres),
                     'compatible' => $esCompatible,
+                    'foto_url' => $fotosPublicas[(int)$prof->id] ?? '',
                 ];
 
                 $profesionales[] = $item;

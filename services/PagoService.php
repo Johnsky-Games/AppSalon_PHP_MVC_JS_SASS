@@ -183,6 +183,12 @@ class PagoService
                 ];
             }
 
+            if (in_array($cita['estado'] ?? 'confirmada', ['cancelada', 'no_asistio'], true)) {
+                $this->pagoRepository->rollback();
+                return ['status' => self::STATUS_CONFLICT, 'http_code' => 409,
+                    'errores' => ['No se puede iniciar un cobro de una cita cancelada o no asistida.']];
+            }
+
             $montoServidor = round((float)$cita['monto_servidor'], 2);
             if ($montoServidor <= 0) {
                 $this->pagoRepository->rollback();
@@ -480,6 +486,11 @@ class PagoService
                     'http_code' => 404,
                     'errores' => ['No existe un registro de pago para la referencia o transacción indicada.'],
                 ];
+            }
+
+            if ($pago->proveedor === 'manual') {
+                $this->pagoRepository->rollback();
+                return ['status' => self::STATUS_CONFLICT, 'http_code' => 409, 'errores' => ['Los cobros manuales no se modifican mediante webhooks de simulación.']];
             }
 
             // REGLA TERMINAL: Una vez en 'reembolsado', el cobro es terminal.
@@ -833,6 +844,11 @@ class PagoService
                     'codigo_error' => 'MONTO_REEMBOLSO_INVALIDO',
                     'errores' => ['El monto a reembolsar es inválido o supera el monto pagado.'],
                 ];
+            }
+
+            if ($pago->proveedor === 'manual') {
+                $this->pagoRepository->rollback();
+                return ['status' => self::STATUS_CONFLICT, 'http_code' => 409, 'errores' => ['Registre la devolución real desde Finanzas; la pasarela simulada no reembolsa cobros manuales.']];
             }
 
             $refExterna = $pago->transaccion_externa_id ?? $pago->referencia_pago;

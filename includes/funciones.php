@@ -104,6 +104,16 @@ function es_peticion_json(): bool
 function isAuth(): void
 {
     iniciar_sesion_segura();
+    if (($_SESSION['login'] ?? false) === true) {
+        $contexto = (new \Services\AuthorizationService())->contexto((int)($_SESSION['id'] ?? 0));
+        if (!$contexto || (int)$contexto['activo'] !== 1 || (int)$contexto['confirmado'] !== 1 ||
+            (isset($_SESSION['version_sesion']) && (int)$contexto['version_sesion'] !== (int)$_SESSION['version_sesion'])) {
+            $_SESSION = [];
+        } else {
+            // Una sola adopción para cuentas activas tras actualizar una instalación anterior.
+            $_SESSION['version_sesion'] = (int)$contexto['version_sesion'];
+        }
+    }
     if (!isset($_SESSION['login']) || $_SESSION['login'] !== true) {
         if (es_peticion_json()) {
             http_response_code(401);
@@ -128,7 +138,8 @@ function esUltimo(string $actual, string $proximo): bool
 function isAdmin(): void
 {
     iniciar_sesion_segura();
-    if (!isset($_SESSION['admin']) || (string)$_SESSION['admin'] !== "1") {
+    isAuth();
+    if (!puede('equipo.gestionar') && rol_actual() !== 'gerente') {
         if (es_peticion_json()) {
             http_response_code(403);
             header('Content-Type: application/json; charset=utf-8');
@@ -188,4 +199,40 @@ function exigir_csrf(): void
         }
         detener_ejecucion(403);
     }
+}
+
+/** Revalida acceso usando roles del servidor; las sesiones heredadas no elevan privilegios. */
+function puede(string $permiso): bool
+{
+    iniciar_sesion_segura();
+    if (($_SESSION['login'] ?? false) !== true) { return false; }
+    $service = new \Services\AuthorizationService();
+    $c = $service->contexto((int)($_SESSION['id'] ?? 0));
+    if (!$c || (int)$c['activo'] !== 1 || (int)$c['confirmado'] !== 1) { return false; }
+    if (isset($_SESSION['version_sesion']) && (int)$c['version_sesion'] !== (int)$_SESSION['version_sesion']) { return false; }
+    return in_array($permiso, \Services\AuthorizationService::ROLES[$c['rol']] ?? [], true);
+}
+
+function exigir_permiso(string $permiso): void
+{
+    isAuth();
+    if (puede($permiso)) { return; }
+    http_response_code(403);
+    if (es_peticion_json()) {
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['resultado' => false, 'error' => 'No tienes permiso para esta operación']);
+    } else { echo 'Error 403: No tienes permiso para esta operación.'; }
+    detener_ejecucion(403);
+}
+
+function rol_actual(): string
+{
+    $c = (new \Services\AuthorizationService())->contexto((int)($_SESSION['id'] ?? 0));
+    return $c && (int)$c['activo'] === 1 ? (string)$c['rol'] : 'cliente';
+}
+
+function profesional_actual_id(): ?int
+{
+    $c = (new \Services\AuthorizationService())->contexto((int)($_SESSION['id'] ?? 0));
+    return $c && (int)$c['activo'] === 1 && $c['profesional_id'] !== null ? (int)$c['profesional_id'] : null;
 }

@@ -98,6 +98,8 @@ class ProfesionalAgendaIntegrationTest extends TestCase
     private function autenticarAdmin(): string
     {
         $_SESSION['login'] = true;
+        ActiveRecord::setDB(self::$db);
+        \Tests\ensureActiveIdentity(1, true);
         $_SESSION['id'] = 1;
         $_SESSION['nombre'] = 'Admin';
         $_SESSION['apellido'] = 'Principal';
@@ -125,6 +127,8 @@ class ProfesionalAgendaIntegrationTest extends TestCase
 
         // 2. Cliente autenticado sin rol admin -> 302 a /
         $_SESSION['login'] = true;
+        ActiveRecord::setDB(self::$db);
+        \Tests\ensureActiveIdentity(15, false);
         $_SESSION['id'] = 15;
         $_SESSION['admin'] = '0';
         $csrfCliente = bin2hex(random_bytes(32));
@@ -133,12 +137,13 @@ class ProfesionalAgendaIntegrationTest extends TestCase
         $_SERVER['REQUEST_METHOD'] = 'POST';
         $_POST = ['csrf_token' => $csrfCliente, 'nombre' => 'Intento Cliente'];
         foreach (['crear', 'cambiarEstado', 'horarios', 'crearDescanso', 'crearBloqueo'] as $accionPost) {
+            ob_start();
             try {
                 ProfesionalController::$accionPost($router);
                 $this->fail("Cliente no admin debe ser rechazado en {$accionPost}");
             } catch (AppTerminationException $e) {
-                $this->assertSame(302, $e->getStatusCode());
-            }
+                $this->assertSame(403, $e->getStatusCode());
+            } finally { ob_end_clean(); }
         }
 
         // 3. Administrador con CSRF inválido -> 403
