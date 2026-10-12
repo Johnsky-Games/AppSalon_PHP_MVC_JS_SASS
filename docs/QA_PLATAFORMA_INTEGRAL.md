@@ -1,10 +1,10 @@
 # QA y registro de riesgos de la plataforma integral
 
-Fecha: 2026-10-12. Estado: integración en curso; este documento no atribuye éxito a pruebas no ejecutadas.
+Fecha: 2026-10-12. Estado: validación integrada aprobada para el código indicado, con límites comerciales documentados.
 
 ## Entorno y evidencia
 
-Se preparó un runtime local PHP8.3.6/MariaDB10.11 para pruebas preliminares. Docker y Chrome no están disponibles localmente. La validación definitiva PHP8.2/MySQL8/Apache y el navegador deben ejecutarse en GitHub Actions u otro entorno reproducible. Los resultados históricos de 218 pruebas pertenecen a la base anterior y no certifican los módulos nuevos.
+Se preparó un runtime local PHP8.3.6/MariaDB10.11 para pruebas preliminares. Docker y Chrome no están disponibles localmente. La validación definitiva PHP 8.2/MySQL 8/Apache y Chrome se ejecutó y aprobó en [GitHub Actions](https://github.com/Johnsky-Games/AppSalon_PHP_MVC_JS_SASS/actions/runs/38318865612). Los resultados históricos de 218 pruebas pertenecen a la base anterior y no certifican los módulos nuevos.
 
 Se ampliaron pruebas existentes para comparar el conjunto completo de tablas entre instalación fresca y actualización; validar historial exacto de migraciones; contrastar columnas, índices, motores y reglas FK; y verificar que manifiesto y restauración incluyan todas las tablas, manteniendo los controles históricos de datos.
 
@@ -20,7 +20,7 @@ Se ampliaron pruebas existentes para comparar el conjunto completo de tablas ent
 | Agenda | Cancelación exacto inicio; estado inválido; dos reservas/reprogramaciones mismo hueco | Política única; una ocupación; rollback conserva original |
 | Cobros | Cita cancelada inicia pago; idempotencia repetida; callback tardío | Sin gateway nuevo; trazabilidad y conciliación |
 | Inventario | Salida supera stock; salidas simultáneas; misma clave distinto contenido | Saldo no negativo, conflicto y movimiento único |
-| Caja | Registrar efectivo; repetir; cierre; usuario no autorizado | Balance reconciliable y auditoría |
+| Caja | Registrar efectivo; repetir; filtrar período; usuario no autorizado | Balance reconciliable y auditoría |
 | Consentimiento | Opt-in seguido opt-out desde perfil | Fuente única; marketing excluye inmediatamente |
 | Formularios | Pregunta inexistente, respuesta fuera rango, HTML, ID ajeno | Validación servidor y protección de respuestas |
 | Fidelidad | Repetir devengo; cita cancelada; saldo insuficiente | Libro trazable; sin duplicado ni saldo negativo |
@@ -43,9 +43,17 @@ Sólo marcar lista cuando: código revisado y SHA fijado; migraciones y respaldo
 
 ## Evidencia preliminar ejecutada
 
-- `MigrationTest`: 8 pruebas, 412 aserciones, código0 (PHP8.3/MariaDB10.11), incluyendo migraciones001..015.
-- Filtro `ReportesFinancierosIntegrationTest|Fase6BReportesIntegrationTest|BackupRestoreIntegrationTest|BackupRestoreIntegridadIntegrationTest`: 22 pruebas, 370 aserciones, código0 (PHP8.3/MariaDB10.11).
-- `SeguridadFrontendIntegrationTest`: 5 pruebas, 229 aserciones, código0 en el mismo runtime.
+- `MigrationTest`: 8 pruebas, 412 aserciones, código 0 (PHP8.3/MariaDB10.11), incluyendo migraciones001..015.
+- Filtro `ReportesFinancierosIntegrationTest|Fase6BReportesIntegrationTest|BackupRestoreIntegrationTest|BackupRestoreIntegridadIntegrationTest`: 22 pruebas, 370 aserciones, código 0 (PHP8.3/MariaDB10.11).
+- `SeguridadFrontendIntegrationTest`: 5 pruebas, 229 aserciones, código 0 en el mismo runtime.
 - `node --check tests/platform_e2e_checks.js` y `node --check tests/browser_e2e_test.js`: pasan.
 - `bash -n tests/run_browser_e2e.sh`: pasa.
-- E2E añadido: módulos administrativos en cuatro anchos, modales con persistenciaSQL, uploadHTTP reencodificado, privacidad/IDOR, matriz de recepción y revocación. La ejecución real está pendiente de CI en este registro preliminar.
+- E2E añadido: módulos administrativos en cuatro anchos, modales con persistenciaSQL, uploadHTTP reencodificado, privacidad/IDOR, matriz de recepción y revocación. Los recorridos se ejecutaron y aprobaron en la validación definitiva.
+
+## Resultado definitivo
+
+Código `b1605d216940b76bd2c779f637d5084f78614450`: [CI aprobado](https://github.com/Johnsky-Games/AppSalon_PHP_MVC_JS_SASS/actions/runs/38318865612). 283 pruebas PHP / 3371 aserciones, 27 comprobaciones Chrome, 3 escenarios Node y respaldo/restauración de30 tablas. Se validaron también el menú móvil y los formularios con CSRF, incluyendo contenido literal escapado y acceso privado.
+
+Los riesgos de consentimiento duplicado, estados de ocupación, privilegios cacheados y fixtures ficticios se corrigieron. Las APIs sensibles revalidan sesión/rol/version y las fotos privadas no se divulgan a otros clientes. No se afirma una prueba de deadlock financiero inducido entre dos procesos: el retry se probó mediante rollback real y errores controlados; el último propietario sí tiene prueba concurrente entre dos procesos.
+
+El saldo de movimientos no es un arqueo físico; pagos externos, facturación fiscal, nómina y despliegue público siguen fuera del alcance operativo de esta entrega.

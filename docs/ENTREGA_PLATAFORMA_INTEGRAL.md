@@ -29,10 +29,14 @@ docker compose --env-file includes/.env -p appsalon-validacion up -d --build
 Regenerar el autoload mediante la imagen oficial de Composer (no viene dentro de la imagen PHP):
 
 ```bash
-MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd):/app" -w /app composer:2 composer install --no-interaction
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/app" -w /app composer:2 composer install --no-interaction
+mkdir -p storage/backups
+docker compose --env-file includes/.env -p appsalon-validacion exec -T web php scripts/backup_db.php --db=appsalon_mvc --output=storage/backups/plataforma-$(date +%Y%m%d-%H%M%S).sql.gz --gzip
 docker compose --env-file includes/.env -p appsalon-validacion exec -T web php database/migrador.php up
 docker compose --env-file includes/.env -p appsalon-validacion exec -T web php database/migrador.php status
 ```
+
+El respaldo se crea antes de modificar el esquema. Si el respaldo falla, resolver ese error antes de aplicar migraciones. `pwd -W` en el comando de Composer corresponde a Git Bash en Windows.
 
 URL: la indicada por `APP_URL`, habitualmente http://localhost:8085. Mantener el `DB_PASS` actual: cambiar `.env` no cambia la contraseña de un volumen MySQL existente. La plantilla `includes/.env.example` es para instalaciones nuevas; no sustituye credenciales existentes.
 
@@ -58,6 +62,16 @@ Docker Compose conserva un entorno local de desarrollo con montaje de código y 
 
 `migrador.php down` revierte **todas** las migraciones aplicadas; no utilizarlo para regresar una única versión ni contra una base con datos que se necesiten conservar.
 
-## Evidencia
+## Evidencia definitiva
 
-La compilación nativa ya no depende de comandos `.bin` de Gulp: funciona mediante Node y evita el problema de rutas Windows con `&`. Auditoría NPM del lockfile actualizado: cero vulnerabilidades reportadas. Suite preliminar PHP8.3/MariaDB: 263 pruebas, 3241 aserciones en orden aleatorio. La evidencia definitiva de PHP8.2/MySQL8 y navegador se adjunta al commit validado en GitHub Actions.
+Código validado: `b1605d216940b76bd2c779f637d5084f78614450`. [GitHub Actions aprobado](https://github.com/Johnsky-Games/AppSalon_PHP_MVC_JS_SASS/actions/runs/38318865612).
+
+- PHP 8.2/MySQL 8: 283 pruebas, 3371 aserciones, orden aleatorio, código 0.
+- Apache/Chrome: 27 recorridos aprobados; 44 capturas de interfaz; cero errores de consola y peticiones fallidas.
+- Tres escenarios Node de error de red, HTTP500 y JSON incompatible aprobados.
+- Migraciones001–015 y respaldo/restauración de las 30 tablas aprobados con verificación SHA-256.
+- Auditoría NPM del lockfile actualizado: cero vulnerabilidades reportadas.
+
+El saldo del libro de movimientos incluye efectivo y transferencias; no sustituye un arqueo físico de caja. La preferencia de contacto personal del perfil queda registrada para recepción y no crea envíos automáticos. Los recordatorios, consentimientos promocionales y fotos públicas tienen controles operativos propios.
+
+Evidencia estructurada: `docs/evidencias/PLATAFORMA_INTEGRAL_2026-10-12.json`. La documentación posterior no cambia el código validado.
