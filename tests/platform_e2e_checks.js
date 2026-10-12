@@ -105,8 +105,13 @@ module.exports = async function verifyPlatform({ browser, baseUrl, recordTest, s
         const bytes = await response.buffer();
         if (response.status() !== 200 || !response.headers()['content-type'].startsWith('image/jpeg') || bytes[0] !== 255 || bytes[1] !== 216) throw new Error('Uploaded PNG must be decoded and reencoded as JPEG.');
         const other = await login('ajeno@platform.test');
-        response = await other.goto(`${baseUrl}/perfil/foto?id=${profileId}`);
-        if (response.status() !== 404) throw new Error('Another client must not read a private photo.');
+        // Chrome can turn an empty 404 document into ERR_HTTP_RESPONSE_CODE_FAILURE.
+        // Fetch checks the real authenticated HTTP denial without navigating to an error page.
+        const deniedPhoto = await other.evaluate(async url => {
+            const response = await fetch(url, { credentials: 'same-origin' });
+            return { status: response.status, size: (await response.arrayBuffer()).byteLength };
+        }, `${baseUrl}/perfil/foto?id=${profileId}`);
+        if (deniedPhoto.status !== 404 || deniedPhoto.size !== 0) throw new Error('Another client must not receive a private photo or its content.');
         response = await other.goto(`${baseUrl}/perfil?id=${profileId}`);
         if (response.status() !== 403) throw new Error('Another client must not read private profile.');
         response = await other.goto(`${baseUrl}/admin/equipo`);
