@@ -1,3 +1,21 @@
+# Entrega más reciente — interfaz moderna
+
+Código validado: `740d41ff73ed42a2717fd5540b8f544fbe45c015` en `feature/interfaz-moderna`, partiendo del cierre de correcciones `50a015a`.
+
+- Diseño con fondos claros, verde petróleo, navy y coral; navegación lateral en escritorio y visible en móvil; formularios, tarjetas, botones y transiciones coherentes.
+- Acceso editorial, contraseña visible/oculta, reserva con subtotal estimado/duración y profesional seleccionado, catálogos buscables y perfiles con avatares SVG ilustrados genéricos.
+- Dashboard y gráficas con datos reales del filtro: importes separados de cobros, signos negativos conservados, ocupación y servicios; tablas continúan disponibles.
+- SweetAlert2 y Toastify locales con licencias; avisos seguros de texto literal, región aria-live, foco visible, skiplink y movimiento reducido.
+- El catálogo finaliza su estado de carga y ofrece reintento si falla red, HTTP o contrato JSON. Se corrigió el arnés E2E para aislar días de agenda de las pruebas de franjas frente a fechas de reserva dinámicas.
+- [CI aprobada #38251198100](https://github.com/Johnsky-Games/AppSalon_PHP_MVC_JS_SASS/actions/runs/38251198100): build limpio, linter PHP, migraciones 001–009, Apache oficial, **218 pruebas / 2727 aserciones**, **21 comprobaciones E2E**, **3 escenarios de fallo de catálogo** y backup/restore SHA-256.
+- UI-01 verifica geometría sin overflow del documento en login, servicios, reserva y reportes a **320/390/768/1440px** (16 casos y capturas); UI-02 verifica controles de accesibilidad. Se revisaron capturas reales en móvil y escritorio. La ejecución previa sobre `83341e1` también aprobó la suite completa y registró cero errores de consola y cero peticiones fallidas.
+- Colaboración: agentes separados para estilos/layout, administración/reportes y revisión E2E; integración y cliente/notificaciones a cargo del coordinador.
+- Guía de actualización y alcance en `docs/GUIA_INTERFAZ.md`. No se añaden migraciones, fotografías personales ni proveedor de cobros real. No se modificaron `main` ni la instalación Windows del usuario.
+
+Los commits documentales posteriores no alteran el código validado.
+
+## Registro técnico anterior
+
 # Estado actual — correcciones de Codex (2026-10-11)
 
 Código publicado: `85fe920bc87032b778b6f89e6f1825d75b4ccd34` en `feature/correcciones-auditoria-integral`.
