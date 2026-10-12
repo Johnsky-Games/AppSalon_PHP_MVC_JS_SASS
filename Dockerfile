@@ -1,7 +1,10 @@
 FROM php:8.2-apache
 
 # Instalar dependencias del sistema y extensiones de PHP requeridas (mysqli, pdo_mysql y soporte mbstring)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# HTTPS evita bloqueos de repositorios HTTP sin desactivar la verificación de firmas.
+RUN find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
+        -exec sed -i 's|http://deb.debian.org|https://deb.debian.org|g;s|http://security.debian.org|https://security.debian.org|g' {} + \
+    && apt-get update && apt-get install -y --no-install-recommends \
         libonig-dev \
     && docker-php-ext-install mysqli pdo_mysql mbstring \
     && rm -rf /var/lib/apt/lists/* \
