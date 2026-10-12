@@ -102,6 +102,14 @@ function calcularFechasPrueba() {
 
 async function runBrowserTests() {
     const { weekendDate, validDate } = calcularFechasPrueba();
+    const bookingDay = new Date(`${validDate}T00:00:00Z`).getUTCDay();
+    if (!Number.isInteger(bookingDay) || bookingDay < 1 || bookingDay > 5) {
+        throw new Error(`La fecha de reserva de pruebas debe ser un día laborable válido: ${validDate}`);
+    }
+    // The split-shift regression must never remove capacity needed by the
+    // subsequent availability/booking checks, regardless of today's weekday.
+    const splitDay = bookingDay === 2 ? 3 : 2;
+    const weekdays = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 
     console.log('======================================================================');
     console.log('SUITE DE PRUEBAS EN NAVEGADOR WEB (JAVASCRIPT HABILITADO) — APPSALON');
@@ -268,6 +276,26 @@ async function runBrowserTests() {
         ]);
 
         await verifyResponsivePage('servicios-admin');
+        const serviceCountBeforeFilter = await page.$$eval('#catalogo-servicios [data-filter-item]', items => items.length);
+        await page.type('#buscar-servicios', 'Servicio sin coincidencias ui-e2e');
+        const filteredServices = await page.evaluate(() => ({
+            visible: [...document.querySelectorAll('#catalogo-servicios [data-filter-item]')].filter(item => !item.hidden).length,
+            emptyShown: document.querySelector('[data-filter-empty="#catalogo-servicios"]')?.hidden === false
+        }));
+        if (filteredServices.visible !== 0 || !filteredServices.emptyShown) {
+            throw new Error(`El buscador no mostró el estado vacío sin coincidencias: ${JSON.stringify(filteredServices)}`);
+        }
+        await page.$eval('#buscar-servicios', input => {
+            input.value = '';
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+        const restoredServices = await page.evaluate(() => ({
+            visible: [...document.querySelectorAll('#catalogo-servicios [data-filter-item]')].filter(item => !item.hidden).length,
+            emptyHidden: document.querySelector('[data-filter-empty="#catalogo-servicios"]')?.hidden === true
+        }));
+        if (restoredServices.visible !== serviceCountBeforeFilter || !restoredServices.emptyHidden) {
+            throw new Error(`Limpiar el buscador no restauró el catálogo completo: ${JSON.stringify(restoredServices)}`);
+        }
 
         const itemsIniciales = await page.$$('ul.servicios li');
         if (itemsIniciales.length !== 3) {
@@ -427,12 +455,12 @@ async function runBrowserTests() {
         const hrefHorarios = await page.$eval('ul.profesionales-lista a[href*="/profesionales/horarios"]', el => el.getAttribute('href'));
         await page.goto(`${BASE_URL}${hrefHorarios}`, { waitUntil: 'networkidle0' });
 
-        // Probar rechazo de horario invertido en Lunes (18:00 a 09:00)
-        await page.evaluate(() => {
-            document.querySelector('#horario_activo_1').checked = true;
-            document.querySelector('#horario_inicio_1').value = '18:00';
-            document.querySelector('#horario_fin_1').value = '09:00';
-        });
+        // Probar rechazo de horario invertido en el día de la reserva (18:00 a 09:00)
+        await page.evaluate(day => {
+            document.querySelector(`#horario_activo_${day}`).checked = true;
+            document.querySelector(`#horario_inicio_${day}`).value = '18:00';
+            document.querySelector(`#horario_fin_${day}`).value = '09:00';
+        }, bookingDay);
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'networkidle0' }),
             page.click('#form-horarios-semanales input[type="submit"]')
@@ -442,19 +470,19 @@ async function runBrowserTests() {
             throw new Error(`Se esperaba alerta de horario invertido, obtenido: ${alertaHorarioInvertido}`);
         }
 
-        // Configurar horario válido en Lunes (09:00 a 18:00)
-        await page.evaluate(() => {
-            document.querySelector('#horario_activo_1').checked = true;
-            document.querySelector('#horario_inicio_1').value = '09:00';
-            document.querySelector('#horario_fin_1').value = '18:00';
-        });
+        // Configurar horario válido en el día de la reserva (09:00 a 18:00)
+        await page.evaluate(day => {
+            document.querySelector(`#horario_activo_${day}`).checked = true;
+            document.querySelector(`#horario_inicio_${day}`).value = '09:00';
+            document.querySelector(`#horario_fin_${day}`).value = '18:00';
+        }, bookingDay);
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'networkidle0' }),
             page.click('#form-horarios-semanales input[type="submit"]')
         ]);
 
-        // Añadir descanso en Lunes (13:00 a 14:00)
-        await page.select('#descanso_dia_semana', '1');
+        // Añadir descanso en el día de la reserva (13:00 a 14:00)
+        await page.select('#descanso_dia_semana', String(bookingDay));
         await page.evaluate(() => {
             document.querySelector('#descanso_hora_inicio').value = '13:00';
             document.querySelector('#descanso_hora_fin').value = '14:00';
@@ -505,34 +533,34 @@ async function runBrowserTests() {
         }
 
         recordTest('PROF-01', 'Gestión de profesionales, servicios asociados, horarios, descansos, bloqueos y desactivación/reactivación', true,
-            `'Sofía Andrade' creada con servicios, horario Lunes 09:00-18:00, descanso 13:00-14:00, bloqueo ${validDate} 15:00-16:30 y ciclo Inactivo/Activo verificado.`);
+            `'Sofía Andrade' creada con servicios, horario ${weekdays[bookingDay]} 09:00-18:00, descanso 13:00-14:00, bloqueo ${validDate} 15:00-16:30 y ciclo Inactivo/Activo verificado.`);
 
         // ------------------------------------------------------------------
         // PROF-02: Múltiples franjas por día, guardado sin cambios y retirada explícita
         // ------------------------------------------------------------------
         await page.goto(`${BASE_URL}${hrefHorarios}`, { waitUntil: 'networkidle0' });
 
-        // 1. Configurar dos franjas el mismo día en Martes (dia=2: 08:00-12:00 y 14:00-18:00)
-        await page.evaluate(() => {
-            document.querySelector('#horario_activo_2').checked = true;
-            document.querySelector('#horario_inicio_2').value = '08:00';
-            document.querySelector('#horario_fin_2').value = '12:00';
-        });
-        await page.click('.btn-agregar-franja[data-dia="2"]');
-        await page.evaluate(() => {
-            document.querySelector('#horario_activo_2_1').checked = true;
-            document.querySelector('#horario_inicio_2_1').value = '14:00';
-            document.querySelector('#horario_fin_2_1').value = '18:00';
-        });
+        // 1. Configurar dos franjas el mismo día en un día distinto al de la reserva (08:00-12:00 y 14:00-18:00)
+        await page.evaluate(day => {
+            document.querySelector(`#horario_activo_${day}`).checked = true;
+            document.querySelector(`#horario_inicio_${day}`).value = '08:00';
+            document.querySelector(`#horario_fin_${day}`).value = '12:00';
+        }, splitDay);
+        await page.click(`.btn-agregar-franja[data-dia="${splitDay}"]`);
+        await page.evaluate(day => {
+            document.querySelector(`#horario_activo_${day}_1`).checked = true;
+            document.querySelector(`#horario_inicio_${day}_1`).value = '14:00';
+            document.querySelector(`#horario_fin_${day}_1`).value = '18:00';
+        }, splitDay);
 
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'networkidle0' }),
             page.click('#form-horarios-semanales input[type="submit"]')
         ]);
 
-        // 2. Cargar vista con las dos franjas del Martes y comprobar que ambas están renderizadas
-        const franjasCargadasMartes = await page.$$eval(
-            '.horario-dia-franjas[data-dia-contenedor="2"] .horario-franja-fila',
+        // 2. Cargar vista con las dos franjas del día de prueba independiente y comprobar que ambas están renderizadas
+        const franjasCargadasDiaIndependiente = await page.$$eval(
+            `.horario-dia-franjas[data-dia-contenedor="${splitDay}"] .horario-franja-fila`,
             filas => filas.map(f => ({
                 activo: f.querySelector('.horario-activo-check').checked,
                 inicio: f.querySelector('.horario-inicio-input').value,
@@ -540,11 +568,11 @@ async function runBrowserTests() {
             }))
         );
         if (
-            franjasCargadasMartes.length !== 2 ||
-            !franjasCargadasMartes[0].activo || franjasCargadasMartes[0].inicio !== '08:00' || franjasCargadasMartes[0].fin !== '12:00' ||
-            !franjasCargadasMartes[1].activo || franjasCargadasMartes[1].inicio !== '14:00' || franjasCargadasMartes[1].fin !== '18:00'
+            franjasCargadasDiaIndependiente.length !== 2 ||
+            !franjasCargadasDiaIndependiente[0].activo || franjasCargadasDiaIndependiente[0].inicio !== '08:00' || franjasCargadasDiaIndependiente[0].fin !== '12:00' ||
+            !franjasCargadasDiaIndependiente[1].activo || franjasCargadasDiaIndependiente[1].inicio !== '14:00' || franjasCargadasDiaIndependiente[1].fin !== '18:00'
         ) {
-            throw new Error(`La vista no conservó las 2 franjas del Martes al cargar: ${JSON.stringify(franjasCargadasMartes)}`);
+            throw new Error(`La vista no conservó las 2 franjas del día de prueba independiente al cargar: ${JSON.stringify(franjasCargadasDiaIndependiente)}`);
         }
 
         // 3. Guardar SIN CAMBIOS y verificar que ambas franjas se preservan en MySQL y en el DOM
@@ -553,19 +581,19 @@ async function runBrowserTests() {
             page.click('#form-horarios-semanales input[type="submit"]')
         ]);
 
-        const mysqlMartesTrasGuardarSinCambios = consultarHorariosEnMySql(2);
-        if (mysqlMartesTrasGuardarSinCambios !== null) {
+        const mysqlDiaIndependienteTrasGuardarSinCambios = consultarHorariosEnMySql(splitDay);
+        if (mysqlDiaIndependienteTrasGuardarSinCambios !== null) {
             if (
-                mysqlMartesTrasGuardarSinCambios.length !== 2 ||
-                mysqlMartesTrasGuardarSinCambios[0] !== '08:00:00-12:00:00' ||
-                mysqlMartesTrasGuardarSinCambios[1] !== '14:00:00-18:00:00'
+                mysqlDiaIndependienteTrasGuardarSinCambios.length !== 2 ||
+                mysqlDiaIndependienteTrasGuardarSinCambios[0] !== '08:00:00-12:00:00' ||
+                mysqlDiaIndependienteTrasGuardarSinCambios[1] !== '14:00:00-18:00:00'
             ) {
-                throw new Error(`En MySQL no se preservaron ambas franjas tras guardar sin cambios: ${JSON.stringify(mysqlMartesTrasGuardarSinCambios)}`);
+                throw new Error(`En MySQL no se preservaron ambas franjas tras guardar sin cambios: ${JSON.stringify(mysqlDiaIndependienteTrasGuardarSinCambios)}`);
             }
         }
 
         const franjasTrasGuardarSinCambios = await page.$$eval(
-            '.horario-dia-franjas[data-dia-contenedor="2"] .horario-franja-fila',
+            `.horario-dia-franjas[data-dia-contenedor="${splitDay}"] .horario-franja-fila`,
             filas => filas.map(f => `${f.querySelector('.horario-inicio-input').value}-${f.querySelector('.horario-fin-input').value}`)
         );
         if (
@@ -576,25 +604,25 @@ async function runBrowserTests() {
             throw new Error(`El DOM no preservó ambas franjas tras guardar sin cambios: ${JSON.stringify(franjasTrasGuardarSinCambios)}`);
         }
 
-        // 4. Retirada explícita de la primera franja del Martes (08:00-12:00) y comprobar que elimina únicamente la franja elegida
-        await page.click('.horario-dia-franjas[data-dia-contenedor="2"] .horario-franja-fila[data-franja-index="0"] .btn-retirar-franja');
+        // 4. Retirada explícita de la primera franja del día de prueba independiente (08:00-12:00) y comprobar que elimina únicamente la franja elegida
+        await page.click(`.horario-dia-franjas[data-dia-contenedor="${splitDay}"] .horario-franja-fila[data-franja-index="0"] .btn-retirar-franja`);
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'networkidle0' }),
             page.click('#form-horarios-semanales input[type="submit"]')
         ]);
 
-        const mysqlMartesTrasRetirar = consultarHorariosEnMySql(2);
-        if (mysqlMartesTrasRetirar !== null) {
+        const mysqlDiaIndependienteTrasRetirar = consultarHorariosEnMySql(splitDay);
+        if (mysqlDiaIndependienteTrasRetirar !== null) {
             if (
-                mysqlMartesTrasRetirar.length !== 1 ||
-                mysqlMartesTrasRetirar[0] !== '14:00:00-18:00:00'
+                mysqlDiaIndependienteTrasRetirar.length !== 1 ||
+                mysqlDiaIndependienteTrasRetirar[0] !== '14:00:00-18:00:00'
             ) {
-                throw new Error(`En MySQL la retirada explícita no dejó únicamente la franja 14:00-18:00: ${JSON.stringify(mysqlMartesTrasRetirar)}`);
+                throw new Error(`En MySQL la retirada explícita no dejó únicamente la franja 14:00-18:00: ${JSON.stringify(mysqlDiaIndependienteTrasRetirar)}`);
             }
         }
 
         const franjasTrasRetirar = await page.$$eval(
-            '.horario-dia-franjas[data-dia-contenedor="2"] .horario-franja-fila',
+            `.horario-dia-franjas[data-dia-contenedor="${splitDay}"] .horario-franja-fila`,
             filas => filas.map(f => ({
                 activo: f.querySelector('.horario-activo-check').checked,
                 rango: `${f.querySelector('.horario-inicio-input').value}-${f.querySelector('.horario-fin-input').value}`
@@ -605,14 +633,14 @@ async function runBrowserTests() {
             !franjasTrasRetirar[0].activo ||
             franjasTrasRetirar[0].rango !== '14:00-18:00'
         ) {
-            throw new Error(`Tras retirar la primera franja del Martes, no quedó únicamente 14:00-18:00 activa: ${JSON.stringify(franjasTrasRetirar)}`);
+            throw new Error(`Tras retirar la primera franja del día de prueba independiente, no quedó únicamente 14:00-18:00 activa: ${JSON.stringify(franjasTrasRetirar)}`);
         }
 
         recordTest('PROF-02', 'Carga de múltiples franjas del mismo día, guardado sin cambios verificado en MySQL y retirada explícita de franja individual', true,
-            'Martes 08:00-12:00 y 14:00-18:00 preservados en MySQL al guardar sin cambios; retirada explícita eliminó solo 08:00-12:00 conservando 14:00-18:00.');
+            `${weekdays[splitDay]} 08:00-12:00 y 14:00-18:00 preservados en MySQL al guardar sin cambios; retirada explícita eliminó solo 08:00-12:00 conservando 14:00-18:00, sin modificar ${weekdays[bookingDay]} reservado para disponibilidad y citas.`);
 
         // Crear segunda profesional activa ("Valeria Castro") habilitada para Servicio 1 y "Masaje Capilar Premium" (Servicio 4)
-        // con horario Lunes 09:00-18:00 para probar filtrado de compatibilidad y reserva completa desde la UI en Fase 5
+        // con horario 09:00-18:00 en el día de reserva para probar filtrado de compatibilidad y reserva completa desde la UI en Fase 5
         await page.goto(`${BASE_URL}/profesionales/crear`, { waitUntil: 'networkidle0' });
         await page.type('#nombre', 'Valeria Castro');
         await page.evaluate(() => {
@@ -645,11 +673,11 @@ async function runBrowserTests() {
         }
 
         await page.goto(`${BASE_URL}${hrefHorariosValeria}`, { waitUntil: 'networkidle0' });
-        await page.evaluate(() => {
-            document.querySelector('#horario_activo_1').checked = true;
-            document.querySelector('#horario_inicio_1').value = '09:00';
-            document.querySelector('#horario_fin_1').value = '18:00';
-        });
+        await page.evaluate(day => {
+            document.querySelector(`#horario_activo_${day}`).checked = true;
+            document.querySelector(`#horario_inicio_${day}`).value = '09:00';
+            document.querySelector(`#horario_fin_${day}`).value = '18:00';
+        }, bookingDay);
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'networkidle0' }),
             page.click('#form-horarios-semanales input[type="submit"]')
@@ -894,7 +922,7 @@ async function runBrowserTests() {
             throw new Error(`No debían renderizarse intervalos en sábado sin turnos, encontrados: ${botonesEnSabado.length}`);
         }
 
-        // 3.4 Seleccionar fecha laborable válida (Lunes) -> carga dinámica de intervalos de 90 min desde GET /api/disponibilidad
+        // 3.4 Seleccionar fecha laborable válida calculada -> carga dinámica de intervalos de 90 min desde GET /api/disponibilidad
         await Promise.all([
             page.waitForResponse(res => res.url().includes('/api/disponibilidad') && res.url().includes(validDate)),
             page.evaluate((laborable) => {
@@ -1237,7 +1265,7 @@ async function runBrowserTests() {
         if (!await page.$eval('#graficas-periodo', node => !node.hidden)) throw new Error('El control de gráficas no restauró el panel.');
         await verifyResponsivePage('reportes-admin');
         recordTest('UI-01', 'Diseño responsivo sin desbordamiento horizontal en cuatro pantallas', true,
-            'Login, servicios, cita y reportes probados a 320, 390, 768 y 1440px; 16 capturas PNG y avatar local cargado.');
+            'Login, servicios, cita y reportes probados a 320, 390, 768 y 1440px; 16 capturas PNG, avatar local cargado y buscador con estado vacío y restauración del catálogo.');
 
         // 1. Filtrar rango exacto [validDate, validDate] sin filtro de profesional ni servicio
         await page.evaluate((fechaRango) => {
