@@ -130,19 +130,14 @@ async function consultarAPI() {
             fetch(`${location.origin}/api/profesionales`, { headers: { 'Accept': 'application/json' } })
         ]);
 
-        if (resServicios.ok) {
-            const servicios = await resServicios.json();
-            if (Array.isArray(servicios)) {
-                mostrarServicios(servicios);
-            }
+        if (!resServicios.ok || !resProfesionales.ok) throw new Error('Catálogo no disponible');
+        const servicios = await resServicios.json();
+        const dataProf = await resProfesionales.json();
+        if (!Array.isArray(servicios) || !dataProf || !Array.isArray(dataProf.profesionales)) {
+            throw new Error('Respuesta de catálogo inválida');
         }
-
-        if (resProfesionales.ok) {
-            const dataProf = await resProfesionales.json();
-            if (dataProf && Array.isArray(dataProf.profesionales)) {
-                catalogoProfesionales = dataProf.profesionales;
-            }
-        }
+        mostrarServicios(servicios);
+        catalogoProfesionales = dataProf.profesionales;
 
         actualizarSelectorProfesionales();
     } catch (error) {
