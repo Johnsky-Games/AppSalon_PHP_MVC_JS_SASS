@@ -130,13 +130,14 @@ Los correos de **confirmación de cuenta**, de **recuperación de contraseña**,
 ### 5.1 Flujo
 
 ```
-registrar / reenviarConfirmacion
+registrar / reenviarConfirmacion / solicitarRecuperacion        (rutas públicas)
    └─ UNA transacción:  emitir token (reemplaza el hash anterior)  +  INSERT en correos_salida (carga CIFRADA)
                         +  cancelar los eventos pendientes de tokens anteriores del mismo usuario   ── COMMIT
-        └─ despacharTrasCommit(): intento inmediato (PHPMailer, Timeout 5 s / Timelimit 10 s)
+        └─ la petición HTTP TERMINA aquí (no espera al SMTP)
+        └─ scripts/procesar_correos.php (worker; cada CORREOS_INTERVALO_SEGUNDOS, 5 s por defecto)
               ├─ éxito  → estado `enviado`, la carga (con el token) se BORRA
               └─ fallo  → estado `pendiente`, intentos+1, proximo_intento = ahora + espera (tabla 5.3)
-                    └─ scripts/procesar_correos.php (cada NOTIFICACIONES_INTERVALO_SEGUNDOS, 60 s por defecto)
+        (solo con CORREOS_ENVIO_INMEDIATO=1 —pruebas— hay además un intento en línea tras el COMMIT con PHPMailer, Timeout 5 s / Timelimit 10 s)
 ```
 
 * `usuarios.token_hash` guarda un único hash vigente: emitir un token nuevo **invalida el anterior** (el enlace viejo da "no válido").

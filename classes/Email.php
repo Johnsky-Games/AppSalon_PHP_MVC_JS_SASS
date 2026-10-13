@@ -192,7 +192,9 @@ class Email
         $texto = preg_replace('/(token|password|pass|pwd|secret)=[^\s&"\']+/i', '$1=***', $texto) ?? $texto;
         $texto = preg_replace('/\b[A-Za-z0-9_\-]{32,}\b/', '[redactado]', $texto) ?? $texto;
         // El servidor SMTP repite la dirección del destinatario en sus rechazos: es dato personal y no debe quedar en la cola ni en logs.
-        $texto = preg_replace('/[^\s<>(),;:"\[\]\\\\]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/u', '[correo]', $texto) ?? $texto;
+        // Parte local entre comillas («"a@b"@dominio») y, después, cualquier «algo@dominio» (nombre de host o literal de IP entre corchetes).
+        $texto = preg_replace('/"(?:[^"\\\\]|\\\\.)*"@(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.\-]+)/u', '[correo]', $texto) ?? $texto;
+        $texto = preg_replace('/[^\s<>(),;:"\[\]\\\\]+@(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.\-]+)/u', '[correo]', $texto) ?? $texto;
         if ($texto === '') {
             $texto = 'Error desconocido en transporte de correo.';
         }
