@@ -103,7 +103,7 @@ class EmailTest extends TestCase
         $this->assertCount(0, Email::$emailsEnviados, 'No deben registrarse como enviados si el transporte falló');
     }
 
-    public function testInvitacionConservaTokenSeguroYExplicaActivacionDelEquipo(): void
+    public function testInvitacionUsaEnlaceDeAceptacionPropioNuncaElDeRecuperacion(): void
     {
         $capturado = null;
         Email::setTransport(static function (PHPMailer $mailer, string $proposito) use (&$capturado): bool {
@@ -112,14 +112,18 @@ class EmailTest extends TestCase
         });
         $token = 'token+con/espacio &comillas"';
         $email = new Email('María <script>alert(1)</script>', 'maria@dominio.com', $token);
+        $email->detallesExtra = ['Rol' => 'Recepción'];
 
         $this->assertTrue($email->enviarInvitacion());
         $this->assertSame('Tu invitación al equipo', $capturado->Subject);
         $this->assertSame('invitacion', Email::$emailsEnviados[0]['proposito']);
-        $this->assertStringContainsString('/recuperar?token=' . rawurlencode($token), $capturado->Body);
-        $this->assertStringContainsString('/recuperar?token=' . rawurlencode($token), $capturado->AltBody);
-        $this->assertStringContainsString('Establecer mi contraseña', $capturado->AltBody);
+        $this->assertStringContainsString('/equipo/aceptar?token=' . rawurlencode($token), $capturado->Body);
+        $this->assertStringContainsString('/equipo/aceptar?token=' . rawurlencode($token), $capturado->AltBody);
+        $this->assertStringNotContainsString('/recuperar', $capturado->AltBody, 'El propósito invitación no se mezcla con la recuperación de contraseña');
+        $this->assertStringContainsString('Aceptar mi invitación', $capturado->AltBody);
         $this->assertStringContainsString('herramientas disponibles para tu rol', $capturado->AltBody);
+        $this->assertStringContainsString('Portal del equipo', $capturado->AltBody);
+        $this->assertStringContainsString('Recepción', $capturado->AltBody);
         $this->assertStringNotContainsString('<script>', $capturado->Body);
         $this->assertStringContainsString('&lt;script&gt;alert(1)&lt;/script&gt;', $capturado->Body);
     }

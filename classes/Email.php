@@ -9,6 +9,10 @@ class Email
     public $nombre;
     public $email;
     public $token;
+    /** Detalles adicionales visibles en el correo (p. ej. rol, portal). Nunca secretos. */
+    public array $detallesExtra = [];
+    /** Portal al que pertenece la cuenta: 'cliente' o 'equipo'. Cambia textos y enlaces del correo. */
+    public string $portal = 'cliente';
 
     /**
      * Transporte simulado para pruebas automatizadas (evita envíos reales).
@@ -214,10 +218,10 @@ class Email
                 'asunto' => 'Tu invitación al equipo',
                 'categoria' => 'BIENVENIDO AL EQUIPO',
                 'titulo' => 'Tu espacio de trabajo está listo',
-                'preheader' => 'Activa tu acceso al equipo estableciendo tu propia contraseña.',
-                'parrafos' => ['La administración del salón te ha invitado a formar parte de su equipo. Establece tu contraseña para activar tu acceso y consultar las herramientas disponibles para tu rol.'],
-                'boton' => 'Establecer mi contraseña',
-                'nota' => 'Este enlace es personal y de un solo uso. Si no esperabas esta invitación, contacta con la administración del salón antes de continuar.',
+                'preheader' => 'Acepta tu invitación para activar tu acceso al equipo.',
+                'parrafos' => ['La administración del salón te ha invitado a formar parte de su equipo. Acepta la invitación para activar tu acceso laboral y consultar las herramientas disponibles para tu rol. Hasta que la aceptes no tendrás permisos de equipo.'],
+                'boton' => 'Aceptar mi invitación',
+                'nota' => 'Este enlace es personal, de un solo uso y vence en 7 días. Si no esperabas esta invitación, ignora este mensaje o contacta con la administración del salón. Tu cuenta de cliente, si la tienes, no cambia.',
             ],
         ];
         if (!isset($mensajes[$proposito])) {
@@ -226,7 +230,7 @@ class Email
         $mensaje = $mensajes[$proposito];
         $email->Subject = $mensaje['asunto'];
         $mensaje['nombre'] = (string)$this->nombre;
-        $mensaje['detalles'] = ['Tu cuenta' => (string)$this->email];
+        $mensaje['detalles'] = ['Tu cuenta' => (string)$this->email] + $this->detallesExtra;
         $mensaje['enlace'] = $enlace;
         $mensaje['aviso'] = 'Recibiste este correo porque se solicitó una acción relacionada con tu cuenta.';
         $contenido = ($plantilla ?? new EmailTemplate())->render($mensaje);
@@ -459,6 +463,7 @@ class Email
     {
         $appUrl = self::resolverAppUrl();
         $enlace = "{$appUrl}/confirmar-cuenta?token=" . rawurlencode((string)$this->token);
+        $this->detallesExtra += ['Acceso' => 'Portal de clientes'];
         return $this->despachar('confirmacion', $enlace);
     }
 
@@ -469,15 +474,20 @@ class Email
     public function enviarInstrucciones(): bool
     {
         $appUrl = self::resolverAppUrl();
-        $enlace = "{$appUrl}/recuperar?token=" . rawurlencode((string)$this->token);
+        $enlace = "{$appUrl}/recuperar?token=" . rawurlencode((string)$this->token) . ($this->portal === 'equipo' ? '&portal=equipo' : '');
+        $this->detallesExtra += ['Acceso' => $this->portal === 'equipo' ? 'Portal del equipo' : 'Portal de clientes'];
         return $this->despachar('recuperacion', $enlace);
     }
 
-    /** Conserva el flujo seguro de establecimiento de contraseña para el colaborador invitado. */
+    /**
+     * Invitación formal al equipo: el enlace lleva a la pantalla de aceptación del portal del equipo,
+     * con un token de propósito exclusivo que no sirve para recuperar contraseñas.
+     */
     public function enviarInvitacion(): bool
     {
         $appUrl = self::resolverAppUrl();
-        $enlace = "{$appUrl}/recuperar?token=" . rawurlencode((string)$this->token);
+        $enlace = "{$appUrl}/equipo/aceptar?token=" . rawurlencode((string)$this->token);
+        $this->detallesExtra += ['Acceso' => 'Portal del equipo'];
         return $this->despachar('invitacion', $enlace);
     }
 }

@@ -39,10 +39,13 @@ class AuthorizationService
         if ($id <= 0) { return null; }
         if (!$this->db) { throw new ServiceUnavailableException('Autorización no disponible: sin conexión.'); }
         $rolEfectivo = "COALESCE(a.rol,IF(u.admin=1,'propietario','cliente'))";
+        // Un colaborador suspendido, dado de baja o aún no aceptado jamás conserva privilegios laborales.
+        $laboralVigente = "({$rolEfectivo}='cliente' OR COALESCE(col.estado,'activo')='activo')";
         $sql = "SELECT u.id,u.admin,u.confirmado,u.version_sesion,{$rolEfectivo} rol,"
-            . "IF(COALESCE(a.activo,1)=1 AND NOT ({$rolEfectivo}='cliente' AND COALESCE(c.estado,'')='suspendido'),1,0) activo,"
-            . "c.estado cliente_estado,p.id profesional_id "
+            . "IF(COALESCE(a.activo,1)=1 AND {$laboralVigente} AND NOT ({$rolEfectivo}='cliente' AND COALESCE(c.estado,'')='suspendido'),1,0) activo,"
+            . "c.estado cliente_estado,col.estado colaborador_estado,p.id profesional_id "
             . "FROM usuarios u LEFT JOIN usuario_accesos a ON a.usuario_id=u.id LEFT JOIN clientes c ON c.usuario_id=u.id "
+            . "LEFT JOIN colaboradores col ON col.usuario_id=u.id "
             . "LEFT JOIN profesionales p ON p.usuarioId=u.id WHERE u.id=?";
         try {
             $stmt = $this->db->prepare($sql);
