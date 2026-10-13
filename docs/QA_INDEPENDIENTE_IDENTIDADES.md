@@ -2,7 +2,7 @@
 
 Revisión adversarial e independiente del commit `4e542af` (rama `claude/blissful-hopper-f5k7a0`, «instalador idempotente…»).
 Todas las pruebas son nuevas y viven en `tests/Qa/`; no se modificó código de la aplicación ni pruebas existentes.
-Fecha de ejecución: 2026-10-13. Entorno: PHP 8.3.6 (el objetivo es 8.2; ver «No cubierto»), MySQL 8.0.46, PHPUnit 10.5.66, Chromium 1194 con puppeteer-core.
+Fecha de ejecución: 2026-10-13. **Ronda 2 (matriz de autorización exacta): ver la sección «Ronda 2» al final del documento.** Entorno: PHP 8.3.6 (el objetivo es 8.2; ver «No cubierto»), MySQL 8.0.46, PHPUnit 10.5.66, Chromium 1194 con puppeteer-core.
 
 Convenciones: **DEFECTO** = el ataque rompió una garantía y existe una prueba roja `test_Defecto_*`; **PASA** = el ataque se ejecutó y el sistema resistió;
 **OBSERVACIÓN** = comportamiento discutible sin prueba roja; **NO PROBADO** = no se alcanzó. Hechos comprobados y suposiciones se separan expresamente.
@@ -25,6 +25,10 @@ php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --colors=n
 # Un archivo o una prueba:
 php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --colors=never --filter '<nombre>' tests/Qa/<Archivo>.php
 ```
+
+**Navegador (ronda 2).** `FrontendTest` busca Chromium en `CHROME_BIN` (si está definido es el único válido) y, solo si no lo está, en el respaldo local
+`/opt/pw-browsers/chromium-1194/chrome-linux/chrome`; `frontend_qa.cjs` recibe el mismo ejecutable. Con `QA_EXIGIR_NAVEGADOR=1` (CI), la ausencia de Chromium o de
+`node_modules/puppeteer-core` **hace fallar** las 7 pruebas del navegador en lugar de omitirlas. Sin esa variable se omiten con el motivo escrito.
 
 El arnés (`tests/Qa/QaCase.php`) aborta si `DB_NAME` no cumple `appsalon_qa_*_test`; las pruebas destructivas/de esquema crean y borran sus propias bases
 `appsalon_qa_<x>_test`. Los servidores HTTP son `php -S` reales con router propio (`tests/Qa/router.php`), el SMTP simulado es propio (`tests/Qa/smtp_qa.php`, puertos 2596-2598)
@@ -324,3 +328,196 @@ Las pruebas están en `tests/Qa/`. «Cmd» es el archivo a ejecutar con el coman
 - `QaCase::limpiar()` trunca todas las tablas de la base QA salvo `migraciones` y `equipo_mutex` (semilla). `ColaboradorRepository::aprovisionarPropietarioInicial()` se usa como camino real para crear propietarios.
 - Los correos nunca salen de la máquina: SMTP simulado propio o puerto cerrado (2599).
 - `executionOrder="depends,defects"` del `phpunit.xml` reordena las pruebas rojas primero; las clases se aíslan con `limpiar()` y servidores propios.
+
+---
+
+# Ronda 2 – Matriz de autorización exacta
+
+Fase de refuerzo de `AutorizacionHttpTest` (QA independiente, sin tocar código de la aplicación). Requisito: para cada ruta y modalidad se comprueba el
+contrato exacto (status, `Location` exacto si hay redirección, cuerpo/código de error exacto si es JSON), la ausencia de datos privados y la ausencia de
+efectos; no se acepta «cualquier redirección» ni «distinto de 200».
+
+## R2.1 Qué es una «celda» y cómo falla
+
+Celda = ruta × método × modalidad de acceso × variante (formato, CSRF, HEAD…). Cada celda exige a la vez:
+
+| Comprobación | Regla |
+|---|---|
+| Status | igual al contrato derivado del código (no una lista de valores admitidos) |
+| Redirección | 302/303 con `Location` **idéntico** y **cuerpo vacío**; el destino se sigue con la misma sesión: sin bucle y sin terminar en 401/403/otra redirección (excepto `POST /api/eliminar`, ver DEF-R2-02) |
+| JSON | `Content-Type: application/json; charset=utf-8` y cuerpo exacto (`{"resultado":false,"error":"…"}` y variantes propias de cada API) |
+| HTML | `Content-Type: text/html; charset=utf-8` y el mensaje esperado (permiso, CSRF, 404, 405…) |
+| Cabeceras | `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy: strict-origin-when-cross-origin` en toda respuesta; `Cache-Control` con `no-store` en todo lo que no sea el catálogo público/webhook |
+| Privacidad | ningún centinela de otras personas (correo, nombre, teléfono, referencia/importe de pago, motivo de cancelación, respuesta de salud, nota/puesto/teléfono de RR. HH., producto/SKU/concepto de caja) en cuerpo **ni cabeceras** (crudo, escapado HTML, URL o JSON) salvo que el rol lo vea por diseño |
+| Efectos | `CHECKSUM TABLE` + conteo de las 32 tablas de negocio antes/después y conteo del buzón SMTP: igual. Excluidas, y por qué: `migraciones` (esquema), `equipo_mutex` (semilla del candado), `intentos_login` (bitácora legítima del limitador: un login fallido DEBE contarse) |
+
+Un fallo imprime `[GET /admin/equipo | recepcion | html] status: esperado 403 html …; obtenido 200 …` (ruta, método, modalidad, variante, esperado vs. obtenido).
+Cada modalidad usa una **sesión PHP nueva** (cookie fabricada con los mismos campos que escribe `LoginController`, token CSRF conocido) para que la
+mutación de sesión de una petición no contamine la siguiente; `test_G_*` demuestra con **logins reales** de los 6 perfiles que la sesión fabricada equivale a la real.
+
+## R2.2 Modalidades (19)
+
+| Modalidad | Qué es | Contrato derivado del código |
+|---|---|---|
+| `anonimo` | sin cookie | HTML 302 → `/`; `/api/*` o `Accept: application/json` → 401 JSON |
+| `login_no_booleano` | `login='1'` (no `true`) | igual que anónimo (isAuth exige `=== true`); APIs con su JSON propio |
+| `propietario` `gerente` `recepcion` `profesional` `finanzas` | login real del portal equipo | 200 si el rol tiene el permiso; si no, 403 con el mensaje de permiso |
+| `cliente` | portal de clientes, rol efectivo `cliente` | 200 en rutas de sesión; 403 en todo lo laboral |
+| `cliente_suspendido` | membresía `suspendido` con sesión abierta | 302 → `/` (sesión vaciada) |
+| `cliente_no_confirmado` | `confirmado=0` | 302 → `/` |
+| `colab_suspendido`, `colab_baja`, `colab_invitado` | acceso laboral revocado / invitación sin aceptar | 302 → `/equipo/login` |
+| `forjada_equipo_en_portal_cliente` | cuenta gerente + `portal=cliente`, `rol=propietario`, `admin=1` | 302 → `/` (cuenta solo laboral sin membresía de cliente) |
+| `forjada_cliente_en_portal_equipo` | cuenta cliente + `portal=equipo`, `rol=propietario`, `admin=1` | 302 → `/equipo/login` |
+| `portal_inexistente_cuenta_equipo` / `_cliente` | `portal=superadmin` | se deriva del rol real del servidor: se comporta exactamente como gerente / como cliente (sin elevación) |
+| `usuario_id_inexistente`, `usuario_eliminado` | id que no existe / fila borrada tras iniciar sesión | 302 → portal de la marca de sesión (`/equipo/login` o `/`); JSON 401 |
+| `sesion_sin_id` | `login=true` sin `id` | APIs: JSON 401 propio; resto: 302 → `/` |
+| `version_sesion_vieja` | `version_sesion` distinta de la del servidor | 302 → `/equipo/login` |
+
+Formatos: `Accept: application/json`, JSON + `X-Requested-With`, solo `X-Requested-With` (**no** cambia el formato: sigue HTML/302), `Accept: */*`, JSON con q menor que HTML, HTML con q menor que JSON, `application/problem+json`.
+
+## R2.3 Rutas (82 pares método+ruta únicos = las 83 llamadas `$router->get/post` de `public/index.php`; 87 filas porque algunas se prueban con varios ids)
+
+La prueba `test_H_la_matriz_cubre_exactamente_las_rutas_registradas_en_index_php` compara la matriz con el código fuente y falla si se añade/quita una ruta sin actualizar `tests/Qa/matriz_rutas.php`.
+Guardias: 24 filas públicas, 16 de sesión (`isAuth`), 46 por permiso (`exigir_permiso`), 1 especial (`GET /perfil/foto`, contrato propio en `test_J`).
+Los roles que superan cada guardia están escritos a mano en la matriz (no se importan de `AuthorizationService::ROLES`); `test_H_el_catalogo_de_permisos…` los compara con la constante.
+
+## R2.4 Mapa de cobertura
+
+| Prueba | Qué recorre | Celdas |
+|---|---|---|
+| `test_A_*` (86 datasets, uno por ruta) | todas las rutas × 19 modalidades, navegación HTML; contrato exacto + privacidad + cero efectos | 1634 |
+| `test_B_*` (7 datasets) | rutas protegidas × 8 modalidades × 7 formatos de petición, solo celdas de denegación | 3031 |
+| `test_C_*` | `HEAD` de todas las rutas GET × 6 modalidades: mismo status/Location, sin cuerpo | 276 |
+| `test_D_metodo_no_registrado…` | 59 rutas × métodos no registrados (GET/HEAD/POST/PUT/DELETE/PATCH/OPTIONS) × 3 modalidades × HTML/JSON: 405 + `Allow` exacto antes de autenticar | 1734 |
+| `test_D_ruta_inexistente…` (20 datasets) | rutas inexistentes, con barra final, mayúsculas, `//`, `..` sin normalizar, `/.env`, `/vendor/…`: 404 sin filtrar nada | 200 |
+| `test_E_post_sin_csrf…` (5 datasets: ninguno, vacío, otro, de otra sesión, arreglo) | 39 rutas POST con CSRF × (autorizado, autenticado sin permiso, anónimo) × HTML/JSON: 403 por CSRF o por permiso/autenticación según el **orden real** de la ruta, cero efectos | 990 |
+| `test_E_el_token_csrf_tambien_se_acepta_por_cabecera…` | `X-CSRF-Token` válido equivale al campo del formulario | 60 |
+| `test_F_*` (20 escenarios) | con **datos válidos**: todas las demás modalidades → denegación exacta y cero efectos; CSRF defectuoso → cero efectos; la persona autorizada → respuesta y **efecto exacto** (tablas y variación de filas); repetir con la misma clave → cero efectos | ver tabla R2.5 |
+| `test_G_*` (6 datasets) | login real de los 6 perfiles vs. contrato de la matriz en todas las rutas GET | 6 × ~45 |
+| `test_I_*` | cada 302/303 de la matriz seguido con la misma sesión: sin bucle, sin 401/403 | todas las redirecciones |
+| `test_J_*` (2) | `GET /perfil/foto` (guardia híbrida) × 19 modalidades × 3 ids × HTML/JSON | 114 |
+| `test_K_*` | `/api/mis-citas` solo devuelve citas propias, `/api/profesionales` solo campos públicos, JSON 401 propio de cada API, cookie HttpOnly/SameSite y regeneración del id | — |
+| `AutorizacionHttpTest` (37) | casos de la ronda 1 con aserciones laxas sustituidas por exactas (ver R2.7) | — |
+
+### R2.5 Escenarios con efecto (`test_F_*`)
+
+| Escenario | Quién lo ejecuta | Efecto exacto verificado |
+|---|---|---|
+| `equipo_crear` | propietario | +1 `colaboradores`, +1 `colaborador_invitaciones`, +1 `correos_salida`, +1 `equipo_auditoria`, +1 `operaciones_idempotentes`; repetir con la misma `idem_key` → nada |
+| `equipo_actualizar` (suspender) | propietario | +1 `equipo_auditoria`; modifica `colaboradores`, `usuario_accesos`, `usuarios` (`version_sesion`) |
+| `equipo_revocar` | propietario | +1 `equipo_auditoria`; modifica `colaboradores`, `colaborador_invitaciones`, `correos_salida` (cancela el correo pendiente) |
+| `equipo_invitar_reenvio` | propietario | +1 invitación, +1 `correos_salida`, +1 auditoría, +1 idempotencia; repetir → nada |
+| `equipo_ficha` | propietario | +1 auditoría; modifica `colaboradores` |
+| `servicios_crear` / `_actualizar` / `_eliminar` | gerente / gerente / propietario | +1 / modifica / −1 `servicios`, y nada más |
+| `profesionales_estado` | gerente | solo `profesionales` |
+| `inventario_crear` | finanzas | +1 `inventario_productos` |
+| `finanzas_registrar` | finanzas | +1 `caja_movimientos`; repetir con la misma clave → nada |
+| `ajustes_guardar` | gerente | +6 `negocio_ajustes` |
+| `perfil_ajeno_editado_por_recepcion` | recepción | modifica solo `perfiles_usuario`; profesional, finanzas y cliente → 403 sin efecto |
+| `api_cancelar_cita_propia` | clienta propietaria | modifica `citas`, +1 `notificaciones_citas`; profesional y finanzas → 403 JSON `no_autorizado` sin efecto |
+| `api_cancelar_cita_ajena_por_cliente` | nadie | cliente, profesional, finanzas → 403 JSON exacto, cero efectos |
+| `agenda_estado` | profesional dueño de la cita | +1 `agenda_eventos`, modifica `citas`; la clienta y finanzas → 403 |
+| `agenda_estado_cita_de_otro_profesional`, `agenda_reprogramar_cita_ajena` | nadie | profesional ajeno, cliente, finanzas → 403 «No tienes permiso para modificar esta cita.» sin efecto |
+| `pagos_iniciar_cita_ajena` | nadie | cliente, profesional, recepción → 403 `forbidden`, sin pago nuevo |
+| `pagos_reembolsar` | finanzas | modifica `pagos` y `citas` (`estado_pago`); recepción, profesional, cliente → 403; repetir → idempotente sin cambios |
+
+## R2.6 NO cubierto (con motivo)
+
+- **Rutas públicas con efecto legítimo** (`POST /cliente/registro`, `/olvide`, `/reenviar-confirmacion`, `/recuperar`, `/equipo/aceptar`, logins): la matriz solo prueba su rechazo sin datos válidos (422/403, cero efectos). Sus caminos felices y límites están en `TokensTest`, `ConcurrenciaTest`, `RegresionNegocioTest`; replicarlos aquí duplicaría fixtures de correo/tokens.
+- **Caminos felices de `POST /api/citas`, `/profesionales/horarios|descansos|bloqueos`, `/perfil/foto` (subida), `/admin/crecimiento` y `/mi-bienestar`**: requieren disponibilidad/horarios, un binario JPEG o formularios dinámicos; en la matriz solo se prueban sus denegaciones y el rechazo de entrada vacía (cero efectos). Cubiertos funcionalmente por las pruebas del equipo y `RegresionNegocioTest`/`PrivacidadTest`.
+- **`POST /api/pagos/webhook`**: es público por diseño (autenticación por firma HMAC, no por sesión). Se prueba que sin firma responde 401 JSON idéntico para todas las modalidades y sin efectos; la firma válida y el replay están en `tests/Integration`.
+- **`GET /perfil/foto` con foto real**: el arnés no escribe archivos de imagen; la visibilidad de fotos está en `PrivacidadTest`.
+- **`GET /confirmar-cuenta` y `GET /recuperar` con token válido**: consumen el token (efecto legítimo); cubiertos en `TokensTest`.
+- **Reproducción en producción** (Apache/nginx): se usa `php -S`. Las diferencias previsibles (normalización de `..` y `//` por el servidor, `Cache-Control` por `session.cache_limiter`) no se midieron fuera de `php -S`.
+- **IPv6/proxy/`X-Forwarded-*`**: `RateLimiter::obtenerIP` no interviene en autorización y no se manipuló.
+- **Concurrencia de la matriz**: las celdas se ejecutan en serie (el servidor embebido es monohilo); la concurrencia está en `ConcurrenciaTest`.
+
+## R2.7 Aserciones laxas sustituidas en `AutorizacionHttpTest`
+
+| Antes | Ahora |
+|---|---|
+| `[200]` vs `[403]` con excepción «exportar puede devolver 200 a cualquiera» | 200 solo para los roles de la tabla literal; 403 con el mensaje de permiso; sin `Location` |
+| anónimo: `Location ∈ {/, /equipo/login}`, estado `∈ {302,401}` | `302` + `Location === '/'` + cuerpo vacío; `/api/mis-citas` → 401 con el JSON completo y `Content-Type` exacto |
+| sesión forjada de cuenta cliente en portal equipo: `∈ {302,403}` | `302` + `Location === '/equipo/login'` + cuerpo vacío en las 12 rutas |
+| sesión forjada de cuenta gerente en portal cliente: `∈ {302,401,403}` | `302` + `Location === '/'` + cuerpo vacío |
+| colaborador suspendido: `∈ {302,403}` y `≠ 200` | `302` + `/equipo/login`, y la pantalla de login muestra «Tu sesión terminó» |
+| baja: login `∈ {403,422}`; como cliente `≠ 302` | equipo → 403 «Tu acceso al equipo está suspendido»; cliente → 422 «Esta cuenta pertenece al equipo del salón», sin `Location` |
+| cliente suspendido: `≠ 200` | `302` + `/` |
+| `/perfil`, `/perfil/foto`, `/api/mis-citas` anónimos: `∈ {302,401,404,422}` | `/perfil` → 302 `/`; `/perfil/foto` → 404 de la página estándar; `/api/mis-citas` → 401 con `No autenticado`; `/api/pagos/iniciar` sin sesión → 401 propio antes de mirar el CSRF |
+| `HEAD /equipo/aceptar` `∈ {200}` | `200` con cuerpo vacío |
+
+## R2.8 Hallazgos nuevos de la ronda 2
+
+Pruebas rojas (en `AutorizacionMatrizTest`):
+
+### DEF-R2-01 (Media) Reportes entregan datos nominales de clientes al rol «finanzas»
+- El rol finanzas no tiene `clientes.ver` ni `clientes.exportar` (el CRM le niega fichas, listado nominal y CSV; `PrivacidadTest::test_finanzas_ve_analitica_pero_no_fichas_ni_listado_nominal` lo exige), pero tiene `reportes.ver`, y `/admin/reportes` y el CSV `/admin/reportes/exportar` incluyen nombre, apellido y correo de cada cliente con reservas (`ReporteRepository.php:400-403, 547-552`; columnas «Cliente»/«Email Cliente» del CSV en `ReporteService.php:1516-1533`).
+- **Reproducción:** login `finanzas` → `GET /admin/reportes/exportar` → 200 `text/csv` con `sentinela.ajeno@example.test` (el cliente sembrado). La exportación nominal de clientes queda accesible a un rol que no tiene `clientes.exportar`.
+- Prueba roja: `AutorizacionMatrizTest::test_Defecto_R2_01_reportes_entregan_nombre_y_correo_de_clientes_al_rol_finanzas_que_no_tiene_clientes_ver_ni_exportar`. (La matriz A excluye esa única combinación —finanzas × `/admin/reportes*`— de la regla de privacidad para no ocultar el resto de comprobaciones de ese rol.)
+
+### DEF-R2-02 (Baja) `POST /api/eliminar` con id inválido redirige a una ruta que deniega a quien la recibe
+- `APIController::cancelar()` (formulario sin `Accept: application/json`): identificador inválido → `Location: /admin` para **cualquier** sesión vigente. `/admin` exige `agenda.gestionar`: cliente, profesional y finanzas reciben 403. El mismo fallo ocurre en la rama «cita no encontrada» cuando no hay `Referer` (`/admin`).
+- **Reproducción:** sesión de cliente con CSRF válido → `POST /api/eliminar` `id=no-es-un-id` → `302 Location: /admin` → `GET /admin` → `403`.
+- Prueba roja: `test_Defecto_R2_02_api_eliminar_redirige_con_id_invalido_a_una_ruta_que_deniega_a_quien_la_recibe` (`test_I_*` excluye esta única celda para no duplicar el rojo).
+
+### DEF-R2-03 (Baja, CWE-601) La cancelación por formulario redirige a la cabecera `Referer` sin validar el origen
+- `APIController.php:452` (`header('Location: ' . ($_SERVER['HTTP_REFERER'] ?? '/admin'))`) y `:505` (`$destino = $_SERVER['HTTP_REFERER'] ?? …`). Requiere un CSRF válido, por lo que hoy solo es alcanzable desde un cliente no navegador o tras XSS; aun así la aplicación nunca debería emitir un `Location` derivado de una cabecera del cliente.
+- **Reproducción:** `POST /api/eliminar` (`id=99999999`, CSRF válido, `Referer: https://evil.example/phishing`) → `302 Location: https://evil.example/phishing`.
+- Prueba roja: `test_Defecto_R2_03_cancelacion_por_formulario_redirige_a_cualquier_referer_incluso_externo`.
+
+Observaciones (sin prueba roja; se afirma su valor actual, estable y coherente con el código):
+1. **El anónimo que abre una pantalla del equipo (`/admin…`) va a `/` (acceso de clientes), no a `/equipo/login`**: sin sesión no se conoce el portal de destino; solo una sesión caducada recuerda su portal (`portal_aviso`). `/` enlaza el acceso del equipo.
+2. **`X-Requested-With: XMLHttpRequest` sin `Accept` no cambia el formato**: `ErrorResponse::wantsJson()` solo mira `Accept` y el prefijo `/api`; un `fetch` sin `Accept: application/json` a una ruta HTML recibe 302/HTML. (Solo `APIController::solicitaRespuestaJsonExplicita()` usa la cabecera, y únicamente para la cancelación.)
+3. **Un `portal` desconocido en la sesión se resuelve por el rol real del servidor** (`portal_sesion()`): no concede nada que la cuenta no tenga, pero es una vía de compatibilidad que conviene retirar cuando no queden sesiones antiguas.
+4. **Existencia de citas enumerable**: `POST /api/eliminar` responde 403 para una cita ajena y 404 para una inexistente (JSON); la numeración es secuencial, así que revela qué ids existen. Impacto bajo (no revela datos).
+5. **Orden validación/CSRF**: `POST /servicios/actualizar`, `/profesionales/actualizar|horarios|descansos|bloqueos` y `/admin/equipo/ficha` descartan la petición (302/404) por id ausente o inexistente **antes** de mirar el CSRF; con id válido el CSRF se exige antes de mutar (probado). Sin efectos, pero conviene exigir CSRF primero por defensa en profundidad.
+6. **`GET /perfil/foto` sin foto responde 404 con cuerpo vacío** (`Content-Type: text/html`), a diferencia del resto de 404 de la aplicación.
+7. **`/api/servicios` es público** (catálogo con precios); es coherente con la reserva pero no exige sesión a diferencia del resto de `/api/*`.
+8. El mensaje de login de colaborador de **baja** dice «suspendido».
+
+## R2.9 Sensibilidad de las pruebas (mutaciones sobre una copia, código real intacto)
+
+Se aplicó cada mutación a una copia del árbol (`/tmp/qa_mut`), se ejecutó el filtro indicado y se comprobó que la prueba falla, con la discrepancia exacta; la aplicación original no se modificó.
+
+| # | Mutación | Resultado |
+|---|---|---|
+| M1 | quitar `exigir_permiso` de `POST /servicios/eliminar` | ROJO (`[POST /servicios/eliminar \| anonimo] Location: esperado '/'; obtenido '/servicios'`) |
+| M2 | destino de la redirección anónima `/` → `/cliente/login` | ROJO (`GET /admin \| anonimo`) |
+| M3 | `Location` de `POST /admin/equipo/crear`: `/admin/equipo` → `/admin` | ROJO |
+| M4 | quitar `exigir_csrf` de `POST /admin/inventario` | ROJO (esperado 403, obtenido 303) |
+| M5 | `exigir_permiso` escribe en BD al denegar | ROJO (`EFECTO en BD: negocio_ajustes(n 0→1)`) |
+| M6 | comentario HTML con el correo del cliente ajeno en todas las vistas | ROJO (`FUGA … PII:sentinela.ajeno@example.test` para profesional, finanzas…) |
+| M7 | `cancelarCita` sin comprobar propiedad (la primera ocurrencia de la condición estaba en `CitaService::eliminar()`, método heredado que ningún controlador invoca —el endpoint siempre llama a `cancelarCita()`—, y la mutación **sobrevivió** por ser código inalcanzable por HTTP; se repitió sobre `cancelarCita()`) | ROJO (profesional y finanzas cancelan la cita de la clienta) |
+| M8 | quitar `X-Frame-Options` | ROJO |
+| M9 | `/servicios/actualizar` sin id redirige a sí misma | ROJO (`BUCLE de redirecciones`) |
+| M10 | 405 sin `Allow` | ROJO |
+| M11 | `/api/mis-citas` sin filtrar por usuario | ROJO |
+| M12 | `mutarAgenda`: «profesional propio» sin comprobar la ficha | ROJO |
+| M13 | `iniciarPago` sin comprobar propiedad de la cita | ROJO (recepción y profesional inician el pago de la cita ajena) |
+| M14 | `reembolsar` exige `agenda.gestionar` en lugar de `finanzas.gestionar` | ROJO (recepción reembolsa; finanzas queda denegada) |
+| M16 | `sesionVigente` ignora el estado laboral | ROJO (suspendido y baja entran a `/admin`) |
+| M17 | cuerpo JSON 401 con punto final | ROJO |
+| M18 | `portal_sesion()` devuelve siempre `equipo` | ROJO |
+| M19 | cookie de sesión sin `HttpOnly` | ROJO |
+
+## R2.10 Resultado de la ejecución completa (ronda 2)
+
+Entorno: PHP 8.3.6, MySQL 8.0, PHPUnit 10.5.66, `DB_NAME=appsalon_qa_test`, SMTP simulado propio en 2599 (la clase arranca y detiene su propio buzón).
+
+```
+php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --colors=never tests/Qa
+Tests: 362, Assertions: 1803, Failures: 3, Skipped: 2.     (tiempo: 7 min 41 s)
+```
+
+- **Fallos (3, intencionados, pruebas rojas nuevas):** `test_Defecto_R2_01…`, `test_Defecto_R2_02…`, `test_Defecto_R2_03…` (ver R2.8). Todas las pruebas `test_Defecto_*` de la ronda 1 pasan con el código actual.
+- **Omitidas (2), con motivo documentado y estable** (sin variable de entorno que las active):
+  1. `TokensTest::test_Defecto_registro_publico_revela_si_un_correo_ya_tiene_cuenta` — riesgo aceptado y documentado (DEF-13; `docs/GUIA_ACTUALIZACION_IDENTIDADES.md` §10).
+  2. `EsquemaTest::test_Defecto_E2_rollback_y_reaplicacion_de_016_reactiva_en_silencio_a_clientes_suspendidos` — el rollback de la 016 elimina la tabla por definición (DEF-16; guía §10).
+- Omisiones por entorno **eliminadas** en esta fase: `FrontendTest` (Chromium/puppeteer: ahora falla con `QA_EXIGIR_NAVEGADOR=1`, y respeta `CHROME_BIN`), `EsquemaTest::test_E1b…` (dependía del orden: ahora prepara su propia base), `FallosTest` «sin ficha 1» (ahora es una precondición que falla) y `TokensTest` «No se emitió recuperación…» (ahora es una aserción de invariante).
+- Orden aleatorio (`--order-by=random`) de las dos clases de autorización: `AutorizacionMatrizTest` 159 pruebas, solo fallan las 3 rojas.
+- Duración: la matriz añade ≈ 4 min (≈ 8 500 peticiones HTTP reales, cada una con huella de 32 tablas antes y después). Para iterar: `--filter 'test_A_.*POST /servicios/eliminar'` ejecuta una sola ruta.
+
+### Archivos de la fase
+
+`tests/Qa/matriz_rutas.php` (matriz declarativa), `tests/Qa/MatrizHttp.php` (siembra, modalidades, huellas, centinelas), `tests/Qa/AutorizacionMatrizTest.php` (A–K y defectos),
+`tests/Qa/AutorizacionHttpTest.php` (aserciones exactas), `tests/Qa/Navegador.php` (`HEAD` sin cuerpo, `CURLOPT_PATH_AS_IS`), `tests/Qa/FrontendTest.php` y `frontend_qa.cjs` (`CHROME_BIN`, `QA_EXIGIR_NAVEGADOR`), y retoques para eliminar omisiones en `EsquemaTest`, `FallosTest`, `TokensTest`.

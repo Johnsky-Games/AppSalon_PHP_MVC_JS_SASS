@@ -23,12 +23,13 @@ final class Navegador
         $h = [];
         curl_setopt_array($ch, [
             CURLOPT_CUSTOMREQUEST => $metodo, CURLOPT_RETURNTRANSFER => true, CURLOPT_HEADER => false,
-            CURLOPT_COOKIEJAR => $this->jar, CURLOPT_COOKIEFILE => $this->jar, CURLOPT_FOLLOWLOCATION => false, CURLOPT_TIMEOUT => $this->timeout,
+            CURLOPT_COOKIEJAR => $this->jar, CURLOPT_COOKIEFILE => $this->jar, CURLOPT_FOLLOWLOCATION => false, CURLOPT_PATH_AS_IS => true, CURLOPT_TIMEOUT => $this->timeout,
             CURLOPT_HEADERFUNCTION => static function ($c, $line) use (&$h) {
                 if (str_contains($line, ':')) { [$k, $v] = explode(':', $line, 2); $h[strtolower(trim($k))][] = trim($v); }
                 return strlen($line);
             },
         ]);
+        if ($metodo === 'HEAD') { curl_setopt($ch, CURLOPT_NOBODY, true); }
         if ($campos !== null) {
             curl_setopt($ch, CURLOPT_POSTFIELDS, is_array($campos) ? http_build_query($campos) : $campos);
         }

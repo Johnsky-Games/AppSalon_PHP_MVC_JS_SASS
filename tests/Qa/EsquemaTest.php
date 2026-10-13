@@ -106,7 +106,10 @@ final class EsquemaTest extends QaCase
     public function test_E1b_cuentas_heredadas_inician_sesion_en_el_portal_correcto_tras_actualizar(): void
     {
         $upg = $this->bd('upg');
-        if ((int)self::admin()->query("SELECT COUNT(*) n FROM information_schema.schemata WHERE schema_name='$upg'")->fetch_assoc()['n'] === 0) { $this->markTestSkipped('requiere E1'); }
+        if ((int)self::admin()->query("SELECT COUNT(*) n FROM information_schema.schemata WHERE schema_name='$upg'")->fetch_assoc()['n'] === 0) {
+            // Autónoma: no depende del orden de ejecución (--order-by=random); prepara la base `upg` ejecutando E1.
+            $this->test_E1_esquema_fresh_es_igual_al_esquema_upgrade_desde_009_con_datos_reales();
+        }
         $srv = self::servidor(['DB_NAME' => $upg], 'upg');
         $a = new Navegador($srv);
         $this->assertSame(302, $a->login('equipo', 'admin@legacy.test', 'Clave-Legacy-123')['status'], 'el administrador heredado debe entrar al portal del equipo');
