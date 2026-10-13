@@ -70,17 +70,17 @@ verifica que el portal de clientes lo rechaza), `ui_navigation_test.js` (enlaces
 | 21–26 | Doble clic, concurrencia, reintento tras commit, claves cruzadas, correo equivalente, rollback | `IdempotenciaAltas…`, `ColaboradoresPortales…`, E2E 18/18 |
 | 27 | Duplicados existentes: diagnóstico sin borrar | `scripts/diagnosticar_duplicados.php` (verificado con fixtures) |
 
-## 5. QA independiente
+## 5. QA independiente (estado de la ronda 1; la ronda 2 lo supera: ver `docs/ENTREGA_RONDA2.md`)
 
 Un subagente de QA independiente (sin tocar código de la aplicación) escribió 203 pruebas adversariales en `tests/Qa/` (concurrencia con procesos reales, HTTP real, navegador, esquema, correo, instalador, privacidad). Informe completo: `docs/QA_INDEPENDIENTE_IDENTIDADES.md`.
 
 - **Primera pasada (commit `4e542af`):** 22 rojas intencionadas = 18 defectos distintos (`DEF-01`…`DEF-18`).
 - **Corrección:** 16 defectos corregidos en la aplicación, con regresiones propias en `tests/Integration/CorreccionesQaIntegrationTest.php` (9 pruebas, 56 aserciones).
-- **Riesgo aceptado y documentado (2):** `DEF-13` y `DEF-16`; sus pruebas quedan omitidas con la justificación en el propio test y en `GUIA_ACTUALIZACION_IDENTIDADES.md` §10.
+- **DEF-13 y DEF-16:** en esta entrega figuraban como «riesgo aceptado». **Esa calificación era incorrecta: nadie los aceptó.** Quedaron registrados como abiertos y se corrigieron y reverificaron en la ronda 2 (ver `docs/ENTREGA_RONDA2.md`).
 - **Re-ejecución tras las correcciones (local, PHP 8.3.6 + MySQL 8.0.46):** suite por defecto `OK (471 tests, 5417 assertions)` en orden aleatorio; suite QA `OK, but some tests were skipped! Tests: 203, Assertions: 1521, Skipped: 3`, 0 fallos. Una de las expectativas del QA (`AutorizacionHttpTest`, sesión forjada) se ajustó a `[302,401,403]` porque las tres respuestas deniegan el acceso; el cambio es visible en el diff.
 - Cómo correrla: `DB_NAME=appsalon_qa_test` (base migrada propia) y `php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result tests/Qa`. No forma parte del CI por defecto (≈3 min).
 
-## 6. Límites y pendientes (sin ocultar)
+## 6. Límites y pendientes de la ronda 1 (varios se resolvieron en la ronda 2; ver `docs/ENTREGA_RONDA2.md` y la matriz)
 
 * El E2E de navegador que ejecuté fuera de CI usa `php -S` + un adaptador de `docker exec`, no Apache/Docker; el de CI (Apache real) sí pasó.
 * Los horarios del profesional no están dentro del asistente: se configuran tras aceptar. Una ficha nueva queda **inactiva** hasta la aceptación.

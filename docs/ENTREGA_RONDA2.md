@@ -1,7 +1,7 @@
 # Entrega ronda 2 — cierre de QA, correo, equipo y CRM
 
 Rama `claude/blissful-hopper-f5k7a0` (sin merge a `main`, sin despliegue). Parte de `ddade89` (CI satisfactorio de la ronda 1).
-SHA final, CI del mismo SHA y resultados literales: ver §2 (se rellenan al cierre).
+El SHA final se informa en el mensaje de entrega (un commit de documentación posterior no puede citar su propio SHA). Los resultados de §2 corresponden al código de `a72a041`; los commits siguientes solo tocan documentación y su CI se verifica aparte.
 
 ## 1. Qué se hizo, por responsable
 
@@ -18,13 +18,13 @@ Cada agente trabajó en su propio *worktree* con su base de datos y puertos, con
 
 ## 2. Resultados (separados, sin mezclar)
 
-Se completa al cierre con la salida literal. Los tres bloques son suites distintas y no se suman:
+Salida literal. Los tres bloques son suites distintas y no se suman:
 
-* **PHPUnit por defecto** (`tests/Unit` + `tests/Integration`): `__PHPUNIT__`
-* **QA independiente** (`tests/Qa`): `__QA__`
-* **E2E de navegador** (Apache real en CI; en local `php -S`): `__E2E__`
-* **Pruebas omitidas:** `__OMITIDAS__`
-* **CI del mismo SHA:** `__CI__`
+* **PHPUnit por defecto** (`tests/Unit` + `tests/Integration`): local (PHP 8.3.6, MySQL 8.0.46, orden aleatorio, semilla 1791934319): `OK (674 tests, 10173 assertions)`; en el CI (PHP 8.2, orden aleatorio) el paso pasó en 166 s.
+* **QA independiente** (`tests/Qa`): local: `OK (595 tests, 5986 assertions)` en 13 min 27 s (807 s), sin fallos ni omitidas; en el CI (PHP 8.2, Chromium del runner, `QA_EXIGIR_NAVEGADOR=1`) el paso pasó en 591 s. La primera ejecución en el CI (run 38481255271) falló con 41 fallos: 40 eran una incompatibilidad del arnés con PHP 8.2 (`proc_close()` devuelve -1 tras `proc_get_status()`), corregida por el QA; el otro era una expectativa de documentación ya cambiada. No hubo ningún defecto de la aplicación exclusivo de 8.2.
+* **E2E de navegador** (Apache real en CI; en local `php -S`): CI sobre Apache real + MySQL + SMTP simulado: paso «Recorrido E2E aislado» pasó (217 s). En local, el QA ejecutó las 8 etapas del E2E con `php -S` y un sustituto de `docker` (código 0) sobre un SHA anterior (`461dbf8`); **no se repitió en local sobre el SHA final** (no hay Docker aquí).
+* **Pruebas omitidas:** 0 en `tests/Qa` y 0 en la suite por defecto. La lista permitida `.github/qa_omitidas_permitidas.txt` está vacía.
+* **CI del mismo SHA:** [run 38485211769](https://github.com/Johnsky-Games/AppSalon_PHP_MVC_JS_SASS/actions/runs/38485211769) sobre `a72a041`: **success** (migraciones, instalador del propietario, PHPUnit, QA, imagen Docker, E2E en Apache, respaldo/restauración con SHA-256).
 
 ## 3. Cómo se resolvió cada punto pedido
 
@@ -39,12 +39,13 @@ Se completa al cierre con la salida literal. Los tres bloques son suites distint
 
 ## 4. Pruebas omitidas y su motivo
 
-`__OMITIDAS_DETALLE__`
+Ninguna. Las dos omisiones de la ronda 1 (`TokensTest` DEF-13 y `EsquemaTest` DEF-16, que figuraban como «riesgo aceptado») se eliminaron: ahora se ejecutan contra la corrección. Las pruebas de navegador solo se omitirían sin Chromium y sin `QA_EXIGIR_NAVEGADOR=1`; el CI fija esa variable y, sin Chromium, **fallan**.
 
 ## 5. Pendientes y riesgos que siguen abiertos (sin ocultar)
 
 Ver la matriz (columnas *Pendiente* y *Riesgo abierto*). Lo más relevante:
 
+* **Hallazgos abiertos del QA al cierre:** ninguno de la lista R2B-01…13 (los últimos, R2B-03c y R2B-13, se corrigieron en `a72a041` y los cubre la suite que pasó). El QA no volvió a revisar esas dos últimas correcciones más allá de sus propias pruebas.
 * **No verificado aquí:** PHP 8.2 y Apache/Docker (solo el CI los ejercita); SMTP real (prohibido enviar correo real); zona horaria real (el desfase se simuló).
 * **Entrega de correo «al menos una vez»**: posible duplicado; un evento llega a `fallido` a los ≈31 min acumulados y requiere `--reintentar`; con el worker detenido no sale ningún correo.
 * **Tiempo constante exacto** del registro/login no se garantiza (se mide un cociente < 2 con SMTP lento, no igualdad).
