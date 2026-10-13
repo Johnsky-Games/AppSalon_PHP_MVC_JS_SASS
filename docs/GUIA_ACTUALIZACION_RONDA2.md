@@ -44,6 +44,8 @@ sha256sum storage/respaldos/antes-ronda2.sql.gz       # anota el hash (PowerShel
 Conserva tu archivo. Comprueba que existan (solo **añade** las que falten):
 
 ```ini
+CORREOS_INTERVALO_SEGUNDOS=5                 # pasada del worker de correo (2-600)
+CORREOS_ENVIO_INMEDIATO=0                   # 0 = solo cola + worker (recomendado)
 APP_KEY="<64 caracteres hexadecimales>"      # php -r "echo bin2hex(random_bytes(32)), PHP_EOL;"  — OBLIGATORIA fuera de desarrollo
 EMAIL_HOST=...  EMAIL_PORT=...  EMAIL_USER=...  EMAIL_PASS=...    # SMTP real solo en producción; en pruebas usa un buzón simulado
 ```
@@ -66,8 +68,8 @@ Si compilas estilos en tu equipo: `npm ci && npm run build` (Windows con ruta co
 
 ## 5. Cola de correos de cuenta (confirmaciones y avisos)
 
-Los correos de confirmación de cuenta y los avisos de «ya tienes una cuenta» pasan por la cola persistente `correos_salida`:
-se escriben en la misma transacción que el alta, se intentan una vez de inmediato y el worker reintenta con espera creciente (60 s, 120 s, 240 s, 480 s, 960 s; 6 intentos ≈ 31 min).
+Los correos de confirmación de cuenta, de recuperación de contraseña y los avisos de «ya tienes una cuenta» pasan por la cola persistente `correos_salida`:
+se escriben en la misma transacción que el alta y los entrega el **worker** (`CORREOS_INTERVALO_SEGUNDOS`, 5 s por defecto), **no la petición HTTP**: así el tiempo de respuesta no delata si una cuenta existe. Si el SMTP falla, reintenta con espera creciente (60 s, 120 s, 240 s, 480 s, 960 s; 6 intentos ≈ 31 min). Con el worker detenido los correos no salen. `CORREOS_ENVIO_INMEDIATO=1` reactiva el intento en línea (solo pruebas).
 **Garantía: «al menos una vez».** Si el servidor SMTP acepta el mensaje y la conexión se corta antes de la confirmación, se reintenta y el cliente puede recibir un duplicado.
 No se promete entrega «exactamente una vez».
 

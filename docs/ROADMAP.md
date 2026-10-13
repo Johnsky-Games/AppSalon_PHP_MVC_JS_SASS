@@ -91,5 +91,5 @@ Cada fase del proyecto se ejecuta bajo la coordinación de tres roles con respon
 
 ## Fase «Identidades, clientes y equipo» (2026-10-13)
 - **Hecho:** corrección del acceso de clientes y distinción suspensión/503; idempotencia persistente + UNIQUE para altas; portales cliente/equipo con sesión de contexto; instalador del primer propietario; colaboradores con invitación formal, aceptación, estados y ficha laboral; asistente de profesional; CRM de clientes con métricas definidas. Ver `docs/ENTREGA_IDENTIDADES.md`.
-- **Pendiente / siguiente:** horarios dentro del asistente (hoy se configuran tras aceptar), auditoría de exportaciones CRM, versión del consentimiento comercial, aviso de homónimos también en el alta heredada de profesionales, reasignación asistida de citas al suspender a un profesional, integración de pasarela real y requisitos laborales de Ecuador (requieren requisitos y fuentes oficiales).
+- **Entregado en la ronda 2:** horarios y servicios dentro del asistente, reasignación asistida de citas antes de la baja, auditoría de exportaciones CRM, versión del consentimiento, aviso de homónimos (clientes y profesionales). **Pendiente / siguiente:** integración de pasarela real y requisitos laborales de Ecuador (requieren requisitos y fuentes oficiales).
 
