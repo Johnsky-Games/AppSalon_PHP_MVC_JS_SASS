@@ -167,6 +167,7 @@ class UsuarioAuthIntegrationTest extends TestCase
         $_SERVER['REQUEST_METHOD'] = 'POST';
         $_POST = [
             'csrf_token' => $csrf,
+            'idem_key' => \Classes\Idempotencia::nuevaClave(),
             'nombre' => 'Mario',
             'apellido' => 'Silva',
             'telefono' => '3109876543',

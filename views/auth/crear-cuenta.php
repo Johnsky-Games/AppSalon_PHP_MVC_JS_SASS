@@ -2,9 +2,10 @@
 <h1 class="nombre-pagina">Crear Cuenta</h1>
 <p class="descripcion-pagina">Llena el siguiente formulario para crear una cuenta</p>
 
-<?php include_once __DIR__ . '/../templates/alertas.php'; ?>
-<form class="formulario" method="POST" action="/crear-cuenta">
+<?php include __DIR__ . '/../templates/alertas.php'; ?>
+<form class="formulario" method="POST" action="/crear-cuenta" data-una-vez>
     <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
+    <input type="hidden" name="idem_key" value="<?php echo s(clave_operacion_formulario()); ?>">
     <div class="campo">
         <label for="nombre">Nombre</label>
         <input type="text" id="nombre" name="nombre" placeholder="Tu Nombre" value="<?php echo s($usuario->nombre); ?>">

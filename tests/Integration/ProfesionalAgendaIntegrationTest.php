@@ -285,6 +285,7 @@ class ProfesionalAgendaIntegrationTest extends TestCase
         $_SERVER['REQUEST_METHOD'] = 'POST';
         $_POST = [
             'csrf_token' => $csrf,
+            'idem_key' => \Classes\Idempotencia::nuevaClave(),
             'nombre' => 'Profesional No Debe Quedar Huerfano',
             'activo' => '1',
             'servicios' => [(string)$s1]

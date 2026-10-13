@@ -21,3 +21,9 @@
 .horario-franja-fila .boton-eliminar { font-size: 1.1rem !important; min-height: 4.4rem; margin: 0 !important; }
 @media (max-width: 1100px) { .horario-franja-fila { grid-template-columns: minmax(8rem, 1fr) minmax(8rem, 1fr) auto minmax(8rem, 1fr); } .horario-franja-fila .btn-retirar-franja { grid-column: 1/-1; justify-self: start; } }
 @media (max-width: 500px) { .horario-franja-fila { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); } .horario-franja-fila label { grid-column: 1/-1; } .campo { gap: .8rem; } }
+
+/* Envío único de altas: el botón queda inerte (aria-disabled, no `disabled`) y comunica el estado. */
+.boton.is-busy, button.is-busy, input.is-busy { cursor: progress; opacity: .72; pointer-events: none; }
+.ui-form-status { min-height: 2.4rem; margin: 1rem 0 0; color: var(--ui-ink); font-size: 1.3rem; }
+.ui-form-status:empty { margin: 0; min-height: 0; }
+@media (prefers-reduced-motion: reduce) { .boton.is-busy, button.is-busy, input.is-busy { transition: none; } }

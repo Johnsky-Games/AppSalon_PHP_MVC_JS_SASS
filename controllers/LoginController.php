@@ -301,19 +301,30 @@ class LoginController
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exigir_csrf();
 
-            $resultado = self::obtenerAuthService()->registrar($_POST, RateLimiter::obtenerIP());
+            $clave = clave_operacion_enviada();
+            if ($clave === null) {
+                // El formulario siempre incluye su clave de operación; sin ella no se admite el alta.
+                $resultado = ['status' => AuthService::STATUS_INVALID, 'usuario' => new Usuario(),
+                    'alertas' => ['error' => ['El formulario venció. Recárgalo para crear tu cuenta.']]];
+            } else {
+                $resultado = self::obtenerAuthService()->registrar($_POST, RateLimiter::obtenerIP(), $clave, \Classes\Idempotencia::actorAnonimo());
+            }
             if ($resultado['usuario'] instanceof Usuario) {
                 $usuario = $resultado['usuario'];
             }
             $alertas = $resultado['alertas'];
 
             if ($resultado['status'] === AuthService::STATUS_OK) {
-                header('Location: /mensaje');
-                detener_ejecucion(302);
+                redirigir('/mensaje');
                 return;
             } elseif ($resultado['status'] === AuthService::STATUS_RATE_LIMITED) {
                 http_response_code(429);
                 header('Retry-After: ' . max(1,(int)($resultado['segundos_restantes'] ?? 900)));
+            } elseif ($resultado['status'] === AuthService::STATUS_CONFLICT_CLAVE) {
+                http_response_code(409);
+            } elseif ($resultado['status'] === AuthService::STATUS_EN_CURSO) {
+                http_response_code(409);
+                header('Retry-After: ' . max(1,(int)($resultado['segundos_restantes'] ?? 3)));
             } elseif ($resultado['status'] === AuthService::STATUS_ERROR) {
                 http_response_code(500);
             } else { http_response_code(422); }

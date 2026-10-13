@@ -2,7 +2,10 @@
 
 namespace Services;
 
+use Classes\ConflictoIdempotenciaException;
 use Classes\Email;
+use Classes\Idempotencia;
+use Classes\OperacionEnCursoException;
 use Classes\RateLimiter;
 use Model\Usuario;
 use Repositories\DuplicateEntryException;
@@ -24,6 +27,10 @@ class AuthService
     public const STATUS_CONFLICT = 'conflict';
     public const STATUS_RATE_LIMITED = 'rate_limited';
     public const STATUS_ERROR = 'error';
+    /** Misma clave de operación reutilizada con datos distintos. */
+    public const STATUS_CONFLICT_CLAVE = 'conflict_key';
+    /** Otra solicitud con la misma clave sigue procesándose. */
+    public const STATUS_EN_CURSO = 'in_progress';
 
     private UsuarioRepository $repository;
     /** @var callable|null */
@@ -138,14 +145,22 @@ class AuthService
     }
 
     /**
-     * Registra una nueva cuenta de usuario aplicando lista blanca de campos permitidos,
+     * Registra una nueva cuenta de CLIENTE aplicando lista blanca de campos permitidos,
      * validaciones de dominio, hash bcrypt, generación de token seguro con hash SHA-256
-     * y envío de correo únicamente tras persistir con éxito el usuario.
+     * y envío de correo únicamente tras persistir con éxito la cuenta y su membresía.
+     *
+     * Idempotencia: con `$claveOperacion` el alta es repetible. Un doble clic, un reintento tras perder la
+     * respuesta o una solicitud concurrente con la misma clave devuelven el resultado original sin crear
+     * otra cuenta ni enviar otro correo. La misma clave con datos distintos produce STATUS_CONFLICT_CLAVE.
+     * Sin clave (llamadas heredadas) el UNIQUE de correo normalizado sigue impidiendo identidades duplicadas.
      *
      * @param array $datos Datos del formulario de registro.
-     * @return array Resultado estructurado con `status`, `resultado`, `id`, `usuario`, `token` y `alertas`.
+     * @param string|null $ip IP del cliente (límite de intentos); null para llamadas de dominio.
+     * @param string|null $claveOperacion Clave de operación generada al mostrar el formulario.
+     * @param string|null $actor Actor de la operación (p. ej. Idempotencia::actorAnonimo()).
+     * @return array Resultado estructurado con `status`, `resultado`, `id`, `usuario`, `token`, `repetida` y `alertas`.
      */
-    public function registrar(array $datos, ?string $ip = null): array
+    public function registrar(array $datos, ?string $ip = null, ?string $claveOperacion = null, ?string $actor = null): array
     {
         Usuario::limpiarAlertas();
 
@@ -163,7 +178,26 @@ class AuthService
             );
         }
 
+        $usaIdempotencia = $claveOperacion !== null && $actor !== null;
+        $contenido = [
+            'nombre' => (string)$usuario->nombre, 'apellido' => (string)$usuario->apellido,
+            'telefono' => (string)$usuario->telefono, 'email' => mb_strtolower(trim((string)$usuario->email)),
+            'password' => (string)$usuario->password,
+        ];
+
         try {
+            if ($usaIdempotencia) {
+                if (!Idempotencia::claveValida($claveOperacion)) {
+                    return $this->construirRespuesta(self::STATUS_INVALID, false, $usuario,
+                        ['error' => ['El formulario venció. Recárgalo para crear tu cuenta.']], ['id' => null, 'token' => null]);
+                }
+                // Un reintento de una alta ya confirmada no consume el límite de intentos ni repite efectos.
+                $previa = Idempotencia::buscar($this->repository->getDb(), 'cliente.registro', $actor, $claveOperacion, $contenido);
+                if ($previa !== null) {
+                    return $this->construirRespuesta(self::STATUS_OK, true, $usuario, [],
+                        ['id' => $previa['recurso_id'], 'token' => null, 'repetida' => true]);
+                }
+            }
             // El transporte público siempre suministra IP; llamadas de dominio existentes conservan compatibilidad.
             if ($ip !== null) {
                 $admision = RateLimiter::admitirDosVectores($this->repository->getDb(), 'ip_register', $ip, 'email_register', strtolower((string)$usuario->email), 10, 3);
@@ -187,7 +221,29 @@ class AuthService
             $tokenPlano = $usuario->generarTokenSeguro('confirmacion', 24);
             // Identidad y membresía cliente se crean en una sola transacción; el registro público
             // nunca produce acceso laboral ni requiere aprobación del equipo.
-            $insertId = $this->repository->create($usuario, 'registro_publico');
+            if ($usaIdempotencia) {
+                $op = Idempotencia::ejecutar($this->repository->getDb(), 'cliente.registro', $actor, $claveOperacion, $contenido,
+                    function () use ($usuario): array {
+                        $id = $this->repository->createCliente($usuario, 'registro_publico');
+                        return ['recurso_tipo' => 'usuario', 'recurso_id' => $id, 'datos' => []];
+                    });
+                if ($op['repetida']) {
+                    // Otra solicitud concurrente con la misma clave ganó: su correo ya se envió.
+                    return $this->construirRespuesta(self::STATUS_OK, true, $usuario, [],
+                        ['id' => $op['recurso_id'], 'token' => null, 'repetida' => true]);
+                }
+                $insertId = $op['recurso_id'];
+            } else {
+                $insertId = $this->repository->createCliente($usuario, 'registro_publico');
+            }
+        } catch (ConflictoIdempotenciaException $e) {
+            return $this->construirRespuesta(self::STATUS_CONFLICT_CLAVE, false, $usuario,
+                ['error' => ['Esta solicitud ya se procesó con otros datos. Recarga el formulario para crear una cuenta nueva.']],
+                ['id' => null, 'token' => null]);
+        } catch (OperacionEnCursoException $e) {
+            return $this->construirRespuesta(self::STATUS_EN_CURSO, false, $usuario,
+                ['error' => ['Tu solicitud anterior sigue procesándose. Espera unos segundos y revisa tu correo.']],
+                ['id' => null, 'token' => null, 'segundos_restantes' => 3]);
         } catch (DuplicateEntryException $e) {
             // Otra solicitud concurrente ganó la carrera por el mismo correo: misma respuesta que el SELECT previo.
             return $this->construirRespuesta(
@@ -218,7 +274,7 @@ class AuthService
             true,
             $usuario,
             [],
-            ['id' => $insertId, 'token' => $tokenPlano]
+            ['id' => $insertId, 'token' => $tokenPlano, 'repetida' => false]
         );
     }
 

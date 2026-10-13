@@ -6,6 +6,9 @@ use Model\BloqueoProfesional;
 use Model\DescansoProfesional;
 use Model\HorarioProfesional;
 use Model\Profesional;
+use Classes\ConflictoIdempotenciaException;
+use Classes\Idempotencia;
+use Classes\OperacionEnCursoException;
 use Repositories\PersistenceException;
 use Repositories\ProfesionalRepository;
 use Repositories\ServicioRepository;
@@ -23,6 +26,10 @@ class ProfesionalService
     public const STATUS_INVALID = 'invalid';
     public const STATUS_NOT_FOUND = 'not_found';
     public const STATUS_ERROR = 'error';
+    /** Misma clave de operación reutilizada con datos distintos. */
+    public const STATUS_CONFLICT_CLAVE = 'conflict_key';
+    /** Otra solicitud con la misma clave sigue procesándose. */
+    public const STATUS_EN_CURSO = 'in_progress';
 
     public const TIMEZONE = 'America/Guayaquil';
     public const MAX_NOMBRE_LENGTH = 120;
@@ -345,7 +352,7 @@ class ProfesionalService
      * Crea un nuevo profesional y vincula los servicios que puede realizar.
      * Ignora cualquier `id` incluido en `$datos`.
      */
-    public function crear(array $datos): array
+    public function crear(array $datos, ?string $claveOperacion = null, ?string $actor = null): array
     {
         $profesional = new Profesional();
         $profesional->sincronizarEditable($datos);
@@ -395,13 +402,54 @@ class ProfesionalService
         $profesional->activo = (string)$validacion['activo'];
 
         try {
+            if ($claveOperacion !== null && $actor !== null) {
+                // Alta idempotente: doble clic, reintento o solicitud concurrente con la misma clave
+                // recuperan el mismo profesional sin crear otro.
+                $ids = $validacion['servicioIds'];
+                sort($ids);
+                $contenido = ['nombre' => mb_strtolower(trim((string)$profesional->nombre)), 'activo' => (string)$validacion['activo'], 'servicios' => $ids];
+                $db = $this->profesionalRepository->getDb();
+                $op = Idempotencia::buscar($db, 'profesional.crear', $actor, $claveOperacion, $contenido)
+                    ?? Idempotencia::ejecutar($db, 'profesional.crear', $actor, $claveOperacion, $contenido,
+                        function () use ($profesional, $validacion): array {
+                            $id = $this->profesionalRepository->createWithServicios($profesional, $validacion['servicioIds']);
+                            return ['recurso_tipo' => 'profesional', 'recurso_id' => $id, 'datos' => []];
+                        });
+                $insertId = $op['recurso_id'];
+                $profesional->id = (string)$insertId;
+                return [
+                    'status' => self::STATUS_OK,
+                    'resultado' => true,
+                    'id' => $insertId,
+                    'repetida' => $op['repetida'],
+                    'profesional' => $profesional,
+                    'alertas' => []
+                ];
+            }
             $insertId = $this->profesionalRepository->createWithServicios($profesional, $validacion['servicioIds']);
             return [
                 'status' => self::STATUS_OK,
                 'resultado' => true,
                 'id' => $insertId,
+                'repetida' => false,
                 'profesional' => $profesional,
                 'alertas' => []
+            ];
+        } catch (ConflictoIdempotenciaException $e) {
+            return [
+                'status' => self::STATUS_CONFLICT_CLAVE,
+                'resultado' => false,
+                'id' => null,
+                'profesional' => $profesional,
+                'alertas' => ['error' => ['Esta solicitud ya se registró con otros datos. Recarga el formulario para crear otro profesional.']]
+            ];
+        } catch (OperacionEnCursoException $e) {
+            return [
+                'status' => self::STATUS_EN_CURSO,
+                'resultado' => false,
+                'id' => null,
+                'profesional' => $profesional,
+                'alertas' => ['error' => ['Tu solicitud anterior sigue procesándose. Espera unos segundos y revisa la lista de profesionales.']]
             ];
         } catch (PersistenceException $e) {
             return [

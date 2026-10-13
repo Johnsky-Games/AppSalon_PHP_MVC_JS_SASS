@@ -215,58 +215,45 @@ class ProfesionalRepository
     public function createWithServicios(Profesional $profesional, array $servicioIds): int
     {
         $db = $this->resolveDb();
-        $inTransaction = false;
 
         try {
-            if (!$db->begin_transaction()) {
-                throw new PersistenceException("No se pudo iniciar transacción para crear profesional: " . $db->error);
-            }
-            $inTransaction = true;
+            // Transacción anidable: puede ejecutarse dentro de una operación idempotente mayor.
+            $profesionalId = \Classes\Transaccion::ejecutar($db, function (mysqli $db) use ($profesional, $servicioIds): int {
+                $stmt = $db->prepare("INSERT INTO profesionales (nombre, activo) VALUES (?, ?)");
+                if (!$stmt) {
+                    throw new PersistenceException("Error al preparar inserción de profesional: " . $db->error);
+                }
 
-            $stmt = $db->prepare("INSERT INTO profesionales (nombre, activo) VALUES (?, ?)");
-            if (!$stmt) {
-                throw new PersistenceException("Error al preparar inserción de profesional: " . $db->error);
-            }
+                $nombre = (string)$profesional->nombre;
+                $activo = (string)$profesional->activo === '0' ? 0 : 1;
+                $stmt->bind_param('si', $nombre, $activo);
 
-            $nombre = (string)$profesional->nombre;
-            $activo = (string)$profesional->activo === '0' ? 0 : 1;
-            $stmt->bind_param('si', $nombre, $activo);
+                if (!$stmt->execute()) {
+                    $err = $stmt->error;
+                    $stmt->close();
+                    throw new PersistenceException("Error al ejecutar inserción de profesional: " . $err);
+                }
 
-            if (!$stmt->execute()) {
-                $err = $stmt->error;
+                $afectadas = $stmt->affected_rows;
+                $id = (int)$db->insert_id;
                 $stmt->close();
-                throw new PersistenceException("Error al ejecutar inserción de profesional: " . $err);
-            }
 
-            $afectadas = $stmt->affected_rows;
-            $profesionalId = (int)$db->insert_id;
-            $stmt->close();
+                if ($afectadas !== 1 || $id <= 0) {
+                    throw new PersistenceException("La inserción del profesional no afectó ninguna fila.");
+                }
 
-            if ($afectadas !== 1 || $profesionalId <= 0) {
-                throw new PersistenceException("La inserción del profesional no afectó ninguna fila.");
-            }
-
-            $this->insertarServiciosProfesional($db, $profesionalId, $servicioIds);
-
-            if (!$db->commit()) {
-                throw new PersistenceException("Fallo al confirmar transacción de creación de profesional: " . $db->error);
-            }
-            $inTransaction = false;
+                $this->insertarServiciosProfesional($db, $id, $servicioIds);
+                return $id;
+            });
 
             $profesional->id = (string)$profesionalId;
             $profesional->servicioIds = array_values(array_unique(array_map('intval', $servicioIds)));
 
             return $profesionalId;
         } catch (PersistenceException $e) {
-            if ($inTransaction) {
-                @$db->rollback();
-            }
             error_log("[ProfesionalRepository::createWithServicios] " . $e->getMessage());
             throw $e;
         } catch (\Throwable $e) {
-            if ($inTransaction) {
-                @$db->rollback();
-            }
             error_log("[ProfesionalRepository::createWithServicios] Excepción inesperada: " . $e->getMessage());
             throw new PersistenceException("Fallo transaccional al crear profesional.", 0, $e);
         }

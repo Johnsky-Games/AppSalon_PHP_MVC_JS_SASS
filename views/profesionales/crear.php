@@ -6,8 +6,9 @@ $alertas = $alertas ?? [];
 include __DIR__ . '/../templates/alertas.php';
 ?>
 
-<form action="/profesionales/crear" method="POST" class="formulario ui-card">
+<form action="/profesionales/crear" method="POST" class="formulario ui-card" data-una-vez>
     <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
+    <input type="hidden" name="idem_key" value="<?php echo s(clave_operacion_formulario()); ?>">
     <?php include __DIR__ . '/formulario.php'; ?>
     <input type="submit" value="Guardar Profesional" class="boton">
 </form>

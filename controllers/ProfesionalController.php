@@ -205,10 +205,16 @@ class ProfesionalController
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exigir_csrf();
 
-            $resultado = self::obtenerProfesionalService()->crear($_POST);
+            $clave = clave_operacion_enviada();
+            if ($clave === null) {
+                // Toda alta nace de un formulario con su clave de operación; sin ella no se admite.
+                $resultado = ['status' => ProfesionalService::STATUS_INVALID, 'profesional' => new Profesional(),
+                    'alertas' => ['error' => ['El formulario venció. Recárgalo antes de guardar.']]];
+            } else {
+                $resultado = self::obtenerProfesionalService()->crear($_POST, $clave, \Classes\Idempotencia::actorUsuario((int)($_SESSION['id'] ?? 0), 'equipo'));
+            }
             if ($resultado['status'] === ProfesionalService::STATUS_OK) {
-                header('Location: /profesionales');
-                detener_ejecucion(302);
+                redirigir('/profesionales');
                 return;
             }
 
@@ -217,6 +223,8 @@ class ProfesionalController
 
             if ($resultado['status'] === ProfesionalService::STATUS_ERROR) {
                 http_response_code(500);
+            } elseif ($resultado['status'] === ProfesionalService::STATUS_CONFLICT_CLAVE || $resultado['status'] === ProfesionalService::STATUS_EN_CURSO) {
+                http_response_code(409);
             } elseif (es_peticion_json() || !self::esCargaFormularioProfesionalValida($_POST)) {
                 http_response_code(422);
             }

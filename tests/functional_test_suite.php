@@ -179,8 +179,10 @@ $reporte = [];
 echo ">>> Ejecutando Escenario 1: Registro de Cuenta...\n";
 $getRegistro = request('GET', '/crear-cuenta', [], $cookieAnon);
 $csrfReg = extractCsrf($getRegistro['body']);
+$claveRegistro = preg_match('/name="idem_key" value="([A-Za-z0-9_-]+)"/', $getRegistro['body'], $mClave) ? $mClave[1] : '';
 
 $postRegistro = request('POST', '/crear-cuenta', [
+    'idem_key' => $claveRegistro,
     'nombre' => 'Carlos',
     'apellido' => 'Mendoza',
     'telefono' => '5551234567',

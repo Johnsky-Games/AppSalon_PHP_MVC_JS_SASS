@@ -214,97 +214,109 @@ class UsuarioRepository
     /**
      * Inserta un nuevo usuario en la base de datos mediante sentencia preparada.
      * Nunca asigna un `id` externo; retorna el identificador autogenerado por MySQL.
+     * No crea membresías: úsalo para identidades del equipo (ver EquipoRepository).
      *
      * @param Usuario $usuario Entidad Usuario a persistir.
      * @return int Identificador primario autogenerado.
+     * @throws DuplicateEntryException Si el correo normalizado ya existe (restricción UNIQUE).
      * @throws PersistenceException Si ocurre un fallo SQL o la inserción no afecta exactamente 1 fila.
      */
-    public function create(Usuario $usuario, ?string $origenCliente = null): int
+    public function create(Usuario $usuario): int
     {
         $db = $this->resolveDb();
-        $transaccion = false;
 
         try {
-            // Con membresía cliente el alta de identidad y de cliente es atómica: no hay cuentas huérfanas.
-            if ($origenCliente !== null) {
-                if (!$db->begin_transaction()) {
-                    throw new PersistenceException("No se pudo iniciar la transacción de alta de cliente: " . $db->error);
-                }
-                $transaccion = true;
-            }
-            $sql = "INSERT INTO usuarios (nombre, apellido, email, password, telefono, admin, confirmado, token, token_hash, token_tipo, token_expira)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-            $stmt = $db->prepare($sql);
-            if (!$stmt) {
-                throw new PersistenceException("Error al preparar inserción de usuario: " . $db->error);
-            }
-
-            $nombre = (string)($usuario->nombre ?? '');
-            $apellido = (string)($usuario->apellido ?? '');
-            $email = (string)($usuario->email ?? '');
-            $password = (string)($usuario->password ?? '');
-            $telefono = (string)($usuario->telefono ?? '');
-            $admin = isset($usuario->admin) && $usuario->admin !== '' ? (string)$usuario->admin : '0';
-            $confirmado = isset($usuario->confirmado) && $usuario->confirmado !== '' ? (string)$usuario->confirmado : '0';
-            $token = $usuario->token !== null && $usuario->token !== '' ? (string)$usuario->token : null;
-            $tokenHash = $usuario->token_hash !== null && $usuario->token_hash !== '' ? (string)$usuario->token_hash : null;
-            $tokenTipo = $usuario->token_tipo !== null && $usuario->token_tipo !== '' ? (string)$usuario->token_tipo : null;
-            $tokenExpira = $usuario->token_expira !== null && $usuario->token_expira !== '' ? (string)$usuario->token_expira : null;
-
-            $stmt->bind_param(
-                'sssssssssss',
-                $nombre,
-                $apellido,
-                $email,
-                $password,
-                $telefono,
-                $admin,
-                $confirmado,
-                $token,
-                $tokenHash,
-                $tokenTipo,
-                $tokenExpira
-            );
-
-            if (!$stmt->execute()) {
-                $err = $stmt->error;
-                $errno = $stmt->errno;
-                $stmt->close();
-                if ($errno === 1062) {
-                    throw new DuplicateEntryException("Correo ya registrado (restricción UNIQUE).");
-                }
-                throw new PersistenceException("Error al ejecutar inserción de usuario: " . $err);
-            }
-
-            $afectadas = $stmt->affected_rows;
-            $insertId = (int)$db->insert_id;
-            $stmt->close();
-
-            if ($afectadas !== 1 || $insertId <= 0) {
-                throw new PersistenceException("La inserción de usuario no afectó ninguna fila.");
-            }
-
-            if ($origenCliente !== null) {
-                $this->insertarMembresiaCliente($db, $insertId, $origenCliente);
-                if (!$db->commit()) {
-                    throw new PersistenceException("Fallo al confirmar el alta de cliente: " . $db->error);
-                }
-                $transaccion = false;
-            }
-
-            $usuario->id = $insertId;
-            return $insertId;
+            return $this->insertarUsuario($db, $usuario);
+        } catch (DuplicateEntryException $e) {
+            throw $e;
         } catch (PersistenceException $e) {
-            if ($transaccion) { @$db->rollback(); }
-            if (!$e instanceof DuplicateEntryException) {
-                error_log("[UsuarioRepository::create] " . $e->getMessage());
-            }
+            error_log("[UsuarioRepository::create] " . $e->getMessage());
             throw $e;
         } catch (\Throwable $e) {
-            if ($transaccion) { @$db->rollback(); }
             error_log("[UsuarioRepository::create] Excepción inesperada: " . $e->getMessage());
             throw new PersistenceException("Fallo en la capa de persistencia al crear usuario.", 0, $e);
         }
+    }
+
+    /**
+     * Alta de cliente: identidad y membresía cliente en una sola transacción (anidable dentro de otra
+     * operación atómica, p. ej. la reserva de idempotencia). Si algo falla no queda cuenta huérfana.
+     *
+     * @param string $origen 'registro_publico' | 'migracion' | 'recepcion'
+     * @throws DuplicateEntryException Si el correo normalizado ya existe.
+     * @throws PersistenceException Ante cualquier otro fallo de persistencia.
+     */
+    public function createCliente(Usuario $usuario, string $origen = 'registro_publico'): int
+    {
+        $db = $this->resolveDb();
+
+        try {
+            return \Classes\Transaccion::ejecutar($db, function (mysqli $db) use ($usuario, $origen): int {
+                $id = $this->insertarUsuario($db, $usuario);
+                $this->insertarMembresiaCliente($db, $id, $origen);
+                return $id;
+            });
+        } catch (DuplicateEntryException $e) {
+            throw $e;
+        } catch (PersistenceException $e) {
+            error_log("[UsuarioRepository::createCliente] " . $e->getMessage());
+            throw $e;
+        } catch (\Throwable $e) {
+            error_log("[UsuarioRepository::createCliente] Excepción inesperada: " . $e->getMessage());
+            throw new PersistenceException("Fallo en la capa de persistencia al crear cliente.", 0, $e);
+        }
+    }
+
+    private function insertarUsuario(mysqli $db, Usuario $usuario): int
+    {
+        $sql = "INSERT INTO usuarios (nombre, apellido, email, password, telefono, admin, confirmado, token, token_hash, token_tipo, token_expira)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        $stmt = $db->prepare($sql);
+        if (!$stmt) {
+            throw new PersistenceException("Error al preparar inserción de usuario: " . $db->error);
+        }
+
+        $nombre = (string)($usuario->nombre ?? '');
+        $apellido = (string)($usuario->apellido ?? '');
+        $email = (string)($usuario->email ?? '');
+        $password = (string)($usuario->password ?? '');
+        $telefono = (string)($usuario->telefono ?? '');
+        $admin = isset($usuario->admin) && $usuario->admin !== '' ? (string)$usuario->admin : '0';
+        $confirmado = isset($usuario->confirmado) && $usuario->confirmado !== '' ? (string)$usuario->confirmado : '0';
+        $token = $usuario->token !== null && $usuario->token !== '' ? (string)$usuario->token : null;
+        $tokenHash = $usuario->token_hash !== null && $usuario->token_hash !== '' ? (string)$usuario->token_hash : null;
+        $tokenTipo = $usuario->token_tipo !== null && $usuario->token_tipo !== '' ? (string)$usuario->token_tipo : null;
+        $tokenExpira = $usuario->token_expira !== null && $usuario->token_expira !== '' ? (string)$usuario->token_expira : null;
+
+        $stmt->bind_param('sssssssssss', $nombre, $apellido, $email, $password, $telefono, $admin, $confirmado, $token, $tokenHash, $tokenTipo, $tokenExpira);
+
+        try {
+            $ok = $stmt->execute();
+            $errno = $ok ? 0 : (int)$stmt->errno;
+            $err = $ok ? '' : $stmt->error;
+        } catch (\mysqli_sql_exception $e) {
+            $ok = false;
+            $errno = (int)$e->getCode();
+            $err = $e->getMessage();
+        }
+        if (!$ok) {
+            $stmt->close();
+            if ($errno === 1062) {
+                throw new DuplicateEntryException("Correo ya registrado (restricción UNIQUE).");
+            }
+            throw new PersistenceException("Error al ejecutar inserción de usuario: " . $err);
+        }
+
+        $afectadas = $stmt->affected_rows;
+        $insertId = (int)$db->insert_id;
+        $stmt->close();
+
+        if ($afectadas !== 1 || $insertId <= 0) {
+            throw new PersistenceException("La inserción de usuario no afectó ninguna fila.");
+        }
+
+        $usuario->id = $insertId;
+        return $insertId;
     }
 
     /**

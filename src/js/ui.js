@@ -67,6 +67,63 @@
             if (typeof compactNavigation.addEventListener === 'function') compactNavigation.addEventListener('change', resetNavigation);
             else compactNavigation.addListener(resetNavigation);
         }
+        // Altas (cliente, colaborador, profesional, invitación): un único envío por formulario.
+        // La protección real es la clave de operación del servidor; esto evita la segunda petición y
+        // comunica el estado. No usa `disabled` (conservaría los datos del botón) y se libera sola si
+        // la red falla, para no dejar al usuario bloqueado.
+        document.querySelectorAll('form[data-una-vez]').forEach(form => {
+            if (form.dataset.unaVezListo) return;
+            form.dataset.unaVezListo = '1';
+            const estado = document.createElement('p');
+            estado.className = 'ui-form-status';
+            estado.setAttribute('role', 'status');
+            estado.setAttribute('aria-live', 'polite');
+            form.appendChild(estado);
+            const botones = () => [...form.querySelectorAll('input[type="submit"], button[type="submit"], button:not([type])')];
+            let enviando = false;
+            let temporizador = 0;
+            const liberar = () => {
+                clearTimeout(temporizador);
+                if (!enviando) return;
+                enviando = false;
+                form.removeAttribute('aria-busy');
+                botones().forEach(boton => {
+                    boton.removeAttribute('aria-disabled');
+                    boton.classList.remove('is-busy');
+                    if (boton.dataset.etiquetaOriginal !== undefined) {
+                        if (boton.tagName === 'INPUT') boton.value = boton.dataset.etiquetaOriginal;
+                        else boton.textContent = boton.dataset.etiquetaOriginal;
+                        delete boton.dataset.etiquetaOriginal;
+                    }
+                });
+                estado.textContent = '';
+            };
+            form.addEventListener('submit', event => {
+                if (enviando) {
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                    return;
+                }
+                enviando = true;
+                form.setAttribute('aria-busy', 'true');
+                botones().forEach(boton => {
+                    boton.setAttribute('aria-disabled', 'true');
+                    boton.classList.add('is-busy');
+                    boton.dataset.etiquetaOriginal = boton.tagName === 'INPUT' ? boton.value : boton.textContent;
+                    if (boton.tagName === 'INPUT') boton.value = 'Guardando…';
+                    else boton.textContent = 'Guardando…';
+                });
+                estado.textContent = 'Guardando, un momento…';
+                temporizador = setTimeout(() => {
+                    liberar();
+                    estado.textContent = 'No recibimos respuesta. Revisa tu conexión y vuelve a intentarlo: no se duplicará el registro.';
+                }, 20000);
+            }, true);
+            form.addEventListener('click', event => {
+                if (enviando && event.target.closest('input[type="submit"], button[type="submit"], button:not([type])')) event.preventDefault();
+            }, true);
+            window.addEventListener('pageshow', event => { if (event.persisted) liberar(); });
+        });
         document.querySelectorAll('[data-modal-open]').forEach(button => {
             button.addEventListener('click', () => {
                 const modal = document.getElementById(button.dataset.modalOpen);

@@ -208,6 +208,24 @@ function exigir_csrf(): void
     }
 }
 
+/**
+ * Clave de operación del formulario de alta. Se genera al MOSTRAR el formulario y se conserva si el
+ * formulario se vuelve a mostrar con errores; un doble clic o reintento reutiliza la misma clave y por
+ * eso el servidor reconoce la misma intención de alta. No sustituye al token CSRF.
+ */
+function clave_operacion_formulario(): string
+{
+    $enviada = $_POST['idem_key'] ?? null;
+    return \Classes\Idempotencia::claveValida($enviada) ? $enviada : \Classes\Idempotencia::nuevaClave();
+}
+
+/** Clave enviada con el formulario o null si falta o es inválida. */
+function clave_operacion_enviada(): ?string
+{
+    $enviada = $_POST['idem_key'] ?? null;
+    return \Classes\Idempotencia::claveValida($enviada) ? $enviada : null;
+}
+
 /** Revalida acceso usando roles del servidor; las sesiones heredadas no elevan privilegios. */
 function puede(string $permiso): bool
 {

@@ -52,13 +52,18 @@ class InMemoryUsuarioRepositoryStub extends UsuarioRepository
         return $this->findByEmail($email) !== null;
     }
 
-    public function create(Usuario $usuario, ?string $origenCliente = null): int
+    public function create(Usuario $usuario): int
     {
         $this->checkFallo();
         $id = $this->autoIncrement++;
         $usuario->id = (string)$id;
         $this->usuarios[$id] = clone $usuario;
         return $id;
+    }
+
+    public function createCliente(Usuario $usuario, string $origen = 'registro_publico'): int
+    {
+        return $this->create($usuario);
     }
 
     public function findByValidToken(string $tokenRaw, string $tipo): ?Usuario

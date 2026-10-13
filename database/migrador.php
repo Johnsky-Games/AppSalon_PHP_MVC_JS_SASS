@@ -78,6 +78,22 @@ if ($comando === 'status') {
             continue;
         }
 
+        // Pre-validación opcional: detecta datos incompatibles ANTES de alterar el esquema,
+        // para no dejar un despliegue a medias. Nunca modifica datos.
+        $precheck = __DIR__ . '/migrations/' . $nombre . '.precheck.php';
+        if (is_file($precheck)) {
+            $validador = require $precheck;
+            $problemas = is_callable($validador) ? $validador($db) : [];
+            if (!empty($problemas)) {
+                echo "[ERROR] La migración {$nombre} NO se aplicó: hay datos incompatibles.\n";
+                foreach ($problemas as $problema) {
+                    echo "  - {$problema}\n";
+                }
+                echo "[AVISO] No se modificó ninguna tabla. Ejecuta scripts/diagnosticar_duplicados.php (solo lectura), resuelve los casos con respaldo previo y reintenta.\n";
+                exit(1);
+            }
+        }
+
         echo "[+] Aplicando migración: {$nombre}...\n";
         $sql = file_get_contents($archivo);
         if (!$db->multi_query($sql)) {
