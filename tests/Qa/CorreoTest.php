@@ -115,4 +115,14 @@ final class CorreoTest extends QaCase
         usleep(400000);
         $this->assertGreaterThan($antes, count(self::buzon(2596)));
     }
+
+    public function test_Defecto_el_outbox_de_correos_no_tiene_proceso_programado_ni_documentacion_operativa(): void
+    {
+        $compose = (string)file_get_contents(self::RAIZ . '/docker-compose.yml');
+        $docs = '';
+        foreach (glob(self::RAIZ . '/docs/*.md') ?: [] as $f) { if (basename($f) === 'QA_INDEPENDIENTE_IDENTIDADES.md') { continue; } $docs .= file_get_contents($f); }
+        $docs .= (string)file_get_contents(self::RAIZ . '/database/README.md');
+        $cableado = str_contains($compose, 'procesar_correos') || str_contains($docs . (string)file_get_contents(self::RAIZ . '/GUIA_ENTREGA_1.md'), 'procesar_correos');
+        $this->assertTrue($cableado, 'scripts/procesar_correos.php (reintento de invitaciones) no figura en docker-compose, ni cron, ni en la documentación: los correos fallidos solo se reintentan cuando alguien abre GET /admin/equipo');
+    }
 }

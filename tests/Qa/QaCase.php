@@ -34,8 +34,9 @@ abstract class QaCase extends TestCase
             mysqli_report(MYSQLI_REPORT_OFF);
             self::$conexion = new \mysqli('127.0.0.1', 'root', 'root', self::nombreBd(), 3306);
             self::$conexion->set_charset('utf8mb4');
-            \Model\ActiveRecord::setDB(self::$conexion);
         }
+        // Otras pruebas pueden haber apuntado ActiveRecord a una base aislada (ya cerrada): se restablece siempre.
+        \Model\ActiveRecord::setDB(self::$conexion);
         return self::$conexion;
     }
 

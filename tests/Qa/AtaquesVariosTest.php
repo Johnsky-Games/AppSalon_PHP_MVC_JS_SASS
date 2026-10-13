@@ -330,4 +330,48 @@ final class AtaquesVariosTest extends QaCase
         self::q('UPDATE usuarios SET nombre=?, apellido=?, telefono=? WHERE id=?', [$antes['nombre'], $antes['apellido'], $antes['telefono'], $duenoId]);
         $this->assertSame($antes, $despues, 'perfiles.gestionar (recepción) debería limitarse a perfiles de CLIENTES; pudo reescribir nombre y teléfono de la cuenta del propietario (HTTP ' . $r['status'] . ')');
     }
+
+    public function test_Defecto_colaborador_suspendido_con_membresia_de_cliente_activa_pierde_tambien_el_portal_de_clientes(): void
+    {
+        $dueno = self::$p['propietario']['id'];
+        $dual = self::cliente(['email' => 'dualstaffsusp.' . bin2hex(random_bytes(2)) . '@example.test']);
+        $repo = new \Repositories\ColaboradorRepository(self::db());
+        $r = $repo->crearInvitacion($dueno, ['nombre' => 'Du', 'apellido' => 'Al', 'email' => $dual['email'], 'telefono' => null, 'puesto' => '', 'rol' => 'recepcion', 'fecha_ingreso' => null, 'servicios' => [], 'nombre_profesional' => '', 'profesional_id' => null]);
+        $repo->aceptar(self::tokenDeInvitacion($r['invitacion_id']), '', $dual['password']);
+        $this->assertSame('ok', $this->svc()->cambiarAcceso($dueno, $r['colaborador_id'], 'recepcion', 'suspendido')['status']);
+        $this->assertSame('activo', self::escalar('SELECT estado FROM clientes WHERE usuario_id=?', [$dual['id']]), 'la membresía de cliente sigue activa: son estados independientes');
+        $n = new Navegador(self::$base);
+        self::q('TRUNCATE intentos_login');
+        $login = $n->login('cliente', $dual['email'], $dual['password']);
+        $this->assertSame(302, $login['status'], 'El login de cliente de alguien con membresía activa debería funcionar: ' . substr(strip_tags($login['body']), 0, 200));
+        $this->assertSame(200, $n->get('/cita')['status'], 'La sesión de cliente se invalida en la petición siguiente porque contexto().activo=0 se calcula con el estado laboral (suspendido) y no distingue el portal');
+    }
+
+    public function test_homonimo_de_profesional_exige_confirmacion_explicita(): void
+    {
+        $svc = $this->svc();
+        $dueno = self::$p['propietario']['id'];
+        $sid = self::servicio();
+        self::q("INSERT INTO profesionales(nombre,activo) VALUES ('  Laura   Gómez ',1)");
+        $base = ['nombre' => 'Laura', 'apellido' => 'Gómez', 'telefono' => '', 'puesto' => '', 'rol' => 'profesional', 'fecha_ingreso' => '', 'servicios' => [(string)$sid], 'nombre_profesional' => 'laura gómez'];
+        $a = $svc->invitar($dueno, $base + ['email' => self::correo('hom1')], Idem::clave());
+        $this->assertSame('invalid', $a['status'], json_encode($a));
+        $this->assertTrue($a['requiere_homonimo'] ?? false);
+        $this->assertSame(0, (int)self::escalar("SELECT COUNT(*) FROM profesionales WHERE colaborador_id IS NOT NULL AND LOWER(nombre)='laura gómez'"));
+        $b = $svc->invitar($dueno, $base + ['email' => self::correo('hom2'), 'confirmar_homonimo' => '1'], Idem::clave());
+        $this->assertSame('ok', $b['status'], json_encode($b));
+    }
+
+    public function test_identificadores_hostiles_en_fichas_y_perfiles_dan_404_sin_advertencias(): void
+    {
+        $o = $this->nav('propietario');
+        $antes = strlen(self::logServidor());
+        foreach (['/admin/equipo/ficha?id[]=1', '/admin/equipo/ficha?id=1abc', '/admin/equipo/ficha?id=-1', '/admin/equipo/ficha?id=0', '/admin/equipo/ficha?id=99999999999999999999', '/admin/equipo/ficha',
+                  '/admin/clientes/ficha?id[]=1', '/admin/clientes/ficha?id=1e3', '/admin/clientes/ficha?id=%00', '/admin/clientes/ficha?id=00001', '/admin/clientes/ficha?id=99999999999',
+                  '/perfil?id[]=1', '/perfil?id=abc', '/perfil/foto?id[]=1', '/perfil/foto?id=-3'] as $ruta) {
+            $r = $o->get($ruta);
+            $this->assertContains($r['status'], [404, 422], "$ruta => {$r['status']}");
+        }
+        $this->assertDoesNotMatchRegularExpression('/Warning|Notice|TypeError|Fatal/i', substr(self::logServidor(), $antes));
+    }
 }

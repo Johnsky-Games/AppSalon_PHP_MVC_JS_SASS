@@ -315,6 +315,46 @@ final class EsquemaTest extends QaCase
         $db->close();
     }
 
+    public function test_E4b_la_restauracion_rechaza_destinos_no_vacios_y_respaldos_truncados_sin_tocar_nada(): void
+    {
+        $o = $this->bd('bk'); $d = $this->bd('bkr');
+        self::crearBd($o);
+        $this->semilla($o);
+        $env = array_merge(getenv(), ['DB_NAME' => $o]);
+        $archivo = sys_get_temp_dir() . '/qa_bk_b_' . getmypid() . '.sql';
+        $p = proc_open([PHP_BINARY, '-d', 'variables_order=EGPCS', self::RAIZ . '/scripts/backup_db.php', "--db=$o", "--output=$archivo"], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, self::RAIZ, $env);
+        stream_get_contents($pipes[1]); stream_get_contents($pipes[2]);
+        $this->assertSame(0, proc_close($p));
+        $restaurar = function (string $bd, string $entrada, ?string $hash) use ($env): array {
+            $args = [PHP_BINARY, '-d', 'variables_order=EGPCS', self::RAIZ . '/scripts/restore_db.php', "--db=$bd", "--input=$entrada"];
+            if ($hash !== null) { $args[] = "--hash=$hash"; }
+            $p = proc_open($args, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, self::RAIZ, $env);
+            $out = stream_get_contents($pipes[1]) . stream_get_contents($pipes[2]);
+            return ['exit' => proc_close($p), 'out' => $out];
+        };
+        // 1) Destino con datos: debe negarse y no alterar nada.
+        $a = self::admin(); $a->query("DROP DATABASE IF EXISTS `$d`"); $a->query("CREATE DATABASE `$d` CHARACTER SET utf8mb4"); $a->select_db($d);
+        $a->query('CREATE TABLE usuarios (id INT PRIMARY KEY, marca VARCHAR(20))'); $a->query("INSERT INTO usuarios VALUES (1,'intacto')"); $a->close();
+        $r = $restaurar($d, $archivo, hash_file('sha256', $archivo));
+        $this->assertNotSame(0, $r['exit'], 'restauró sobre una base con datos: ' . $r['out']);
+        $db = $this->conectar($d);
+        $this->assertSame('intacto', $this->filas($db, 'SELECT marca FROM usuarios WHERE id=1')[0]['marca'], 'la restauración alteró la base destino pese a rechazarla');
+        $db->close();
+        // 2) Respaldo truncado (sin marcador final): se rechaza antes de ejecutar nada.
+        $a = self::admin(); $a->query("DROP DATABASE IF EXISTS `$d`"); $a->query("CREATE DATABASE `$d` CHARACTER SET utf8mb4"); $a->close();
+        $trunc = $archivo . '.trunc.sql';
+        file_put_contents($trunc, substr((string)file_get_contents($archivo), 0, (int)(filesize($archivo) * 0.6)));
+        $r = $restaurar($d, $trunc, hash_file('sha256', $trunc));
+        $this->assertNotSame(0, $r['exit'], 'restauró un respaldo truncado: ' . $r['out']);
+        $db = $this->conectar($d);
+        $this->assertSame([], $this->filas($db, 'SHOW TABLES'), 'un respaldo truncado dejó tablas a medias');
+        $db->close();
+        // 3) Sin hash ni manifiesto adyacente fiable: se exige verificación.
+        $r = $restaurar($d, $archivo, str_repeat('f', 64));
+        $this->assertNotSame(0, $r['exit']);
+        @unlink($archivo); @unlink($archivo . '.manifest.json'); @unlink($trunc);
+    }
+
     public function test_Defecto_E5_conteo_de_tablas_y_documentacion(): void
     {
         $db = $this->conectar($this->bd('bk'));
