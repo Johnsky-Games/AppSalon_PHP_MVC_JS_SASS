@@ -170,7 +170,7 @@ final class CrmService
         if (empty($acceso['analitica'])) { $segmentos = array_values(array_diff($segmentos, ['vip'])); }
         $segmento = $lista('segmento', 'El segmento', $segmentos);
         $membresia = $lista('membresia', 'El estado de membresía', array_keys(self::MEMBRESIAS));
-        $consentimiento = $lista('consentimiento', 'El filtro de consentimiento comercial', ['si', 'no']);
+        $consentimiento = $lista('consentimiento', 'El filtro de consentimiento comercial', ['si', 'vigente', 'anterior', 'no']);
         $diasActivo = $entero('dias_activo', 'La ventana de clientes activos', self::DIAS_ACTIVO_MIN, self::DIAS_ACTIVO_MAX) ?? self::DIAS_ACTIVO_DEFECTO;
 
         $ordenesPermitidos = !empty($acceso['analitica']) ? self::ORDENES : array_values(array_diff(self::ORDENES, ['gasto']));
@@ -298,6 +298,8 @@ final class CrmService
             'clientes_total' => $total,
             'membresias' => ['activo' => (int)($ind['m_activa'] ?? 0), 'suspendido' => (int)($ind['m_suspendida'] ?? 0), 'sin_registro' => (int)($ind['m_sin_registro'] ?? 0)],
             'con_consentimiento' => (int)($ind['con_consentimiento'] ?? 0),
+            'con_consentimiento_vigente' => (int)($ind['con_consentimiento_vigente'] ?? 0),
+            'con_consentimiento_anterior' => (int)($ind['con_consentimiento_anterior'] ?? 0),
             'nuevos' => (int)($ind['nuevos'] ?? 0),
             'primera_visita_en_rango' => (int)($ind['primera_visita_en_rango'] ?? 0),
             'activos' => (int)($ind['activos'] ?? 0),
@@ -431,6 +433,8 @@ final class CrmService
             'fidelidad' => $fid, 'espera' => $espera, 'gasto' => $gasto,
             'cronologia' => $cronologia,
             'citas' => $citas, 'pagos' => $pagos,
+            // Evidencia append-only de aceptaciones y retiros, con la versión del texto que la persona vio.
+            'consentimiento_historial' => $this->repo->historialConsentimiento($id, 20),
         ];
     }
 
@@ -480,7 +484,7 @@ final class CrmService
      * Genera el CSV. `$tipo` 'clientes' (operativo, sin datos privados de formularios) o 'comercial' (solo quienes
      * aceptaron comunicaciones, con cuenta confirmada y membresía no suspendida). Cada celda pasa por
      * ReporteService::sanearCeldaCsv (neutralización de fórmulas), sin duplicar esa lógica.
-     * @return array{contenido:string,filas:int,truncado:bool,archivo:string}
+     * @return array{contenido:string,filas:int,truncado:bool,archivo:string,columnas:string[]}
      */
     public function exportar(array $f, array $acceso, string $tipo): array
     {
@@ -502,9 +506,11 @@ final class CrmService
         };
         $dinero = static fn(int $cents): string => number_format($cents / 100, 2, '.', '');
         if ($tipo === 'comercial') {
-            $escribir(['ID', 'Nombre', 'Apellido', 'Correo', 'Consentimiento desde']);
+            $cab = ['ID', 'Nombre', 'Apellido', 'Correo', 'Consentimiento desde'];
+            $escribir($cab);
         } else {
             $cab = ['ID', 'Nombre', 'Apellido', 'Correo', 'Teléfono', 'Estado de membresía', 'Origen', 'Fecha de alta', 'Cuenta confirmada', 'Consentimiento comercial', 'Fecha de consentimiento',
+                'Versión del consentimiento', 'Consentimiento con versión anterior',
                 'Visitas completadas (total)', 'Visitas completadas (periodo y filtros)', 'Primera visita', 'Última visita', 'Días desde la última visita', 'Segmento'];
             if ($analitica) { array_push($cab, 'Cobros reales (USD)', 'Devoluciones reales (USD)', 'Gasto neto real (USD)', 'Neto simulado (USD, no es ingreso)'); }
             $escribir($cab);
@@ -519,6 +525,7 @@ final class CrmService
                 } else {
                     $fila = [(int)$r['id'], $r['nombre'], $r['apellido'], $r['email'], (string)$r['telefono'], self::MEMBRESIAS[$r['membresia']] ?? $r['membresia'], (string)$r['origen'], (string)$r['alta'],
                         (int)$r['confirmado'] === 1 ? 'Sí' : 'No', (int)$r['consentimiento'] === 1 ? 'Sí' : 'No', (string)$r['consentimiento_en'],
+                        $r['consentimiento_version'] === null ? '' : (int)$r['consentimiento_version'], (int)$r['consentimiento_anterior'] === 1 ? 'Sí' : 'No',
                         (int)$r['visitas_total'], (int)$r['visitas_rango'], (string)$r['primera_visita'], (string)$r['ultima_visita'], $r['recencia'] === null ? '' : (int)$r['recencia'],
                         self::SEGMENTOS[$r['segmento']] ?? $r['segmento']];
                     if ($analitica) {
@@ -536,6 +543,6 @@ final class CrmService
         $contenido = (string)stream_get_contents($fp);
         fclose($fp);
         $archivo = ($tipo === 'comercial' ? 'lista_comercial_' : 'clientes_') . $f['desde'] . '_a_' . min($f['hasta'], $hoy) . '.csv';
-        return ['contenido' => $contenido, 'filas' => $filas, 'truncado' => $truncado, 'archivo' => $archivo];
+        return ['contenido' => $contenido, 'filas' => $filas, 'truncado' => $truncado, 'archivo' => $archivo, 'columnas' => $cab];
     }
 }

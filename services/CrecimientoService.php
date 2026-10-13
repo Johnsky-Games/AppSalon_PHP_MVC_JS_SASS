@@ -56,7 +56,11 @@ class CrecimientoService
     public function accionCliente(int $id, array $datos): string
     {
         switch($datos['accion']??'') {
-            case 'consentimiento': $this->repo->consentimiento($id,($datos['aceptado']??'')==='1'); return 'Preferencia comercial actualizada.';
+            case 'consentimiento':
+                // Versión del texto que la persona vio (viaja en el formulario) y reconfirmación expresa de un texto más nuevo.
+                $this->repo->consentimiento($id,($datos['aceptado']??'')==='1',$datos['consentimiento_version']??null,
+                    ['reconfirma'=>($datos['reconfirmar_consentimiento']??'')==='1','ip_hash'=>\Services\AuditoriaHuella::ip(\Services\AuditoriaHuella::ipDeSolicitud())]);
+                return 'Preferencia comercial actualizada.';
             case 'espera':
                 $servicio=filter_var($datos['servicio_id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]]);
                 $prof=($datos['profesional_id']??'')==='' ? null : filter_var($datos['profesional_id'],FILTER_VALIDATE_INT,['options'=>['min_range'=>1]]);

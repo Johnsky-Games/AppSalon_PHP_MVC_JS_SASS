@@ -5,7 +5,9 @@ use mysqli;
 
 final class ProfileRepository
 {
-    public function __construct(private mysqli $db) {}
+    private ?ConsentimientoRepository $consentimientos = null;
+
+    public function __construct(private mysqli $db, ?ConsentimientoRepository $consentimientos = null) { $this->consentimientos = $consentimientos; }
 
     private function statement(string $sql, string $types = '', array $values = []): \mysqli_stmt
     {
@@ -18,7 +20,7 @@ final class ProfileRepository
 
     public function obtener(int $id): ?array
     {
-        $stmt = $this->statement('SELECT u.id, u.nombre, u.apellido, u.telefono, u.email, COALESCE(p.contacto_email,1) contacto_email, COALESCE(p.marketing_email,0) marketing_email, COALESCE(p.recordatorios,1) recordatorios, COALESCE(p.foto_publica,0) foto_publica, f.archivo, EXISTS(SELECT 1 FROM profesionales pr WHERE pr.usuarioId=u.id AND pr.activo=1) es_profesional FROM usuarios u LEFT JOIN perfiles_usuario p ON p.usuarioId=u.id LEFT JOIN perfil_fotos f ON f.usuarioId=u.id WHERE u.id=?', 'i', [$id]);
+        $stmt = $this->statement('SELECT u.id, u.nombre, u.apellido, u.telefono, u.email, COALESCE(p.contacto_email,1) contacto_email, COALESCE(p.marketing_email,0) marketing_email, p.consentimiento_marketing_at, p.consentimiento_marketing_version_id consentimiento_version_id, COALESCE(p.recordatorios,1) recordatorios, COALESCE(p.foto_publica,0) foto_publica, f.archivo, EXISTS(SELECT 1 FROM profesionales pr WHERE pr.usuarioId=u.id AND pr.activo=1) es_profesional FROM usuarios u LEFT JOIN perfiles_usuario p ON p.usuarioId=u.id LEFT JOIN perfil_fotos f ON f.usuarioId=u.id WHERE u.id=?', 'i', [$id]);
         $row = $stmt->get_result()->fetch_assoc();
         $stmt->close();
         return $row ?: null;
@@ -34,18 +36,34 @@ final class ProfileRepository
         $stmt->close(); return $map;
     }
 
-    public function guardar(int $id, array $datos): void
+    /**
+     * Guarda datos del perfil y preferencias. El consentimiento comercial pasa por ConsentimientoRepository::aplicarDecision
+     * (fuente única + versión del texto + historial append-only) en la MISMA transacción: o se guarda todo o nada.
+     * Con `$datos['marketing_email']` el valor deseado; `consentimiento_version` es la versión que la persona vio y
+     * `reconfirma_consentimiento` indica que aceptó expresamente un texto más nuevo que el que ya había aceptado.
+     *
+     * @param array{origen?:string,canal?:string,actor_id?:?int,ip_hash?:?string} $meta contexto de auditoría de la decisión
+     */
+    public function guardar(int $id, array $datos, array $meta = []): void
     {
-        $this->db->begin_transaction();
-        try {
+        \Classes\Transaccion::ejecutar($this->db, function () use ($id, $datos, $meta): void {
             $stmt = $this->statement('SELECT id FROM usuarios WHERE id=? FOR UPDATE', 'i', [$id]);
             $exists = $stmt->get_result()->fetch_assoc(); $stmt->close();
             if (!$exists) { throw new PersistenceException('El perfil ya no existe.'); }
             $stmt = $this->statement('UPDATE usuarios SET nombre=?, apellido=?, telefono=? WHERE id=?', 'sssi', [$datos['nombre'], $datos['apellido'], $datos['telefono'], $id]); $stmt->close();
-            $stmt = $this->statement('INSERT INTO perfiles_usuario (usuarioId,contacto_email,marketing_email,recordatorios,foto_publica,consentimiento_marketing_at) VALUES (?,?,?,?,?,IF(?=1,NOW(),NULL)) ON DUPLICATE KEY UPDATE contacto_email=VALUES(contacto_email), consentimiento_marketing_at=IF(VALUES(marketing_email)=0,NULL,IF(marketing_email=1,consentimiento_marketing_at,NOW())), marketing_email=VALUES(marketing_email), recordatorios=VALUES(recordatorios), foto_publica=VALUES(foto_publica)', 'iiiiii', [$id,$datos['contacto_email'],$datos['marketing_email'],$datos['recordatorios'],$datos['foto_publica'],$datos['marketing_email']]); $stmt->close();
-            $this->db->commit();
-        } catch (\Throwable $e) { $this->db->rollback(); throw $e; }
+            // Las columnas de consentimiento NO se escriben aquí: las gobierna aplicarDecision.
+            $stmt = $this->statement('INSERT INTO perfiles_usuario (usuarioId,contacto_email,recordatorios,foto_publica) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE contacto_email=VALUES(contacto_email), recordatorios=VALUES(recordatorios), foto_publica=VALUES(foto_publica)', 'iiii', [$id,$datos['contacto_email'],$datos['recordatorios'],$datos['foto_publica']]); $stmt->close();
+            if (empty($datos['omitir_consentimiento'])) {
+                $this->consentimientos()->aplicarDecision($id, (int)$datos['marketing_email'] === 1, $datos['consentimiento_version'] ?? null, [
+                    'origen' => $meta['origen'] ?? 'perfil', 'canal' => $meta['canal'] ?? 'portal_cliente',
+                    'actor_id' => $meta['actor_id'] ?? $id, 'ip_hash' => $meta['ip_hash'] ?? null,
+                    'reconfirma' => !empty($datos['reconfirma_consentimiento']),
+                ]);
+            }
+        });
     }
+
+    public function consentimientos(): ConsentimientoRepository { return $this->consentimientos ??= new ConsentimientoRepository($this->db); }
 
     public function guardarFoto(int $id, string $archivo): ?string
     {

@@ -99,8 +99,16 @@ $fid = $ficha['fidelidad'];
         <dl class="crm-dl">
             <dt>Estado</dt><dd><strong><?= (int)$cli['consentimiento'] === 1 ? 'Aceptó recibir promociones por correo' : 'No ha aceptado' ?></strong></dd>
             <dt>Fecha</dt><dd><?= $cli['consentimiento_en'] ? s($fechaHora($cli['consentimiento_en'])) : 'Sin consentimiento vigente' ?></dd>
-            <dt>Versión del texto</dt><dd>No registrada: el esquema actual guarda solo la aceptación y su fecha.</dd>
+            <dt>Versión del texto</dt><dd><?php if ((int)$cli['consentimiento'] !== 1): ?>—<?php else: ?>Versión <?= (int)$cli['consentimiento_version'] ?><?= (int)$cli['consentimiento_version_historica'] === 1 ? ' (histórica: aceptada antes del versionado, texto exacto no registrado)' : '' ?><?php if ((int)$cli['consentimiento_anterior'] === 1): ?> <span class="crm-etiqueta crm-etiqueta--aviso">Consentimiento con versión anterior</span><?php endif; ?><?php endif; ?></dd>
         </dl>
+        <?php if (!empty($ficha['consentimiento_historial'])): ?>
+        <h3 class="crm-subtitulo">Historial de decisiones</h3>
+        <ul class="crm-lista" aria-label="Historial de consentimiento comercial">
+            <?php foreach ($ficha['consentimiento_historial'] as $h): ?>
+            <li><?= (int)$h['valor'] === 1 ? 'Aceptó' : 'Retiró' ?> · versión <?= (int)$h['version'] ?><?= (int)$h['es_historica'] === 1 ? ' (histórica)' : '' ?> · <?= $h['ocurrido_en'] ? s($fechaHora($h['ocurrido_en'])) : 'fecha desconocida' ?><?= $h['origen'] === 'migracion' ? ' · migrado, sin versión registrada' : '' ?></li>
+            <?php endforeach; ?>
+        </ul>
+        <?php endif; ?>
     </section>
 
     <section class="crm-card" aria-labelledby="f-espera">
