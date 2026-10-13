@@ -36,7 +36,7 @@ $idemInvitacion = !empty($homonimos['clave']) ? $homonimos['clave'] : clave_oper
 </div>
 <fieldset class="ui-profile-preferences" data-solo-rol="profesional"><legend>Si el rol es Profesional: ficha operativa</legend>
 <?php if (!empty($fichasSinCuenta)) { ?>
-<div class="campo"><label for="eq-ficha">Vincular una ficha existente (conserva su historial)</label><select id="eq-ficha" name="profesional_id"><option value="">Crear una ficha nueva</option><?php foreach ($fichasSinCuenta as $f) { ?><option value="<?= s($f['id']) ?>" <?= (string)($previo['profesional_id'] ?? '') === (string)$f['id'] ? 'selected' : '' ?>><?= s($f['nombre']) ?><?= (int)$f['activo'] === 0 ? ' (inactiva)' : '' ?></option><?php } ?></select></div>
+<div class="campo"><label for="eq-ficha">Vincular una ficha existente (conserva su historial)</label><select id="eq-ficha" name="profesional_id"><option value="">Crear una ficha nueva</option><?php foreach ($fichasSinCuenta as $f) { ?><option value="<?= s($f['id']) ?>" <?= (is_scalar($previo['profesional_id'] ?? null) ? (string)$previo['profesional_id'] : '') === (string)$f['id'] ? 'selected' : '' ?>><?= s($f['nombre']) ?><?= (int)$f['activo'] === 0 ? ' (inactiva)' : '' ?></option><?php } ?></select></div>
 <?php } ?>
 <div class="campo"><label for="eq-nombre-prof">Nombre en la agenda (si es una ficha nueva)</label><input id="eq-nombre-prof" name="nombre_profesional" maxlength="120" placeholder="Por defecto: nombre y apellido" value="<?= s($previo['nombre_profesional'] ?? '') ?>"></div>
 <?php if (!empty($fichasSinCuenta)) { ?>

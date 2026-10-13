@@ -57,9 +57,25 @@ final class CrmAuditoriaService
         if (!isset(self::TIPOS[$tipo])) { $tipo = 'invalido'; }
         // Un mismo actor que repite la misma denegación dentro de la ventana deja UNA sola fila: la auditoría es de solo
         // anexado y no debe poder llenarse con intentos repetidos (la primera denegación sí queda registrada).
-        if ($resultado === 'denegada' && $this->repo->hayDenegadaReciente(isset($actor['id']) ? (int)$actor['id'] : null, $tipo, $motivo, self::VENTANA_AGRUPAR_DENEGADAS_MIN)) {
-            return 0;
+        if ($resultado === 'denegada') {
+            $actorId = isset($actor['id']) ? (int)$actor['id'] : null;
+            // El candado hace atómicos «comprobar» e «insertar»: 16 peticiones simultáneas del mismo actor dejan UNA fila.
+            $candado = 'crm_aud_den:' . substr(hash('sha256', ($actorId ?? 'anon') . '|' . $tipo . '|' . ($motivo ?? '')), 0, 32);
+            $obtenido = $this->repo->tomarCandado($candado);
+            try {
+                if ($obtenido && $this->repo->hayDenegadaReciente($actorId, $tipo, $motivo, self::VENTANA_AGRUPAR_DENEGADAS_MIN)) {
+                    return 0;
+                }
+                return $this->registrarFila($tipo, $resultado, $motivo, $actor, $filtros, $exportacion);
+            } finally {
+                if ($obtenido) { $this->repo->soltarCandado($candado); }
+            }
         }
+        return $this->registrarFila($tipo, $resultado, $motivo, $actor, $filtros, $exportacion);
+    }
+
+    private function registrarFila(string $tipo, string $resultado, ?string $motivo, array $actor, ?array $filtros, ?array $exportacion): int
+    {
         $fil = $filtros !== null ? self::filtrosParaAuditoria($filtros) : null;
         $versionId = null; $politica = null;
         if ($resultado === 'exitosa') {

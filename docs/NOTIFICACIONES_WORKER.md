@@ -125,7 +125,7 @@ El protocolo SMTP no proporciona una garantía de entrega atómica de dos fases 
 
 ## 5. Cola de correos de cuenta (`correos_salida`)
 
-Los correos de **confirmación de cuenta**, de **recuperación de contraseña**, el **aviso de cuenta existente** y las **invitaciones de colaboradores** no se envían de forma síncrona y "a ver si sale": se escriben en una cola persistente (outbox) dentro de la misma transacción que el hecho de negocio, los envía un worker (cada `CORREOS_INTERVALO_SEGUNDOS`, 5 s por defecto) y, si el SMTP falla, los reintenta con espera creciente. **No se envían dentro de la petición HTTP** (salvo que se active `CORREOS_ENVIO_INMEDIATO=1`): si lo hicieran, el tiempo de respuesta delataría si una cuenta existe. Un SMTP caído **no hace fallar** el registro, la recuperación ni el reenvío; el correo queda en cola y se reintenta hasta 6 veces (≈31 min acumulados). Pasado ese punto el evento queda `fallido` y **requiere** `--reintentar`: la cola no entrega «para siempre».
+Los correos de **confirmación de cuenta**, de **recuperación de contraseña**, el **aviso de cuenta existente** y las **invitaciones de colaboradores** no se envían de forma síncrona y "a ver si sale": se escriben en una cola persistente (outbox) dentro de la misma transacción que el hecho de negocio, los envía un worker (cada `CORREOS_INTERVALO_SEGUNDOS`, 5 s por defecto) y, si el SMTP falla, los reintenta con espera creciente. **Los correos de rutas públicas (registro, recuperación, reenvío) no se envían dentro de la petición HTTP** (salvo `CORREOS_ENVIO_INMEDIATO=1`): si lo hicieran, el tiempo de respuesta delataría si una cuenta existe. **Excepción documentada:** las invitaciones de colaboradores (ruta autenticada del propietario, sin oráculo de enumeración) y los avisos de cita/reasignación sí intentan el envío tras el `COMMIT` en la propia petición; si falla, quedan en cola para el worker. Un SMTP caído **no hace fallar** el registro, la recuperación ni el reenvío; el correo queda en cola y se reintenta hasta 6 veces (≈31 min acumulados). Pasado ese punto el evento queda `fallido` y **requiere** `--reintentar`: la cola no entrega «para siempre».
 
 ### 5.1 Flujo
 
@@ -157,7 +157,7 @@ registrar / reenviarConfirmacion
 
 ### 5.3 Tiempos de reintento exactos
 
-Calculados del SQL real de `CorreoSalidaRepository::marcarFallido`: `proximo_intento = UTC_TIMESTAMP() + LEAST(2^n · 30, 3600) s`, con `n` = nº de intentos ya realizados (incluido el que acaba de fallar). El intento nº 1 es el inmediato posterior al commit.
+Calculados del SQL real de `CorreoSalidaRepository::marcarFallido`: `proximo_intento = UTC_TIMESTAMP() + LEAST(2^n · 30, 3600) s`, con `n` = nº de intentos ya realizados (incluido el que acaba de fallar). El intento nº 1 es la primera pasada del worker (≤ `CORREOS_INTERVALO_SEGUNDOS`) en los correos de rutas públicas, y el inmediato posterior al commit en las invitaciones de colaboradores.
 
 | Fallo nº | Espera hasta el siguiente intento | Instante acumulado desde el primer fallo |
 |---|---|---|
@@ -168,7 +168,7 @@ Calculados del SQL real de `CorreoSalidaRepository::marcarFallido`: `proximo_int
 | 5 | 960 s | 31 min |
 | 6 | — (`fallido`) | ≈ 31 min |
 
-El worker revisa la cola cada `NOTIFICACIONES_INTERVALO_SEGUNDOS` (60 s por defecto), así que cada intento ocurre en el primer ciclo posterior a su vencimiento. El enlace de confirmación vale 24 h; una caída del SMTP mayor de ~31 min deja los eventos en `fallido` y requiere el reintento manual de 5.5 (si pasaron más de 24 h el worker los cancela y el cliente debe pedir un reenvío). Con el SMTP caído, el worker corta la tanda tras 3 fallos seguidos para no gastar un intento ni 5 s de espera en cada evento; los demás quedan intactos para el siguiente ciclo. `creado_en` y `proximo_intento` se escriben en UTC explícitamente (no dependen de la zona horaria de MySQL).
+El worker revisa la cola de correos cada `CORREOS_INTERVALO_SEGUNDOS` (5 s por defecto; los recordatorios de citas siguen en `NOTIFICACIONES_INTERVALO_SEGUNDOS`, 60 s), así que cada intento ocurre en el primer ciclo posterior a su vencimiento. El enlace de confirmación vale 24 h; una caída del SMTP mayor de ~31 min deja los eventos en `fallido` y requiere el reintento manual de 5.5 (si pasaron más de 24 h el worker los cancela y el cliente debe pedir un reenvío). Con el SMTP caído, el worker corta la tanda tras 3 fallos seguidos para no gastar un intento ni 5 s de espera en cada evento; los demás quedan intactos para el siguiente ciclo. `creado_en` y `proximo_intento` se escriben en UTC explícitamente (no dependen de la zona horaria de MySQL).
 
 ### 5.4 Diagnóstico
 
@@ -233,7 +233,7 @@ php scripts\procesar_correos.php --estado
 
 * **Garantizado:** un correo de confirmación aceptado por el sistema no se pierde por un SMTP caído, lento o colgado, ni por la muerte de un worker (el lease vence y otro lo retoma). Un solo evento por token (clave única `confirmacion:<usuario>:<huella del token>`), un solo aviso por correo y ventana, y un solo worker por evento a la vez (`UPDATE … WHERE worker_token = ?` en cada transición).
 * **No garantizado (límite real):** si el servidor SMTP **aceptó** el mensaje y la conexión se corta antes de que lo sepamos (o el worker muere entre el envío y el `UPDATE … 'enviado'`), el evento se reintenta y el destinatario puede recibir el correo **duplicado**. Ambas copias llevan el mismo enlace vigente. Ocurre también si un envío dura más que el lease (120 s) y otro worker lo retoma. Además, un correo ya en vuelo cuando un reenvío posterior invalida su enlace puede llegar con un enlace que ya no sirve (la cola lo cancela, pero no puede "des-enviar"): el cliente usa el correo más reciente.
-* El tiempo de respuesta de una petición web con el SMTP caído está acotado por los timeouts de PHPMailer (≈5-10 s) del intento inmediato; `reenviarConfirmacion` responde igual que si el correo hubiera salido (anti-enumeración), por lo que esa latencia es un canal lateral mínimo ya existente.
+* Las rutas públicas no esperan al SMTP (solo encolan), de modo que su tiempo de respuesta no depende de él. Las invitaciones de colaboradores sí intentan el envío en la petición del propietario: con el SMTP colgado esa petición puede tardar hasta ≈10 s (timeouts de PHPMailer); no es un canal de enumeración porque exige sesión de propietario.
 * Retención: los eventos `enviado`/`cancelado` conservan solo destinatario, tipo y estado (sin carga). No se purgan automáticamente.
 
 ### 5.8 Migración 019

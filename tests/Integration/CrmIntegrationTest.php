@@ -36,7 +36,7 @@ final class CrmIntegrationTest extends TestCase
         $this->db->set_charset('utf8mb4');
         ActiveRecord::setDB($this->db);
         validar_base_datos_prueba($this->db);
-        $this->tag = bin2hex(random_bytes(3));
+        $this->tag = bin2hex(random_bytes(8));
         if (session_status() === PHP_SESSION_NONE) { session_start(); }
         $_SESSION = []; $_GET = []; $_POST = [];
         $_SERVER['REQUEST_METHOD'] = 'GET';

@@ -42,7 +42,7 @@ final class CrmAuditoriaConsentimientoIntegrationTest extends TestCase
         ActiveRecord::setDB($this->db);
         validar_base_datos_prueba($this->db);
         // Letras fuera de [0-9a-f]: la etiqueta jamás puede aparecer por azar dentro de una huella hexadecimal.
-        $this->tag = 'zq' . bin2hex(random_bytes(3));
+        $this->tag = 'zq' . bin2hex(random_bytes(8));
         $this->proposito = 'mk_' . substr(bin2hex(random_bytes(4)), 0, 8);
         if (session_status() === PHP_SESSION_NONE) { session_start(); }
         $_SESSION = []; $_GET = []; $_POST = [];

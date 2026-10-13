@@ -1315,9 +1315,9 @@ class ReporteService
             return $texto;
         }
 
-        $peligrosos = ['=', '+', '-', '@', "\t", "\r", "\n"];
+        $peligrosos = ['=', '+', '-', '@', "\t", "\r", "\n", "\f", "\v"];
         $primerChar = $texto[0];
-        $sinEspaciosIniciales = ltrim($texto, " \t\n\r\0\x0B");
+        $sinEspaciosIniciales = ltrim($texto, " \t\n\r\0\x0B\f");
         $primerCharVisible = $sinEspaciosIniciales !== '' ? $sinEspaciosIniciales[0] : '';
 
         if (in_array($primerChar, $peligrosos, true) || in_array($primerCharVisible, $peligrosos, true)) {

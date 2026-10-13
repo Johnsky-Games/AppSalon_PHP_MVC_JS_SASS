@@ -70,6 +70,26 @@ final class CrmAuditoriaRepository
         return $existe;
     }
 
+    /**
+     * Candado de aplicación (GET_LOCK) para que «comprobar si hay una denegación reciente» e «insertar» sean una sola
+     * operación frente a ráfagas concurrentes del mismo actor (QA R2B-06b). Devuelve false si no se obtuvo a tiempo.
+     */
+    public function tomarCandado(string $nombre, int $segundos = 3): bool
+    {
+        $stmt = $this->db->prepare('SELECT GET_LOCK(?, ?) AS ok');
+        if (!$stmt) { return false; }
+        $stmt->bind_param('si', $nombre, $segundos);
+        $ok = $stmt->execute() && (int)($stmt->get_result()->fetch_assoc()['ok'] ?? 0) === 1;
+        $stmt->close();
+        return $ok;
+    }
+
+    public function soltarCandado(string $nombre): void
+    {
+        $stmt = $this->db->prepare('SELECT RELEASE_LOCK(?)');
+        if ($stmt) { $stmt->bind_param('s', $nombre); $stmt->execute(); $stmt->get_result(); $stmt->close(); }
+    }
+
     /** @return array{0:string,1:string,2:array} WHERE, tipos y parámetros */
     private function donde(array $f): array
     {
