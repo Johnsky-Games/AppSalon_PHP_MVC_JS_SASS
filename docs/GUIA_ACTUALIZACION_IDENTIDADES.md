@@ -84,11 +84,71 @@ entrar como propietario por `/equipo/login` → *Equipo y permisos* → invitar 
 `php scripts/diagnosticar_duplicados.php [--json]` lista candidatos con evidencia (citas, servicios, comisiones, cercanía de la fecha de alta). **No borra ni fusiona nada.**
 Criterio recomendado: conserva la ficha con historial o cuenta vinculada y **desactiva** (no borres) la otra; antes revisa citas futuras para no crear solapamientos.
 
-## 7. Revertir
+## 7. Revertir (procedimiento seguro y probado)
 
-* Datos: restaura el respaldo en una base nueva (`php scripts/restore_db.php --db=<nueva> --input=<archivo> --hash=<sha256>`), verifica y recién entonces apunta `DB_NAME` a ella.
-* Esquema: `php database/migrador.php down` revierte **todas** las migraciones; no lo ejecutes sobre tu base. Para deshacer solo estas tres, ejecuta manualmente
-  `018_…_rollback.sql`, `017_…_rollback.sql` y `016_…_rollback.sql` (en ese orden) y borra sus filas de `migraciones`. Hazlo solo en una copia.
+**Datos primero:** para volver a una versión anterior de la aplicación restaura el respaldo en una base nueva
+(`php scripts/restore_db.php --db=<nueva> --input=<archivo> --hash=<sha256>`), verifica y recién entonces apunta `DB_NAME` a ella.
+El rollback de esquema sirve para **reaplicar** migraciones (p. ej. corregir una migración en un entorno de prueba), no para ejecutar código anterior a la 016.
+
+`php database/migrador.php down` **se niega** (código de salida 2, sin tocar nada) a revertir una migración cuya reversión destruya datos de negocio.
+Para aceptar una pérdida debes indicar, migración por migración, `--aceptar-perdida=<migracion>` **y** un respaldo verificable (`--respaldo=<archivo.sql.gz>`):
+generado por `scripts/backup_db.php` con su manifiesto SHA-256, de **esta** base, del esquema actual (última migración aplicada), de las últimas 24 horas y con al menos las filas actuales de las tablas en riesgo.
+`--hasta=<migracion>` limita la reversión a esa migración y las posteriores (sin él, `down` revierte **todas**). `--simular` solo informa.
+
+### 7.1 Revertir y reaplicar solo 016–018 sin perder suspensiones (Linux / macOS, host con PHP)
+
+```bash
+mkdir -p storage/respaldos
+php scripts/backup_db.php --gzip --output=storage/respaldos/antes-de-revertir.sql.gz          # 1. respaldo (con manifiesto)
+php database/migrador.php down --hasta=016_clientes_membresia --simular                         # 2. qué se perdería; no modifica nada
+php database/migrador.php down --hasta=016_clientes_membresia \
+  --aceptar-perdida=016_clientes_membresia --aceptar-perdida=017_idempotencia_unicidad \
+  --aceptar-perdida=018_colaboradores_invitaciones \
+  --respaldo=storage/respaldos/antes-de-revertir.sql.gz                                          # 3. revertir (sin estas opciones sale con código 2)
+php database/migrador.php up                                                                     # 4. reaplicar: las suspensiones se restauran
+```
+
+### 7.2 Lo mismo en Windows (Git Bash) con Docker Compose
+
+```bash
+mkdir -p storage/respaldos
+MSYS_NO_PATHCONV=1 docker compose --env-file includes/.env -p appsalon-validacion exec web \
+  php scripts/backup_db.php --gzip --output=storage/respaldos/antes-de-revertir.sql.gz
+MSYS_NO_PATHCONV=1 docker compose --env-file includes/.env -p appsalon-validacion exec web \
+  php database/migrador.php down --hasta=016_clientes_membresia --simular
+MSYS_NO_PATHCONV=1 docker compose --env-file includes/.env -p appsalon-validacion exec web \
+  php database/migrador.php down --hasta=016_clientes_membresia \
+  --aceptar-perdida=016_clientes_membresia --aceptar-perdida=017_idempotencia_unicidad --aceptar-perdida=018_colaboradores_invitaciones \
+  --respaldo=storage/respaldos/antes-de-revertir.sql.gz
+MSYS_NO_PATHCONV=1 docker compose --env-file includes/.env -p appsalon-validacion exec web php database/migrador.php up
+```
+
+La lista exacta de `--aceptar-perdida` depende de los datos: `--simular` muestra qué migraciones bloquean y por qué (una base sin datos de negocio revierte sin ellas).
+Un `down` sin `--hasta` incluye además las migraciones 001–015; bloqueará también por sus datos (p. ej. `010_equipo_permisos` por `usuario_accesos`) y debes aceptarlas igual.
+
+### 7.3 Qué garantiza la 016 al revertir
+
+* `016_clientes_membresia_rollback.sql` copia **todas** las filas de `clientes` (estado, motivo de suspensión, origen, fecha de alta) a `clientes_resguardo_016` y **no elimina** esa tabla.
+* Al reaplicar la 016, las membresías no derivables se recuperan, origen y fecha de alta se restauran y **una suspensión explícita nunca se reactiva sola** (queda suspendida si el resguardo o la retrocarga la marcan así).
+  Las filas restauradas se marcan con `restaurado_en`.
+* Purga manual cuando el operador decida (solo filas ya restauradas): `DELETE FROM clientes_resguardo_016 WHERE restaurado_en IS NOT NULL;` (ejecútalo con `mysql` en el contenedor `db`). Para borrar el resguardo completo: `DROP TABLE clientes_resguardo_016;` (la 016 la recrea vacía).
+* Mientras la 016 esté revertida, **ningún código lee ni aplica las suspensiones**: no sirvas tráfico real en ese intervalo.
+* Una instalación que ya tenía la 016 aplicada antes de este cambio no tiene la tabla de resguardo hasta el primer rollback: el propio rollback la crea.
+
+### 7.4 Inventario de rollbacks y decisión tomada
+
+| Migraciones | Qué elimina el rollback | Decisión |
+|---|---|---|
+| 001, 002, 008 | contadores de intentos, columnas de token, `primera_peticion`, arrendamientos de worker | Datos efímeros: no bloquean. |
+| 003–007, 009–015 | tablas y columnas de negocio (profesionales, citas, pagos, notificaciones, accesos, perfiles, agenda, finanzas, inventario, fidelidad, comisiones) | Guard **genérico**: analiza el SQL del rollback (`DROP TABLE`, `DROP COLUMN`) contra los datos reales y bloquea si hay filas o valores. `equipo_mutex` y `usuarios.version_sesion` se tratan como efímeros. |
+| 016 | tabla `clientes` | Guard explícito + **resguardo persistente** (§7.3). |
+| 017 | `operaciones_idempotentes` y el UNIQUE de correo normalizado | Guard explícito (claves vigentes). Pierde la garantía de no duplicar altas reintentadas mientras esté revertida. |
+| 018 | `colaboradores`, `colaborador_invitaciones`, `correos_salida`, `profesionales.colaborador_id` | Guard explícito. No hay copia: exige aceptación + respaldo. |
+
+Límites reales: (a) ejecutar a mano un `*_rollback.sql` se salta el guard (las cabeceras de 016–018 lo advierten); el procedimiento soportado es siempre el migrador.
+(b) El guard genérico detecta `DROP TABLE`/`DROP COLUMN` con datos; no entiende efectos semánticos de un rollback futuro con `UPDATE`/`DELETE` (ninguno de 001–018 los usa salvo borrar su fila de control). Una migración nueva que lo necesite debe aportar su `NNN_nombre.guard.php`.
+(c) El manifiesto del respaldo no está firmado: protege de errores, no de un operador que falsifique el archivo.
+(d) Código de salida: `0` ok, `1` error u opción inválida, `2` bloqueado por pérdida de datos (nada se modificó).
 
 ## 8. Compilar estilos (Windows, ruta con espacios y `&`)
 
@@ -112,7 +172,18 @@ docker compose --env-file includes/.env -p appsalon-validacion exec web php scri
 ```
 Sin worker, usa el botón **Reenviar invitación** (genera un enlace nuevo y lo envía de inmediato).
 
-## 10. Avisos conocidos
+## 10. Riesgos conocidos y estado
 
-* `php database/migrador.php down` o aplicar `016_clientes_membresia_rollback.sql` **elimina** la tabla `clientes` y, al reaplicar, las suspensiones de clientes explícitas se pierden (solo se rederiva `usuario_accesos.activo`). No lo uses en producción; para volver atrás restaura el respaldo.
-* El registro público responde «El usuario ya está registrado» para un correo existente (comportamiento histórico, limitado por intentos por IP/correo). Eso permite saber si un correo —incluido uno del personal— tiene cuenta. Es un riesgo aceptado y documentado; endurecerlo implicaría un flujo de «te enviamos un correo» distinto.
+* **DEF-13 (enumeración de cuentas en el registro público): corregido, pendiente de reverificación por QA independiente.**
+  `POST /cliente/registro` (y `/crear-cuenta`) responde igual —misma redirección `302` a `/mensaje`, mismo cuerpo, cabeceras y alertas— para un correo nuevo, un cliente
+  confirmado o sin confirmar, personal laboral (colaborador/propietario), una cuenta con doble perfil y una cuenta suspendida. Solo cambian los efectos en el servidor:
+  correo nuevo → alta + token + evento de confirmación; cliente sin confirmar → token nuevo y confirmación (sin crear otra cuenta ni tocar su contraseña);
+  confirmado/personal/suspendida → no se modifica nada y se encola un **aviso de cuenta existente** al titular (como máximo 1 por hora y correo; `portal` = `equipo` si la cuenta es solo laboral).
+  Los errores de validación del formulario siguen siendo `422` con su detalle; el límite de intentos (3 por correo y 10 por IP cada 15 min) cuenta igual en todas las ramas.
+  El correo sale por la cola `correos_salida` (se encola en la misma transacción que el alta y se intenta enviar tras el commit; los reintentos los hace el worker de §9: **debe estar activo**).
+  Hallazgo adicional corregido: `AuthService::login` no ejecutaba bcrypt para correos inexistentes (≈5 ms frente a ≈65 ms con cuenta), lo que permitía enumerar por tiempo; ahora ambos ≈65 ms.
+  Residuos honestos: (1) no hay tiempo constante: `password_hash` se paga en todas las ramas, pero en una **segunda** solicitud dentro de la misma hora, un correo confirmado/personal ya avisado
+  no vuelve a enviar SMTP (≈66 ms) mientras uno nuevo/sin confirmar sí (≈123 ms con el SMTP simulado local; más con uno remoto) — acotado por el límite de 3 intentos por correo cada 15 min;
+  (2) `/olvide` y `/reenviar-confirmacion` son uniformes en respuesta, pero hoy envían el correo dentro de la petición (diferencia de tiempo ≈ SMTP) hasta que pasen a la cola;
+  (3) quien pre-registra el correo de otra persona deja una cuenta sin confirmar con **su** contraseña; la víctima, al confirmar, activa esa cuenta (riesgo inherente al registro con confirmación por correo; el registro ya no revela que la cuenta existe).
+* **DEF-16 (ciclo rollback/reaplicación de la 016 pierde suspensiones): corregido, pendiente de reverificación por QA independiente.** Ver §7: `down` bloquea sin aceptación y respaldo verificable, y la 016 conserva las suspensiones en `clientes_resguardo_016`.
