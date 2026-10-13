@@ -241,6 +241,15 @@ class Email
                 'boton' => 'Aceptar mi invitación',
                 'nota' => 'Este enlace es personal, de un solo uso y vence en 7 días. Si no esperabas esta invitación, ignora este mensaje o contacta con la administración del salón. Tu cuenta de cliente, si la tienes, no cambia.',
             ],
+            'cuenta_existente' => [
+                'asunto' => 'Intento de registro con tu correo',
+                'categoria' => 'AVISO DE SEGURIDAD',
+                'titulo' => 'Ya tienes una cuenta con este correo',
+                'preheader' => 'Alguien intentó crear una cuenta con tu correo; la tuya ya existe.',
+                'parrafos' => ['Alguien intentó crear una cuenta con este correo, pero ya tienes una. Si fuiste tú, ingresa con tu contraseña o usa «Olvidé mi contraseña». Tu cuenta no cambió.'],
+                'boton' => 'Ir a iniciar sesión',
+                'nota' => 'Si no fuiste tú, no tienes que hacer nada: nadie obtuvo acceso a tu cuenta. Este aviso se envía como máximo una vez por hora.',
+            ],
         ];
         if (!isset($mensajes[$proposito])) {
             throw new \InvalidArgumentException('Propósito de correo no válido.');
@@ -508,5 +517,18 @@ class Email
         $enlace = "{$appUrl}/equipo/aceptar?token=" . rawurlencode((string)$this->token);
         $this->detallesExtra += ['Acceso' => 'Portal del equipo'];
         return $this->despachar('invitacion', $enlace);
+    }
+
+    /**
+     * Aviso sin token para quien intentó registrarse con un correo que ya tiene cuenta. No confirma nada al
+     * solicitante (la respuesta pública es uniforme); solo informa al titular real del correo.
+     */
+    public function enviarAvisoCuentaExistente(): bool
+    {
+        $appUrl = self::resolverAppUrl();
+        $esEquipo = $this->portal === 'equipo';
+        $enlace = $appUrl . ($esEquipo ? '/equipo/login' : '/login');
+        $this->detallesExtra += ['Acceso' => $esEquipo ? 'Portal del equipo' : 'Portal de clientes'];
+        return $this->despachar('cuenta_existente', $enlace);
     }
 }
