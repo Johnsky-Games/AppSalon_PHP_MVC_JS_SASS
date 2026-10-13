@@ -7,6 +7,7 @@ repo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_dir"
 command -v docker >/dev/null
 command -v curl >/dev/null
+command -v timeout >/dev/null
 node -e 'if (Number(process.versions.node.split(".")[0]) < 22) { throw new Error("E2E requiere Node 22 o superior para puppeteer-core"); }'
 test -f vendor/autoload.php
 test -d node_modules/puppeteer-core
@@ -118,7 +119,8 @@ export CHROME_BIN APP_URL="$app_url" PAYMENT_WEBHOOK_SECRET="$secret"
 export TZ=America/Guayaquil
 export TEST_DB_CONTAINER="$db" TEST_DB_NAME="$db_name" TEST_REQUIRE_DB_ASSERTIONS=1
 export TEST_MAILBOX_PATH="$mailbox" TEST_BROWSER_REPORT_PATH="$artifacts/browser_test_report.json"
-node tests/browser_e2e_test.js 2>&1 | tee "$artifacts/browser.log"
+echo 'E2E_STAGE: recorrido de negocio y SMTP'
+timeout --kill-after=10s 480s node tests/browser_e2e_test.js 2>&1 | tee "$artifacts/browser.log"
 docker run --rm --network "$net" -v "$repo_dir:/var/www/html:ro" -w /var/www/html \
     -v "$artifacts:/e2e-artifacts:ro" "${common_env[@]}" "$image" \
     php tests/assert_browser_e2e.php /e2e-artifacts/browser_test_report.json
@@ -127,13 +129,18 @@ docker run --rm --network "$net" -v "$repo_dir:/var/www/html:ro" -w /var/www/htm
 [[ $(docker inspect -f '{{.State.Running}}' "$worker") == true ]]
 
 # Contratos HTTP y regresiones visuales sobre las mismas fixtures aisladas.
-node tests/error_routes_http_checks.js 2>&1 | tee "$artifacts/error-routes.log"
-TEST_ERROR_OUTPUT_DIR="$artifacts/errors" node tests/error_visual_test.js 2>&1 | tee "$artifacts/error-layout.log"
-node tests/ui_navigation_test.js 2>&1 | tee "$artifacts/navigation.log"
-TEST_RESPONSIVE_OUTPUT_DIR="$artifacts/responsive" node tests/responsive_views_test.js 2>&1 | tee "$artifacts/responsive.log"
+echo 'E2E_STAGE: contratos HTTP'
+timeout --kill-after=10s 90s node tests/error_routes_http_checks.js 2>&1 | tee "$artifacts/error-routes.log"
+echo 'E2E_STAGE: diseño de errores'
+TEST_ERROR_OUTPUT_DIR="$artifacts/errors" timeout --kill-after=10s 120s node tests/error_visual_test.js 2>&1 | tee "$artifacts/error-layout.log"
+echo 'E2E_STAGE: navegación'
+timeout --kill-after=10s 120s node tests/ui_navigation_test.js 2>&1 | tee "$artifacts/navigation.log"
+echo 'E2E_STAGE: responsividad de vistas'
+TEST_RESPONSIVE_OUTPUT_DIR="$artifacts/responsive" timeout --kill-after=10s 420s node tests/responsive_views_test.js 2>&1 | tee "$artifacts/responsive.log"
 
 # Previsualizaciones exclusivamente ficticias: renderizado real sin enviar correos.
 docker run --rm --network "$net" -v "$repo_dir:/var/www/html:ro" -w /var/www/html \
     -v "$artifacts:/e2e-artifacts" "${common_env[@]}" -e APP_URL="$app_url" "$image" \
     php tests/fixtures/email_previews.php /e2e-artifacts/email-previews
-node tests/email_visual_test.js "$artifacts/email-previews" 2>&1 | tee "$artifacts/email-layout.log"
+echo 'E2E_STAGE: diseño de correos'
+timeout --kill-after=10s 120s node tests/email_visual_test.js "$artifacts/email-previews" 2>&1 | tee "$artifacts/email-layout.log"

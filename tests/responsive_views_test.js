@@ -23,9 +23,16 @@ const failures = [];
 const scriptErrors = [];
 
 async function settle(page) {
+    // Chrome completo puede suspender requestAnimationFrame en pestañas de fondo.
+    await page.bringToFront();
     await page.evaluate(async () => {
-        await document.fonts.ready;
-        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        await Promise.race([
+            (async () => {
+                await document.fonts.ready;
+                await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            })(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('La vista no alcanzó un layout estable en 5 segundos.')), 5000))
+        ]);
     });
 }
 
@@ -149,6 +156,7 @@ async function verifyDialogs(page, pageName) {
 
 async function inspect(page, route) {
     const [name, url, required, allowedStatus = [200]] = route;
+    console.log(`[INICIO] ${name}: ${url}`);
     try {
         await page.setViewport({ width: 1440, height: 900 });
         const response = await page.goto(new URL(url, baseUrl).href, { waitUntil: 'networkidle2' });
@@ -217,7 +225,7 @@ async function login(page, email, destination) {
 }
 
 (async () => {
-    const browser = await puppeteer.launch({ executablePath: chrome, headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] });
+    const browser = await puppeteer.launch({ executablePath: chrome, headless: true, protocolTimeout: 30000, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] });
     try {
         const publicContext = await browser.createBrowserContext();
         const publicPage = await publicContext.newPage();
