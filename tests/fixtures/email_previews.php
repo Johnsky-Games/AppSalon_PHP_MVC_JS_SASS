@@ -60,7 +60,7 @@ $guardar = static function (string $tipo, string $html, string $texto, string $b
     ];
 };
 
-foreach (['confirmacion' => 'Confirmar mi cuenta', 'recuperacion' => 'Restablecer mi contraseña', 'invitacion' => 'Establecer mi contraseña'] as $tipo => $boton) {
+foreach (['confirmacion' => 'Confirmar mi cuenta', 'recuperacion' => 'Restablecer mi contraseña', 'invitacion' => 'Aceptar mi invitación'] as $tipo => $boton) {
     $ruta = $tipo === 'confirmacion' ? '/confirmar-cuenta' : '/recuperar';
     $enlace = 'https://salon.example' . $ruta . '?token=' . rawurlencode($token);
     $mailer = $email->prepararMailer($tipo, $enlace, $plantilla);

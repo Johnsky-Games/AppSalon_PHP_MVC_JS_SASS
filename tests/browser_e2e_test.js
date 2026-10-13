@@ -255,6 +255,8 @@ async function runBrowserTests() {
         await page.goto(`${BASE_URL}/equipo/login`, { waitUntil: 'networkidle0' });
         await verifyResponsivePage('login');
         await verifyAccessibleLogin();
+        // Las comprobaciones de accesibilidad recorren el acceso de clientes; el administrador entra por el del equipo.
+        await page.goto(`${BASE_URL}/equipo/login`, { waitUntil: 'networkidle0' });
 
         await page.waitForSelector('input[name="email"]', { timeout: 5000 });
         await page.type('input[name="email"]', 'admin@appsalon.com');
@@ -1172,6 +1174,8 @@ async function runBrowserTests() {
         ]);
 
         console.log('\n>>> [FASE 2B / FASE 5 - ADMIN CITAS] Consulta de citas por fecha en /admin (profesional, intervalo y snapshot histórico) y eliminación en /api/eliminar...');
+        // Tras cerrar la sesión de cliente el administrador entra por el portal del equipo.
+        await page.goto(`${BASE_URL}/equipo/login`, { waitUntil: 'networkidle0' });
         await page.waitForSelector('input[name="email"]', { timeout: 5000 });
         await page.type('input[name="email"]', 'admin@appsalon.com');
         await page.type('input[name="password"]', 'Password123!');

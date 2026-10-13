@@ -40,7 +40,7 @@ async function geometry(page, label) {
     await settle(page);
     const result = await page.evaluate(() => {
         const content = document.querySelector('main') || document.body;
-        const localScroll = '.ui-table-scroll, .tabla-contenedor, .ops-table-wrap, .growth-table-wrap';
+        const localScroll = '.ui-table-scroll, .tabla-contenedor, .ops-table-wrap, .growth-table-wrap, .crm-grafico__lienzo, .crm-tabla';
         const issues = [];
         const describe = el => `${el.tagName.toLowerCase()}${el.id ? '#' + el.id : '.' + String(el.className).replace(/\s+/g, '.')}`;
         for (const el of [content, ...content.querySelectorAll('*')]) {
@@ -233,7 +233,10 @@ async function login(page, email, destination) {
         publicPage.on('pageerror', error => scriptErrors.push(error.message));
         for (const route of [
             ['login', '/', '#email'],
-            ['crear-cuenta', '/crear-cuenta', '#nombre'],
+            ['crear-cuenta', '/cliente/registro', '#nombre'],
+            ['login-cliente', '/cliente/login', '#email'],
+            ['login-equipo', '/equipo/login', '#email'],
+            ['aceptar-invitacion-invalida', '/equipo/aceptar?token=invalido', 'main', [404]],
             ['olvide-password', '/olvide', '#email'],
             ['reenviar-confirmacion', '/reenviar-confirmacion', '#email'],
             ['mensaje-cuenta', '/mensaje', 'main'],
@@ -250,6 +253,8 @@ async function login(page, email, destination) {
         for (const route of [
             ['admin', '/admin', '.ui-dashboard-stats'],
             ['servicios', '/servicios', '#catalogo-servicios'],
+            ['equipo-colaboradores', '/admin/equipo', '#equipo-invitar-titulo'],
+            ['clientes-crm', '/admin/clientes', 'main'],
             ['crear-servicio', '/servicios/crear', '#nombre'],
             ['actualizar-servicio', `/servicios/actualizar?id=${serviceId}`, '#nombre'],
             ['profesionales', '/profesionales', '#equipo-profesionales'],

@@ -9,14 +9,15 @@ module.exports = async function verifyPlatform({ browser, baseUrl, recordTest, s
     const name = process.env.TEST_DB_NAME;
     if (!db || !name || !name.endsWith('_test')) throw new Error('Platform E2E requires an explicitly isolated test database.');
     const query = sql => execFileSync('docker', ['exec', db, 'mysql', '-uroot', '-proot', '--default-character-set=utf8mb4', '-N', '-e', sql, name], { encoding: 'utf8', stdio: ['ignore','pipe','pipe'] }).trim();
-    query("INSERT INTO usuarios(id,nombre,apellido,email,password,telefono,admin,confirmado) SELECT 1001,'Recepcion','E2E','recepcion@platform.test',password,'0991234567',0,1 FROM usuarios WHERE email='admin@appsalon.com' ON DUPLICATE KEY UPDATE confirmado=1; INSERT INTO usuario_accesos(usuario_id,rol,activo) VALUES(1001,'recepcion',1) ON DUPLICATE KEY UPDATE rol='recepcion',activo=1; INSERT INTO usuarios(id,nombre,apellido,email,password,telefono,admin,confirmado) SELECT 1003,'Cliente','Ajeno','ajeno@platform.test',password,'0991234567',0,1 FROM usuarios WHERE email='admin@appsalon.com' ON DUPLICATE KEY UPDATE confirmado=1; INSERT INTO usuario_accesos(usuario_id,rol,activo) VALUES(1003,'cliente',1) ON DUPLICATE KEY UPDATE rol='cliente',activo=1;");
+    query("INSERT INTO usuarios(id,nombre,apellido,email,password,telefono,admin,confirmado) SELECT 1001,'Recepcion','E2E','recepcion@platform.test',password,'0991234567',0,1 FROM usuarios WHERE email='admin@appsalon.com' ON DUPLICATE KEY UPDATE confirmado=1; INSERT INTO usuario_accesos(usuario_id,rol,activo) VALUES(1001,'recepcion',1) ON DUPLICATE KEY UPDATE rol='recepcion',activo=1; INSERT INTO colaboradores(usuario_id,email_norm,nombre,apellido,rol,estado,aceptado_en,codigo) VALUES(1001,'recepcion@platform.test','Recepcion','E2E','recepcion','activo',UTC_TIMESTAMP(),'COL-E2E01') ON DUPLICATE KEY UPDATE estado='activo'; INSERT INTO usuarios(id,nombre,apellido,email,password,telefono,admin,confirmado) SELECT 1003,'Cliente','Ajeno','ajeno@platform.test',password,'0991234567',0,1 FROM usuarios WHERE email='admin@appsalon.com' ON DUPLICATE KEY UPDATE confirmado=1; INSERT INTO usuario_accesos(usuario_id,rol,activo) VALUES(1003,'cliente',1) ON DUPLICATE KEY UPDATE rol='cliente',activo=1;");
     const contexts = [];
     const errors = [];
     async function login(email) {
         const context = await browser.createBrowserContext(); contexts.push(context);
         const page = await context.newPage();
         page.on('pageerror', error => errors.push(error.message));
-        page.on('requestfailed', request => errors.push(`${request.url()}: ${request.failure()?.errorText}`));
+        // Una navegación inmediata (p. ej. la redirección de una sesión revocada) cancela imágenes aún en vuelo: no es un fallo de red.
+        page.on('requestfailed', request => { if (request.failure()?.errorText === 'net::ERR_ABORTED' && !['document', 'xhr', 'fetch'].includes(request.resourceType())) return; errors.push(`${request.url()}: ${request.failure()?.errorText}`); });
         // Cuentas laborales entran por el portal del equipo; las de clientes por el suyo.
         const portal = ['admin@appsalon.com', 'recepcion@platform.test'].includes(email) ? '/equipo/login' : '/cliente/login';
         await page.goto(`${baseUrl}${portal}`, { waitUntil: 'networkidle0' });
@@ -166,11 +167,12 @@ module.exports = async function verifyPlatform({ browser, baseUrl, recordTest, s
             if (response.status() !== 403) throw new Error(`Reception forbidden route ${route} returned ${response.status()}`);
         }
         await owner.goto(`${baseUrl}/admin/equipo`,{waitUntil:'networkidle0'});
-        const selector='form[action="/admin/equipo/actualizar"]:has(input[name="id"][value="1001"])';
-        await fill(owner,selector,{activo:'0'});
+        const colaboradorId = query("SELECT id FROM colaboradores WHERE usuario_id=1001");
+        const selector=`form[action="/admin/equipo/actualizar"]:has(input[name="id"][value="${colaboradorId}"])`;
+        await fill(owner,selector,{estado:'suspendido'});
         await submit(owner,selector);
         response = await reception.goto(`${baseUrl}/agenda`,{waitUntil:'networkidle0'});
-        if (new URL(reception.url()).pathname !== '/') throw new Error('Revoked reception session must lose access on next request.');
+        if (new URL(reception.url()).pathname !== '/equipo/login') throw new Error('Revoked reception session must lose access on next request and return to the team sign-in.');
         if (errors.length) throw new Error(`Platform page/runtime/network failures: ${errors.join('; ')}`);
         recordTest('PLAT-05','Matriz negativa y revocación en siguiente petición',true,'Recepción agenda200; equipo/caja/stock/crecimiento/ajustes403; propietario desactiva cuenta y sesión previa pierde acceso.');
     } finally { for (const context of contexts) await context.close(); }

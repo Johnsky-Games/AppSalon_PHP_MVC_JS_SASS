@@ -135,6 +135,8 @@ echo 'E2E_STAGE: diseño de errores'
 TEST_ERROR_OUTPUT_DIR="$artifacts/errors" timeout --kill-after=10s 120s node tests/error_visual_test.js 2>&1 | tee "$artifacts/error-layout.log"
 echo 'E2E_STAGE: navegación'
 timeout --kill-after=10s 120s node tests/ui_navigation_test.js 2>&1 | tee "$artifacts/navigation.log"
+echo 'E2E_STAGE: altas sin duplicados (doble clic, Enter y peticiones simultáneas)'
+E2E_OWNER_EMAIL=admin@appsalon.com E2E_OWNER_PASSWORD='Password123!' timeout --kill-after=10s 180s node tests/double_submit_e2e.js 2>&1 | tee "$artifacts/double-submit.log"
 echo 'E2E_STAGE: responsividad de vistas'
 TEST_RESPONSIVE_OUTPUT_DIR="$artifacts/responsive" timeout --kill-after=10s 420s node tests/responsive_views_test.js 2>&1 | tee "$artifacts/responsive.log"
 

@@ -167,6 +167,32 @@ async function registroCliente(browser, etiqueta) {
             });
             comprobar('Profesional: 4 POST simultáneos misma clave → un solo registro', contar(`SELECT COUNT(*) FROM profesionales WHERE nombre='${nombre2}'`) === 1);
             comprobar('Profesional: sin errores de consola', page.consoleErrors.length === 0, page.consoleErrors.join('|'));
+
+            // ---- 6. Colaborador: invitación con doble clic y peticiones simultáneas ----------------------------
+            const correo = `e2e-colab-${Date.now()}@duplicados.test`;
+            await page.goto(`${baseUrl}/admin/equipo`, { waitUntil: 'networkidle0' });
+            await rellenar(page, { '#eq-nombre': 'Invitada', '#eq-apellido': 'Doble', '#eq-email': correo, '#eq-puesto': 'Mostrador' });
+            await page.select('#eq-rol', 'recepcion');
+            await dobleClic(page, 'form[action="/admin/equipo/crear"] button[type="submit"]');
+            await esperarDestino(page, '/admin/equipo');
+            await new Promise(r => setTimeout(r, 500));
+            comprobar('Colaborador: doble clic → una ficha', contar(`SELECT COUNT(*) FROM colaboradores WHERE email_norm='${correo}'`) === 1);
+            comprobar('Colaborador: doble clic → una invitación pendiente', contar(`SELECT COUNT(*) FROM colaborador_invitaciones i JOIN colaboradores c ON c.id=i.colaborador_id WHERE c.email_norm='${correo}' AND i.estado='pendiente'`) === 1);
+            comprobar('Colaborador: doble clic → un solo evento de correo', contar(`SELECT COUNT(*) FROM correos_salida WHERE destinatario_email='${correo}'`) === 1);
+            comprobar('Colaborador: sin cuenta ni acceso hasta aceptar', contar(`SELECT COUNT(*) FROM usuarios WHERE email='${correo}'`) === 0);
+
+            const correo2 = `e2e-colab-http-${Date.now()}@duplicados.test`;
+            await page.goto(`${baseUrl}/admin/equipo`, { waitUntil: 'networkidle0' });
+            await rellenar(page, { '#eq-nombre': 'Invitada', '#eq-apellido': 'Simultanea', '#eq-email': correo2 });
+            await page.evaluate(async () => {
+                const form = document.querySelector('form[action="/admin/equipo/crear"]');
+                const enviar = () => fetch(form.action, { method: 'POST', body: new URLSearchParams(new FormData(form)), redirect: 'manual', credentials: 'same-origin' });
+                await Promise.all([enviar(), enviar(), enviar(), enviar()]);
+            });
+            comprobar('Colaborador: 4 POST simultáneos misma clave → una ficha, una invitación, un correo',
+                contar(`SELECT COUNT(*) FROM colaboradores WHERE email_norm='${correo2}'`) === 1
+                && contar(`SELECT COUNT(*) FROM colaborador_invitaciones i JOIN colaboradores c ON c.id=i.colaborador_id WHERE c.email_norm='${correo2}'`) === 1
+                && contar(`SELECT COUNT(*) FROM correos_salida WHERE destinatario_email='${correo2}'`) === 1);
             await context.close();
         } else {
             console.log('OMITIDO flujo de profesional: faltan E2E_OWNER_EMAIL / E2E_OWNER_PASSWORD');
