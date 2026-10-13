@@ -34,6 +34,9 @@ class UsuarioAuthIntegrationTest extends TestCase
 
     protected function setUp(): void
     {
+        // Estas pruebas verifican la entrega en línea tras el commit (camino CORREOS_ENVIO_INMEDIATO=1); el valor por defecto
+        // (solo cola + worker) se prueba en ColaSinEnvioEnLineaIntegrationTest y en la suite Qa.
+        $_ENV['CORREOS_ENVIO_INMEDIATO'] = '1'; putenv('CORREOS_ENVIO_INMEDIATO=1');
         validar_base_datos_prueba(self::$db);
 
         self::$db->query("DROP TRIGGER IF EXISTS test_fail_usuarios_insert");
@@ -67,6 +70,7 @@ class UsuarioAuthIntegrationTest extends TestCase
 
     protected function tearDown(): void
     {
+        unset($_ENV['CORREOS_ENVIO_INMEDIATO']); putenv('CORREOS_ENVIO_INMEDIATO');
         self::$db->query("DROP TRIGGER IF EXISTS test_fail_usuarios_insert");
         self::$db->query("DROP TRIGGER IF EXISTS test_fail_usuarios_update");
         LoginController::setAuthService(null);

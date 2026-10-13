@@ -33,6 +33,9 @@ final class RegistroUniformeIntegrationTest extends TestCase
 
     public static function setUpBeforeClass(): void
     {
+        // Estas pruebas verifican la entrega en línea tras el commit (camino CORREOS_ENVIO_INMEDIATO=1); el valor por defecto
+        // (solo cola + worker) se prueba en ColaSinEnvioEnLineaIntegrationTest y en la suite Qa.
+        $_ENV['CORREOS_ENVIO_INMEDIATO'] = '1'; putenv('CORREOS_ENVIO_INMEDIATO=1');
         self::$db = new \mysqli(getenv('DB_HOST') ?: '127.0.0.1', getenv('DB_USER') ?: 'root', getenv('DB_PASS') ?: 'root', getenv('DB_NAME') ?: 'appsalon_test', (int)(getenv('DB_PORT') ?: 3306));
         self::$db->set_charset('utf8mb4');
         ActiveRecord::setDB(self::$db);
@@ -57,6 +60,7 @@ final class RegistroUniformeIntegrationTest extends TestCase
 
     public static function tearDownAfterClass(): void
     {
+        unset($_ENV['CORREOS_ENVIO_INMEDIATO']); putenv('CORREOS_ENVIO_INMEDIATO');
         foreach ([self::$servidor, self::$smtp] as $p) {
             if (is_resource($p)) { @proc_terminate($p); @proc_close($p); }
         }

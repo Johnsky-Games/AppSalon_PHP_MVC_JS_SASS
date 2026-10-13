@@ -191,6 +191,8 @@ class Email
         }
         $texto = preg_replace('/(token|password|pass|pwd|secret)=[^\s&"\']+/i', '$1=***', $texto) ?? $texto;
         $texto = preg_replace('/\b[A-Za-z0-9_\-]{32,}\b/', '[redactado]', $texto) ?? $texto;
+        // El servidor SMTP repite la dirección del destinatario en sus rechazos: es dato personal y no debe quedar en la cola ni en logs.
+        $texto = preg_replace('/[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/', '[correo]', $texto) ?? $texto;
         if ($texto === '') {
             $texto = 'Error desconocido en transporte de correo.';
         }
@@ -546,7 +548,7 @@ class Email
     {
         $appUrl = self::resolverAppUrl();
         $esEquipo = $this->portal === 'equipo';
-        $enlace = $appUrl . ($esEquipo ? '/equipo/login' : '/login');
+        $enlace = $appUrl . ($esEquipo ? '/equipo/login' : '/cliente/login');
         $this->detallesExtra += ['Acceso' => $esEquipo ? 'Portal del equipo' : 'Portal de clientes'];
         return $this->despachar('cuenta_existente', $enlace);
     }

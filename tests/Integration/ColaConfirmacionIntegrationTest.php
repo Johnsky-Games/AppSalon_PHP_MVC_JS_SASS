@@ -39,6 +39,9 @@ final class ColaConfirmacionIntegrationTest extends TestCase
 
     protected function setUp(): void
     {
+        // Estas pruebas verifican la entrega en línea tras el commit (camino CORREOS_ENVIO_INMEDIATO=1); el valor por defecto
+        // (solo cola + worker) se prueba en ColaSinEnvioEnLineaIntegrationTest y en la suite Qa.
+        $_ENV['CORREOS_ENVIO_INMEDIATO'] = '1'; putenv('CORREOS_ENVIO_INMEDIATO=1');
         $this->db = $this->conectar();
         ActiveRecord::setDB($this->db);
         validar_base_datos_prueba($this->db);
@@ -58,6 +61,7 @@ final class ColaConfirmacionIntegrationTest extends TestCase
 
     protected function tearDown(): void
     {
+        unset($_ENV['CORREOS_ENVIO_INMEDIATO']); putenv('CORREOS_ENVIO_INMEDIATO');
         $this->detenerSmtp();
         foreach ($this->envPrevio as $v => [$e, $g]) {
             if ($e === null) { unset($_ENV[$v]); } else { $_ENV[$v] = $e; }

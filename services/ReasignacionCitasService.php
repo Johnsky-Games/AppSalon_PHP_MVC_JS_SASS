@@ -368,8 +368,8 @@ final class ReasignacionCitasService
 
     /**
      * Envía de inmediato (mejor esfuerzo, fuera de toda transacción) los avisos del outbox recién creados.
-     * Si el envío falla, la fila queda pendiente/fallida y la recoge el worker de notificaciones: nunca se duplica,
-     * porque cada intento adquiere la fila con un arrendamiento exclusivo.
+     * Si el envío falla, la fila queda pendiente/fallida y la recoge el worker de notificaciones: un arrendamiento exclusivo
+     * evita que dos workers la envíen a la vez, pero la entrega es «al menos una vez» (un corte tras el envío puede duplicarla).
      *
      * @param int[] $ids
      */

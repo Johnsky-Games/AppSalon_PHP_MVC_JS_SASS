@@ -14,7 +14,7 @@ use Repositories\PersistenceException;
  * - Confirmación de cita (`confirmacion`)
  * - Cancelación de cita (`cancelacion`)
  * - Recordatorios configurables de citas próximas (`recordatorio`)
- * - Procesamiento idempotente y cola de reintentos seguros con backoff sin duplicados.
+ * - Procesamiento idempotente y cola de reintentos seguros con backoff (entrega «al menos una vez»; un corte tras el envío puede duplicar).
  * - Aislamiento total de fallos SMTP para que ningún error de correo revierta operaciones confirmadas.
  */
 class NotificacionCitaService
@@ -425,7 +425,7 @@ class NotificacionCitaService
     /**
      * Procesa la cola de notificaciones en estado `'pendiente'` o `'fallido'` cuyo `proximo_intento_at`
      * haya vencido y cuyos `intentos < max_intentos`.
-     * Garantiza reintentos seguros e idempotentes sin duplicados mediante bloqueo `FOR UPDATE`.
+     * Reduce los duplicados mediante bloqueo `FOR UPDATE` y arrendamiento; la entrega es «al menos una vez».
      *
      * @return array<string, mixed>
      */

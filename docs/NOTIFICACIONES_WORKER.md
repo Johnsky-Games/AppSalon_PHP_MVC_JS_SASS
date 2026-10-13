@@ -125,7 +125,7 @@ El protocolo SMTP no proporciona una garantía de entrega atómica de dos fases 
 
 ## 5. Cola de correos de cuenta (`correos_salida`)
 
-Los correos de **confirmación de cuenta**, el **aviso de cuenta existente** y las **invitaciones de colaboradores** no se envían de forma síncrona y "a ver si sale": se escriben en una cola persistente (outbox) dentro de la misma transacción que el hecho de negocio, se intentan enviar justo después del `COMMIT` y, si el SMTP falla, un worker los reintenta. Un SMTP caído **no hace fallar** el registro ni el reenvío y **no pierde el correo**.
+Los correos de **confirmación de cuenta**, de **recuperación de contraseña**, el **aviso de cuenta existente** y las **invitaciones de colaboradores** no se envían de forma síncrona y "a ver si sale": se escriben en una cola persistente (outbox) dentro de la misma transacción que el hecho de negocio, los envía un worker (cada `CORREOS_INTERVALO_SEGUNDOS`, 5 s por defecto) y, si el SMTP falla, los reintenta con espera creciente. **No se envían dentro de la petición HTTP** (salvo que se active `CORREOS_ENVIO_INMEDIATO=1`): si lo hicieran, el tiempo de respuesta delataría si una cuenta existe. Un SMTP caído **no hace fallar** el registro, la recuperación ni el reenvío; el correo queda en cola y se reintenta hasta 6 veces (≈31 min acumulados). Pasado ese punto el evento queda `fallido` y **requiere** `--reintentar`: la cola no entrega «para siempre».
 
 ### 5.1 Flujo
 

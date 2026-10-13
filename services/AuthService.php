@@ -505,21 +505,34 @@ class AuthService
 
             $usuario = $this->repository->findByEmail($email);
             if ($usuario !== null && (string)$usuario->confirmado === '1') {
-                $tokenPlano = $this->repository->issueRecoveryToken($usuario, 2);
-                if ($tokenPlano === null) {
-                    error_log("AuthService::solicitarRecuperacion fallo al persistir token de recuperacion para usuario ID {$usuario->id}");
-                    return $this->construirRespuesta(
-                        self::STATUS_ERROR,
-                        false,
-                        $auth,
-                        ['error' => ['No fue posible procesar la solicitud en este momento. Intenta nuevamente.']]
-                    );
-                }
+                if ($this->emailDispatcher === null) {
+                    // Por la cola persistente: sin envío en la petición (el tiempo de respuesta no delata la cuenta) y con reintentos.
+                    if (!$this->emitirRecuperacionEnCola($usuario)) {
+                        error_log("AuthService::solicitarRecuperacion fallo al persistir token de recuperacion para usuario ID {$usuario->id}");
+                        return $this->construirRespuesta(
+                            self::STATUS_ERROR,
+                            false,
+                            $auth,
+                            ['error' => ['No fue posible procesar la solicitud en este momento. Intenta nuevamente.']]
+                        );
+                    }
+                } else {
+                    $tokenPlano = $this->repository->issueRecoveryToken($usuario, 2);
+                    if ($tokenPlano === null) {
+                        error_log("AuthService::solicitarRecuperacion fallo al persistir token de recuperacion para usuario ID {$usuario->id}");
+                        return $this->construirRespuesta(
+                            self::STATUS_ERROR,
+                            false,
+                            $auth,
+                            ['error' => ['No fue posible procesar la solicitud en este momento. Intenta nuevamente.']]
+                        );
+                    }
 
-                // Enviar instrucciones únicamente después de persistir exitosamente el token
-                $enviado = $this->despacharCorreo('recuperacion', (string)$usuario->email, (string)$usuario->nombre, $tokenPlano, $this->portalDeCuenta((int)$usuario->id));
-                if (!$enviado) {
-                    error_log("AuthService::solicitarRecuperacion fallo al despachar correo de recuperacion para usuario ID {$usuario->id}");
+                    // Despachador inyectado (pruebas unitarias): comportamiento original, síncrono y sin cola.
+                    $enviado = $this->despacharCorreo('recuperacion', (string)$usuario->email, (string)$usuario->nombre, $tokenPlano, $this->portalDeCuenta((int)$usuario->id));
+                    if (!$enviado) {
+                        error_log("AuthService::solicitarRecuperacion fallo al despachar correo de recuperacion para usuario ID {$usuario->id}");
+                    }
                 }
             }
         } catch (PersistenceException $e) {
@@ -629,6 +642,51 @@ class AuthService
             $auth,
             ['exito' => ['Si la cuenta existe y está pendiente de confirmación, hemos enviado un nuevo enlace a tu correo electrónico.']]
         );
+    }
+
+    /**
+     * Recuperación por la cola persistente. En UNA transacción: emite el token (reemplaza el anterior), encola el correo y
+     * cancela los eventos de recuperación previos aún no entregados. Reintenta interbloqueos (1213/1205) como la confirmación.
+     * @return bool false si no se pudo emitir el token
+     * @throws PersistenceException si la base de datos falla de forma persistente
+     */
+    private function emitirRecuperacionEnCola(Usuario $usuario): bool
+    {
+        $db = $this->repository->getDb();
+        $cola = new CorreoSalidaService(new \Repositories\CorreoSalidaRepository($db));
+        $portal = $this->portalDeCuenta((int)$usuario->id);
+        $eventoId = null;
+        for ($intento = 1; ; $intento++) {
+            $errno = 0;
+            try {
+                $eventoId = \Classes\Transaccion::ejecutar($db, function () use ($usuario, $cola, $db, $portal, &$errno): ?int {
+                    try {
+                        $tokenPlano = $this->repository->issueRecoveryToken($usuario, 2);
+                        if ($tokenPlano === null) {
+                            return null;
+                        }
+                        $id = $cola->encolarRecuperacionCuenta((int)$usuario->id, (string)$usuario->email, (string)$usuario->nombre, $tokenPlano, $portal);
+                        $cola->cancelarRecuperacionesAnteriores((int)$usuario->id, $id);
+                        return $id;
+                    } catch (\Throwable $e) {
+                        $errno = (int)$db->errno ?: ($e->getCode() > 0 ? (int)$e->getCode() : 0);
+                        throw $e;
+                    }
+                });
+                break;
+            } catch (\Throwable $e) {
+                if (in_array($errno, [1213, 1205], true) && $intento < 4) {
+                    usleep(random_int(20000, 80000) * $intento);
+                    continue;
+                }
+                throw $e instanceof PersistenceException ? $e : new PersistenceException('No se pudo emitir la recuperación', 0, $e);
+            }
+        }
+        if ($eventoId === null) {
+            return false;
+        }
+        $cola->despacharTrasCommit($eventoId);
+        return true;
     }
 
     /** Reenvío con despachador inyectado (pruebas unitarias): comportamiento original, síncrono y sin cola. */

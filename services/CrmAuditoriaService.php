@@ -13,6 +13,8 @@ use Repositories\CrmAuditoriaRepository;
  */
 final class CrmAuditoriaService
 {
+    /** Minutos durante los cuales las denegaciones idénticas del mismo actor se agrupan en una fila. */
+    public const VENTANA_AGRUPAR_DENEGADAS_MIN = 10;
     public const RESULTADOS = ['exitosa' => 'Exitosa', 'denegada' => 'Denegada', 'fallida' => 'Fallida'];
     public const TIPOS = ['clientes' => 'Clientes (operativa)', 'comercial' => 'Lista comercial', 'campana' => 'Campaña (Clientes y Fidelidad)', 'invalido' => 'Tipo no válido'];
     public const POR_PAGINA = [25, 50, 100];
@@ -53,6 +55,11 @@ final class CrmAuditoriaService
     {
         if (!isset(self::RESULTADOS[$resultado])) { throw new \InvalidArgumentException('Resultado de auditoría no válido.'); }
         if (!isset(self::TIPOS[$tipo])) { $tipo = 'invalido'; }
+        // Un mismo actor que repite la misma denegación dentro de la ventana deja UNA sola fila: la auditoría es de solo
+        // anexado y no debe poder llenarse con intentos repetidos (la primera denegación sí queda registrada).
+        if ($resultado === 'denegada' && $this->repo->hayDenegadaReciente(isset($actor['id']) ? (int)$actor['id'] : null, $tipo, $motivo, self::VENTANA_AGRUPAR_DENEGADAS_MIN)) {
+            return 0;
+        }
         $fil = $filtros !== null ? self::filtrosParaAuditoria($filtros) : null;
         $versionId = null; $politica = null;
         if ($resultado === 'exitosa') {

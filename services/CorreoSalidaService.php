@@ -23,6 +23,7 @@ final class CorreoSalidaService
 {
     public const TIPO_CONFIRMACION = 'confirmacion_cuenta';
     public const TIPO_AVISO_EXISTENTE = 'aviso_cuenta_existente';
+    public const TIPO_RECUPERACION = 'recuperacion_cuenta';
 
     private const R_ENVIADO = 'enviado';
     private const R_FALLO = 'fallo';
@@ -65,9 +66,37 @@ final class CorreoSalidaService
             self::TIPO_AVISO_EXISTENTE, $email, $nombre, ['portal' => $portal === 'equipo' ? 'equipo' : 'cliente']);
     }
 
-    /** CONTRATO. Intento inmediato posterior al commit; nunca lanza (un fallo deja el evento reintentable). */
+    /**
+     * Recuperación de contraseña: token propio, mismo tratamiento que la confirmación (misma transacción, cancelación de
+     * enlaces anteriores y comprobación de vigencia al despachar). `$portal` = 'cliente'|'equipo'.
+     */
+    public function encolarRecuperacionCuenta(int $usuarioId, string $email, string $nombre, string $tokenPlano, string $portal): int
+    {
+        return $this->repo->encolar('recuperacion:' . $usuarioId . ':' . substr(hash('sha256', $tokenPlano), 0, 24),
+            self::TIPO_RECUPERACION, $email, $nombre, ['token' => $tokenPlano, 'portal' => $portal === 'equipo' ? 'equipo' : 'cliente'], $usuarioId);
+    }
+
+    public function cancelarRecuperacionesAnteriores(int $usuarioId, int $excepto): int
+    {
+        return $this->repo->cancelarPorUsuario($usuarioId, self::TIPO_RECUPERACION, 'Reemplazado por un enlace de recuperación más reciente.', $excepto);
+    }
+
+    /**
+     * ¿Se intenta el envío en la propia petición HTTP? Por defecto NO (QA R2B-02/08/09): enviar en línea haría que el
+     * tiempo de respuesta delate si la cuenta existe (con SMTP lento, 0,4 s frente a 0,01 s). Los correos de cuenta salen
+     * siempre por la cola y el worker (intervalo CORREOS_INTERVALO_SEGUNDOS, 5 s por defecto). Solo CORREOS_ENVIO_INMEDIATO=1
+     * (pruebas o instalaciones pequeñas que aceptan ese canal lateral) lo activa.
+     */
+    public static function envioInmediatoHabilitado(): bool
+    {
+        $v = $_ENV['CORREOS_ENVIO_INMEDIATO'] ?? getenv('CORREOS_ENVIO_INMEDIATO');
+        return is_string($v) && in_array(strtolower(trim($v)), ['1', 'true', 'si', 'sí', 'on'], true);
+    }
+
+    /** CONTRATO. Intento inmediato posterior al commit (solo si está habilitado); nunca lanza (un fallo deja el evento reintentable). */
     public function despacharTrasCommit(int $eventoId): bool
     {
+        if (!self::envioInmediatoHabilitado()) { return false; }
         try { return $this->despachar($eventoId); } catch (\Throwable $e) {
             error_log('[correos] despacho inmediato del evento #' . $eventoId . ' fallido: ' . Email::sanearMensajeError($e->getMessage()));
             return false;
@@ -91,8 +120,8 @@ final class CorreoSalidaService
             error_log("[correos] evento #{$id} ({$evento['tipo']}) con carga ilegible: fallido definitivo");
             return self::R_FALLO;
         }
-        if ($evento['tipo'] === self::TIPO_CONFIRMACION && $evento['usuario_id'] !== null) {
-            $vigencia = $this->vigenciaConfirmacion($evento['usuario_id'], (string)$carga['token']);
+        if (in_array($evento['tipo'], [self::TIPO_CONFIRMACION, self::TIPO_RECUPERACION], true) && $evento['usuario_id'] !== null) {
+            $vigencia = $this->vigenciaConfirmacion($evento['usuario_id'], (string)$carga['token'], $evento['tipo'] === self::TIPO_RECUPERACION ? 'recuperacion' : 'confirmacion');
             if ($vigencia === false) {
                 // El enlace ya no sirve (reemplazado por un reenvío, vencido o cuenta ya confirmada): no se envía jamás.
                 $this->repo->marcarCancelado($id, $evento['token'], 'Enlace ya no vigente (reemplazado, vencido o cuenta confirmada).');
@@ -111,6 +140,7 @@ final class CorreoSalidaService
             $enviado = match ($evento['tipo']) {
                 'invitacion_colaborador' => $correo->enviarInvitacion(),
                 self::TIPO_CONFIRMACION => $correo->enviarConfirmacion(),
+                self::TIPO_RECUPERACION => $correo->enviarInstrucciones(),
                 self::TIPO_AVISO_EXISTENTE => $correo->enviarAvisoCuentaExistente(),
                 default => false,
             };
@@ -145,14 +175,16 @@ final class CorreoSalidaService
      * Es una defensa en profundidad: el reenvío ya cancela los eventos anteriores, y esta comprobación cubre la
      * confirmación de la cuenta por otra vía y la ventana entre el envío y la cancelación.
      */
-    private function vigenciaConfirmacion(int $usuarioId, string $tokenPlano): ?bool
+    private function vigenciaConfirmacion(int $usuarioId, string $tokenPlano, string $tipoToken = 'confirmacion'): ?bool
     {
         try {
-            $usuario = (new UsuarioRepository($this->repo->conexion()))->findByValidToken($tokenPlano, 'confirmacion');
+            $usuario = (new UsuarioRepository($this->repo->conexion()))->findByValidToken($tokenPlano, $tipoToken);
         } catch (\Throwable) {
             return null;
         }
-        return $usuario !== null && (int)$usuario->id === $usuarioId && (string)$usuario->confirmado !== '1';
+        if ($usuario === null || (int)$usuario->id !== $usuarioId) { return false; }
+        // La confirmación deja de servir si la cuenta ya está confirmada; la recuperación solo existe para cuentas confirmadas.
+        return $tipoToken === 'recuperacion' ? (string)$usuario->confirmado === '1' : (string)$usuario->confirmado !== '1';
     }
 
     /** @return int cantidad enviada */

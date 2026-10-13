@@ -12,7 +12,7 @@ $dias = \Model\HorarioProfesional::DIAS_SEMANA;
 $pref = preg_replace('/[^a-z0-9_-]/i', '', (string)($ag['prefijo'] ?? 'ag'));
 $franjas = is_array($ag['franjas'] ?? null) ? $ag['franjas'] : [];
 $descansos = is_array($ag['descansos'] ?? null) ? $ag['descansos'] : [];
-$seleccion = array_map('strval', (array)($ag['seleccion'] ?? []));
+$seleccion = array_map('strval', array_filter((array)($ag['seleccion'] ?? []), 'is_scalar'));
 $editable = ($ag['editable'] ?? true) !== false;
 $val = static fn($fila, string $k): string => is_array($fila) && is_string($fila[$k] ?? null) ? $fila[$k] : '';
 $fila = static function (string $tipo, int $dia, int $i, $datos, string $nombreDia) use ($val, $editable): string {

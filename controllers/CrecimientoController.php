@@ -46,7 +46,7 @@ class CrecimientoController
     {
         $cabecera=['ID','Nombre','Apellido','Correo','Consentimiento'];
         $out=fopen('php://temp','r+');fputcsv($out,$cabecera);
-        foreach($filas as $fila){fputcsv($out,array_map(static function($v){$s=(string)$v;return preg_match('/^[\s]*[=+@\-]/u',$s)?"'".$s:$s;},array_values($fila)));}
+        foreach($filas as $fila){fputcsv($out,array_map([\Services\ReporteService::class,'sanearCeldaCsv'],array_values($fila)));}
         rewind($out);$contenido=(string)stream_get_contents($out);fclose($out);
         try {
             $c=(new \Services\AuthorizationService())->contexto((int)($_SESSION['id']??0));

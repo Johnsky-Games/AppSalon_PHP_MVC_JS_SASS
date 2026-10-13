@@ -54,6 +54,22 @@ final class CrmAuditoriaRepository
         }
     }
 
+    /**
+     * ¿Ya hay una denegación igual (mismo actor, tipo y motivo) en los últimos `$minutos`? Sirve para agrupar los
+     * intentos repetidos y que una cuenta con pocos privilegios no pueda llenar de filas la auditoría de solo anexado (QA R2B-06).
+     */
+    public function hayDenegadaReciente(?int $actorId, string $tipo, ?string $motivo, int $minutos): bool
+    {
+        $minutos = max(1, $minutos);
+        $stmt = $this->db->prepare("SELECT 1 FROM crm_exportaciones_auditoria WHERE resultado='denegada' AND tipo=? AND (actor_usuario_id <=> ?) AND (motivo <=> ?)
+            AND ocurrido_en >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL {$minutos} MINUTE) LIMIT 1");
+        if (!$stmt) { return false; }
+        $stmt->bind_param('sis', $tipo, $actorId, $motivo);
+        $existe = $stmt->execute() && $stmt->get_result()->num_rows > 0;
+        $stmt->close();
+        return $existe;
+    }
+
     /** @return array{0:string,1:string,2:array} WHERE, tipos y parámetros */
     private function donde(array $f): array
     {

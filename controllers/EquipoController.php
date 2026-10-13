@@ -252,7 +252,8 @@ class EquipoController
         $motivo = $_POST['motivo'] ?? '';
         if (!$id || !is_array($decisiones) || !is_string($motivo)) {
             $_SESSION['equipo_alertas'] = ['error' => ['Datos no válidos.']];
-            redirigir('/admin/equipo');
+            // Quien gestiona agenda puede no tener equipo.gestionar: se vuelve a su inicio, nunca a una ruta que le deniegue (QA R2B-11).
+            redirigir(inicio_portal());
             return;
         }
         $r = (new ReasignacionCitasService())->aplicar((int)$_SESSION['id'], (int)$id, $decisiones, $motivo, clave_operacion_enviada());

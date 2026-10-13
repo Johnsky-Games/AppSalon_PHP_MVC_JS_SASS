@@ -12,7 +12,7 @@ function debuguear($variable): string
 // Escapa / Sanitizar el HTML
 function s($html): string
 {
-    if (is_null($html)) {
+    if (is_null($html) || is_array($html) || is_object($html) && !method_exists($html, '__toString')) {
         return '';
     }
     return htmlspecialchars((string)$html, ENT_QUOTES, 'UTF-8');

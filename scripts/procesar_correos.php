@@ -32,6 +32,11 @@ foreach (array_slice($argv, 1) as $arg) {
         fwrite(STDERR, "Argumento no reconocido: " . preg_replace('/[^\x20-\x7E]/', '?', mb_substr($arg, 0, 60)) . "\nUsa --ayuda.\n");
         exit(2);
     }
+    if ($m[1] === 'reintentar' && (!isset($m[2]) || $m[2] === '=')) {
+        // Sin valor, getopt lo ignoraría y se ejecutaría una tanda normal: es un uso incorrecto (QA R2B).
+        fwrite(STDERR, "--reintentar exige un valor: --reintentar=<id> o --reintentar=todos-fallidos.\n");
+        exit(2);
+    }
 }
 if (isset($opciones['ayuda']) || isset($opciones['help'])) {
     $doc = (string)file_get_contents(__FILE__);

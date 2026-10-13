@@ -33,6 +33,9 @@ final class ColaboradoresPortalesIntegrationTest extends TestCase
 
     protected function setUp(): void
     {
+        // Estas pruebas verifican la entrega en línea tras el commit (camino CORREOS_ENVIO_INMEDIATO=1); el valor por defecto
+        // (solo cola + worker) se prueba en ColaSinEnvioEnLineaIntegrationTest y en la suite Qa.
+        $_ENV['CORREOS_ENVIO_INMEDIATO'] = '1'; putenv('CORREOS_ENVIO_INMEDIATO=1');
         $this->db = new \mysqli(getenv('DB_HOST') ?: '127.0.0.1', getenv('DB_USER') ?: 'root', getenv('DB_PASS') ?: 'root', getenv('DB_NAME') ?: 'appsalon_test', (int)(getenv('DB_PORT') ?: 3306));
         $this->db->set_charset('utf8mb4');
         ActiveRecord::setDB($this->db);
@@ -58,6 +61,7 @@ final class ColaboradoresPortalesIntegrationTest extends TestCase
 
     protected function tearDown(): void
     {
+        unset($_ENV['CORREOS_ENVIO_INMEDIATO']); putenv('CORREOS_ENVIO_INMEDIATO');
         if ($this->db->ping()) {
             $this->db->query('DROP TRIGGER IF EXISTS test_fail_invitacion');
             $this->limpiar();

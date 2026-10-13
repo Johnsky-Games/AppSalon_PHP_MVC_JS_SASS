@@ -763,6 +763,12 @@ class ProfesionalRepository
         }
     }
 
+    /** «Hoy» según la zona horaria de la agenda (Ecuador), nunca la del proceso PHP (QA R2B-10). */
+    private function fechaHoyAgenda(): string
+    {
+        return (new \DateTimeImmutable('now', new \DateTimeZone('America/Guayaquil')))->format('Y-m-d');
+    }
+
     /**
      * Cuerpo del reemplazo de horarios; DEBE ejecutarse dentro de una transacción abierta por el llamador.
      *
@@ -773,7 +779,7 @@ class ProfesionalRepository
     {
         $this->bloquearProfesionalParaMutacion($db, $profesionalId);
 
-        $fechaHoy = date('Y-m-d');
+        $fechaHoy = $this->fechaHoyAgenda();
         $citasConfirmadas = $this->findCitasConfirmadasFuturasForUpdate($profesionalId, $fechaHoy, $db);
         if (!empty($citasConfirmadas)) {
             $horariosPorDia = [];
@@ -923,7 +929,7 @@ class ProfesionalRepository
              ORDER BY c.id FOR UPDATE"
         );
         if (!$stmtCitas) { throw new PersistenceException('Error al preparar la comprobación de citas: ' . $db->error); }
-        $hoy = date('Y-m-d');
+        $hoy = $this->fechaHoyAgenda();
         $stmtCitas->bind_param('is', $profesionalId, $hoy);
         if (!$stmtCitas->execute()) { $err = $stmtCitas->error; $stmtCitas->close(); throw new PersistenceException('Error al comprobar citas del profesional: ' . $err); }
         $afectadas = [];
@@ -962,7 +968,7 @@ class ProfesionalRepository
     private function aplicarReemplazoDescansos(mysqli $db, int $profesionalId, array $descansos): void
     {
         if ($descansos) {
-            $citas = $this->findCitasConfirmadasFuturasForUpdate($profesionalId, date('Y-m-d'), $db);
+            $citas = $this->findCitasConfirmadasFuturasForUpdate($profesionalId, $this->fechaHoyAgenda(), $db);
             foreach ($citas as $cita) {
                 $diaCita = (int)date('N', strtotime((string)$cita->fecha));
                 [$citaIni, $citaFin] = $this->extraerIntervaloMinutosCita($cita);
@@ -1132,7 +1138,7 @@ class ProfesionalRepository
             $profId = (int)$descanso->profesionalId;
             $this->bloquearProfesionalParaMutacion($db, $profId);
 
-            $fechaHoy = date('Y-m-d');
+            $fechaHoy = $this->fechaHoyAgenda();
             $citasConfirmadas = $this->findCitasConfirmadasFuturasForUpdate($profId, $fechaHoy, $db);
             if (!empty($citasConfirmadas)) {
                 $diaDescanso = (int)$descanso->dia_semana;

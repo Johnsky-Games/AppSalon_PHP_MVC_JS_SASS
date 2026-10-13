@@ -17,6 +17,16 @@ require_once __DIR__ . '/migrador_reversion.php';
 
 use Model\ActiveRecord;
 
+/** Orientación cuando el propio rollback SQL se niega por datos de negocio (error 1242 de sus guardas escalares). */
+function pista_reversion_negada(int $errno, string $nombre): void
+{
+    if ($errno === 1242) {
+        echo "[BLOQUEO] La reversión de {$nombre} se negó A PROPÓSITO: sus tablas contienen datos de negocio y --aceptar-perdida NO basta para descartarlos.\n";
+        echo "          No se modificó nada. Archiva las tablas (mysqldump) y vacíalas con un usuario administrador, o restaura el respaldo en una base nueva.\n";
+        echo "          Ver docs/GUIA_ACTUALIZACION_RONDA2.md §7 y la cabecera de {$nombre}_rollback.sql.\n";
+    }
+}
+
 $comando = $argv[1] ?? 'status';
 $db = ActiveRecord::getDB();
 
@@ -285,15 +295,18 @@ if ($comando === 'status') {
         $sql = file_get_contents($archivo);
         if (!$db->multi_query($sql)) {
             echo "[ERROR] Error al iniciar la reversión de {$nombre}: " . $db->error . "\n";
+            pista_reversion_negada((int)$db->errno, $nombre);
             exit(1);
         }
 
         $fallo = false;
         $mensajeError = '';
+        $errnoFallo = 0;
         do {
             if ($db->errno) {
                 $fallo = true;
                 $mensajeError = $db->error;
+                $errnoFallo = (int)$db->errno;
                 break;
             }
             if ($res = $db->store_result()) {
@@ -306,6 +319,7 @@ if ($comando === 'status') {
                 if ($db->errno) {
                     $fallo = true;
                     $mensajeError = $db->error;
+                    $errnoFallo = (int)$db->errno;
                 }
                 break;
             }
@@ -313,6 +327,7 @@ if ($comando === 'status') {
 
         if ($fallo) {
             echo "[ERROR] Fallo intermedio en la reversión de {$nombre}: {$mensajeError}\n";
+            pista_reversion_negada($errnoFallo, $nombre);
             exit(1);
         }
 
