@@ -10,7 +10,9 @@ include __DIR__ . '/../templates/alertas.php';
     <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
     <input type="hidden" name="idem_key" value="<?php echo s(clave_operacion_formulario()); ?>">
     <?php include __DIR__ . '/formulario.php'; ?>
+    <?php if (!empty($homonimos)) { $puedeVerFicha = true; include __DIR__ . '/../equipo/_aviso_homonimos_profesional.php'; } else { ?>
     <input type="submit" value="Guardar Profesional" class="boton">
+    <?php } ?>
 </form>
 
 <p class="ui-form-help">Esta ficha organiza la agenda y no crea una cuenta de acceso. Para que la persona ingrese con su propio correo, invítala desde <a href="/admin/equipo">Equipo y permisos</a> (allí puedes vincular una ficha existente o crear una nueva junto con la invitación).</p>

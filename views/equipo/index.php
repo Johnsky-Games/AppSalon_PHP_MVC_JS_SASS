@@ -13,7 +13,8 @@ $etiquetaRol = ['propietario' => 'Propietario', 'gerente' => 'Gerencia', 'recepc
 $etiquetaEstado = ['invitado' => 'Invitación pendiente', 'activo' => 'Activo', 'suspendido' => 'Suspendido', 'baja' => 'Baja'];
 $etiquetaCorreo = ['enviado' => 'Correo enviado', 'pendiente' => 'Correo en cola', 'fallido' => 'Correo no enviado', 'enviando' => 'Enviando correo', 'cancelado' => ''];
 $previo = array_map(static fn($v) => is_array($v) ? $v : (string)$v, $previo ?? []);
-$idemInvitacion = clave_operacion_formulario();
+// Con aviso de homónimos se conserva la clave del intento: el token de confirmación está ligado a ella.
+$idemInvitacion = !empty($homonimos['clave']) ? $homonimos['clave'] : clave_operacion_formulario();
 ?>
 <header class="ui-page-header"><p class="ui-eyebrow">Personas y accesos</p><h1 class="nombre-pagina">Equipo y permisos</h1><p class="descripcion-pagina">Invita a cada persona con su propio correo. Hasta que acepte la invitación no tiene acceso laboral; los cambios de rol o estado cierran sus sesiones anteriores.</p></header>
 <?php include __DIR__ . '/../templates/barra.php'; include __DIR__ . '/../templates/alertas.php'; ?>
@@ -42,10 +43,11 @@ $idemInvitacion = clave_operacion_formulario();
 <div class="campo"><label for="eq-ajustar"><input type="checkbox" id="eq-ajustar" name="ajustar_agenda" value="1" <?= ($previo['ajustar_agenda'] ?? '') === '1' ? 'checked' : '' ?>> Al vincular una ficha existente, reemplazar sus servicios y su horario por lo indicado abajo</label><small class="ui-form-help">Si no lo marcas, la ficha conserva su configuración actual y lo de abajo solo se usa para fichas nuevas.</small></div>
 <?php } ?>
 <?php $ag = ['prefijo' => 'eq', 'mostrarServicios' => true, 'servicios' => $servicios, 'seleccion' => (array)($previo['servicios'] ?? []), 'franjas' => (array)($previo['franjas'] ?? []), 'descansos' => (array)($previo['descansos'] ?? [])]; include __DIR__ . '/_agenda_asistente.php'; ?>
-<div class="campo"><label for="eq-homonimo"><input type="checkbox" id="eq-homonimo" name="confirmar_homonimo" value="1"> Es otra persona con el mismo nombre que un profesional existente</label></div>
 <p class="ui-form-help">Una ficha nueva guarda su horario y servicios desde ya, pero no aparece en disponibilidad ni en reservas hasta que la persona acepte la invitación; entonces se activa con esta configuración (una ficha existente conserva su estado actual). Puedes ajustarla después en su ficha laboral.</p>
 </fieldset>
+<?php if (!empty($homonimos)) { $puedeVerFicha = !empty($puedeProfesionales); include __DIR__ . '/_aviso_homonimos_profesional.php'; } else { ?>
 <button class="boton" type="submit">Enviar invitación</button>
+<?php } ?>
 </form>
 </section>
 

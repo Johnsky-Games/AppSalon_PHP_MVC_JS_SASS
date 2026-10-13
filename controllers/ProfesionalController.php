@@ -195,6 +195,7 @@ class ProfesionalController
 
         $profesional = new Profesional();
         $alertas = [];
+        $homonimos = null;
 
         $catalogoServicios = self::obtenerServicioService()->listar();
         if ($catalogoServicios['status'] === ServicioService::STATUS_ERROR) {
@@ -211,17 +212,32 @@ class ProfesionalController
                 $resultado = ['status' => ProfesionalService::STATUS_INVALID, 'profesional' => new Profesional(),
                     'alertas' => ['error' => ['El formulario venció. Recárgalo antes de guardar.']]];
             } else {
-                $resultado = self::obtenerProfesionalService()->crear($_POST, $clave, \Classes\Idempotencia::actorUsuario((int)($_SESSION['id'] ?? 0), 'equipo'));
+                $actorId = (int)($_SESSION['id'] ?? 0);
+                $rol = null;
+                try { $rol = (new \Services\AuthorizationService())->contexto($actorId)['rol'] ?? null; } catch (\Throwable) {}
+                $resultado = self::obtenerProfesionalService()->crear($_POST, $clave, \Classes\Idempotencia::actorUsuario($actorId, 'equipo'),
+                    ['actor_id' => $actorId, 'actor_rol' => $rol, 'ip_hash' => \Services\AuditoriaHuella::ip(\Services\AuditoriaHuella::ipDeSolicitud())]);
             }
             if ($resultado['status'] === ProfesionalService::STATUS_OK) {
                 redirigir('/profesionales');
                 return;
             }
+            if ($resultado['status'] === ProfesionalService::STATUS_CANCELADO) {
+                // No se creó nada: se lleva al operador a la ficha existente que coincide.
+                redirigir(!empty($resultado['id_existente']) ? '/profesionales/actualizar?id=' . (int)$resultado['id_existente'] : '/profesionales');
+                return;
+            }
+            if ($resultado['status'] === ProfesionalService::STATUS_REQUIERE_CONFIRMACION) {
+                $homonimos = $resultado['homonimos'];
+            }
 
             $profesional = $resultado['profesional'] ?? new Profesional();
             $alertas = $resultado['alertas'];
 
-            if ($resultado['status'] === ProfesionalService::STATUS_ERROR) {
+            if ($resultado['status'] === ProfesionalService::STATUS_REQUIERE_CONFIRMACION) {
+                // 200 en el paso normal del flujo; 409 si alguien intentó confirmar con un token que no corresponde.
+                http_response_code(!empty($homonimos['confirmacion_invalida']) ? 409 : 200);
+            } elseif ($resultado['status'] === ProfesionalService::STATUS_ERROR) {
                 http_response_code(500);
             } elseif ($resultado['status'] === ProfesionalService::STATUS_CONFLICT_CLAVE || $resultado['status'] === ProfesionalService::STATUS_EN_CURSO) {
                 http_response_code(409);
@@ -235,6 +251,7 @@ class ProfesionalController
             'apellido' => $_SESSION['apellido'] ?? '',
             'profesional' => $profesional,
             'serviciosDisponibles' => $catalogoServicios['servicios'] ?? [],
+            'homonimos' => $homonimos,
             'alertas' => $alertas
         ]);
     }

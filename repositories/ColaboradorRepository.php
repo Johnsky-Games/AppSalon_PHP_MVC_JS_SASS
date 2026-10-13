@@ -181,6 +181,8 @@ final class ColaboradorRepository
         // la persona acepte la invitación.
         $agenda = $d['agenda'] ?? ['franjas' => [], 'descansos' => []];
         $repo->reemplazarConfiguracionAgenda($id, $d['servicios'], $agenda['franjas'], $agenda['descansos']);
+        // Decisión del operador ante posibles homónimos: se anexa en la misma transacción que la ficha y la invitación.
+        if (!empty($d['homonimo'])) { $d['homonimo']['servicio']->registrarContinuo($d['homonimo']['decision'], $id); }
         return $id;
     }
 

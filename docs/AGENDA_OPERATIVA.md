@@ -39,8 +39,20 @@ El cambio y su evento de auditoría `agenda_eventos` se confirman en la misma tr
 * **Comisiones.** La comisión se devenga al cobrar, con el profesional que tiene la cita en ese momento (`FinanzasService::registrar`). Una cita aún sin devengo que se reasigna **sigue al destino** (su cobro posterior devenga para el destino con su porcentaje). Si el pago de la cita **ya devengó** (movimiento `devengo` pendiente o liquidado) la reasignación se **bloquea** (`comision_devengada`): hay que cancelarla o gestionarla con finanzas; no se reescriben movimientos de comisión.
 * **Rollback seguro de 021.** Si `citas_reasignaciones` tiene filas se renombra a `citas_reasignaciones_respaldo_021` (y se quitan sus claves foráneas); si ya existe ese respaldo el rollback falla a propósito sin perder datos.
 
+## Aviso de posibles homónimos al dar de alta un profesional
+
+Aplica a `/profesionales/crear` y a la **ficha nueva** del asistente de invitación (vincular una ficha heredada existente no crea ficha y no lo dispara). Reutiliza `Services\HomonimosService` (normalización, orden invertido, parecido) tal cual; una ficha solo tiene nombre, así que se compara el nombre completo (sin criterio de teléfono). Mismas garantías que el alta de clientes del CRM:
+
+* **Nunca fusiona ni bloquea.** Con coincidencias la ficha **no se crea** hasta que el operador pulsa «Es una persona distinta: crear ficha»; también puede «Cancelar y usar la ficha existente».
+* **Token no forjable.** HMAC (`Secretos::clave('homonimos-confirmacion')`, prefijo propio `homonimos-profesional`) ligado al operador, a la clave de operación del formulario y al conjunto exacto de ids; el servidor recalcula las coincidencias al recibir la confirmación. El aviso se vuelve a mostrar con la **misma** clave (el token depende de ella). La antigua casilla `confirmar_homonimo` ya no confirma nada.
+* **Auditoría.** `profesionales_homonimos_decisiones` (migración 021, solo anexado con disparadores): «continuó» se escribe en la **misma transacción** que la ficha (y la invitación en el asistente); «canceló» al cancelar. Único por (operador, clave, decisión): el doble clic no duplica.
+* **Idempotencia.** Un reintento de un alta ya confirmada devuelve el resultado original (`Idempotencia::buscar`) sin repetir el aviso ni la decisión.
+* **PII mínima.** El aviso muestra nombre, si la ficha está activa y si está vinculada a una cuenta; nunca correos ni teléfonos. El enlace a la ficha solo aparece con `profesionales.gestionar`.
+* Piezas: `HomonimosProfesionalesService`, `ProfesionalHomonimosRepository`, `ProfesionalService::crear(..., $homonimos)`, `ColaboradorService::invitar(..., $ipHash)`, `views/equipo/_aviso_homonimos_profesional.php`.
+
 ## Pruebas
 
 `tests/Integration/AgendaOperativaIntegrationTest.php` cubre dueño/ajeno, alcance profesional, solapamiento, encaje de turno, snapshots y pago, transiciones válidas/terminales/idempotencia, historial cancelado, hora pasada, fallo SQL de auditoría con rollback y outbox durable. Ejecutar mediante la suite PHPUnit del repositorio en MySQL real tras migraciones 010 y 012.
 
 También: `tests/Integration/AsistenteProfesionalIntegrationTest.php` (asistente de servicios y horario) y `tests/Integration/ReasignacionCitasIntegrationTest.php` (reasignación, concurrencia con procesos reales, atomicidad, comisiones, privacidad y rollback de 021; worker `tests/fixtures/concurrent_reasignacion_worker.php`).
+`tests/Integration/HomonimosProfesionalesIntegrationTest.php` cubre el aviso de homónimos de profesionales (token, auditoría, atomicidad, HTTP y procesos concurrentes).

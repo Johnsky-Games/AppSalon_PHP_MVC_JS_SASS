@@ -30,6 +30,10 @@ class ProfesionalService
     public const STATUS_CONFLICT_CLAVE = 'conflict_key';
     /** Otra solicitud con la misma clave sigue procesándose. */
     public const STATUS_EN_CURSO = 'in_progress';
+    /** Posibles homónimos: la ficha no se crea hasta que el operador confirma «Es una persona distinta». */
+    public const STATUS_REQUIERE_CONFIRMACION = 'requiere_confirmacion';
+    /** El operador canceló ante el aviso de homónimos: no se creó nada. */
+    public const STATUS_CANCELADO = 'cancelado';
 
     public const TIMEZONE = 'America/Guayaquil';
     public const MAX_NOMBRE_LENGTH = 120;
@@ -352,7 +356,7 @@ class ProfesionalService
      * Crea un nuevo profesional y vincula los servicios que puede realizar.
      * Ignora cualquier `id` incluido en `$datos`.
      */
-    public function crear(array $datos, ?string $claveOperacion = null, ?string $actor = null): array
+    public function crear(array $datos, ?string $claveOperacion = null, ?string $actor = null, ?array $homonimos = null): array
     {
         $profesional = new Profesional();
         $profesional->sincronizarEditable($datos);
@@ -409,10 +413,37 @@ class ProfesionalService
                 sort($ids);
                 $contenido = ['nombre' => mb_strtolower(trim((string)$profesional->nombre)), 'activo' => (string)$validacion['activo'], 'servicios' => $ids];
                 $db = $this->profesionalRepository->getDb();
-                $op = Idempotencia::buscar($db, 'profesional.crear', $actor, $claveOperacion, $contenido)
-                    ?? Idempotencia::ejecutar($db, 'profesional.crear', $actor, $claveOperacion, $contenido,
-                        function () use ($profesional, $validacion): array {
+                // Un reintento de un alta ya confirmada devuelve el resultado original (sin repetir el aviso de homónimos).
+                $op = Idempotencia::buscar($db, 'profesional.crear', $actor, $claveOperacion, $contenido);
+                $decisionHomonimo = null;
+                $servicioHomonimos = null;
+                if ($op === null && $homonimos !== null) {
+                    // Aviso de posibles homónimos: contexto {actor_id, actor_rol, ip_hash} aportado por el controlador.
+                    $servicioHomonimos = new HomonimosProfesionalesService(new \Repositories\ProfesionalHomonimosRepository($db));
+                    $decision = is_string($datos['decision'] ?? null) ? $datos['decision'] : 'crear';
+                    $token = is_string($datos['token_confirmacion'] ?? null) ? $datos['token_confirmacion'] : null;
+                    $eval = $servicioHomonimos->evaluar((int)$homonimos['actor_id'], $homonimos['actor_rol'] ?? null, (string)$profesional->nombre, $claveOperacion, $decision, $token,
+                        $homonimos['ip_hash'] ?? null, HomonimosProfesionalesService::AMBITO_PROFESIONAL);
+                    if ($eval['estado'] === HomonimosProfesionalesService::CANCELADO) {
+                        return ['status' => self::STATUS_CANCELADO, 'resultado' => false, 'id' => null, 'id_existente' => $eval['ids'][0] ?? null, 'profesional' => $profesional, 'alertas' => []];
+                    }
+                    if ($eval['estado'] === HomonimosProfesionalesService::REQUIERE_CONFIRMACION) {
+                        // Carrera con el propio doble clic: la primera solicitud pudo confirmarse entre la búsqueda previa y este punto.
+                        $op = Idempotencia::buscar($db, 'profesional.crear', $actor, $claveOperacion, $contenido);
+                        if ($op === null) {
+                            return ['status' => self::STATUS_REQUIERE_CONFIRMACION, 'resultado' => false, 'id' => null, 'profesional' => $profesional,
+                                'homonimos' => ['coincidencias' => $eval['coincidencias'], 'token' => $eval['token'], 'confirmacion_invalida' => $eval['confirmacion_invalida']],
+                                'alertas' => !empty($eval['confirmacion_invalida']) ? ['error' => ['La confirmación no corresponde a las coincidencias actuales. Revísalas de nuevo antes de continuar.']] : []];
+                        }
+                    } elseif ($eval['estado'] === HomonimosProfesionalesService::CONFIRMADA) {
+                        $decisionHomonimo = $eval['decision'];
+                    }
+                }
+                $op ??= Idempotencia::ejecutar($db, 'profesional.crear', $actor, $claveOperacion, $contenido,
+                        function () use ($profesional, $validacion, $decisionHomonimo, $servicioHomonimos): array {
                             $id = $this->profesionalRepository->createWithServicios($profesional, $validacion['servicioIds']);
+                            // La decisión del operador se anexa en la MISMA transacción: o existen ficha y decisión, o ninguna.
+                            if ($decisionHomonimo !== null) { $servicioHomonimos->registrarContinuo($decisionHomonimo, $id); }
                             return ['recurso_tipo' => 'profesional', 'recurso_id' => $id, 'datos' => []];
                         });
                 $insertId = $op['recurso_id'];

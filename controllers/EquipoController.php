@@ -7,6 +7,7 @@ use Repositories\ColaboradorRepository;
 use Repositories\CorreoSalidaRepository;
 use Repositories\ProfesionalRepository;
 use Repositories\ServicioRepository;
+use Services\AuditoriaHuella;
 use Services\AuthorizationService;
 use Services\ColaboradorService;
 use Services\CorreoSalidaService;
@@ -44,9 +45,11 @@ class EquipoController
             'alertas' => $alertas,
             'puedeRh' => puede('rh.gestionar'),
             'puedeAgenda' => puede('agenda.gestionar'),
+            'puedeProfesionales' => puede('profesionales.gestionar'),
             'previo' => $_SESSION['equipo_previo'] ?? [],
+            'homonimos' => $_SESSION['equipo_homonimos'] ?? null,
         ]);
-        unset($_SESSION['equipo_previo']);
+        unset($_SESSION['equipo_previo'], $_SESSION['equipo_homonimos']);
     }
 
     public static function crear(): void { self::mutar('crear'); }
@@ -67,7 +70,7 @@ class EquipoController
         $mensaje = '';
         switch ($accion) {
             case 'crear':
-                $r = $servicio->invitar($actor, $_POST, $clave);
+                $r = $servicio->invitar($actor, $_POST, $clave, AuditoriaHuella::ip(AuditoriaHuella::ipDeSolicitud()));
                 if ($r['status'] === ColaboradorService::OK) {
                     $mensaje = match ($r['correo'] ?? 'pendiente') {
                         'enviado' => 'Invitación enviada. La persona no tendrá acceso al equipo hasta que la acepte.',
@@ -76,7 +79,18 @@ class EquipoController
                     };
                     if (!empty($r['repetida'])) { $mensaje = 'Esta invitación ya estaba registrada; se muestra el resultado original.'; }
                     if (!empty($r['profesional_id'])) { $mensaje .= ' Configura sus horarios para habilitar reservas.'; }
-                } else { $_SESSION['equipo_previo'] = self::previoSeguro($_POST); }
+                } elseif ($r['status'] === ColaboradorService::CANCELADO) {
+                    // No se creó nada: el operador decidió usar la ficha existente.
+                    $_SESSION['equipo_alertas'] = ['exito' => $r['errores']];
+                    redirigir('/admin/equipo');
+                    return;
+                } else {
+                    $_SESSION['equipo_previo'] = self::previoSeguro(array_diff_key($_POST, ['decision' => 1, 'token_confirmacion' => 1]));
+                    if (!empty($r['homonimos'])) {
+                        // El aviso se vuelve a mostrar con LA MISMA clave de operación: el token está ligado a ella.
+                        $_SESSION['equipo_homonimos'] = ['coincidencias' => $r['homonimos']['coincidencias'], 'token' => $r['homonimos']['token'], 'clave' => $clave];
+                    }
+                }
                 break;
             case 'reenviar':
                 if (!$id) { break; }

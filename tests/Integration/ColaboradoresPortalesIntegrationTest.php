@@ -557,7 +557,11 @@ final class ColaboradoresPortalesIntegrationTest extends TestCase
         $aviso = $this->invitar($this->email(), 'profesional', $datos);
         $this->assertSame(ColaboradorService::INVALID, $aviso['status']);
         $this->assertTrue($aviso['requiere_homonimo']);
-        $ok = $this->invitar($this->email(), 'profesional', $datos + ['confirmar_homonimo' => '1']);
+        // La casilla heredada «confirmar_homonimo» ya no basta: hace falta el token del aviso (no forjable).
+        $this->assertSame(ColaboradorService::INVALID, $this->invitar($this->email(), 'profesional', $datos + ['confirmar_homonimo' => '1'])['status']);
+        $clave = Idempotencia::nuevaClave();
+        $primero = $this->invitar($this->email(), 'profesional', $datos, $clave);
+        $ok = $this->invitar($this->email(), 'profesional', $datos + ['decision' => 'confirmar', 'token_confirmacion' => $primero['homonimos']['token']], $clave);
         $this->assertSame(ColaboradorService::OK, $ok['status'], 'Los homónimos legítimos no se bloquean');
     }
 

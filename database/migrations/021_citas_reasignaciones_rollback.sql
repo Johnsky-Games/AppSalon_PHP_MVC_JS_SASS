@@ -18,3 +18,20 @@ SET @sentencia := IF(@existe = 0 OR @filas = 0, 'SELECT 1',
 PREPARE paso_021 FROM @sentencia;
 EXECUTE paso_021;
 DEALLOCATE PREPARE paso_021;
+
+-- Decisiones de homónimos de profesionales (auditoría de solo anexado): mismo criterio. Con filas se renombra a
+-- profesionales_homonimos_decisiones_respaldo_021 y se retiran sus disparadores (sus nombres son únicos por esquema
+-- y bloquearían volver a aplicar 021); vacía, se elimina.
+SET @existe := (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'profesionales_homonimos_decisiones');
+SET @filas := 0;
+SET @contar := IF(@existe = 0, 'SELECT 0 INTO @filas', 'SELECT COUNT(*) INTO @filas FROM profesionales_homonimos_decisiones');
+PREPARE contar_021 FROM @contar;
+EXECUTE contar_021;
+DEALLOCATE PREPARE contar_021;
+SET @sentencia := IF(@existe = 0, 'SELECT 1',
+    IF(@filas = 0, 'DROP TABLE profesionales_homonimos_decisiones', 'RENAME TABLE profesionales_homonimos_decisiones TO profesionales_homonimos_decisiones_respaldo_021'));
+PREPARE paso_021 FROM @sentencia;
+EXECUTE paso_021;
+DEALLOCATE PREPARE paso_021;
+DROP TRIGGER IF EXISTS trg_prof_homonimo_no_update;
+DROP TRIGGER IF EXISTS trg_prof_homonimo_no_delete;

@@ -9,6 +9,7 @@ use Classes\RateLimiter;
 use Repositories\ColaboradorRepository;
 use Repositories\DuplicateEntryException;
 use Repositories\PersistenceException;
+use Repositories\ProfesionalHomonimosRepository;
 
 /**
  * Ciclo de vida del colaborador: invitación formal, reenvío, aceptación, ficha laboral y acceso.
@@ -24,6 +25,8 @@ final class ColaboradorService
     public const FORBIDDEN = 'forbidden';
     public const RATE_LIMITED = 'rate_limited';
     public const ERROR = 'error';
+    /** El operador canceló ante el aviso de homónimos: no se creó nada. */
+    public const CANCELADO = 'cancelado';
 
     public function __construct(private ColaboradorRepository $repo, private CorreoSalidaService $correos) {}
 
@@ -104,7 +107,8 @@ final class ColaboradorService
             'nombre' => $nombre, 'apellido' => $apellido, 'email' => $email, 'telefono' => $telefono === '' ? null : $telefono,
             'puesto' => $puesto, 'rol' => $rol, 'fecha_ingreso' => $fecha === '' ? null : $fecha,
             'servicios' => $servicios, 'nombre_profesional' => $nombreProf, 'profesional_id' => $profesionalId,
-            'confirmar_homonimo' => ($post['confirmar_homonimo'] ?? '') === '1',
+            'decision' => is_string($post['decision'] ?? null) ? $post['decision'] : 'crear',
+            'token_confirmacion' => is_string($post['token_confirmacion'] ?? null) ? $post['token_confirmacion'] : null,
             'agenda' => $agenda,
         ], []];
     }
@@ -113,7 +117,7 @@ final class ColaboradorService
      * Invita a un colaborador (y, si es profesional, crea su ficha operativa) de forma idempotente.
      * El correo se escribe en el outbox dentro de la misma transacción y se envía después de confirmar.
      */
-    public function invitar(int $actor, array $post, ?string $clave): array
+    public function invitar(int $actor, array $post, ?string $clave, ?string $ipHash = null): array
     {
         [$d, $errores] = $this->validarInvitacion($post);
         if ($d === null) { return ['status' => self::INVALID, 'errores' => $errores]; }
@@ -129,9 +133,28 @@ final class ColaboradorService
         try {
             $previa = Idempotencia::buscar($db, 'colaborador.invitar', $actorId, $clave, $contenido);
             if ($previa !== null) { return $this->resultadoInvitacion($previa, true); }
-            if ($d['rol'] === 'profesional' && $d['profesional_id'] === null && !$d['confirmar_homonimo'] && $this->existeHomonimo($d['nombre_profesional'])) {
-                return ['status' => self::INVALID, 'requiere_homonimo' => true,
-                    'errores' => ['Ya existe un profesional llamado «' . $d['nombre_profesional'] . '». Si es otra persona, marca «Es otra persona con el mismo nombre» y vuelve a enviar.']];
+            if ($d['rol'] === 'profesional' && $d['profesional_id'] === null) {
+                // Aviso de posibles homónimos (mismas garantías que el alta de clientes): token HMAC, decisión auditada en la misma transacción.
+                $homonimos = new HomonimosProfesionalesService(new ProfesionalHomonimosRepository($db));
+                $rolActor = null;
+                try { $rolActor = (new AuthorizationService($db))->contexto($actor)['rol'] ?? null; } catch (\Throwable) {}
+                $eval = $homonimos->evaluar($actor, $rolActor, $d['nombre_profesional'], $clave, $d['decision'], $d['token_confirmacion'], $ipHash, HomonimosProfesionalesService::AMBITO_ASISTENTE);
+                if ($eval['estado'] === HomonimosProfesionalesService::CANCELADO) {
+                    return ['status' => self::CANCELADO, 'id_existente' => $eval['ids'][0] ?? null, 'errores' => ['No se creó nada. Si es la misma persona, vincula su ficha existente en «Vincular una ficha existente».']];
+                }
+                if ($eval['estado'] === HomonimosProfesionalesService::REQUIERE_CONFIRMACION) {
+                    // Carrera con el propio doble clic: la primera solicitud pudo confirmarse entre la búsqueda previa y este punto.
+                    $previa = Idempotencia::buscar($db, 'colaborador.invitar', $actorId, $clave, $contenido);
+                    if ($previa !== null) { return $this->resultadoInvitacion($previa, true); }
+                    return ['status' => self::INVALID, 'requiere_homonimo' => true, // INVALID: la invitación NO se creó hasta confirmar (token)
+                        'homonimos' => ['coincidencias' => $eval['coincidencias'], 'token' => $eval['token'], 'confirmacion_invalida' => $eval['confirmacion_invalida']],
+                        'errores' => [!empty($eval['confirmacion_invalida'])
+                            ? 'La confirmación no corresponde a las coincidencias actuales. Revísalas de nuevo antes de continuar.'
+                            : 'Ya existe una ficha con un nombre igual o muy parecido a «' . $d['nombre_profesional'] . '». Revisa las coincidencias y confirma si es otra persona.']];
+                }
+                if ($eval['estado'] === HomonimosProfesionalesService::CONFIRMADA) {
+                    $d['homonimo'] = ['servicio' => $homonimos, 'decision' => $eval['decision']];
+                }
             }
             $op = Idempotencia::ejecutar($db, 'colaborador.invitar', $actorId, $clave, $contenido, function () use ($actor, $d): array {
                 $r = $this->repo->crearInvitacion($actor, $d, (int)($d['profesional_id'] ?? 0));
@@ -171,18 +194,6 @@ final class ColaboradorService
     {
         try { return $this->correos->despachar($correoId) ? 'enviado' : 'pendiente'; }
         catch (\Throwable) { return 'pendiente'; }
-    }
-
-    private function existeHomonimo(string $nombre): bool
-    {
-        $db = \Model\ActiveRecord::getDB();
-        $s = $db->prepare("SELECT 1 FROM profesionales WHERE LOWER(TRIM(REGEXP_REPLACE(nombre,'[[:space:]]+',' ')))=? LIMIT 1");
-        $norm = mb_strtolower(trim(preg_replace('/\s+/u', ' ', $nombre) ?? ''));
-        $s->bind_param('s', $norm);
-        $s->execute();
-        $existe = $s->get_result()->num_rows > 0;
-        $s->close();
-        return $existe;
     }
 
     /** Reenvío explícito (otra acción legítima, con límite de frecuencia y auditoría). */
