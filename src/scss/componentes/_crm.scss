@@ -150,7 +150,17 @@
   td.ui-table-number, td.ui-table-date { white-space: nowrap; overflow-wrap: normal; font-variant-numeric: tabular-nums; }
 }
 .crm-tabla-clientes table { min-width: 86rem; }
-.crm-tabla-auditoria table { min-width: 96rem; }
+.crm-tabla-auditoria table { min-width: 110rem; }
+.crm-tabla-auditoria {
+  th, td { overflow-wrap: normal; word-break: normal; }
+  th:nth-child(1), td:nth-child(1) { min-width: 16rem; }
+  th:nth-child(2), td:nth-child(2) { min-width: 17rem; }
+  th:nth-child(3), td:nth-child(3) { min-width: 15rem; }
+  th:nth-child(4), td:nth-child(4) { min-width: 12rem; }
+  th:nth-child(5), td:nth-child(5) { min-width: 13rem; }
+  th:nth-child(6), td:nth-child(6) { min-width: 26rem; overflow-wrap: anywhere; }
+  th:nth-child(7), td:nth-child(7) { min-width: 20rem; }
+}
 
 .crm-encabezado-lista {
   display: flex; flex-wrap: wrap; gap: 1.2rem 2rem; align-items: center; justify-content: space-between; margin-bottom: .8rem;

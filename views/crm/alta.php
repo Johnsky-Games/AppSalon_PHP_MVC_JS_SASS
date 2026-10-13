@@ -51,7 +51,7 @@ $mostrar = AltaClienteService::MOSTRAR;
         <input type="hidden" name="token_confirmacion" value="<?= s($resultado['token']) ?>">
         <div class="crm-homonimos__acciones">
             <button class="boton" type="submit" name="decision" value="confirmar">Es una persona distinta: crear cliente</button>
-            <button class="boton boton-secundario" type="submit" name="decision" value="cancelar" formnovalidate>Cancelar y usar la ficha existente</button>
+            <button class="boton ui-button-quiet" type="submit" name="decision" value="cancelar" formnovalidate>Cancelar y usar la ficha existente</button>
         </div>
     </section>
     <?php else: ?>
