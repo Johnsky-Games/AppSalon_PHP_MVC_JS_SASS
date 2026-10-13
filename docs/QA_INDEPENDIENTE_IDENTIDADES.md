@@ -35,14 +35,14 @@ y la concurrencia usa procesos PHP reales con una barrera de tiempo común (`tes
 Salida literal de `php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --colors=never tests/Qa` (ejecución final, `DB_NAME=appsalon_qa_test`):
 
 ```
-Time: 03:38.908, Memory: 16.00 MB
+Time: 03:42.862, Memory: 16.00 MB
 Tests: 203, Assertions: 1516, Failures: 22, Skipped: 1.
 ```
 
 - **203 pruebas** en 12 archivos (`AtaquesVarios` 20, `AutorizacionHttp` 37, `CabecerasYDisponibilidad` 6, `Concurrencia` 17, `Correo` 6, `Esquema` 12, `Fallos` 47, `Frontend` 7, `Instalador` 9, `Privacidad` 20, `RegresionNegocio` 6, `Tokens` 16) + arnés (`QaCase`, `Navegador`, `worker.php`, `smtp_qa.php`, `router.php`, `frontend_qa.cjs`).
 - **22 fallos, todos intencionados**: 20 métodos `test_Defecto_*` (uno con 3 casos de datos). **0 fallos entre las pruebas que no son `Defecto_*`** (180 pasan).
 - **1 omitida** (`TokensTest::test_cuenta_existente_sin_confirmar_recupera_sesiones_y_tokens_previos`): el sistema no emite recuperación para una cuenta sin confirmar, de modo que no hay token que reutilizar (comportamiento válido).
-- Estabilidad: la suite completa se ejecutó 4 veces. La 1.ª mostró 5 errores y 4 fallos que NO eran defectos de la aplicación sino contaminación entre clases del arnés (una conexión cerrada que `ActiveRecord` conservaba tras `InstaladorTest`); se corrigió en `QaCase::db()`. En la 3.ª solo hubo 21 rojas porque este mismo informe contenía el texto que buscaba la comprobación documental de DEF-17 (ahora excluye este archivo). La 2.ª y la final dieron exactamente las mismas 22 rojas y 0 fallos fuera de `Defecto_*`.
+- Estabilidad: la suite completa se ejecutó 5 veces. La 1.ª mostró 5 errores y 4 fallos que NO eran defectos de la aplicación sino contaminación entre clases del arnés (una conexión cerrada que `ActiveRecord` conservaba tras `InstaladorTest`); se corrigió en `QaCase::db()`. En la 3.ª solo hubo 21 rojas porque este mismo informe contenía el texto que buscaba la comprobación documental de DEF-17 (ahora excluye este archivo). La 2.ª, la 4.ª y la 5.ª (tras parametrizar las credenciales por entorno) dieron exactamente las mismas 22 rojas y 0 fallos fuera de `Defecto_*`.
 
 Las pruebas rojas `Defecto_*` y el defecto que demuestran:
 
