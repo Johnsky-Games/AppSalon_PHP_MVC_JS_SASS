@@ -10,10 +10,8 @@ declare(strict_types=1);
  *
  * Características y Objetos Incluidos:
  * - Ejecutable exclusivamente desde CLI (`php_sapi_name() === 'cli'`).
- * - Incluye todas las tablas del esquema migrado (esquema base + migraciones 001 a 008, 13 tablas en total):
- *   `bloqueos_profesionales`, `citas`, `citasservicios`, `descansos_profesionales`, `horarios_profesionales`,
- *   `intentos_login`, `migraciones`, `notificaciones_citas`, `pagos`, `profesionales`, `profesionales_servicios`,
- *   `servicios`, `usuarios`.
+ * - Incluye todas las tablas del esquema migrado (esquema base + todas las migraciones aplicadas; 35 tablas con la migración 018):
+ *   (se descubren con SHOW FULL TABLES: no hay lista fija que mantener).
  * - Esquemas DDL completos (`DROP TABLE IF EXISTS`, `CREATE TABLE`).
  * - Inserciones de datos (`INSERT INTO`) escapadas en juego de caracteres `utf8mb4`.
  * - Snapshot transaccional consistente InnoDB (`REPEATABLE READ` + `START TRANSACTION WITH CONSISTENT SNAPSHOT`)

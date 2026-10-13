@@ -27,8 +27,8 @@ class EquipoController
     {
         exigir_permiso('equipo.gestionar');
         $db = ActiveRecord::getDB();
-        // Reintento oportunista de correos pendientes: sin worker permanente el equipo sigue viendo su avance.
-        try { (new CorreoSalidaService(new CorreoSalidaRepository($db)))->procesarPendientes(3); } catch (\Throwable) { /* se verá como pendiente */ }
+        // Una lectura nunca envía correos (un SMTP lento no debe colgar la pantalla): los reintentos los hace
+        // scripts/procesar_correos.php (incluido en el worker de notificaciones) o el botón «Reenviar invitación».
         $repo = self::repo();
         $alertas = $_SESSION['equipo_alertas'] ?? [];
         unset($_SESSION['equipo_alertas']);
@@ -68,12 +68,12 @@ class EquipoController
                 if ($r['status'] === ColaboradorService::OK) {
                     $mensaje = match ($r['correo'] ?? 'pendiente') {
                         'enviado' => 'Invitación enviada. La persona no tendrá acceso al equipo hasta que la acepte.',
-                        'fallido' => 'La invitación quedó guardada, pero el correo no pudo enviarse. Se reintentará; también puedes pulsar «Reenviar invitación».',
-                        default => 'Invitación guardada. El correo está en cola y se enviará en breve; no se creará ninguna otra invitación si repites la acción.',
+                        'fallido' => 'La invitación quedó guardada, pero el correo no pudo enviarse. Pulsa «Reenviar invitación» o activa el worker de correos (scripts/procesar_correos.php).',
+                        default => 'Invitación guardada. El correo está en cola: si no llega, pulsa «Reenviar invitación» o activa el worker de correos. Repetir esta acción no crea otra invitación.',
                     };
                     if (!empty($r['repetida'])) { $mensaje = 'Esta invitación ya estaba registrada; se muestra el resultado original.'; }
                     if (!empty($r['profesional_id'])) { $mensaje .= ' Configura sus horarios para habilitar reservas.'; }
-                } else { $_SESSION['equipo_previo'] = array_diff_key($_POST, ['csrf_token' => 1]); }
+                } else { $_SESSION['equipo_previo'] = array_filter(array_diff_key($_POST, ['csrf_token' => 1]), static fn($v, $k) => $k === 'servicios' ? is_array($v) && !array_filter($v, 'is_array') : is_string($v), ARRAY_FILTER_USE_BOTH); }
                 break;
             case 'reenviar':
                 if (!$id) { break; }

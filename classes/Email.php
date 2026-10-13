@@ -202,6 +202,8 @@ class Email
         $email->Username = (string)($_ENV['EMAIL_USER'] ?? (getenv('EMAIL_USER') ?: ''));
         $email->Password = self::resolverPasswordSmtp();
         $email->Timeout = 5;
+        // El saludo del servidor se espera hasta SMTP::$Timelimit (300 s por defecto): se acota para no colgar peticiones.
+        $email->getSMTPInstance()->Timelimit = 10;
 
         $remitente = self::resolverRemitente();
         $email->setFrom($remitente['email'], $remitente['nombre']);
@@ -275,6 +277,7 @@ class Email
         $email->Username = (string)($_ENV['EMAIL_USER'] ?? (getenv('EMAIL_USER') ?: ''));
         $email->Password = self::resolverPasswordSmtp();
         $email->Timeout = 5;
+        $email->getSMTPInstance()->Timelimit = 10;
 
         $remitente = self::resolverRemitente();
         $email->setFrom($remitente['email'], $remitente['nombre']);

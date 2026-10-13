@@ -177,7 +177,9 @@ final class AutorizacionHttpTest extends QaCase
         $fallos = [];
         foreach (array_keys(self::RUTAS) as $ruta) {
             $r = $n->get($ruta, ["Cookie: PHPSESSID=$id"]);
-            if ($r['status'] !== 403) { $fallos[] = "$ruta => {$r['status']}"; }
+            // Denegado = 403, o 302/401 cuando la sesión forjada se invalida por no tener membresía de cliente
+            // (resultado más estricto desde que cada membresía tiene su propio estado). Nunca 200.
+            if (!in_array($r['status'], [302, 401, 403], true)) { $fallos[] = "$ruta => {$r['status']}"; }
         }
         $this->assertSame([], $fallos);
     }

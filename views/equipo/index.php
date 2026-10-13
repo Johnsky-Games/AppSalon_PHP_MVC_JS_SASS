@@ -12,7 +12,7 @@ $etiquetasPermisos = [
 $etiquetaRol = ['propietario' => 'Propietario', 'gerente' => 'Gerencia', 'recepcion' => 'Recepción', 'profesional' => 'Profesional', 'finanzas' => 'Finanzas'];
 $etiquetaEstado = ['invitado' => 'Invitación pendiente', 'activo' => 'Activo', 'suspendido' => 'Suspendido', 'baja' => 'Baja'];
 $etiquetaCorreo = ['enviado' => 'Correo enviado', 'pendiente' => 'Correo en cola', 'fallido' => 'Correo no enviado', 'enviando' => 'Enviando correo', 'cancelado' => ''];
-$previo = $previo ?? [];
+$previo = array_map(static fn($v) => is_array($v) ? $v : (string)$v, $previo ?? []);
 $idemInvitacion = clave_operacion_formulario();
 ?>
 <header class="ui-page-header"><p class="ui-eyebrow">Personas y accesos</p><h1 class="nombre-pagina">Equipo y permisos</h1><p class="descripcion-pagina">Invita a cada persona con su propio correo. Hasta que acepte la invitación no tiene acceso laboral; los cambios de rol o estado cierran sus sesiones anteriores.</p></header>

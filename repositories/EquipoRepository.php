@@ -62,8 +62,14 @@ class EquipoRepository
             // La versión también invalida sesiones antiguas después de cambio de rol.
             $admin=$rol==='propietario' || $rol==='gerente' ? 1 : 0;
             $s=$this->sql('UPDATE usuarios SET admin=?,version_sesion=version_sesion+1 WHERE id=?','ii',[$admin,$id]);$s->close();
-            $s=$this->sql('UPDATE profesionales SET usuarioId=NULL WHERE usuarioId=?','i',[$id]);$s->close();
-            if ($profesionalId!==null) { $s=$this->sql('UPDATE profesionales SET usuarioId=? WHERE id=?','ii',[$id,$profesionalId]);$s->close(); }
+            // La ficha solo se desvincula si se vincula otra explícitamente o si la persona deja de ser profesional:
+            // guardar el mismo acceso, suspender y reactivar NO debe romper su agenda ni «Mis clientes».
+            if ($profesionalId!==null) {
+                $s=$this->sql('UPDATE profesionales SET usuarioId=NULL WHERE usuarioId=?','i',[$id]);$s->close();
+                $s=$this->sql('UPDATE profesionales SET usuarioId=? WHERE id=?','ii',[$id,$profesionalId]);$s->close();
+            } elseif ($rol!=='profesional') {
+                $s=$this->sql('UPDATE profesionales SET usuarioId=NULL WHERE usuarioId=?','i',[$id]);$s->close();
+            }
             $this->sincronizarColaborador($id,$rol,$activo,$estadoColaborador);
             $s=$this->sql("INSERT INTO equipo_auditoria(actor_id,usuario_id,accion,detalle) VALUES(?,?,'acceso_actualizado',?)",'iis',[$actor,$id,$rol . ($activo ? ':activo' : ':inactivo')]);$s->close();
         });

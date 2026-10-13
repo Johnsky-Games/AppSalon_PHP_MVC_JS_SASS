@@ -40,8 +40,9 @@ final class ColaboradorRepository
         }
         if (!$ok) {
             $s->close();
-            if ($errno === 1062) { throw new DuplicateEntryException('Registro duplicado'); }
-            throw new PersistenceException('No fue posible guardar la operación de colaboradores');
+            if ($errno === 1062) { throw new DuplicateEntryException('Registro duplicado', $errno); }
+            // El errno viaja en el código para que Idempotencia reintente interbloqueos (1213) y espere bloqueos (1205).
+            throw new PersistenceException('No fue posible guardar la operación de colaboradores', $errno);
         }
         return $s;
     }
@@ -126,11 +127,22 @@ final class ColaboradorRepository
             $usuario = $this->una('SELECT id FROM usuarios WHERE LOWER(TRIM(email))=? LIMIT 1', 's', [$emailNorm]);
             $usuarioId = $usuario ? (int)$usuario['id'] : null;
 
-            $this->sql("INSERT INTO colaboradores(usuario_id,email_norm,nombre,apellido,telefono,puesto,rol,estado,fecha_ingreso,creado_por) VALUES (?,?,?,?,?,?,?,'invitado',?,?)",
-                'isssssssi', [$usuarioId, $emailNorm, $d['nombre'], $d['apellido'], $d['telefono'], $d['puesto'], $d['rol'], $d['fecha_ingreso'], $actor])->close();
-            $colaboradorId = (int)$this->db->insert_id;
-            $codigo = sprintf('COL-%06d', $colaboradorId);
-            $this->sql('UPDATE colaboradores SET codigo=? WHERE id=?', 'si', [$codigo, $colaboradorId])->close();
+            try {
+                $this->sql("INSERT INTO colaboradores(usuario_id,email_norm,nombre,apellido,telefono,puesto,rol,estado,fecha_ingreso,creado_por) VALUES (?,?,?,?,?,?,?,'invitado',?,?)",
+                    'isssssssi', [$usuarioId, $emailNorm, $d['nombre'], $d['apellido'], $d['telefono'], $d['puesto'], $d['rol'], $d['fecha_ingreso'], $actor])->close();
+                $colaboradorId = (int)$this->db->insert_id;
+                $codigo = sprintf('COL-%06d', $colaboradorId);
+                $this->sql('UPDATE colaboradores SET codigo=? WHERE id=?', 'si', [$codigo, $colaboradorId])->close();
+            } catch (DuplicateEntryException $duplicado) {
+                // Solo se reutiliza una ficha cuya invitación fue revocada SIN haberse aceptado nunca (un correo = una ficha).
+                // Se consulta después del conflicto para no tomar bloqueos de hueco que provoquen interbloqueos.
+                $previo = $this->una('SELECT id, codigo, estado, aceptado_en FROM colaboradores WHERE email_norm=? FOR UPDATE', 's', [$emailNorm]);
+                if (!$previo || $previo['estado'] !== 'baja' || $previo['aceptado_en'] !== null) { throw $duplicado; }
+                $colaboradorId = (int)$previo['id'];
+                $codigo = (string)$previo['codigo'];
+                $this->sql("UPDATE colaboradores SET usuario_id=?, nombre=?, apellido=?, telefono=?, puesto=?, rol=?, estado='invitado', fecha_ingreso=?, baja_en=NULL, creado_por=? WHERE id=?",
+                    'issssssii', [$usuarioId, $d['nombre'], $d['apellido'], $d['telefono'], $d['puesto'], $d['rol'], $d['fecha_ingreso'], $actor, $colaboradorId])->close();
+            }
 
             $profesionalId = null;
             if ($d['rol'] === 'profesional') {
@@ -138,7 +150,7 @@ final class ColaboradorRepository
             }
 
             $invitacion = $this->emitirInvitacion($colaboradorId, $actor);
-            $correoId = $this->encolarInvitacion($invitacion, $d['email'], trim($d['nombre'] . ' ' . $d['apellido']), $d['rol'], $d['puesto']);
+            $correoId = $this->encolarInvitacion($invitacion, $d['email'], mb_substr(trim($d['nombre'] . ' ' . $d['apellido']), 0, 120, 'UTF-8'), $d['rol'], $d['puesto']);
             $this->auditar($actor, $usuarioId, 'colaborador_invitado', "$codigo:{$d['rol']}");
             return ['colaborador_id' => $colaboradorId, 'codigo' => $codigo, 'invitacion_id' => $invitacion['id'], 'correo_id' => $correoId, 'profesional_id' => $profesionalId];
         });
@@ -186,10 +198,12 @@ final class ColaboradorRepository
     public function reenviarInvitacion(int $actor, int $colaboradorId): array
     {
         return Transaccion::ejecutar($this->db, function () use ($actor, $colaboradorId): array {
-            $this->exigirPropietario($actor);
+            // Bloqueo primero: las lecturas posteriores deben ver lo que confirmó el reenvío anterior
+            // (una lectura consistente previa congelaría una instantánea y evadiría la espera mínima).
             $c = $this->una('SELECT * FROM colaboradores WHERE id=? FOR UPDATE', 'i', [$colaboradorId]);
+            $this->exigirPropietario($actor);
             if (!$c || $c['estado'] !== 'invitado') { throw new \DomainException('Solo se puede reenviar a quien aún no aceptó su invitación'); }
-            $ultima = $this->una("SELECT id, TIMESTAMPDIFF(SECOND, creada_en, UTC_TIMESTAMP()) segundos FROM colaborador_invitaciones WHERE colaborador_id=? ORDER BY id DESC LIMIT 1", 'i', [$colaboradorId]);
+            $ultima = $this->una("SELECT id, TIMESTAMPDIFF(SECOND, creada_en, UTC_TIMESTAMP()) segundos FROM colaborador_invitaciones WHERE colaborador_id=? ORDER BY id DESC LIMIT 1 FOR UPDATE", 'i', [$colaboradorId]);
             if ($ultima && (int)$ultima['segundos'] < self::ESPERA_REENVIO_SEGUNDOS) {
                 throw new \DomainException('Acabas de enviar una invitación. Espera un minuto antes de reenviarla.');
             }
@@ -198,7 +212,7 @@ final class ColaboradorRepository
                 (new CorreoSalidaRepository($this->db))->cancelar('invitacion:' . (int)$previa['id']);
             }
             $inv = $this->emitirInvitacion($colaboradorId, $actor);
-            $nombre = trim($c['nombre'] . ' ' . $c['apellido']);
+            $nombre = mb_substr(trim($c['nombre'] . ' ' . $c['apellido']), 0, 120, 'UTF-8');
             $correoId = $this->encolarInvitacion($inv, $c['email_norm'], $nombre, $c['rol'], (string)$c['puesto']);
             $this->auditar($actor, $c['usuario_id'] !== null ? (int)$c['usuario_id'] : null, 'invitacion_reenviada', (string)$c['codigo']);
             return ['colaborador_id' => $colaboradorId, 'invitacion_id' => $inv['id'], 'correo_id' => $correoId];
@@ -217,6 +231,8 @@ final class ColaboradorRepository
                 (new CorreoSalidaRepository($this->db))->cancelar('invitacion:' . (int)$previa['id']);
             }
             $this->sql("UPDATE colaboradores SET estado='baja', baja_en=UTC_TIMESTAMP() WHERE id=?", 'i', [$colaboradorId])->close();
+            // La ficha operativa (sin cuenta) vuelve a estar disponible para otra invitación; no se borra.
+            $this->sql('UPDATE profesionales SET colaborador_id=NULL WHERE colaborador_id=? AND usuarioId IS NULL', 'i', [$colaboradorId])->close();
             $this->auditar($actor, $c['usuario_id'] !== null ? (int)$c['usuario_id'] : null, 'invitacion_revocada', (string)$c['codigo']);
         });
     }
@@ -251,8 +267,12 @@ final class ColaboradorRepository
                     $this->sql("UPDATE colaborador_invitaciones SET estado='revocada', revocada_en=UTC_TIMESTAMP() WHERE id=?", 'i', [(int)$previa['id']])->close();
                     (new CorreoSalidaRepository($this->db))->cancelar('invitacion:' . (int)$previa['id']);
                 }
+                // El operador pudo corregir el correo: la ficha y la cuenta futura deben coincidir con el enlace.
+                $existente = $this->una('SELECT id FROM usuarios WHERE LOWER(TRIM(email))=? LIMIT 1', 's', [$emailNorm]);
+                $this->sql('UPDATE colaboradores SET email_norm=?, nombre=?, apellido=?, usuario_id=? WHERE id=?', 'sssii',
+                    [$emailNorm, $nombre, $apellido, $existente ? (int)$existente['id'] : null, (int)$pendiente['id']])->close();
                 $inv = $this->emitirInvitacion((int)$pendiente['id'], null);
-                $correoId = $this->encolarInvitacion($inv, $emailNorm, trim($nombre . ' ' . $apellido), 'propietario', 'Propietario');
+                $correoId = $this->encolarInvitacion($inv, $emailNorm, mb_substr(trim($nombre . ' ' . $apellido), 0, 120, 'UTF-8'), 'propietario', 'Propietario');
                 $this->auditar(null, null, 'bootstrap_activacion_regenerada', 'propietario');
                 return ['estado' => 'activacion_emitida', 'token' => $inv['token'], 'correo_id' => $correoId];
             }
@@ -282,7 +302,7 @@ final class ColaboradorRepository
             $colaboradorId = (int)$this->db->insert_id;
             $this->sql('UPDATE colaboradores SET codigo=? WHERE id=?', 'si', [sprintf('COL-%06d', $colaboradorId), $colaboradorId])->close();
             $inv = $this->emitirInvitacion($colaboradorId, null);
-            $correoId = $this->encolarInvitacion($inv, $emailNorm, trim($nombre . ' ' . $apellido), 'propietario', 'Propietario');
+            $correoId = $this->encolarInvitacion($inv, $emailNorm, mb_substr(trim($nombre . ' ' . $apellido), 0, 120, 'UTF-8'), 'propietario', 'Propietario');
             $this->auditar(null, $usuario ? (int)$usuario['id'] : null, 'bootstrap_activacion', 'propietario');
             return ['estado' => 'activacion_emitida', 'token' => $inv['token'], 'correo_id' => $correoId];
         });
@@ -379,8 +399,11 @@ final class ColaboradorRepository
     /** Citas futuras que seguirían asignadas a la ficha profesional de este colaborador. */
     public function citasFuturasDeProfesional(int $colaboradorId): int
     {
+        // Se bloquea primero la ficha: una reserva concurrente (que bloquea la misma fila) o termina antes y
+        // se cuenta, o espera y encuentra la ficha ya suspendida. Sin esto una cita nacería huérfana.
+        $this->sql('SELECT id FROM profesionales WHERE colaborador_id=? FOR UPDATE', 'i', [$colaboradorId])->close();
         $f = $this->una("SELECT COUNT(*) n FROM citas c JOIN profesionales p ON p.id=c.profesionalId
-            WHERE p.colaborador_id=? AND c.estado IN ('confirmada','en_servicio') AND c.fecha >= DATE(CONVERT_TZ(UTC_TIMESTAMP(),'+00:00','-05:00'))", 'i', [$colaboradorId]);
+            WHERE p.colaborador_id=? AND c.estado IN ('confirmada','en_servicio') AND c.fecha >= DATE(CONVERT_TZ(UTC_TIMESTAMP(),'+00:00','-05:00')) FOR SHARE", 'i', [$colaboradorId]);
         return (int)($f['n'] ?? 0);
     }
 

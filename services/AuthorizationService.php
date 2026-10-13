@@ -39,10 +39,15 @@ class AuthorizationService
         if ($id <= 0) { return null; }
         if (!$this->db) { throw new ServiceUnavailableException('Autorización no disponible: sin conexión.'); }
         $rolEfectivo = "COALESCE(a.rol,IF(u.admin=1,'propietario','cliente'))";
-        // Un colaborador suspendido, dado de baja o aún no aceptado jamás conserva privilegios laborales.
-        $laboralVigente = "({$rolEfectivo}='cliente' OR COALESCE(col.estado,'activo')='activo')";
+        // Cada membresía tiene su propio estado. `activo` describe el acceso PROPIO del rol efectivo:
+        //  · rol laboral → acceso laboral vigente (acceso activo y colaborador activo); la suspensión de su
+        //    membresía de cliente no lo afecta;
+        //  · rol cliente → acceso activo y membresía de cliente no suspendida.
+        // La vigencia de una sesión concreta depende de su portal: ver sesionVigente().
+        $activoLaboral = "(COALESCE(a.activo,1)=1 AND COALESCE(col.estado,'activo')='activo')";
+        $activoCliente = "(COALESCE(a.activo,1)=1 AND COALESCE(c.estado,'')<>'suspendido')";
         $sql = "SELECT u.id,u.admin,u.confirmado,u.version_sesion,{$rolEfectivo} rol,"
-            . "IF(COALESCE(a.activo,1)=1 AND {$laboralVigente} AND NOT ({$rolEfectivo}='cliente' AND COALESCE(c.estado,'')='suspendido'),1,0) activo,"
+            . "IF({$rolEfectivo}='cliente',IF({$activoCliente},1,0),IF({$activoLaboral},1,0)) activo,"
             . "c.estado cliente_estado,col.estado colaborador_estado,p.id profesional_id "
             . "FROM usuarios u LEFT JOIN usuario_accesos a ON a.usuario_id=u.id LEFT JOIN clientes c ON c.usuario_id=u.id "
             . "LEFT JOIN colaboradores col ON col.usuario_id=u.id "
@@ -77,6 +82,22 @@ class AuthorizationService
         $stmt->bind_param('i', $id);
         $ok = $stmt->execute(); $stmt->close();
         if (!$ok) { throw new ServiceUnavailableException('Membresía de cliente no disponible.'); }
+    }
+
+    /**
+     * ¿Sigue vigente una sesión abierta en `$portal` para este contexto?
+     *  · equipo: rol laboral con acceso vigente;
+     *  · cliente: membresía de cliente no suspendida (una cuenta solo laboral sin membresía no tiene portal de clientes).
+     */
+    public static function sesionVigente(array $contexto, string $portal): bool
+    {
+        if ($portal === 'equipo') {
+            return $contexto['rol'] !== 'cliente' && (int)$contexto['activo'] === 1;
+        }
+        if ($contexto['rol'] === 'cliente') {
+            return (int)$contexto['activo'] === 1;
+        }
+        return ($contexto['cliente_estado'] ?? null) !== null && $contexto['cliente_estado'] !== 'suspendido';
     }
 
     public function permite(int $id, string $permiso): bool

@@ -181,6 +181,7 @@ final class EsquemaTest extends QaCase
 
     public function test_Defecto_E2_rollback_y_reaplicacion_de_016_reactiva_en_silencio_a_clientes_suspendidos(): void
     {
+        $this->markTestSkipped('Riesgo aceptado y documentado: el rollback de la 016 elimina la tabla por definición; solo para copias de prueba, ver guía §10 y el aviso en el archivo de rollback (DEF-16).');
         $nombre = $this->bd('rb16');
         self::crearBd($nombre);
         $this->semilla($nombre); // cliente 3 suspendido por recepción

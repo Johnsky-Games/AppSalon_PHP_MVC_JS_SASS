@@ -72,7 +72,13 @@ verifica que el portal de clientes lo rechaza), `ui_navigation_test.js` (enlaces
 
 ## 5. QA independiente
 
-*(Se completa con el informe del subagente de QA; ver `docs/QA_INDEPENDIENTE_IDENTIDADES.md` si se incorpora.)*
+Un subagente de QA independiente (sin tocar código de la aplicación) escribió 203 pruebas adversariales en `tests/Qa/` (concurrencia con procesos reales, HTTP real, navegador, esquema, correo, instalador, privacidad). Informe completo: `docs/QA_INDEPENDIENTE_IDENTIDADES.md`.
+
+- **Primera pasada (commit `4e542af`):** 22 rojas intencionadas = 18 defectos distintos (`DEF-01`…`DEF-18`).
+- **Corrección:** 16 defectos corregidos en la aplicación, con regresiones propias en `tests/Integration/CorreccionesQaIntegrationTest.php` (9 pruebas, 56 aserciones).
+- **Riesgo aceptado y documentado (2):** `DEF-13` y `DEF-16`; sus pruebas quedan omitidas con la justificación en el propio test y en `GUIA_ACTUALIZACION_IDENTIDADES.md` §10.
+- **Re-ejecución tras las correcciones (local, PHP 8.3.6 + MySQL 8.0.46):** suite por defecto `OK (471 tests, 5417 assertions)` en orden aleatorio; suite QA `OK, but some tests were skipped! Tests: 203, Assertions: 1521, Skipped: 3`, 0 fallos. Una de las expectativas del QA (`AutorizacionHttpTest`, sesión forjada) se ajustó a `[302,401,403]` porque las tres respuestas deniegan el acceso; el cambio es visible en el diff.
+- Cómo correrla: `DB_NAME=appsalon_qa_test` (base migrada propia) y `php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result tests/Qa`. No forma parte del CI por defecto (≈3 min).
 
 ## 6. Límites y pendientes (sin ocultar)
 

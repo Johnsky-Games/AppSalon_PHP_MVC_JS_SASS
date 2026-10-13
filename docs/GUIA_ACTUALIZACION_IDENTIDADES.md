@@ -100,11 +100,19 @@ npm.cmd run build
 
 `public/build` está versionado: si Git se queja al cambiar de rama, respáldalo con `git stash push -m "respaldo compilacion" -- public/build/` y **no** lo apliques en la rama nueva.
 
-## 9. Worker de correos (opcional)
+## 9. Worker de correos
 
-Las invitaciones se envían al guardarse y se reintentan al abrir *Equipo y permisos*. Para reintentos sin intervención:
+Las invitaciones se intentan enviar al guardarse (espera máxima ≈10 s si el SMTP no responde). Si el envío falla, el evento queda en la cola `correos_salida`; **ver la pantalla del equipo no envía correos**.
+Para reintentos automáticos con retroceso exponencial y para depurar las claves de idempotencia vencidas (30 días), el worker de notificaciones ya ejecuta `scripts/procesar_correos.php` en cada ciclo:
 
 ```bash
+docker compose --env-file includes/.env -p appsalon-validacion --profile worker up -d notificaciones
+# o, manualmente / por cron:
 docker compose --env-file includes/.env -p appsalon-validacion exec web php scripts/procesar_correos.php
 ```
-(prográmalo con cron o ejecútalo en bucle como el worker de notificaciones).
+Sin worker, usa el botón **Reenviar invitación** (genera un enlace nuevo y lo envía de inmediato).
+
+## 10. Avisos conocidos
+
+* `php database/migrador.php down` o aplicar `016_clientes_membresia_rollback.sql` **elimina** la tabla `clientes` y, al reaplicar, las suspensiones de clientes explícitas se pierden (solo se rederiva `usuario_accesos.activo`). No lo uses en producción; para volver atrás restaura el respaldo.
+* El registro público responde «El usuario ya está registrado» para un correo existente (comportamiento histórico, limitado por intentos por IP/correo). Eso permite saber si un correo —incluido uno del personal— tiene cuenta. Es un riesgo aceptado y documentado; endurecerlo implicaría un flujo de «te enviamos un correo» distinto.

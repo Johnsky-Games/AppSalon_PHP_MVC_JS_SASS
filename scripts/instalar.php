@@ -35,8 +35,8 @@ $salir = static function (string $mensaje, int $codigo = 1): never {
 };
 
 // 0) En producción APP_KEY es obligatoria: sin ella las altas idempotentes y el cifrado de correos fallan cerrado.
-if (in_array(strtolower($env('APP_ENV')), ['production', 'prod', 'produccion'], true) && strlen($env('APP_KEY')) < 32) {
-    $salir("APP_KEY (mínimo 32 caracteres aleatorios) es obligatoria en producción.\nGenera una con: php -r \"echo bin2hex(random_bytes(32)), PHP_EOL;\" y defínela en includes/.env. No la publiques.");
+if (!in_array(strtolower(trim($env('APP_ENV'))), ['development', 'dev', 'local', 'testing', 'test'], true) && strlen($env('APP_KEY')) < 32) {
+    $salir("APP_KEY (mínimo 32 caracteres aleatorios) es obligatoria salvo APP_ENV=development|local|testing.\nGenera una con: php -r \"echo bin2hex(random_bytes(32)), PHP_EOL;\" y defínela en includes/.env. No la publiques.");
 }
 
 // 1) Esperar a MySQL (arranque conjunto en Compose).
@@ -47,6 +47,11 @@ for ($intento = 1; !($db instanceof mysqli) && $intento <= 30; $intento++) {
     if ($db instanceof mysqli) { $db->set_charset('utf8mb4'); ActiveRecord::setDB($db); }
 }
 if (!($db instanceof mysqli)) { $salir('No se pudo conectar a MySQL tras 60 s. Revisa DB_HOST, DB_PORT y credenciales.'); }
+
+// Candado de instalación: instancias simultáneas (p. ej. dos contenedores) se serializan; la que entra después
+// recalcula el estado y encuentra el trabajo hecho. Se libera al terminar el proceso.
+$candado = $db->query("SELECT GET_LOCK('appsalon_instalador', 180) bloqueado");
+if (!$candado || (int)$candado->fetch_assoc()['bloqueado'] !== 1) { $salir('Otra instalación está en curso y no terminó en 180 s. Reintenta.'); }
 
 // 2) Estado de la base: ¿instalación nueva o base con datos?
 $existeMigraciones = $db->query("SHOW TABLES LIKE 'migraciones'")->num_rows > 0;

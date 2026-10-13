@@ -16,9 +16,11 @@ final class Secretos
         $maestro = $_ENV['APP_KEY'] ?? getenv('APP_KEY');
         $maestro = is_string($maestro) ? trim($maestro) : '';
         if (strlen($maestro) < 32) {
-            $entorno = strtolower((string)($_ENV['APP_ENV'] ?? getenv('APP_ENV') ?: ''));
-            if (in_array($entorno, ['production', 'prod', 'produccion'], true)) {
-                throw new ServiceUnavailableException('APP_KEY (mínimo 32 caracteres) es obligatoria en producción.');
+            // Falla cerrado: solo un entorno EXPLÍCITAMENTE de desarrollo o pruebas puede derivar la clave.
+            // Un valor vacío, desconocido o con variaciones («staging», «Production ») se trata como producción.
+            $entorno = strtolower(trim((string)($_ENV['APP_ENV'] ?? getenv('APP_ENV') ?: '')));
+            if (!in_array($entorno, ['development', 'dev', 'local', 'testing', 'test'], true)) {
+                throw new ServiceUnavailableException('APP_KEY (mínimo 32 caracteres) es obligatoria fuera de desarrollo y pruebas.');
             }
             // Solo desarrollo/pruebas: clave derivada de la configuración local, nunca de un valor publicado.
             $maestro = hash('sha256', 'appsalon-dev|' . ($_ENV['DB_NAME'] ?? getenv('DB_NAME') ?: '') . '|' . ($_ENV['DB_PASS'] ?? getenv('DB_PASS') ?: ''));

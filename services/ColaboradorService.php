@@ -39,6 +39,9 @@ final class ColaboradorService
     public function validarInvitacion(array $post): array
     {
         $e = [];
+        foreach (['nombre', 'apellido', 'email', 'telefono', 'puesto', 'fecha_ingreso', 'nombre_profesional', 'rol', 'profesional_id'] as $campo) {
+            if (isset($post[$campo]) && !is_string($post[$campo]) && !is_int($post[$campo])) { return [null, ['Los datos enviados no tienen el formato esperado.']]; }
+        }
         $nombre = $this->texto($post['nombre'] ?? null, 60); if ($nombre === null) { $e[] = 'Indica el nombre (hasta 60 caracteres).'; }
         $apellido = $this->texto($post['apellido'] ?? null, 60); if ($apellido === null) { $e[] = 'Indica el apellido (hasta 60 caracteres).'; }
         $email = is_string($post['email'] ?? null) ? trim($post['email']) : '';
@@ -63,7 +66,7 @@ final class ColaboradorService
                 if ($profesionalId === false) { $e[] = 'La ficha profesional seleccionada no es válida.'; $profesionalId = null; }
             } else {
                 $nombreProf = $this->texto($post['nombre_profesional'] ?? '', 120, false) ?? '';
-                if ($nombreProf === '') { $nombreProf = trim(($nombre ?? '') . ' ' . ($apellido ?? '')); }
+                if ($nombreProf === '') { $nombreProf = mb_substr(trim(($nombre ?? '') . ' ' . ($apellido ?? '')), 0, 120, 'UTF-8'); }
                 $crudo = $post['servicios'] ?? [];
                 if (!is_array($crudo)) { $crudo = []; }
                 foreach ($crudo as $sid) {

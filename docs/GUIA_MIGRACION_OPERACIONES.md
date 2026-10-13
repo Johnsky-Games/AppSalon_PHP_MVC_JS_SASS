@@ -139,7 +139,7 @@ Register-ScheduledTask -TaskName "AppSalon_ProcesarNotificaciones_Docker" -Actio
 AppSalon incluye utilidades CLI autónomas en PHP (`scripts/backup_db.php` y `scripts/restore_db.php`) que operan directamente sobre la extensión `mysqli` usando snapshots consistentes de `InnoDB` (`REPEATABLE READ` + `START TRANSACTION WITH CONSISTENT SNAPSHOT`), sin depender de binarios externos del sistema operativo (`mysqldump`).
 
 ### 5.1. Alcance y Objetos del Respaldo
-El script de respaldo incluye **la totalidad de las 13 tablas del esquema migrado** (`001` a `008`):
+El script de respaldo incluye **todas las tablas del esquema migrado** (descubiertas con `SHOW FULL TABLES`; con las migraciones `001` a `018` son **35**). El listado siguiente corresponde a las primeras migraciones (`001` a `008`) y se conserva como referencia histórica:
 1. `bloqueos_profesionales`
 2. `citas`
 3. `citasservicios`

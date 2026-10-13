@@ -15,7 +15,15 @@ final class ProfileController
         $raw = $_GET['id'] ?? $_SESSION['id'] ?? null;
         $id = filter_var($raw, FILTER_VALIDATE_INT, ['options'=>['min_range'=>1]]);
         if (!$id) { http_response_code(404); detener_ejecucion(404); }
-        if (!$public && $id !== (int)($_SESSION['id'] ?? 0)) { exigir_permiso('perfiles.gestionar'); }
+        if (!$public && $id !== (int)($_SESSION['id'] ?? 0)) {
+            exigir_permiso('perfiles.gestionar');
+            // Recepción y gerencia atienden perfiles de CLIENTES; los datos de personal solo los administra RR. HH.
+            $objetivo = (new \Services\AuthorizationService())->contexto($id);
+            if (($objetivo['rol'] ?? 'cliente') !== 'cliente' && !puede('rh.gestionar')) {
+                \Classes\ErrorResponse::render(403, ['mensaje' => 'Los datos del personal los administra quien gestiona Recursos Humanos.']);
+                detener_ejecucion(403);
+            }
+        }
         return $id;
     }
     public static function index(Router $router): void

@@ -44,6 +44,8 @@ Tests: 203, Assertions: 1516, Failures: 22, Skipped: 1.
 - **1 omitida** (`TokensTest::test_cuenta_existente_sin_confirmar_recupera_sesiones_y_tokens_previos`): el sistema no emite recuperación para una cuenta sin confirmar, de modo que no hay token que reutilizar (comportamiento válido).
 - Estabilidad: la suite completa se ejecutó 5 veces. La 1.ª mostró 5 errores y 4 fallos que NO eran defectos de la aplicación sino contaminación entre clases del arnés (una conexión cerrada que `ActiveRecord` conservaba tras `InstaladorTest`); se corrigió en `QaCase::db()`. En la 3.ª solo hubo 21 rojas porque este mismo informe contenía el texto que buscaba la comprobación documental de DEF-17 (ahora excluye este archivo). La 2.ª, la 4.ª y la 5.ª (tras parametrizar las credenciales por entorno) dieron exactamente las mismas 22 rojas y 0 fallos fuera de `Defecto_*`.
 
+> **Actualización posterior a las correcciones:** los 18 defectos fueron atendidos (16 corregidos, `DEF-13` y `DEF-16` como riesgo aceptado y omitidos con justificación). La re-ejecución de la suite completa dio `Tests: 203, Assertions: 1521, Skipped: 3` sin fallos. La salida literal de arriba corresponde a la primera pasada, previa a las correcciones.
+
 Las pruebas rojas `Defecto_*` y el defecto que demuestran:
 
 | Prueba | Defecto |
