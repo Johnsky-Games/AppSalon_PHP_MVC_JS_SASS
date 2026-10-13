@@ -306,4 +306,15 @@ final class AtaquesVariosTest extends QaCase
         $this->assertContains($res['status'], [401, 403], 'un cliente suspendido reservó con una sesión previa: ' . $res['body']);
         $this->assertSame(0, (int)self::escalar('SELECT COUNT(*) FROM citas WHERE usuarioId=?', [$dual['id']]));
     }
+
+    public function test_Defecto_nombre_y_apellido_de_60_caracteres_validos_para_el_formulario_hacen_fallar_la_invitacion(): void
+    {
+        $n60 = str_repeat('ñ', 60);
+        $svc = $this->svc();
+        $r = $svc->invitar(self::$p['propietario']['id'], ['nombre' => $n60, 'apellido' => $n60, 'email' => self::correo('largo'), 'telefono' => '', 'puesto' => str_repeat('p', 80), 'rol' => 'recepcion', 'fecha_ingreso' => ''], Idem::clave());
+        $this->assertSame('ok', $r['status'], 'Límites declarados: nombre 60 + apellido 60. correos_salida.destinatario_nombre es VARCHAR(120) y recibe "nombre apellido" (121 caracteres): ' . json_encode($r, JSON_UNESCAPED_UNICODE));
+        $sid = self::servicio();
+        $r = $svc->invitar(self::$p['propietario']['id'], ['nombre' => str_repeat('a', 60), 'apellido' => str_repeat('b', 59), 'email' => self::correo('largo2'), 'telefono' => '', 'puesto' => '', 'rol' => 'recepcion', 'fecha_ingreso' => ''], Idem::clave());
+        $this->assertSame('ok', $r['status'], 'el caso de 119 caracteres sí debe funcionar: ' . json_encode($r));
+    }
 }
