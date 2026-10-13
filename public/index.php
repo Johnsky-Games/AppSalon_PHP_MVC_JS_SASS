@@ -107,6 +107,9 @@ $router->post('/admin/equipo/invitar', [\Controllers\EquipoController::class, 'i
 $router->post('/admin/equipo/revocar', [\Controllers\EquipoController::class, 'revocar']);
 $router->get('/admin/equipo/ficha', [\Controllers\EquipoController::class, 'ficha']);
 $router->post('/admin/equipo/ficha', [\Controllers\EquipoController::class, 'ficha']);
+$router->post('/admin/equipo/ficha/agenda', [\Controllers\EquipoController::class, 'fichaAgenda']);
+$router->get('/admin/equipo/reasignar', [\Controllers\EquipoController::class, 'reasignar']);
+$router->post('/admin/equipo/reasignar', [\Controllers\EquipoController::class, 'reasignarAplicar']);
 $router->get('/perfil', [\Controllers\ProfileController::class, 'index']);
 $router->post('/perfil', [\Controllers\ProfileController::class, 'index']);
 $router->get('/perfil/foto', [\Controllers\ProfileController::class, 'foto']);

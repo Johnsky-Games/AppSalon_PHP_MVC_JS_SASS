@@ -787,6 +787,52 @@ class CitaRepository
     }
 
     /**
+     * Comprueba, DENTRO de la transacción del llamador y con los mismos bloqueos y reglas que una reserva real
+     * (pasos 4 y 5 de `crearReservaConProfesionalAtomica`), que el intervalo `[inicioMin, finMin)` cabe en el
+     * horario del profesional, no cruza descansos ni bloqueos y no se solapa con otra cita vigente.
+     * La usa la reasignación asistida de citas para no duplicar la lógica de disponibilidad.
+     *
+     * El llamador debe haber bloqueado antes la fila del profesional (`FOR UPDATE`), como hace la reserva.
+     *
+     * @param int|null $excluirCitaId Cita que se está moviendo (no cuenta como ocupación).
+     * @return array{codigo:string,error:string}|null null si el hueco es válido
+     * @throws PersistenceException
+     */
+    public function validarHuecoEnTransaccion(mysqli $db, int $profesionalId, string $fecha, int $inicioMin, int $finMin, ?int $excluirCitaId = null): ?array
+    {
+        $dt = \DateTimeImmutable::createFromFormat('!Y-m-d', $fecha, new \DateTimeZone('America/Guayaquil'));
+        if (!$dt) {
+            throw new PersistenceException('Fecha de cita inválida para validar el hueco.');
+        }
+        $diaSemanaIso = (int)$dt->format('N');
+
+        $horariosDia = $this->cargarHorariosDiaForShare($db, $profesionalId, $diaSemanaIso);
+        $descansosDia = $this->cargarDescansosDiaForShare($db, $profesionalId, $diaSemanaIso);
+        $bloqueosFecha = $this->cargarBloqueosFechaForShare($db, $profesionalId, $fecha);
+        if ($finMin > 1440 || !$this->cabeEnAgendaDelDia($inicioMin, $finMin, $diaSemanaIso, $fecha, $horariosDia, $descansosDia, $bloqueosFecha)) {
+            return [
+                'codigo' => 'fuera_de_horario',
+                'error' => 'El intervalo solicitado no está disponible en el horario del profesional o cruza un descanso o bloqueo.',
+            ];
+        }
+
+        foreach ($this->cargarCitasProfesionalEnFechaForUpdate($db, $profesionalId, $fecha) as $citaExistente) {
+            if ($excluirCitaId !== null && (int)$citaExistente->id === $excluirCitaId) {
+                continue;
+            }
+            [$ocupInicio, $ocupFin] = $this->resolverIntervaloCitaOcupada($citaExistente);
+            if ($inicioMin < $ocupFin && $ocupInicio < $finMin) {
+                return [
+                    'codigo' => 'conflicto_ocupacion',
+                    'error' => 'El horario seleccionado ya está ocupado por otra reserva de este profesional.',
+                ];
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Lee y bloquea (`LOCK IN SHARE MODE`) los servicios solicitados en orden ascendente de ID.
      *
      * @param mysqli $db

@@ -748,109 +748,251 @@ class ProfesionalRepository
     public function replaceHorarios(int $profesionalId, array $horarios): void
     {
         $db = $this->resolveDb();
-        $inTransaction = false;
 
         try {
-            if (!$db->begin_transaction()) {
-                throw new PersistenceException("No se pudo iniciar transacción de horarios: " . $db->error);
+            // Transacción anidable: el mismo reemplazo se compone con operaciones mayores (asistente del profesional).
+            \Classes\Transaccion::ejecutar($db, function (mysqli $db) use ($profesionalId, $horarios): void {
+                $this->aplicarReemplazoHorarios($db, $profesionalId, $horarios);
+            });
+        } catch (PersistenceException $e) {
+            error_log("[ProfesionalRepository::replaceHorarios] " . $e->getMessage());
+            throw $e;
+        } catch (\Throwable $e) {
+            error_log("[ProfesionalRepository::replaceHorarios] Excepción inesperada: " . $e->getMessage());
+            throw new PersistenceException("Fallo transaccional al guardar horarios semanales.", 0, $e);
+        }
+    }
+
+    /**
+     * Cuerpo del reemplazo de horarios; DEBE ejecutarse dentro de una transacción abierta por el llamador.
+     *
+     * @param array<int, HorarioProfesional> $horarios
+     * @throws PersistenceException con código 422 si una cita confirmada futura dejaría de caber
+     */
+    private function aplicarReemplazoHorarios(mysqli $db, int $profesionalId, array $horarios): void
+    {
+        $this->bloquearProfesionalParaMutacion($db, $profesionalId);
+
+        $fechaHoy = date('Y-m-d');
+        $citasConfirmadas = $this->findCitasConfirmadasFuturasForUpdate($profesionalId, $fechaHoy, $db);
+        if (!empty($citasConfirmadas)) {
+            $horariosPorDia = [];
+            foreach ($horarios as $h) {
+                $dia = (int)$h->dia_semana;
+                $ini = self::horaAMinutos(HorarioProfesional::normalizarHora((string)$h->hora_inicio));
+                $fin = self::horaAMinutos(HorarioProfesional::normalizarHora((string)$h->hora_fin));
+                $horariosPorDia[$dia][] = ['inicio' => $ini, 'fin' => $fin];
             }
-            $inTransaction = true;
 
-            $this->bloquearProfesionalParaMutacion($db, $profesionalId);
+            foreach ($citasConfirmadas as $cita) {
+                $diaSemana = (int)date('N', strtotime((string)$cita->fecha));
+                [$citaIni, $citaFin] = $this->extraerIntervaloMinutosCita($cita);
 
-            $fechaHoy = date('Y-m-d');
-            $citasConfirmadas = $this->findCitasConfirmadasFuturasForUpdate($profesionalId, $fechaHoy, $db);
-            if (!empty($citasConfirmadas)) {
-                $horariosPorDia = [];
-                foreach ($horarios as $h) {
-                    $dia = (int)$h->dia_semana;
-                    $ini = self::horaAMinutos(HorarioProfesional::normalizarHora((string)$h->hora_inicio));
-                    $fin = self::horaAMinutos(HorarioProfesional::normalizarHora((string)$h->hora_fin));
-                    $horariosPorDia[$dia][] = ['inicio' => $ini, 'fin' => $fin];
+                $franjas = $horariosPorDia[$diaSemana] ?? [];
+                $cabe = false;
+                foreach ($franjas as $f) {
+                    if ($citaIni >= $f['inicio'] && $citaFin <= $f['fin']) {
+                        $cabe = true;
+                        break;
+                    }
                 }
 
-                foreach ($citasConfirmadas as $cita) {
-                    $diaSemana = (int)date('N', strtotime((string)$cita->fecha));
-                    [$citaIni, $citaFin] = $this->extraerIntervaloMinutosCita($cita);
+                if (!$cabe) {
+                    throw new PersistenceException(
+                        "No se pueden modificar los horarios: colisiona con la cita confirmada ID {$cita->id} del {$cita->fecha}.",
+                        422
+                    );
+                }
+            }
+        }
 
-                    $franjas = $horariosPorDia[$diaSemana] ?? [];
-                    $cabe = false;
-                    foreach ($franjas as $f) {
-                        if ($citaIni >= $f['inicio'] && $citaFin <= $f['fin']) {
-                            $cabe = true;
-                            break;
-                        }
-                    }
+        $stmtDel = $db->prepare("DELETE FROM horarios_profesionales WHERE profesionalId = ?");
+        if (!$stmtDel) {
+            throw new PersistenceException("Error al preparar limpieza de horarios: " . $db->error);
+        }
+        $stmtDel->bind_param('i', $profesionalId);
+        if (!$stmtDel->execute()) {
+            $err = $stmtDel->error;
+            $stmtDel->close();
+            throw new PersistenceException("Error al limpiar horarios previos: " . $err);
+        }
+        $stmtDel->close();
 
-                    if (!$cabe) {
+        if (!empty($horarios)) {
+            $stmtIns = $db->prepare(
+                "INSERT INTO horarios_profesionales (profesionalId, dia_semana, hora_inicio, hora_fin)
+                 VALUES (?, ?, ?, ?)"
+            );
+            if (!$stmtIns) {
+                throw new PersistenceException("Error al preparar inserción de horarios: " . $db->error);
+            }
+
+            foreach ($horarios as $h) {
+                $dia = (int)$h->dia_semana;
+                $inicio = (string)$h->hora_inicio;
+                $fin = (string)$h->hora_fin;
+                $stmtIns->bind_param('iiss', $profesionalId, $dia, $inicio, $fin);
+
+                if (!$stmtIns->execute()) {
+                    $err = $stmtIns->error;
+                    $stmtIns->close();
+                    throw new PersistenceException("Error al insertar horario semanal: " . $err);
+                }
+                if ($stmtIns->affected_rows !== 1) {
+                    $stmtIns->close();
+                    throw new PersistenceException("La inserción de horario semanal no afectó ninguna fila.");
+                }
+                $h->id = (string)$db->insert_id;
+                $h->profesionalId = (string)$profesionalId;
+            }
+
+            $stmtIns->close();
+        }
+    }
+
+    /**
+     * Reemplazo ATÓMICO y anidable de la configuración operativa de un profesional: servicios que presta,
+     * horario semanal (varias franjas por día) y descansos recurrentes. Se compone con la transacción del llamador
+     * (invitación idempotente o edición de ficha) y nunca confirma por su cuenta.
+     *
+     * Reglas de seguridad de agenda (todas con el profesional bloqueado `FOR UPDATE`, como una reserva):
+     *  - los servicios deben existir en el catálogo (no hay marca de activo en `servicios`);
+     *  - no se retira un servicio que una cita futura confirmada/en servicio todavía necesita;
+     *  - el nuevo horario y los descansos no pueden dejar fuera ni chocar con citas futuras ya tomadas.
+     *
+     * @param int[]|null $servicioIds null = no modificar servicios
+     * @param array<int, array{dia:int,inicio:string,fin:string}> $franjas
+     * @param array<int, array{dia:int,inicio:string,fin:string,motivo:?string}> $descansos
+     * @throws \DomainException reglas de negocio (mensaje apto para mostrar)
+     * @throws PersistenceException fallos de base de datos
+     */
+    public function reemplazarConfiguracionAgenda(int $profesionalId, ?array $servicioIds, array $franjas, array $descansos): void
+    {
+        $db = $this->resolveDb();
+        \Classes\Transaccion::ejecutar($db, function (mysqli $db) use ($profesionalId, $servicioIds, $franjas, $descansos): void {
+            if (!$this->bloquearProfesionalParaMutacion($db, $profesionalId)) {
+                throw new \DomainException('La ficha profesional no existe.', 422);
+            }
+
+            if ($servicioIds !== null) {
+                $this->sincronizarServiciosSeguros($db, $profesionalId, $servicioIds);
+            }
+
+            $horarios = [];
+            foreach ($franjas as $f) {
+                $horarios[] = new HorarioProfesional([
+                    'profesionalId' => $profesionalId, 'dia_semana' => $f['dia'], 'hora_inicio' => $f['inicio'], 'hora_fin' => $f['fin'],
+                ]);
+            }
+            try {
+                $this->aplicarReemplazoHorarios($db, $profesionalId, $horarios);
+                $this->aplicarReemplazoDescansos($db, $profesionalId, $descansos);
+            } catch (PersistenceException $e) {
+                if ($e->getCode() === 422) { throw new \DomainException($e->getMessage(), 422, $e); }
+                throw $e;
+            }
+        });
+    }
+
+    /**
+     * @param int[] $servicioIds
+     * @throws \DomainException
+     */
+    private function sincronizarServiciosSeguros(mysqli $db, int $profesionalId, array $servicioIds): void
+    {
+        $ids = array_values(array_unique(array_map('intval', $servicioIds)));
+        sort($ids);
+        if (!$ids) {
+            throw new \DomainException('Selecciona al menos un servicio que prestará el profesional.', 422);
+        }
+        $stmt = $db->prepare('SELECT id FROM servicios WHERE id = ? LIMIT 1 LOCK IN SHARE MODE');
+        if (!$stmt) { throw new PersistenceException('Error al preparar la verificación de servicios: ' . $db->error); }
+        foreach ($ids as $sid) {
+            $stmt->bind_param('i', $sid);
+            if (!$stmt->execute()) { $err = $stmt->error; $stmt->close(); throw new PersistenceException('Error al verificar el servicio: ' . $err); }
+            $existe = $stmt->get_result()->fetch_assoc() !== null;
+            if (!$existe) { $stmt->close(); throw new \DomainException('Uno de los servicios seleccionados ya no existe en el catálogo. Recarga la página.', 422); }
+        }
+        $stmt->close();
+
+        // Un servicio no se retira mientras una cita futura vigente lo necesite.
+        $stmtCitas = $db->prepare(
+            "SELECT DISTINCT c.id, cs.servicioId
+             FROM citas c JOIN citasservicios cs ON cs.citaId = c.id
+             WHERE c.profesionalId = ? AND c.estado IN ('confirmada','en_servicio') AND c.fecha >= ?
+             ORDER BY c.id FOR UPDATE"
+        );
+        if (!$stmtCitas) { throw new PersistenceException('Error al preparar la comprobación de citas: ' . $db->error); }
+        $hoy = date('Y-m-d');
+        $stmtCitas->bind_param('is', $profesionalId, $hoy);
+        if (!$stmtCitas->execute()) { $err = $stmtCitas->error; $stmtCitas->close(); throw new PersistenceException('Error al comprobar citas del profesional: ' . $err); }
+        $afectadas = [];
+        foreach ($stmtCitas->get_result()->fetch_all(MYSQLI_ASSOC) as $f) {
+            if (!in_array((int)$f['servicioId'], $ids, true)) { $afectadas[(int)$f['id']] = true; }
+        }
+        $stmtCitas->close();
+        if ($afectadas) {
+            throw new \DomainException('No se puede retirar un servicio que tienen reservado las citas futuras #' . implode(', #', array_slice(array_keys($afectadas), 0, 5)) . '. Reasígnalas o cancélalas antes.', 422);
+        }
+
+        $del = $db->prepare('SELECT servicioId FROM profesionales_servicios WHERE profesionalId = ? FOR UPDATE');
+        $del->bind_param('i', $profesionalId);
+        if (!$del->execute()) { $err = $del->error; $del->close(); throw new PersistenceException('Error al leer los servicios del profesional: ' . $err); }
+        $actuales = array_map('intval', array_column($del->get_result()->fetch_all(MYSQLI_ASSOC), 'servicioId'));
+        $del->close();
+        $quitar = array_values(array_diff($actuales, $ids));
+        $agregar = array_values(array_diff($ids, $actuales));
+        if ($quitar) {
+            $stmtQ = $db->prepare('DELETE FROM profesionales_servicios WHERE profesionalId = ? AND servicioId = ?');
+            foreach ($quitar as $sid) {
+                $stmtQ->bind_param('ii', $profesionalId, $sid);
+                if (!$stmtQ->execute()) { $err = $stmtQ->error; $stmtQ->close(); throw new PersistenceException('Error al retirar un servicio: ' . $err); }
+            }
+            $stmtQ->close();
+        }
+        $this->insertarServiciosProfesional($db, $profesionalId, $agregar);
+    }
+
+    /**
+     * Reemplaza los descansos recurrentes (dentro de la transacción del llamador) comprobando que no pisen citas futuras.
+     *
+     * @param array<int, array{dia:int,inicio:string,fin:string,motivo:?string}> $descansos
+     * @throws PersistenceException con código 422 si chocan con una cita confirmada futura
+     */
+    private function aplicarReemplazoDescansos(mysqli $db, int $profesionalId, array $descansos): void
+    {
+        if ($descansos) {
+            $citas = $this->findCitasConfirmadasFuturasForUpdate($profesionalId, date('Y-m-d'), $db);
+            foreach ($citas as $cita) {
+                $diaCita = (int)date('N', strtotime((string)$cita->fecha));
+                [$citaIni, $citaFin] = $this->extraerIntervaloMinutosCita($cita);
+                foreach ($descansos as $d) {
+                    if ((int)$d['dia'] !== $diaCita) { continue; }
+                    $dIni = self::horaAMinutos(HorarioProfesional::normalizarHora($d['inicio']));
+                    $dFin = self::horaAMinutos(HorarioProfesional::normalizarHora($d['fin']));
+                    if (max($citaIni, $dIni) < min($citaFin, $dFin)) {
                         throw new PersistenceException(
-                            "No se pueden modificar los horarios: colisiona con la cita confirmada ID {$cita->id} del {$cita->fecha}.",
+                            "No se puede registrar el descanso: colisiona con la cita confirmada ID {$cita->id} del {$cita->fecha}.",
                             422
                         );
                     }
                 }
             }
-
-            $stmtDel = $db->prepare("DELETE FROM horarios_profesionales WHERE profesionalId = ?");
-            if (!$stmtDel) {
-                throw new PersistenceException("Error al preparar limpieza de horarios: " . $db->error);
-            }
-            $stmtDel->bind_param('i', $profesionalId);
-            if (!$stmtDel->execute()) {
-                $err = $stmtDel->error;
-                $stmtDel->close();
-                throw new PersistenceException("Error al limpiar horarios previos: " . $err);
-            }
-            $stmtDel->close();
-
-            if (!empty($horarios)) {
-                $stmtIns = $db->prepare(
-                    "INSERT INTO horarios_profesionales (profesionalId, dia_semana, hora_inicio, hora_fin)
-                     VALUES (?, ?, ?, ?)"
-                );
-                if (!$stmtIns) {
-                    throw new PersistenceException("Error al preparar inserción de horarios: " . $db->error);
-                }
-
-                foreach ($horarios as $h) {
-                    $dia = (int)$h->dia_semana;
-                    $inicio = (string)$h->hora_inicio;
-                    $fin = (string)$h->hora_fin;
-                    $stmtIns->bind_param('iiss', $profesionalId, $dia, $inicio, $fin);
-
-                    if (!$stmtIns->execute()) {
-                        $err = $stmtIns->error;
-                        $stmtIns->close();
-                        throw new PersistenceException("Error al insertar horario semanal: " . $err);
-                    }
-                    if ($stmtIns->affected_rows !== 1) {
-                        $stmtIns->close();
-                        throw new PersistenceException("La inserción de horario semanal no afectó ninguna fila.");
-                    }
-                    $h->id = (string)$db->insert_id;
-                    $h->profesionalId = (string)$profesionalId;
-                }
-
-                $stmtIns->close();
-            }
-
-            if (!$db->commit()) {
-                throw new PersistenceException("Error al confirmar transacción de horarios: " . $db->error);
-            }
-            $inTransaction = false;
-        } catch (PersistenceException $e) {
-            if ($inTransaction) {
-                @$db->rollback();
-            }
-            error_log("[ProfesionalRepository::replaceHorarios] " . $e->getMessage());
-            throw $e;
-        } catch (\Throwable $e) {
-            if ($inTransaction) {
-                @$db->rollback();
-            }
-            error_log("[ProfesionalRepository::replaceHorarios] Excepción inesperada: " . $e->getMessage());
-            throw new PersistenceException("Fallo transaccional al guardar horarios semanales.", 0, $e);
         }
+        $stmtDel = $db->prepare('DELETE FROM descansos_profesionales WHERE profesionalId = ?');
+        if (!$stmtDel) { throw new PersistenceException('Error al preparar la limpieza de descansos: ' . $db->error); }
+        $stmtDel->bind_param('i', $profesionalId);
+        if (!$stmtDel->execute()) { $err = $stmtDel->error; $stmtDel->close(); throw new PersistenceException('Error al limpiar descansos previos: ' . $err); }
+        $stmtDel->close();
+        if (!$descansos) { return; }
+        $stmtIns = $db->prepare('INSERT INTO descansos_profesionales (profesionalId, dia_semana, hora_inicio, hora_fin, motivo) VALUES (?, ?, ?, ?, ?)');
+        if (!$stmtIns) { throw new PersistenceException('Error al preparar la inserción de descansos: ' . $db->error); }
+        foreach ($descansos as $d) {
+            $dia = (int)$d['dia']; $ini = (string)$d['inicio']; $fin = (string)$d['fin']; $motivo = $d['motivo'] ?? null;
+            $stmtIns->bind_param('iisss', $profesionalId, $dia, $ini, $fin, $motivo);
+            if (!$stmtIns->execute()) { $err = $stmtIns->error; $stmtIns->close(); throw new PersistenceException('Error al insertar un descanso: ' . $err); }
+        }
+        $stmtIns->close();
     }
 
     /**

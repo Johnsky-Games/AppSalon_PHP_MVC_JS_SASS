@@ -93,7 +93,13 @@ una vez» si el servidor acepta el mensaje y la conexión se corta antes de conf
   invalidan sesiones previas. GET/HEAD nunca consumen.
 * **Reenviar**: acción explícita, limitada a 1/minuto, revoca el enlace anterior y cancela su evento. **Revocar**: cierra la ficha como baja.
 * **Suspender/baja/cambiar rol**: revoca sesiones (`version_sesion`), protege al último propietario (candado `equipo_mutex`) y, si es profesional con
-  citas futuras, **bloquea** hasta resolverlas (se informa cuántas). La baja desactiva su ficha en la agenda; no se borra nada.
+  citas futuras, **bloquea** hasta resolverlas (se informa cuántas). La baja desactiva su ficha en la agenda; no se borra nada. Las citas se
+  resuelven con el asistente de reasignación (`/admin/equipo/reasignar`, ver `docs/AGENDA_OPERATIVA.md`); la confirmación de la baja usa clave de
+  operación (idempotente) y sigue rechazándose en el servidor mientras quede alguna cita futura sin resolver.
+* **Servicios y horario del profesional** (asistente): al invitar y en la ficha laboral el propietario define los servicios que presta y su horario
+  semanal (varias franjas por día y descansos). La ficha nueva nace inactiva con esa configuración ya guardada: no aparece en disponibilidad ni en
+  reservas hasta que la persona acepte (entonces `activo=1`). Una ficha heredada vinculada conserva su configuración salvo que se marque
+  «reemplazar» expresamente. Detalle en `docs/AGENDA_OPERATIVA.md`.
 
 ## 5. Matriz de roles y permisos
 

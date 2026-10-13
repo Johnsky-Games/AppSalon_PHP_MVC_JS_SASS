@@ -165,11 +165,22 @@ final class ColaboradorRepository
                 throw new \DomainException('La ficha profesional no existe o ya está vinculada a una cuenta');
             }
             $this->sql('UPDATE profesionales SET colaborador_id=? WHERE id=?', 'ii', [$colaboradorId, $profesionalHeredado])->close();
+            // Solo se reescribe su configuración si el operador lo pidió expresamente (casilla del asistente).
+            $agenda = $d['agenda'] ?? null;
+            if ($agenda && !empty($agenda['aplicar'])) {
+                (new ProfesionalRepository($this->db))->reemplazarConfiguracionAgenda($profesionalHeredado, $d['servicios'], $agenda['franjas'], $agenda['descansos']);
+            }
             return $profesionalHeredado;
         }
         $prof = new Profesional(['nombre' => $d['nombre_profesional'], 'activo' => '0']);
-        $id = (new ProfesionalRepository($this->db))->createWithServicios($prof, $d['servicios']);
+        $repo = new ProfesionalRepository($this->db);
+        $id = $repo->createWithServicios($prof, []);
         $this->sql('UPDATE profesionales SET colaborador_id=? WHERE id=?', 'ii', [$colaboradorId, $id])->close();
+        // La ficha nace INACTIVA: servicios y horario definidos en el asistente quedan guardados (y validados: servicios
+        // existentes, sin solapes) pero no son reservables, porque disponibilidad y reserva exigen activo=1, hasta que
+        // la persona acepte la invitación.
+        $agenda = $d['agenda'] ?? ['franjas' => [], 'descansos' => []];
+        $repo->reemplazarConfiguracionAgenda($id, $d['servicios'], $agenda['franjas'], $agenda['descansos']);
         return $id;
     }
 
@@ -393,6 +404,37 @@ final class ColaboradorRepository
             $this->sql('UPDATE colaboradores SET puesto=?, fecha_ingreso=?, notas_rh=?, telefono=? WHERE id=?', 'ssssi',
                 [$d['puesto'], $d['fecha_ingreso'], $d['notas_rh'], $d['telefono'], $colaboradorId])->close();
             $this->auditar($actor, $existe['usuario_id'] !== null ? (int)$existe['usuario_id'] : null, 'ficha_actualizada', (string)$existe['codigo']);
+        });
+    }
+
+    /**
+     * Guarda servicios, horario semanal y descansos de la ficha profesional de un colaborador (asistente de la ficha).
+     * Atómico: si algo falla (servicio inexistente, choque con citas ya tomadas) no cambia nada.
+     * No activa ni desactiva la ficha: una persona invitada sigue siendo no reservable hasta aceptar.
+     *
+     * @param int[]  $servicios
+     * @return array{profesional_id:int,estado:string}
+     * @throws \DomainException permiso insuficiente o regla de negocio
+     */
+    public function configurarAgendaProfesional(int $actor, int $colaboradorId, array $servicios, array $franjas, array $descansos): array
+    {
+        return Transaccion::ejecutar($this->db, function () use ($actor, $colaboradorId, $servicios, $franjas, $descansos): array {
+            $c = (new AuthorizationService($this->db))->contexto($actor);
+            $permisos = $c && (int)$c['activo'] === 1 ? (AuthorizationService::ROLES[$c['rol']] ?? []) : [];
+            if (!in_array('rh.gestionar', $permisos, true) || !in_array('profesionales.gestionar', $permisos, true)) {
+                throw new \DomainException('No tienes permiso para configurar servicios y horarios del profesional.');
+            }
+            $col = $this->una('SELECT id, codigo, rol, estado, usuario_id FROM colaboradores WHERE id=? FOR UPDATE', 'i', [$colaboradorId]);
+            if (!$col) { throw new \DomainException('Colaborador no encontrado.'); }
+            if ($col['rol'] !== 'profesional') { throw new \DomainException('Solo las personas con rol Profesional tienen servicios y horario.', 422); }
+            if ($col['estado'] === 'baja') { throw new \DomainException('La persona está dada de baja; no se puede modificar su agenda.', 422); }
+            $ficha = $this->una('SELECT id FROM profesionales WHERE colaborador_id=? FOR UPDATE', 'i', [$colaboradorId]);
+            if (!$ficha) { throw new \DomainException('Esta persona no tiene ficha profesional vinculada.', 422); }
+            $pid = (int)$ficha['id'];
+            (new ProfesionalRepository($this->db))->reemplazarConfiguracionAgenda($pid, $servicios, $franjas, $descansos);
+            $this->auditar($actor, $col['usuario_id'] !== null ? (int)$col['usuario_id'] : null, 'agenda_profesional',
+                (string)$col['codigo'] . ': ' . count($servicios) . ' serv., ' . count($franjas) . ' franjas, ' . count($descansos) . ' descansos');
+            return ['profesional_id' => $pid, 'estado' => (string)$col['estado']];
         });
     }
 

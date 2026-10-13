@@ -194,6 +194,66 @@
                 });
             });
         });
+        // Asistente de agenda del profesional: añadir/quitar turnos y descansos y copiar el lunes.
+        // Sin JavaScript el formulario sigue siendo válido con las filas que ya trae renderizadas.
+        document.querySelectorAll('[data-agenda-asistente]').forEach(asistente => {
+            const nombreDia = dia => dia.querySelector('legend')?.textContent.trim() || '';
+            const nuevaFila = (tipo, dia) => {
+                const plantilla = asistente.querySelector(`template[data-ag-plantilla="${tipo}"]`);
+                const lista = dia.querySelector(`[data-ag-lista="${tipo}"]`);
+                if (!plantilla || !lista) return null;
+                const indice = parseInt(lista.dataset.agSiguiente || '0', 10);
+                lista.dataset.agSiguiente = String(indice + 1);
+                const prefijo = tipo === 'franja' ? 'franjas' : 'descansos';
+                const nodo = plantilla.content.firstElementChild.cloneNode(true);
+                nodo.querySelectorAll('[name]').forEach(campo => { campo.name = campo.name.replace(`${prefijo}[0][0]`, `${prefijo}[${dia.dataset.agDia}][${indice}]`); });
+                nodo.querySelectorAll('[aria-label]').forEach(campo => campo.setAttribute('aria-label', campo.getAttribute('aria-label').replace('__DIA__', nombreDia(dia))));
+                lista.appendChild(nodo);
+                return nodo;
+            };
+            const valores = (dia, tipo) => [...dia.querySelectorAll(`[data-ag-lista="${tipo}"] [data-ag-fila]`)]
+                .map(fila => [...fila.querySelectorAll('input')].map(campo => campo.value))
+                .filter(fila => fila[0] !== '' || fila[1] !== '');
+            const llenar = (dia, tipo, filas) => {
+                const lista = dia.querySelector(`[data-ag-lista="${tipo}"]`);
+                if (!lista) return;
+                lista.querySelectorAll('[data-ag-fila]').forEach(fila => fila.remove());
+                (filas.length ? filas : [[]]).forEach(valoresFila => {
+                    const fila = nuevaFila(tipo, dia);
+                    if (fila) fila.querySelectorAll('input').forEach((campo, i) => { campo.value = valoresFila[i] ?? ''; });
+                });
+                if (tipo === 'descanso' && filas.length) dia.querySelector('details')?.setAttribute('open', '');
+            };
+            asistente.addEventListener('click', event => {
+                const agregar = event.target.closest('[data-ag-agregar]');
+                if (agregar) {
+                    const fila = nuevaFila(agregar.dataset.agAgregar, agregar.closest('[data-ag-dia]'));
+                    fila?.querySelector('input')?.focus();
+                    return;
+                }
+                const quitar = event.target.closest('[data-ag-quitar]');
+                if (quitar) {
+                    const fila = quitar.closest('[data-ag-fila]');
+                    const filas = fila.parentElement.querySelectorAll('[data-ag-fila]');
+                    // La última fila de una lista se vacía en vez de eliminarse: siempre queda un punto de captura.
+                    if (filas.length === 1) fila.querySelectorAll('input').forEach(campo => { campo.value = ''; });
+                    else fila.remove();
+                    return;
+                }
+                if (event.target.closest('[data-ag-copiar-lunes]')) {
+                    const lunes = asistente.querySelector('[data-ag-dia="1"]');
+                    if (!lunes) return;
+                    const franjas = valores(lunes, 'franja');
+                    const descansos = valores(lunes, 'descanso');
+                    ['2', '3', '4', '5'].forEach(numero => {
+                        const dia = asistente.querySelector(`[data-ag-dia="${numero}"]`);
+                        if (!dia) return;
+                        llenar(dia, 'franja', franjas);
+                        llenar(dia, 'descanso', descansos);
+                    });
+                }
+            });
+        });
         const notices = document.querySelectorAll('.alerta');
         if (notices.length) notify([...notices].map(n => n.textContent.trim()).join(' · '), [...notices].some(n => n.classList.contains('error')) ? 'error' : 'success');
         if (window.Swal) window.Swal = window.Swal.mixin({ confirmButtonColor: '#155c53', cancelButtonColor: '#647570', buttonsStyling: true, backdrop: 'rgba(20, 40, 37, .4)', showClass: { popup: reducedMotion ? '' : 'ui-dialog-enter' }, hideClass: { popup: '' } });

@@ -38,11 +38,12 @@ $idemInvitacion = clave_operacion_formulario();
 <div class="campo"><label for="eq-ficha">Vincular una ficha existente (conserva su historial)</label><select id="eq-ficha" name="profesional_id"><option value="">Crear una ficha nueva</option><?php foreach ($fichasSinCuenta as $f) { ?><option value="<?= s($f['id']) ?>" <?= (string)($previo['profesional_id'] ?? '') === (string)$f['id'] ? 'selected' : '' ?>><?= s($f['nombre']) ?><?= (int)$f['activo'] === 0 ? ' (inactiva)' : '' ?></option><?php } ?></select></div>
 <?php } ?>
 <div class="campo"><label for="eq-nombre-prof">Nombre en la agenda (si es una ficha nueva)</label><input id="eq-nombre-prof" name="nombre_profesional" maxlength="120" placeholder="Por defecto: nombre y apellido" value="<?= s($previo['nombre_profesional'] ?? '') ?>"></div>
-<p class="ui-section-title">Servicios que podrá realizar (ficha nueva)</p>
-<div class="listado-servicios-checks ui-grid"><?php foreach ($servicios as $srv) { $sel = in_array((string)$srv->id, array_map('strval', (array)($previo['servicios'] ?? [])), true); ?>
-<div class="check-servicio"><label for="eq-srv-<?= s($srv->id) ?>"><input type="checkbox" id="eq-srv-<?= s($srv->id) ?>" name="servicios[]" value="<?= s($srv->id) ?>" <?= $sel ? 'checked' : '' ?>> <?= s($srv->nombre) ?> (<?= s($srv->duracion_minutos) ?> min)</label></div><?php } ?></div>
+<?php if (!empty($fichasSinCuenta)) { ?>
+<div class="campo"><label for="eq-ajustar"><input type="checkbox" id="eq-ajustar" name="ajustar_agenda" value="1" <?= ($previo['ajustar_agenda'] ?? '') === '1' ? 'checked' : '' ?>> Al vincular una ficha existente, reemplazar sus servicios y su horario por lo indicado abajo</label><small class="ui-form-help">Si no lo marcas, la ficha conserva su configuración actual y lo de abajo solo se usa para fichas nuevas.</small></div>
+<?php } ?>
+<?php $ag = ['prefijo' => 'eq', 'mostrarServicios' => true, 'servicios' => $servicios, 'seleccion' => (array)($previo['servicios'] ?? []), 'franjas' => (array)($previo['franjas'] ?? []), 'descansos' => (array)($previo['descansos'] ?? [])]; include __DIR__ . '/_agenda_asistente.php'; ?>
 <div class="campo"><label for="eq-homonimo"><input type="checkbox" id="eq-homonimo" name="confirmar_homonimo" value="1"> Es otra persona con el mismo nombre que un profesional existente</label></div>
-<p class="ui-form-help">La ficha queda inactiva en la agenda hasta que la persona acepte; después se activa y podrás ajustar sus horarios en Profesionales.</p>
+<p class="ui-form-help">Una ficha nueva guarda su horario y servicios desde ya, pero no aparece en disponibilidad ni en reservas hasta que la persona acepte la invitación; entonces se activa con esta configuración (una ficha existente conserva su estado actual). Puedes ajustarla después en su ficha laboral.</p>
 </fieldset>
 <button class="boton" type="submit">Enviar invitación</button>
 </form>
@@ -63,13 +64,14 @@ $idemInvitacion = clave_operacion_formulario();
 <form method="POST" action="/admin/equipo/invitar" data-una-vez><input type="hidden" name="csrf_token" value="<?= s(csrf_token()) ?>"><input type="hidden" name="idem_key" value="<?= s(\Classes\Idempotencia::nuevaClave()) ?>"><input type="hidden" name="id" value="<?= s($p['id']) ?>"><button class="boton" type="submit">Reenviar invitación</button></form>
 <form method="POST" action="/admin/equipo/revocar"><input type="hidden" name="csrf_token" value="<?= s(csrf_token()) ?>"><input type="hidden" name="id" value="<?= s($p['id']) ?>"><button class="boton ui-button-quiet" type="submit">Revocar invitación</button></form>
 <?php } else { ?>
-<form method="POST" action="/admin/equipo/actualizar" class="formulario"><input type="hidden" name="csrf_token" value="<?= s(csrf_token()) ?>"><input type="hidden" name="id" value="<?= s($p['id']) ?>">
+<form method="POST" action="/admin/equipo/actualizar" class="formulario" data-una-vez><input type="hidden" name="csrf_token" value="<?= s(csrf_token()) ?>"><input type="hidden" name="idem_key" value="<?= s(\Classes\Idempotencia::nuevaClave()) ?>"><input type="hidden" name="id" value="<?= s($p['id']) ?>">
 <div class="campo"><label for="rol-<?= s($p['id']) ?>">Rol</label><select id="rol-<?= s($p['id']) ?>" name="rol"><?php foreach ($rolesAcceso as $rol) { ?><option value="<?= s($rol) ?>" <?= $rol === $p['rol'] ? 'selected' : '' ?>><?= s($etiquetaRol[$rol] ?? $rol) ?></option><?php } ?></select></div>
 <div class="campo"><label for="estado-<?= s($p['id']) ?>">Estado laboral</label><select id="estado-<?= s($p['id']) ?>" name="estado"><?php foreach (['activo' => 'Activo', 'suspendido' => 'Suspendido', 'baja' => 'Baja'] as $v => $t) { ?><option value="<?= s($v) ?>" <?= $p['estado'] === $v ? 'selected' : '' ?>><?= s($t) ?></option><?php } ?></select></div>
 <button type="submit" class="boton">Guardar acceso</button></form>
 <?php if ($esPropia) { ?><p class="ui-form-help">Esta es tu propia cuenta: se protege al último propietario activo.</p><?php } ?>
 <?php } ?>
 <?php if (!empty($puedeRh)) { ?><a class="boton ui-button-quiet" href="/admin/equipo/ficha?id=<?= s($p['id']) ?>">Ficha laboral</a><?php } ?>
+<?php if (!empty($puedeAgenda) && !empty($p['profesional_id']) && $p['rol'] === 'profesional' && $p['estado'] !== 'invitado') { ?><a class="boton ui-button-quiet" href="/admin/equipo/reasignar?id=<?= s($p['id']) ?>">Revisar citas futuras</a><?php } ?>
 </article>
 <?php } ?>
 <?php if (!$colaboradores) { ?><p>Todavía no hay personas en el equipo. Invita a la primera con el formulario de arriba.</p><?php } ?>
@@ -81,6 +83,6 @@ $idemInvitacion = clave_operacion_formulario();
 <li><strong>Invitación pendiente:</strong> sin acceso laboral; el enlace vence a los 7 días y solo sirve una vez.</li>
 <li><strong>Activo:</strong> accede al portal del equipo con los permisos de su rol.</li>
 <li><strong>Suspendido:</strong> conserva ficha e historial pero no entra; sus sesiones se cierran.</li>
-<li><strong>Baja:</strong> cierre de la relación; no se borra nada. Si es profesional, antes deben resolverse sus citas futuras.</li>
+<li><strong>Baja:</strong> cierre de la relación; no se borra nada. Si es profesional, antes deben resolverse sus citas futuras: usa «Revisar citas futuras» para reasignarlas a un sustituto disponible, cancelarlas con aviso al cliente o revisarlas a mano.</li>
 </ul>
 <p>Solo un propietario administra accesos y el último propietario activo no puede desactivarse.</p></section>

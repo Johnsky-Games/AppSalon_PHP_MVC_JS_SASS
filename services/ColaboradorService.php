@@ -77,6 +77,26 @@ final class ColaboradorService
                 if (!$servicios) { $e[] = 'Selecciona al menos un servicio que podrá realizar el profesional.'; }
             }
         }
+        // Asistente del profesional: servicios (ya leídos arriba para fichas nuevas) y horario semanal.
+        $agenda = ['franjas' => [], 'descansos' => [], 'aplicar' => false];
+        if ($rol === 'profesional') {
+            $ajustar = $profesionalId !== null && ($post['ajustar_agenda'] ?? '') === '1';
+            if ($ajustar) {
+                // Ficha heredada: solo se reescribe su configuración si el operador lo pide expresamente.
+                $crudo = $post['servicios'] ?? [];
+                foreach (is_array($crudo) ? $crudo : [] as $sid) {
+                    $id = filter_var($sid, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+                    if ($id === false) { $e[] = 'Hay servicios seleccionados que no son válidos.'; break; }
+                    $servicios[$id] = $id;
+                }
+                if (!$servicios) { $e[] = 'Selecciona al menos un servicio para reemplazar los de la ficha existente.'; }
+            }
+            if ($profesionalId === null || $ajustar) {
+                $r = AgendaSemanalValidador::normalizar($post['franjas'] ?? null, $post['descansos'] ?? null);
+                array_push($e, ...$r['errores']);
+                $agenda = ['franjas' => $r['franjas'], 'descansos' => $r['descansos'], 'aplicar' => $ajustar];
+            }
+        }
         if ($e) { return [null, $e]; }
         $servicios = array_values($servicios);
         sort($servicios);
@@ -85,6 +105,7 @@ final class ColaboradorService
             'puesto' => $puesto, 'rol' => $rol, 'fecha_ingreso' => $fecha === '' ? null : $fecha,
             'servicios' => $servicios, 'nombre_profesional' => $nombreProf, 'profesional_id' => $profesionalId,
             'confirmar_homonimo' => ($post['confirmar_homonimo'] ?? '') === '1',
+            'agenda' => $agenda,
         ], []];
     }
 
@@ -103,7 +124,8 @@ final class ColaboradorService
         $actorId = Idempotencia::actorUsuario($actor, 'equipo');
         $contenido = ['email' => Identidad::normalizarEmail($d['email']), 'nombre' => mb_strtolower($d['nombre']), 'apellido' => mb_strtolower($d['apellido']),
             'telefono' => $d['telefono'], 'puesto' => $d['puesto'], 'rol' => $d['rol'], 'fecha' => $d['fecha_ingreso'],
-            'servicios' => $d['servicios'], 'ficha' => $d['profesional_id'], 'nombre_prof' => mb_strtolower($d['nombre_profesional'])];
+            'servicios' => $d['servicios'], 'ficha' => $d['profesional_id'], 'nombre_prof' => mb_strtolower($d['nombre_profesional']),
+            'agenda' => $d['agenda']];
         try {
             $previa = Idempotencia::buscar($db, 'colaborador.invitar', $actorId, $clave, $contenido);
             if ($previa !== null) { return $this->resultadoInvitacion($previa, true); }
@@ -125,7 +147,7 @@ final class ColaboradorService
         } catch (DuplicateEntryException) {
             return ['status' => self::CONFLICT, 'errores' => ['Ya existe un colaborador con este correo. Búscalo en la lista del equipo para reenviar su invitación o editar su ficha.']];
         } catch (\DomainException $ex) {
-            return ['status' => self::FORBIDDEN, 'errores' => [$ex->getMessage()]];
+            return ['status' => $ex->getCode() === 422 ? self::INVALID : self::FORBIDDEN, 'errores' => [$ex->getMessage()]];
         } catch (PersistenceException $ex) {
             return ['status' => self::ERROR, 'errores' => ['No se pudo guardar la invitación. Inténtalo de nuevo.']];
         }
@@ -233,11 +255,79 @@ final class ColaboradorService
         }
     }
 
-    public function cambiarAcceso(int $actor, int $colaboradorId, string $rol, string $estado): array
+    /**
+     * Cambia rol y estado laboral. Con $clave (formulario web) la confirmación es idempotente: repetir el POST con la
+     * misma clave devuelve el resultado original sin volver a aplicar nada (p. ej. doble clic en «Guardar acceso»).
+     * Una suspensión o baja de un profesional se rechaza mientras queden citas futuras sin resolver.
+     */
+    public function cambiarAcceso(int $actor, int $colaboradorId, string $rol, string $estado, ?string $clave = null): array
     {
-        try { $this->repo->cambiarAcceso($actor, $colaboradorId, $rol, $estado); return ['status' => self::OK]; }
+        try {
+            if ($clave === null) {
+                $this->repo->cambiarAcceso($actor, $colaboradorId, $rol, $estado);
+                return ['status' => self::OK];
+            }
+            if (!Idempotencia::claveValida($clave)) { return ['status' => self::INVALID, 'errores' => ['El formulario venció. Recárgalo antes de enviar.']]; }
+            $db = \Model\ActiveRecord::getDB();
+            $actorId = Idempotencia::actorUsuario($actor, 'equipo');
+            $contenido = ['colaborador' => $colaboradorId, 'rol' => $rol, 'estado' => $estado];
+            $op = Idempotencia::ejecutar($db, 'colaborador.acceso', $actorId, $clave, $contenido, function () use ($actor, $colaboradorId, $rol, $estado): array {
+                $this->repo->cambiarAcceso($actor, $colaboradorId, $rol, $estado);
+                return ['recurso_tipo' => 'colaborador', 'recurso_id' => $colaboradorId, 'datos' => ['rol' => $rol, 'estado' => $estado]];
+            });
+            return ['status' => self::OK, 'repetida' => $op['repetida']];
+        }
+        catch (ConflictoIdempotenciaException) { return ['status' => self::CONFLICT_KEY, 'errores' => ['Esta solicitud ya se usó con otros datos. Recarga la página.']]; }
+        catch (OperacionEnCursoException) { return ['status' => self::IN_PROGRESS, 'errores' => ['La solicitud anterior sigue procesándose.']]; }
         catch (\InvalidArgumentException|\DomainException $ex) { return ['status' => self::FORBIDDEN, 'errores' => [$ex->getMessage()]]; }
         catch (PersistenceException) { return ['status' => self::ERROR, 'errores' => ['No se pudo actualizar el acceso.']]; }
+    }
+
+    /**
+     * Asistente de la ficha: servicios que presta y horario semanal (franjas y descansos) del profesional.
+     * Idempotente por clave de formulario; no activa la ficha (una persona invitada sigue sin ser reservable).
+     *
+     * @param array $post servicios[], franjas[dia][n][inicio|fin], descansos[dia][n][inicio|fin|motivo]
+     */
+    public function configurarAgenda(int $actor, int $colaboradorId, array $post, ?string $clave): array
+    {
+        if ($clave === null || !Idempotencia::claveValida($clave)) {
+            return ['status' => self::INVALID, 'errores' => ['El formulario venció. Recárgalo antes de enviar.']];
+        }
+        $errores = [];
+        $servicios = [];
+        $crudo = $post['servicios'] ?? [];
+        if (!is_array($crudo)) { $crudo = []; }
+        foreach ($crudo as $sid) {
+            $id = filter_var($sid, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+            if ($id === false) { $errores[] = 'Hay servicios seleccionados que no son válidos.'; break; }
+            $servicios[$id] = $id;
+        }
+        if (!$servicios && !$errores) { $errores[] = 'Selecciona al menos un servicio que prestará el profesional.'; }
+        $r = AgendaSemanalValidador::normalizar($post['franjas'] ?? null, $post['descansos'] ?? null);
+        array_push($errores, ...$r['errores']);
+        if ($errores) { return ['status' => self::INVALID, 'errores' => $errores]; }
+        $servicios = array_values($servicios);
+        sort($servicios);
+
+        $db = \Model\ActiveRecord::getDB();
+        $actorId = Idempotencia::actorUsuario($actor, 'equipo');
+        $contenido = ['colaborador' => $colaboradorId, 'servicios' => $servicios, 'franjas' => $r['franjas'], 'descansos' => $r['descansos']];
+        try {
+            $op = Idempotencia::ejecutar($db, 'colaborador.agenda', $actorId, $clave, $contenido, function () use ($actor, $colaboradorId, $servicios, $r): array {
+                $datos = $this->repo->configurarAgendaProfesional($actor, $colaboradorId, $servicios, $r['franjas'], $r['descansos']);
+                return ['recurso_tipo' => 'profesional', 'recurso_id' => $datos['profesional_id'], 'datos' => $datos];
+            });
+            return ['status' => self::OK, 'repetida' => $op['repetida'], 'profesional_id' => $op['recurso_id'], 'estado' => $op['datos']['estado'] ?? null];
+        } catch (ConflictoIdempotenciaException) {
+            return ['status' => self::CONFLICT_KEY, 'errores' => ['Esta solicitud ya se usó con otros datos. Recarga la página.']];
+        } catch (OperacionEnCursoException) {
+            return ['status' => self::IN_PROGRESS, 'errores' => ['La solicitud anterior sigue procesándose.']];
+        } catch (\DomainException $ex) {
+            return ['status' => $ex->getCode() === 422 ? self::INVALID : self::FORBIDDEN, 'errores' => [$ex->getMessage()]];
+        } catch (PersistenceException) {
+            return ['status' => self::ERROR, 'errores' => ['No se pudo guardar la agenda del profesional. Inténtalo de nuevo.']];
+        }
     }
 
     public function actualizarFicha(int $actor, int $colaboradorId, array $post): array

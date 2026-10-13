@@ -22,6 +22,7 @@ Este directorio contiene las migraciones versionadas y scripts de soporte para l
   - `016_clientes_membresia.sql` / `_rollback.sql`: tabla `clientes` (membresía de cliente: `estado`, `origen`) con retrocarga que conserva suspensiones y no eleva privilegios.
   - `017_idempotencia_unicidad.sql` / `_rollback.sql` / **`017_….precheck.php`**: tabla `operaciones_idempotentes` (clave SHA-256, huella HMAC, actor, expiración) y `UNIQUE` funcional `uq_usuarios_email_normalizado` sobre `LOWER(TRIM(email))`. Requiere MySQL ≥ 8.0.13. El archivo `.precheck.php` se ejecuta **antes** de alterar el esquema y aborta con el detalle si existen correos equivalentes (no borra ni fusiona).
   - `018_colaboradores_invitaciones.sql` / `_rollback.sql`: `colaboradores` (ficha laboral, estado, rol), `colaborador_invitaciones` (una pendiente por colaborador), `correos_salida` (outbox con carga cifrada y clave única por causa) y `profesionales.colaborador_id`. Retrocarga cada acceso laboral existente como colaborador (roles y suspensiones intactos).
+  - `021_citas_reasignaciones.sql` / `_rollback.sql`: tabla `citas_reasignaciones` (auditoría de reasignación/cancelación de citas por baja de un profesional). El rollback **conserva** los datos: con filas la renombra a `citas_reasignaciones_respaldo_021`.
 
 ---
 
