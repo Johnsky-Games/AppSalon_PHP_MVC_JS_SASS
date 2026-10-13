@@ -503,7 +503,8 @@ final class R2bColaCorreosTest extends R2bCase
         self::registrarHttp(new Navegador(self::$base), $email);
         $this->smtp('ok');
         $antes = self::q('SELECT id, estado, intentos FROM correos_salida ORDER BY id');
-        foreach ([['--nope'], ['basura'], ['--reintentar=0'], ['--reintentar=-3'], ['--reintentar=1e3'], ['--reintentar=todos'], ['--reintentar=9999999999999999999999'], ['--limite=1', '--zzz'], ["--arg\x01rojo"], ['--' . str_repeat('a', 5000)]] as $args) {
+        // R2B (fase 2): `--reintentar` SIN valor ya no ejecuta una tanda normal: es un uso incorrecto (código 2) y no toca la cola.
+        foreach ([['--reintentar'], ['--reintentar='], ['--nope'], ['basura'], ['--reintentar=0'], ['--reintentar=-3'], ['--reintentar=1e3'], ['--reintentar=todos'], ['--reintentar=9999999999999999999999'], ['--limite=1', '--zzz'], ["--arg\x01rojo"], ['--' . str_repeat('a', 5000)]] as $args) {
             $w = self::worker($args, $this->envW());
             $this->assertSame(2, $w['exit'], json_encode($args) . ' => ' . $w['out'] . $w['err']);
             $this->assertDoesNotMatchRegularExpression('/[\x00-\x08\x0B-\x1F]/', $w['err'], 'el mensaje de error refleja caracteres de control del argumento');

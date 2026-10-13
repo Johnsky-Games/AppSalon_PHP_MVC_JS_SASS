@@ -657,6 +657,18 @@ final class R2bAgendaTest extends R2bCase
         $this->assertSame(1, (int)self::escalar("SELECT COUNT(*) FROM notificaciones_citas WHERE cita_referencia_id=? AND tipo='cancelacion'", [$e['cita']]));
     }
 
+    /** INVENTARIO (fase 2): el aviso de la reasignación/cancelación al cliente sale DENTRO de la petición (mejor esfuerzo), antes de cualquier worker. */
+    public function test_inventario_el_aviso_de_la_reasignacion_sale_en_la_propia_peticion(): void
+    {
+        $e = $this->escenario();
+        $colId = (int)$e['origen']['colaborador_id'];
+        self::vaciarBuzonFallo(self::SMTP);
+        $this->assertSame(302, $this->postReasignar($colId, [(string)$e['cita'] => 'cancelar'])['status']);
+        $para = array_filter(self::buzonFallo(self::SMTP), fn($m) => in_array(self::$cliente['email'], $m['to'], true));
+        $this->assertCount(1, $para, 'INVENTARIO: el aviso al cliente llega dentro de POST /admin/equipo/reasignar');
+        $this->assertSame(0, (int)self::escalar("SELECT COUNT(*) FROM correos_salida WHERE destinatario_email=?", [self::$cliente['email']]), 'no usa la cola de cuentas');
+    }
+
     public function test_comision_devengada_bloquea_la_reasignacion_aunque_se_fuerce_el_formulario(): void
     {
         $e = $this->escenario();

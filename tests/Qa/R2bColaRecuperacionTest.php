@@ -424,6 +424,34 @@ final class R2bColaRecuperacionTest extends R2bCase
         $this->assertSame($hash, hash('sha256', (string)$this->tokenRecuperacion($m[0])));
     }
 
+    // ------------------------------------------------------------------ inventario de envíos en línea que persisten
+
+    /**
+     * R2B-12 (rojo, documentación frente a comportamiento). `docs/NOTIFICACIONES_WORKER.md` (apartado inicial de la cola) afirma que los
+     * correos de CUENTA y las INVITACIONES DE COLABORADORES «no se envían dentro de la petición HTTP». Para las invitaciones es falso:
+     * `ColaboradorService` llama a `despachar()` justo después del commit (alta y reenvío). Con un SMTP de 400 ms la petición del propietario
+     * tarda más que la latencia y el correo ya está en el buzón antes de cualquier worker. (Es una ruta autenticada del propietario y el
+     * destinatario lo elige él: no abre un canal de enumeración; el defecto es la afirmación del documento o, si se prefiere, el envío en línea.)
+     */
+    public function test_Defecto_R2B_12_las_invitaciones_de_colaborador_se_envian_dentro_de_la_peticion_aunque_la_documentacion_dice_que_no(): void
+    {
+        $doc = (string)file_get_contents(self::RAIZ . '/docs/NOTIFICACIONES_WORKER.md');
+        $this->assertMatchesRegularExpression('/invitaciones de colaboradores[^.]*no se env[ií]an de forma s[ií]ncrona/iu', $doc, 'el documento ya no hace la afirmación: actualizar esta prueba');
+        $this->assertStringContainsString('No se envían dentro de la petición HTTP', $doc);
+        $this->lento(0.4);
+        $n = new Navegador(self::$base);
+        self::q('TRUNCATE intentos_login');
+        $this->assertSame(302, $n->login('equipo', self::$dueno['email'], self::$dueno['password'])['status']);
+        $csrf = Navegador::csrfDe($n->get('/admin/equipo')['body']);
+        $email = self::correo('inv-linea');
+        $t0 = microtime(true);
+        $r = $n->post('/admin/equipo/crear', ['csrf_token' => $csrf, 'idem_key' => Idem::clave(), 'nombre' => 'Ana', 'apellido' => 'Lopez', 'email' => $email, 'telefono' => '', 'puesto' => '', 'rol' => 'recepcion', 'fecha_ingreso' => '']);
+        $ms = (microtime(true) - $t0) * 1000;
+        $this->assertSame(302, $r['status']);
+        $enLinea = count($this->mailsPara($email)) === 1;
+        $this->assertFalse($enLinea, sprintf('la invitación salió DENTRO de la petición (%.0f ms con un SMTP de 400 ms; correo ya en el buzón) y el documento dice lo contrario', $ms));
+    }
+
     // ------------------------------------------------------------------ 6. supervisor notificaciones_worker.php
 
     public function test_el_supervisor_procesa_la_cola_de_correos_en_su_intervalo_y_rechaza_valores_invalidos(): void
