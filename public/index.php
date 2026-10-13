@@ -113,6 +113,11 @@ $router->post('/mi-bienestar', [\Controllers\CrecimientoController::class, 'clie
 $router->get('/admin/ajustes', [\Controllers\AjustesController::class, 'index']);
 $router->post('/admin/ajustes', [\Controllers\AjustesController::class, 'index']);
 
+// CRM de clientes (módulo CrmController: listado, ficha 360° y exportación).
+$router->get('/admin/clientes', [\Controllers\CrmController::class, 'index']);
+$router->get('/admin/clientes/ficha', [\Controllers\CrmController::class, 'ficha']);
+$router->get('/admin/clientes/exportar', [\Controllers\CrmController::class, 'exportar']);
+
 // Comprueba y valida las rutas, que existan y les asigna las funciones del Controlador
     emitir_cabeceras_seguridad();
     $router->comprobarRutas();
