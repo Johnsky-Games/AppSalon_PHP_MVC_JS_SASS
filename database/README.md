@@ -18,9 +18,17 @@ Este directorio contiene las migraciones versionadas y scripts de soporte para l
   - `007_citas_estado_cancelacion.sql` / `007_citas_estado_cancelacion_rollback.sql`: Columnas `estado` (`confirmada`, `cancelada`), `cancelado_por`, `cancelado_at`, `motivo_cancelacion` en `citas`, con índices `idx_citas_estado` e `idx_citas_prof_fecha_estado` para cancelación lógica trazable y optimización de agenda.
   - `008_notificaciones_outbox_lease.sql` / `008_notificaciones_outbox_lease_rollback.sql`: Columnas `worker_token` y `lease_expires_at` en `notificaciones_citas` con índice `idx_notificaciones_lease` para soporte de arrendamientos de worker y recuperación resiliente de outbox.
 
+  - `009` … `015`: reembolsos con fecha, equipo/permisos (`usuario_accesos`, `version_sesion`, `equipo_mutex`), perfiles y fotos, agenda operativa, finanzas e inventario, fidelidad/formularios y comisiones (ver `docs/`).
+  - `016_clientes_membresia.sql` / `_rollback.sql`: tabla `clientes` (membresía de cliente: `estado`, `origen`) con retrocarga que conserva suspensiones y no eleva privilegios.
+  - `017_idempotencia_unicidad.sql` / `_rollback.sql` / **`017_….precheck.php`**: tabla `operaciones_idempotentes` (clave SHA-256, huella HMAC, actor, expiración) y `UNIQUE` funcional `uq_usuarios_email_normalizado` sobre `LOWER(TRIM(email))`. Requiere MySQL ≥ 8.0.13. El archivo `.precheck.php` se ejecuta **antes** de alterar el esquema y aborta con el detalle si existen correos equivalentes (no borra ni fusiona).
+  - `018_colaboradores_invitaciones.sql` / `_rollback.sql`: `colaboradores` (ficha laboral, estado, rol), `colaborador_invitaciones` (una pendiente por colaborador), `correos_salida` (outbox con carga cifrada y clave única por causa) y `profesionales.colaborador_id`. Retrocarga cada acceso laboral existente como colaborador (roles y suspensiones intactos).
+
 ---
 
 ## 2. Uso del Migrador
+
+> Una migración puede acompañarse de `NNN_nombre.precheck.php`: devuelve una función `fn(mysqli): string[]`; si la lista no está vacía el migrador **no aplica nada** y sale con código 1.
+> Para instalar o actualizar con el primer propietario en un solo paso usa `php scripts/instalar.php` (ver `docs/GUIA_ACTUALIZACION_IDENTIDADES.md`).
 
 ```bash
 # Consultar estado de migraciones
