@@ -1,10 +1,12 @@
 name: CI — AppSalon PHP MVC
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
       - "feature/**"
+      - "claude/**"
   pull_request:
     branches:
       - main
@@ -48,7 +50,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: "8.2"
-          extensions: mysqli, pdo_mysql, mbstring, zlib, gd, fileinfo
+          extensions: mysqli, pdo_mysql, mbstring, zlib, gd, fileinfo, sodium
           ini-values: variables_order=EGPCS
           coverage: none
 
@@ -76,6 +78,17 @@ jobs:
           php database/migrador.php up
           php database/migrador.php status
 
+      - name: Instalador idempotente del primer propietario (base nueva aislada)
+        run: |
+          mysql -h 127.0.0.1 -P 3306 -uroot -proot -e "CREATE DATABASE appsalon_ci_install_test CHARACTER SET utf8mb4"
+          export DB_NAME=appsalon_ci_install_test OWNER_EMAIL=propietario@ci.test APP_URL=http://localhost:3000
+          php scripts/instalar.php | tee /tmp/instalar1.log
+          grep -q "ENLACE DE ACTIVACIÓN" /tmp/instalar1.log
+          php scripts/instalar.php | tee /tmp/instalar2.log
+          grep -q "activación de propietario pendiente" /tmp/instalar2.log
+          test "$(mysql -h 127.0.0.1 -P 3306 -uroot -proot -N -e 'SELECT COUNT(*) FROM appsalon_ci_install_test.colaboradores')" = "1"
+          mysql -h 127.0.0.1 -P 3306 -uroot -proot -e "DROP DATABASE appsalon_ci_install_test"
+
       - name: Ejecutar suite completa de PHPUnit (sin caché y orden aleatorio)
         run: php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --order-by=random --colors=never
 
@@ -85,6 +98,7 @@ jobs:
           docker run --rm appsalon-web-ci php -m | grep -i mbstring
           docker run --rm appsalon-web-ci php -m | grep -i mysqli
           docker run --rm appsalon-web-ci php -m | grep -i gd
+          docker run --rm appsalon-web-ci php -m | grep -i sodium
           docker run --rm appsalon-web-ci apache2ctl -M | grep rewrite_module
 
       - name: Recorrido E2E aislado en Apache, MySQL y SMTP mock
