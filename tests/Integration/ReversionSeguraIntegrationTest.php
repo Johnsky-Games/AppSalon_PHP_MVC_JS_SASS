@@ -11,7 +11,7 @@ use PHPUnit\Framework\TestCase;
  */
 final class ReversionSeguraIntegrationTest extends TestCase
 {
-    private const BDS = ['appsalon_identidad_rev_test', 'appsalon_identidad_rev2_test', 'appsalon_identidad_rev3_test', 'appsalon_identidad_revfresh_test'];
+    private const BDS = ['appsalon_identidad_rev_test', 'appsalon_identidad_rev2_test', 'appsalon_identidad_rev3_test', 'appsalon_identidad_revfresh_test', 'appsalon_identidad_rev022_test'];
     private const HASH_CLAVE = 'Cliente-Pass-12345';
     private const MIGRACIONES = ['016_clientes_membresia', '017_idempotencia_unicidad', '018_colaboradores_invitaciones'];
     private static string $raiz;
@@ -184,6 +184,24 @@ final class ReversionSeguraIntegrationTest extends TestCase
         $this->assertStringContainsString('--respaldo=', $r['out']);
         $this->assertStringContainsString('No se modificó ninguna tabla', $r['out']);
         $this->assertSame($antes, $this->estado($bd), 'down bloqueado no debe tocar ni una tabla ni la tabla de control');
+    }
+
+    public function test_la_022_solo_bloquea_con_datos_de_negocio_y_el_retrollenado_no_cuenta(): void
+    {
+        $bd = 'appsalon_identidad_rev022_test';
+        self::crearBd($bd);
+        // Solo el retro-llenado de la migración (versión 1 histórica): revertir no destruye nada de negocio.
+        $r = self::migrar($bd, 'down', '--simular');
+        $this->assertStringNotContainsString('022_crm_auditoria_consentimiento_homonimos', $r['out'], $r['out']);
+        // Una versión publicada por el equipo es dato de negocio: se bloquea y el rollback SQL también se niega.
+        $this->sql($bd, "INSERT INTO consentimiento_versiones (proposito, version, texto, texto_hash, vigente_desde, es_historica, creado_en)
+            VALUES ('marketing_email', 2, 'Texto nuevo', '" . str_repeat('d', 64) . "', UTC_TIMESTAMP(), 0, UTC_TIMESTAMP())");
+        $antes = $this->estado($bd);
+        $r = self::migrar($bd, 'down');
+        $this->assertSame(2, $r['exit'], $r['out']);
+        $this->assertStringContainsString('022_crm_auditoria_consentimiento_homonimos', $r['out']);
+        $this->assertStringContainsString('versiones de consentimiento publicadas', $r['out']);
+        $this->assertSame($antes, $this->estado($bd));
     }
 
     public function test_simular_informa_sin_modificar_y_las_opciones_invalidas_se_rechazan(): void

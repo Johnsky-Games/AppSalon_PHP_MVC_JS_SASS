@@ -122,6 +122,24 @@ class NotificacionCitaServiceTest extends TestCase
         $this->assertStringNotContainsString("\n", $remitenteInyectado['nombre']);
     }
 
+    public function testLaConfirmacionDeUnaReasignacionDiceQueCambioElProfesionalYEscapaLosNombres(): void
+    {
+        $service = new NotificacionCitaService();
+        $payload = [
+            'cita_id' => 7, 'fecha' => '2026-11-20', 'hora_inicio' => '11:30', 'hora_fin' => '12:30',
+            'cliente_nombre' => 'Ana', 'profesional_nombre' => 'Valeria <b>Castro</b>', 'profesional_anterior' => 'Luis & Co',
+            'reasignada' => true, 'total_formateado' => '60.00', 'servicios' => [],
+        ];
+        $res = $service->construirContenidoHtml(NotificacionCita::TIPO_CONFIRMACION, $payload);
+        $this->assertStringContainsString('cambió de profesional', $res['html']);
+        $this->assertStringContainsString('Luis &amp; Co', $res['html']);
+        $this->assertStringContainsString('Valeria &lt;b&gt;Castro&lt;/b&gt;', $res['html']);
+        $this->assertStringNotContainsString('ha sido registrada exitosamente', $res['html']);
+        unset($payload['reasignada']);
+        $normal = $service->construirContenidoHtml(NotificacionCita::TIPO_CONFIRMACION, $payload);
+        $this->assertStringContainsString('ha sido registrada exitosamente', $normal['html']);
+    }
+
     public function testConstruirContenidoHtmlEscapaCaracteresEspecialesEnConfirmacionCancelacionYRecordatorio(): void
     {
         $_ENV['APP_URL'] = 'javascript:alert(document.domain)';

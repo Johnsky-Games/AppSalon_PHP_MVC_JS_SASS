@@ -713,6 +713,13 @@ class NotificacionCitaService
                 'boton' => 'Ver mis citas',
                 'nota' => 'Puedes consultar o gestionar tus citas desde tu cuenta. Las horas corresponden a la zona horaria de la agenda del salón (Ecuador).',
             ];
+            if (!empty($payload['reasignada'])) {
+                $anterior = trim((string)($payload['profesional_anterior'] ?? ''));
+                $mensaje['categoria'] = 'CAMBIO DE PROFESIONAL';
+                $mensaje['titulo'] = "Tu cita #{$citaId} cambió de profesional";
+                $mensaje['preheader'] = "Tu cita #{$citaId} del {$fecha} ahora la atiende {$profNombreRaw}.";
+                $mensaje['parrafos'] = [($anterior !== '' ? "Tu cita pasó de {$anterior} a {$profNombreRaw}." : "Tu cita ahora la atiende {$profNombreRaw}.") . ' La fecha, la hora y los servicios no cambian.'];
+            }
         }
 
         $mensaje['nombre'] = $clienteNombre;
