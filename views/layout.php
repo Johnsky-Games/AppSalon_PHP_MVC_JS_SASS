@@ -7,28 +7,49 @@ try {
     $uiAjustes = (new \Repositories\CrecimientoRepository())->ajustes();
     $uiNombreComercial = trim((string)($uiAjustes['nombre_comercial'] ?? '')) ?: $uiNombreComercial;
     $uiContacto = trim((string)($uiAjustes['contacto'] ?? ''));
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        $_SESSION['ui_empresa'] = ['nombre_comercial' => $uiNombreComercial, 'contacto' => $uiContacto];
+    }
 } catch (\Throwable $e) { /* La identidad predeterminada permite renderizar ante fallo de consulta. */ }
-$uiRuta = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
-$uiEnlaces = [['/perfil', 'Mi Perfil', 'users']];
-if (puede('agenda.gestionar')) $uiEnlaces[] = ['/admin', 'Ver Citas', 'calendar'];
-if (puede('agenda.gestionar') || puede('agenda.ver_propia')) $uiEnlaces[] = ['/agenda', 'Agenda', 'calendar'];
+$uiRuta = rtrim(parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/', '/') ?: '/';
+$uiRol = $uiAutenticado ? rol_actual() : 'cliente';
+$uiGestion = $uiAutenticado && $uiRol !== 'cliente';
+$uiDia = [];
+$uiServicios = [];
+$uiNegocio = [];
+$uiCuenta = [['/perfil', 'Mi Perfil', 'users']];
+if (puede('agenda.gestionar')) $uiDia[] = ['/admin', 'Ver Citas', 'calendar'];
+if (puede('agenda.gestionar') || puede('agenda.ver_propia')) $uiDia[] = ['/agenda', 'Agenda', 'calendar'];
 if (puede('servicios.gestionar')) {
-    $uiEnlaces[] = ['/servicios', 'Servicios', 'sparkles'];
-    $uiEnlaces[] = ['/servicios/crear', 'Nuevo Servicio', 'plus'];
+    $uiServicios[] = ['/servicios', 'Servicios', 'sparkles'];
+    $uiServicios[] = ['/servicios/crear', 'Nuevo Servicio', 'plus'];
 }
+if (puede('profesionales.gestionar')) $uiServicios[] = ['/profesionales', 'Profesionales', 'users'];
+if (puede('equipo.gestionar')) $uiServicios[] = ['/admin/equipo', 'Equipo y Permisos', 'users'];
 foreach ([
-    ['profesionales.gestionar','/profesionales','Profesionales','users'],
-    ['equipo.gestionar','/admin/equipo','Equipo y Permisos','users'],
     ['finanzas.gestionar','/admin/finanzas','Caja y Cobros','chart'],
     ['inventario.gestionar','/admin/inventario','Inventario','check'],
     ['reportes.ver','/admin/reportes','Ver Reportes','chart'],
     ['marketing.gestionar','/admin/crecimiento','Clientes y Fidelidad','sparkles'],
-    ['ajustes.gestionar','/admin/ajustes','Ajustes','check'],
-] as [$permiso,$href,$texto,$icono]) if (puede($permiso)) $uiEnlaces[] = [$href,$texto,$icono];
-if (!$uiAdmin && rol_actual() === 'cliente') {
-    $uiEnlaces[] = ['/cita','Reservar Cita','calendar'];
-    $uiEnlaces[] = ['/mis-citas','Mis Citas','check'];
-    $uiEnlaces[] = ['/mi-bienestar','Mi Bienestar','sparkles'];
+] as [$permiso,$href,$texto,$icono]) if (puede($permiso)) $uiNegocio[] = [$href,$texto,$icono];
+if (puede('ajustes.gestionar')) $uiCuenta[] = ['/admin/ajustes', 'Ajustes', 'check'];
+if (!$uiAdmin && $uiRol === 'cliente') {
+    $uiDia[] = ['/cita', 'Reservar Cita', 'calendar'];
+    $uiDia[] = ['/mis-citas', 'Mis Citas', 'check'];
+    $uiCuenta[] = ['/mi-bienestar', 'Mi Bienestar', 'sparkles'];
+}
+$uiGrupos = array_filter([
+    ['titulo' => $uiGestion ? 'Tu día' : 'Tus citas', 'enlaces' => $uiDia],
+    ['titulo' => 'Servicios y equipo', 'enlaces' => $uiServicios],
+    ['titulo' => 'Gestión comercial', 'enlaces' => $uiNegocio],
+    ['titulo' => $uiGestion ? 'Cuenta y ajustes' : 'Tu cuenta', 'enlaces' => $uiCuenta],
+], static fn(array $grupo): bool => !empty($grupo['enlaces']));
+$uiInicio = $uiDia[0][0] ?? '/perfil';
+// La coincidencia más específica evita marcar dos secciones en las vistas de creación.
+$uiEnlaceActivo = '';
+foreach ($uiGrupos as $uiGrupo) foreach ($uiGrupo['enlaces'] as [$uiHref]) {
+    $uiCoincide = $uiRuta === $uiHref || ($uiHref !== '/admin' && str_starts_with($uiRuta, $uiHref . '/'));
+    if ($uiCoincide && strlen($uiHref) > strlen($uiEnlaceActivo)) $uiEnlaceActivo = $uiHref;
 }
 $uiIconos = [
     'calendar' => '<rect x="3" y="5" width="18" height="16" rx="3"/><path d="M16 3v4M8 3v4M3 11h18m-13 4h2m4 0h2"/>',
@@ -56,23 +77,34 @@ $uiIconos = [
     <div class="contenedor-app">
         <?php if ($uiAutenticado) { ?>
         <aside class="ui-sidebar" aria-label="Navegación principal">
-            <a class="ui-brand" href="<?php echo $uiAdmin ? '/admin' : '/cita'; ?>" aria-label="App Salón, inicio">
+            <div class="ui-sidebar-header">
+            <a class="ui-brand" href="<?php echo s($uiInicio); ?>" aria-label="<?php echo s($uiNombreComercial); ?>, inicio">
                 <span class="ui-brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 3c0 6-9 6-9 12a9 9 0 0 0 18 0c0-6-9-6-9-12Z"/><path d="M12 10v11m-5-7 5 4 5-4"/></svg></span>
                 <span><?php echo s($uiNombreComercial); ?><small>El arte de cuidarte</small></span>
             </a>
-            <p class="ui-nav-label"><?php echo $uiAdmin ? 'TU ESPACIO DE GESTIÓN' : 'TU MOMENTO, A TU RITMO'; ?></p>
-            <button class="ui-nav-toggle" type="button" data-nav-toggle aria-expanded="false" aria-controls="ui-main-navigation">Menú</button>
+            <button class="ui-nav-toggle" type="button" data-nav-toggle aria-expanded="false" aria-controls="ui-navigation-panel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg><span data-nav-toggle-label>Menú</span></button>
+            </div>
+            <div class="ui-sidebar-scroll" id="ui-navigation-panel">
+            <p class="ui-nav-label"><?php echo $uiGestion ? 'TU ESPACIO DE GESTIÓN' : 'TU MOMENTO, A TU RITMO'; ?></p>
             <nav class="ui-main-nav" id="ui-main-navigation" aria-label="Secciones">
-                <?php foreach ($uiEnlaces as [$uiHref, $uiTexto, $uiIcono]) {
-                    $uiActiva = $uiRuta === $uiHref || ($uiHref === '/profesionales' && str_starts_with($uiRuta, '/profesionales/')) || ($uiHref === '/servicios' && $uiRuta === '/servicios/actualizar');
+                <?php foreach ($uiGrupos as $uiGrupoIndice => $uiGrupo) { ?>
+                <section class="ui-nav-group" aria-labelledby="ui-nav-group-<?php echo $uiGrupoIndice; ?>">
+                <h2 class="ui-nav-group-title" id="ui-nav-group-<?php echo $uiGrupoIndice; ?>"><?php echo s($uiGrupo['titulo']); ?></h2>
+                <ul class="ui-nav-list">
+                <?php foreach ($uiGrupo['enlaces'] as [$uiHref, $uiTexto, $uiIcono]) {
+                    $uiActiva = $uiEnlaceActivo === $uiHref;
                 ?>
-                <a href="<?php echo s($uiHref); ?>" class="ui-nav-link<?php echo $uiActiva ? ' is-active' : ''; ?>"<?php echo $uiActiva ? ' aria-current="page"' : ''; ?>>
+                <li><a href="<?php echo s($uiHref); ?>" class="ui-nav-link<?php echo $uiActiva ? ' is-active' : ''; ?>"<?php echo $uiActiva ? ' aria-current="page"' : ''; ?>>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><?php echo $uiIconos[$uiIcono]; ?></svg>
                     <span><?php echo s($uiTexto); ?></span>
-                </a>
+                </a></li>
+                <?php } ?>
+                </ul>
+                </section>
                 <?php } ?>
             </nav>
-            <div class="ui-sidebar-note"><span aria-hidden="true">✦</span><strong>Todo empieza por ti.</strong><p><?php echo $uiAdmin ? 'Organiza el día. Cuida cada detalle. Haz que cada visita cuente.' : 'Elige tu servicio favorito y encuentra el momento perfecto.'; ?></p></div>
+            <div class="ui-sidebar-note"><span aria-hidden="true">✦</span><strong>Todo empieza por ti.</strong><p><?php echo $uiGestion ? 'Organiza el día. Cuida cada detalle. Haz que cada visita cuente.' : 'Elige tu servicio favorito y encuentra el momento perfecto.'; ?></p></div>
+            </div>
             <p class="ui-sidebar-footer">Belleza, tiempo y bienestar.</p>
         </aside>
         <?php } else { ?>

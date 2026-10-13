@@ -469,7 +469,9 @@ class PagoIdempotenciaSeguridadIntegrationTest extends TestCase
         $this->assertIsArray($jsonRespuesta);
         $this->assertSame(PagoService::STATUS_ERROR, $jsonRespuesta['status']);
         $this->assertSame('PAYMENT_CONFIGURATION_ERROR', $jsonRespuesta['codigo_error']);
-        $this->assertStringContainsString('MockPaymentGateway está estrictamente prohibido en entorno de producción', $jsonRespuesta['error']);
+        $this->assertSame('El servicio de pagos no está disponible temporalmente. Intenta nuevamente más tarde.', $jsonRespuesta['error']);
+        $this->assertStringNotContainsString('MockPaymentGateway', $salida);
+        $this->assertStringNotContainsString('PAYMENT_WEBHOOK_SECRET', $salida);
     }
 
     /**

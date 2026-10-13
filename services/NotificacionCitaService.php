@@ -3,6 +3,7 @@
 namespace Services;
 
 use Classes\Email;
+use Classes\EmailTemplate;
 use Model\NotificacionCita;
 use Repositories\CitaRepository;
 use Repositories\NotificacionCitaRepository;
@@ -562,7 +563,8 @@ class NotificacionCitaService
                     'reintento' => true,
                     'intento_numero' => $candidata->intentos + 1,
                 ],
-                $this->transport
+                $this->transport,
+                $mensaje['texto']
             );
 
             $instanteFinUtc = $this->obtenerAhoraUtc()->format('Y-m-d H:i:s');
@@ -633,16 +635,17 @@ class NotificacionCitaService
      * @param string $tipo `'confirmacion'`, `'cancelacion'` o `'recordatorio'`
      * @param array<string, mixed> $payload
      * @param string|null $asuntoPredefinido
-     * @return array{asunto: string, html: string, enlace: string}
+     * @param EmailTemplate|null $plantilla Permite vistas previas aisladas del negocio real.
+     * @return array{asunto: string, html: string, texto: string, enlace: string}
      */
-    public function construirContenidoHtml(string $tipo, array $payload, ?string $asuntoPredefinido = null): array
+    public function construirContenidoHtml(string $tipo, array $payload, ?string $asuntoPredefinido = null, ?EmailTemplate $plantilla = null): array
     {
         $appUrl = Email::resolverAppUrl();
         $enlaceCitas = "{$appUrl}/cita";
 
         $citaId = (int)($payload['cita_id'] ?? 0);
-        $clienteNombre = htmlspecialchars((string)($payload['cliente_nombre'] ?? 'Cliente'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-        $fecha = htmlspecialchars((string)($payload['fecha'] ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        $clienteNombre = (string)($payload['cliente_nombre'] ?? 'Cliente');
+        $fecha = (string)($payload['fecha'] ?? '');
 
         $horaInicioRaw = trim((string)($payload['hora_inicio'] ?? ($payload['hora'] ?? '')));
         $horaFinRaw = trim((string)($payload['hora_fin'] ?? ''));
@@ -658,34 +661,11 @@ class NotificacionCitaService
         } else {
             $horarioTexto = $horaInicioRaw !== '' ? $horaInicioRaw : 'Horario registrado';
         }
-        $horarioEscapado = htmlspecialchars($horarioTexto, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-
         $profNombreRaw = isset($payload['profesional_nombre']) && trim((string)$payload['profesional_nombre']) !== ''
             ? trim((string)$payload['profesional_nombre'])
             : 'Asignación general del salón';
-        $profEscapado = htmlspecialchars($profNombreRaw, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-
-        $totalFormateado = htmlspecialchars(
-            (string)($payload['total_formateado'] ?? number_format((float)($payload['total'] ?? 0), 2, '.', '')),
-            ENT_QUOTES | ENT_SUBSTITUTE,
-            'UTF-8'
-        );
-
+        $totalFormateado = (string)($payload['total_formateado'] ?? number_format((float)($payload['total'] ?? 0), 2, '.', ''));
         $servicios = is_array($payload['servicios'] ?? null) ? $payload['servicios'] : [];
-        $itemsHtml = '';
-        foreach ($servicios as $srv) {
-            $srvNombre = htmlspecialchars((string)($srv['nombre'] ?? 'Servicio'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-            $srvPrecio = htmlspecialchars((string)($srv['precio'] ?? '0.00'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-            $srvDur = isset($srv['duracion_minutos']) && (int)$srv['duracion_minutos'] > 0
-                ? ' (' . (int)$srv['duracion_minutos'] . ' min)'
-                : '';
-            $itemsHtml .= "<li>{$srvNombre}{$srvDur} — \${$srvPrecio}</li>";
-        }
-        if ($itemsHtml === '') {
-            $itemsHtml = '<li>Servicios registrados en la reserva</li>';
-        }
-
-        $enlaceEscapado = htmlspecialchars($enlaceCitas, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 
         if ($tipo === NotificacionCita::TIPO_CANCELACION) {
             $asunto = $asuntoPredefinido !== null && trim($asuntoPredefinido) !== ''
@@ -695,66 +675,63 @@ class NotificacionCitaService
                 ? 'por la administración del salón'
                 : 'a solicitud tuya';
 
-            $html = "<html><body>"
-                . "<h2>Cita #{$citaId} Cancelada — AppSalon</h2>"
-                . "<p>Hola <strong>{$clienteNombre}</strong>,</p>"
-                . "<p>Te informamos que tu cita <strong>#{$citaId}</strong> ha sido cancelada {$canceladoPor}.</p>"
-                . "<ul>"
-                . "<li><strong>Fecha:</strong> {$fecha}</li>"
-                . "<li><strong>Horario:</strong> {$horarioEscapado}</li>"
-                . "<li><strong>Profesional:</strong> {$profEscapado}</li>"
-                . "</ul>"
-                . "<p><strong>Servicios de la cita cancelada:</strong></p>"
-                . "<ul>{$itemsHtml}</ul>"
-                . "<p><strong>Total de referencia:</strong> \${$totalFormateado}</p>"
-                . "<p>Si deseas programar una nueva cita, puedes hacerlo en: <a href='{$enlaceEscapado}'>Agendar en AppSalon</a></p>"
-                . "</body></html>";
+            $mensaje = [
+                'categoria' => 'ACTUALIZACIÓN DE TU RESERVA',
+                'titulo' => "Cita #{$citaId} Cancelada",
+                'preheader' => "Tu cita #{$citaId} fue cancelada. Consulta los detalles y agenda una nueva visita.",
+                'parrafos' => ["Tu cita #{$citaId} ha sido cancelada {$canceladoPor}. Si deseas volver a visitarnos, puedes elegir una nueva fecha desde tu cuenta."],
+                'etiqueta_servicios' => 'Servicios de la cita cancelada',
+                'etiqueta_total' => 'Total de referencia de la cita cancelada',
+                'boton' => 'Agendar una nueva cita',
+                'nota' => 'Este correo confirma la cancelación de la reserva. Si necesitas ayuda, contacta con la administración del salón.',
+            ];
         } elseif ($tipo === NotificacionCita::TIPO_RECORDATORIO) {
             $horaCorta = substr($horaInicioRaw, 0, 5);
             $asunto = $asuntoPredefinido !== null && trim($asuntoPredefinido) !== ''
                 ? $asuntoPredefinido
-                : "Recordatorio de tu cita #{$citaId} en AppSalon ({$payload['fecha']} {$horaCorta})";
-
-            $html = "<html><body>"
-                . "<h2>Recordatorio de tu próxima cita #{$citaId} — AppSalon</h2>"
-                . "<p>Hola <strong>{$clienteNombre}</strong>,</p>"
-                . "<p>Te recordamos que tienes una cita próxima programada en AppSalon:</p>"
-                . "<ul>"
-                . "<li><strong>Reserva:</strong> #{$citaId}</li>"
-                . "<li><strong>Fecha:</strong> {$fecha}</li>"
-                . "<li><strong>Horario:</strong> {$horarioEscapado}</li>"
-                . "<li><strong>Profesional:</strong> {$profEscapado}</li>"
-                . "</ul>"
-                . "<p><strong>Servicios reservados:</strong></p>"
-                . "<ul>{$itemsHtml}</ul>"
-                . "<p><strong>Total:</strong> \${$totalFormateado}</p>"
-                . "<p>Puedes consultar o gestionar tus citas en: <a href='{$enlaceEscapado}'>Ver mis citas</a></p>"
-                . "</body></html>";
+                : "Recordatorio de tu cita #{$citaId} en AppSalon ({$fecha} {$horaCorta})";
+            $mensaje = [
+                'categoria' => 'TU VISITA ESTÁ CERCA',
+                'titulo' => "Recordatorio de tu próxima cita #{$citaId}",
+                'preheader' => "Te esperamos el {$fecha} a las {$horaCorta}. Revisa tu reserva antes de tu visita.",
+                'parrafos' => ['Tu próxima visita al salón está cerca. Aquí tienes la fecha, el horario y los servicios de tu reserva para organizarte con tiempo.'],
+                'etiqueta_servicios' => 'Servicios reservados',
+                'boton' => 'Ver mis citas',
+                'nota' => 'Si tus planes cambiaron, consulta las opciones disponibles desde tu cuenta. Las horas corresponden a la zona horaria de la agenda del salón (Ecuador).',
+            ];
         } else {
             $asunto = $asuntoPredefinido !== null && trim($asuntoPredefinido) !== ''
                 ? $asuntoPredefinido
                 : "Confirmación de tu cita #{$citaId} en AppSalon";
 
-            $html = "<html><body>"
-                . "<h2>Confirmación de Reserva #{$citaId} — AppSalon</h2>"
-                . "<p>Hola <strong>{$clienteNombre}</strong>,</p>"
-                . "<p>Tu cita ha sido registrada exitosamente con el siguiente detalle:</p>"
-                . "<ul>"
-                . "<li><strong>Reserva:</strong> #{$citaId}</li>"
-                . "<li><strong>Fecha:</strong> {$fecha}</li>"
-                . "<li><strong>Horario:</strong> {$horarioEscapado}</li>"
-                . "<li><strong>Profesional:</strong> {$profEscapado}</li>"
-                . "</ul>"
-                . "<p><strong>Servicios seleccionados:</strong></p>"
-                . "<ul>{$itemsHtml}</ul>"
-                . "<p><strong>Total:</strong> \${$totalFormateado}</p>"
-                . "<p>Puedes consultar o gestionar tus citas en: <a href='{$enlaceEscapado}'>Ver mis citas</a></p>"
-                . "</body></html>";
+            $mensaje = [
+                'categoria' => 'TU RESERVA ESTÁ CONFIRMADA',
+                'titulo' => "Confirmación de Reserva #{$citaId}",
+                'preheader' => "Tu cita #{$citaId} está confirmada para el {$fecha}. Todos los detalles en un solo lugar.",
+                'parrafos' => ['Tu cita ha sido registrada exitosamente. Guarda este resumen y consulta tu cuenta cuando necesites revisar tu próxima visita.'],
+                'etiqueta_servicios' => 'Servicios seleccionados',
+                'boton' => 'Ver mis citas',
+                'nota' => 'Puedes consultar o gestionar tus citas desde tu cuenta. Las horas corresponden a la zona horaria de la agenda del salón (Ecuador).',
+            ];
         }
+
+        $mensaje['nombre'] = $clienteNombre;
+        $mensaje['detalles'] = [
+            'Reserva' => "#{$citaId}",
+            'Fecha' => $fecha,
+            'Horario' => $horarioTexto,
+            'Profesional' => $profNombreRaw,
+        ];
+        $mensaje['servicios'] = $servicios;
+        $mensaje['total'] = '$' . $totalFormateado;
+        $mensaje['enlace'] = $enlaceCitas;
+        $mensaje['aviso'] = 'Recibiste este correo como parte de la gestión de tu reserva. Consulta tus preferencias de notificaciones desde tu perfil.';
+        $contenido = ($plantilla ?? new EmailTemplate())->render($mensaje);
 
         return [
             'asunto' => Email::sanearTextoCabecera($asunto, 180),
-            'html' => $html,
+            'html' => $contenido['html'],
+            'texto' => $contenido['texto'],
             'enlace' => $enlaceCitas
         ];
     }
@@ -1021,7 +998,8 @@ class NotificacionCitaService
                 'enlace' => $mensajeFinal['enlace'],
                 'intento_numero' => $notificacion->intentos,
             ],
-            $this->transport
+            $this->transport,
+            $mensajeFinal['texto']
         );
 
         $instanteFinUtc = $this->obtenerAhoraUtc()->format('Y-m-d H:i:s');

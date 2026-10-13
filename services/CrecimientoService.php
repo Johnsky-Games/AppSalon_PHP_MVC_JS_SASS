@@ -101,6 +101,19 @@ class CrecimientoService
     public function guardarAjustes(int $autor, array $datos): void
     {
         $nombre=$this->texto($datos['nombre_comercial']??'',120); $contacto=$this->texto($datos['contacto']??'',200,false); $beneficio=$this->texto($datos['beneficio_fidelidad']??'',300);
-        $this->repo->guardarAjustes($autor,['nombre_comercial'=>$nombre,'contacto'=>$contacto,'beneficio_fidelidad'=>$beneficio]);
+        // Preservar datos de contacto si un cliente anterior no envía los nuevos campos.
+        $actuales=$this->repo->ajustes();
+        $valores=['nombre_comercial'=>$nombre,'contacto'=>$contacto,'beneficio_fidelidad'=>$beneficio];
+        foreach (['email_contacto'=>254,'telefono'=>60,'direccion'=>300] as $clave=>$max) {
+            $valor=$this->texto($datos[$clave]??($actuales[$clave]??''),$max,false);
+            if (preg_match('/[\r\n\t]/',$valor)) {
+                throw new \InvalidArgumentException('La información de contacto debe estar en una sola línea.');
+            }
+            if ($clave==='email_contacto' && $valor!=='' && filter_var($valor,FILTER_VALIDATE_EMAIL)===false) {
+                throw new \InvalidArgumentException('Introduce un correo de contacto válido.');
+            }
+            $valores[$clave]=$valor;
+        }
+        $this->repo->guardarAjustes($autor,$valores);
     }
 }

@@ -1,6 +1,12 @@
 <?php
 
-require_once __DIR__ . '/../includes/app.php';
+// El renderer de emergencia se carga antes que las dependencias y la base de datos.
+require_once __DIR__ . '/../includes/funciones.php';
+require_once __DIR__ . '/../classes/ErrorResponse.php';
+require_once __DIR__ . '/../classes/ServiceUnavailableException.php';
+ini_set('display_errors', '0');
+$requestBufferLevel = ob_get_level();
+ob_start();
 
 use Controllers\AdminController;
 use Controllers\CitaController;
@@ -11,6 +17,9 @@ use Controllers\ProfesionalController;
 use Controllers\ReporteController;
 use Controllers\ServicioController;
 use MVC\Router;
+
+try {
+require_once __DIR__ . '/../includes/app.php';
 
 $router = new Router();
 
@@ -105,10 +114,16 @@ $router->get('/admin/ajustes', [\Controllers\AjustesController::class, 'index'])
 $router->post('/admin/ajustes', [\Controllers\AjustesController::class, 'index']);
 
 // Comprueba y valida las rutas, que existan y les asigna las funciones del Controlador
-try {
     emitir_cabeceras_seguridad();
     $router->comprobarRutas();
 } catch (\AppTerminationException $e) {
-    // Terminación controlada tras emisión de encabezados o respuesta
-    exit;
+    // Redirecciones y respuestas controladas ya fueron emitidas por el controlador.
+} catch (\Throwable $e) {
+    while (ob_get_level() > $requestBufferLevel) {
+        ob_end_clean();
+    }
+    \Classes\ErrorResponse::fromThrowable($e);
+}
+while (ob_get_level() > $requestBufferLevel) {
+    ob_end_flush();
 }

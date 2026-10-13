@@ -102,4 +102,39 @@ class EmailTest extends TestCase
 
         $this->assertCount(0, Email::$emailsEnviados, 'No deben registrarse como enviados si el transporte falló');
     }
+
+    public function testInvitacionConservaTokenSeguroYExplicaActivacionDelEquipo(): void
+    {
+        $capturado = null;
+        Email::setTransport(static function (PHPMailer $mailer, string $proposito) use (&$capturado): bool {
+            $capturado = $mailer;
+            return $proposito === 'invitacion';
+        });
+        $token = 'token+con/espacio &comillas"';
+        $email = new Email('María <script>alert(1)</script>', 'maria@dominio.com', $token);
+
+        $this->assertTrue($email->enviarInvitacion());
+        $this->assertSame('Tu invitación al equipo', $capturado->Subject);
+        $this->assertSame('invitacion', Email::$emailsEnviados[0]['proposito']);
+        $this->assertStringContainsString('/recuperar?token=' . rawurlencode($token), $capturado->Body);
+        $this->assertStringContainsString('/recuperar?token=' . rawurlencode($token), $capturado->AltBody);
+        $this->assertStringContainsString('Establecer mi contraseña', $capturado->AltBody);
+        $this->assertStringContainsString('herramientas disponibles para tu rol', $capturado->AltBody);
+        $this->assertStringNotContainsString('<script>', $capturado->Body);
+        $this->assertStringContainsString('&lt;script&gt;alert(1)&lt;/script&gt;', $capturado->Body);
+    }
+
+    public function testConfirmacionYRecuperacionIncluyenTextoPlanoLegibleYEnlacePersonal(): void
+    {
+        $email = new Email('Juan Pérez', 'juan@dominio.com', 'token123');
+        foreach (['confirmacion' => '/confirmar-cuenta?token=token123', 'recuperacion' => '/recuperar?token=token123'] as $proposito => $ruta) {
+            $mailer = $email->prepararMailer($proposito, 'https://salon.example' . $ruta);
+            $this->assertStringContainsString('Juan Pérez', $mailer->AltBody);
+            $this->assertStringContainsString('juan@dominio.com', $mailer->AltBody);
+            $this->assertStringContainsString('https://salon.example' . $ruta, $mailer->AltBody);
+            $this->assertStringNotContainsString('font-size', $mailer->AltBody);
+            $this->assertStringNotContainsString('<html', $mailer->AltBody);
+            $this->assertSame('UTF-8', $mailer->CharSet);
+        }
+    }
 }

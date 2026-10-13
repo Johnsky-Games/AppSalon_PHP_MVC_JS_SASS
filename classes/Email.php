@@ -170,8 +170,9 @@ class Email
      * Construye y configura la instancia completa de PHPMailer con remitente, destinatario,
      * asunto y cuerpo HTML para el propósito especificado.
      * Permite inspección y validación del mensaje real antes o durante el despacho.
+     * La plantilla opcional permite vistas previas con ajustes ficticios sin usar la BD.
      */
-    public function prepararMailer(string $proposito, string $enlace): PHPMailer
+    public function prepararMailer(string $proposito, string $enlace, ?EmailTemplate $plantilla = null): PHPMailer
     {
         $email = new PHPMailer(true);
         $email->isSMTP();
@@ -190,23 +191,47 @@ class Email
         $email->isHTML(true);
         $email->CharSet = 'UTF-8';
 
-        if ($proposito === 'confirmacion') {
-            $email->Subject = 'Confirma tu cuenta';
-            $contenido = '<html>';
-            $contenido .= '<p><strong> Hola ' . htmlspecialchars((string)$this->nombre, ENT_QUOTES, 'UTF-8') . ", </strong> confirma tu cuenta de App Salon haciendo click en el siguiente enlace.</p>";
-            $contenido .= "<p>Presiona aquí: <a href='" . htmlspecialchars($enlace, ENT_QUOTES, 'UTF-8') . "'>Confirmar Cuenta</a></p>";
-            $contenido .= '<p>Si tu no solicitaste esta cuenta, puedes ignorar este mensaje.</p>';
-            $contenido .= '</html>';
-            $email->Body = $contenido;
-        } elseif ($proposito === 'recuperacion') {
-            $email->Subject = 'Reestablece tu password';
-            $contenido = '<html>';
-            $contenido .= '<p><strong> Hola ' . htmlspecialchars((string)$this->nombre, ENT_QUOTES, 'UTF-8') . ", </strong> Has solicitado reestablecer tu password. Sigue el siguiente enlace para hacerlo.</p>";
-            $contenido .= "<p>Presiona aquí: <a href='" . htmlspecialchars($enlace, ENT_QUOTES, 'UTF-8') . "'>Reestablecer Password</a></p>";
-            $contenido .= '<p>Si tu no solicitaste esta cuenta, puedes ignorar este mensaje.</p>';
-            $contenido .= '</html>';
-            $email->Body = $contenido;
+        $mensajes = [
+            'confirmacion' => [
+                'asunto' => 'Confirma tu cuenta',
+                'categoria' => 'BIENVENIDO A TU SALÓN',
+                'titulo' => 'Tu próxima visita empieza aquí',
+                'preheader' => 'Confirma tu correo para activar tu cuenta y gestionar tus reservas.',
+                'parrafos' => ['Gracias por crear tu cuenta. Solo falta confirmar tu correo para acceder y gestionar tus reservas en un mismo lugar.'],
+                'boton' => 'Confirmar mi cuenta',
+                'nota' => 'Este enlace es personal y de un solo uso. Si no creaste esta cuenta, puedes ignorar este mensaje.',
+            ],
+            'recuperacion' => [
+                'asunto' => 'Reestablece tu password',
+                'categoria' => 'ACCESO SEGURO',
+                'titulo' => 'Recupera el acceso a tu cuenta',
+                'preheader' => 'Crea una nueva contraseña de forma segura con este enlace personal.',
+                'parrafos' => ['Recibimos una solicitud para restablecer tu contraseña. Abre el siguiente enlace y elige una nueva para volver a ingresar.'],
+                'boton' => 'Restablecer mi contraseña',
+                'nota' => 'Si no solicitaste este cambio, ignora el mensaje: tu contraseña seguirá siendo la misma. Por seguridad, no compartas este enlace.',
+            ],
+            'invitacion' => [
+                'asunto' => 'Tu invitación al equipo',
+                'categoria' => 'BIENVENIDO AL EQUIPO',
+                'titulo' => 'Tu espacio de trabajo está listo',
+                'preheader' => 'Activa tu acceso al equipo estableciendo tu propia contraseña.',
+                'parrafos' => ['La administración del salón te ha invitado a formar parte de su equipo. Establece tu contraseña para activar tu acceso y consultar las herramientas disponibles para tu rol.'],
+                'boton' => 'Establecer mi contraseña',
+                'nota' => 'Este enlace es personal y de un solo uso. Si no esperabas esta invitación, contacta con la administración del salón antes de continuar.',
+            ],
+        ];
+        if (!isset($mensajes[$proposito])) {
+            throw new \InvalidArgumentException('Propósito de correo no válido.');
         }
+        $mensaje = $mensajes[$proposito];
+        $email->Subject = $mensaje['asunto'];
+        $mensaje['nombre'] = (string)$this->nombre;
+        $mensaje['detalles'] = ['Tu cuenta' => (string)$this->email];
+        $mensaje['enlace'] = $enlace;
+        $mensaje['aviso'] = 'Recibiste este correo porque se solicitó una acción relacionada con tu cuenta.';
+        $contenido = ($plantilla ?? new EmailTemplate())->render($mensaje);
+        $email->Body = $contenido['html'];
+        $email->AltBody = $contenido['texto'];
 
         return $email;
     }
@@ -243,7 +268,7 @@ class Email
         $email->CharSet = 'UTF-8';
         $email->Subject = $asuntoLimpio;
         $email->Body = $contenidoHtml;
-        $email->AltBody = $contenidoTexto ?? trim(strip_tags($contenidoHtml));
+        $email->AltBody = $contenidoTexto ?? EmailTemplate::textoDesdeHtml($contenidoHtml);
 
         return $email;
     }
@@ -280,6 +305,7 @@ class Email
      * @param string $contenidoHtml
      * @param array<string, mixed> $meta
      * @param callable|null $transportePersonalizado
+     * @param string|null $contenidoTexto Versión legible equivalente al contenido HTML.
      * @return array{exito: bool, error: ?string, mailer: ?PHPMailer}
      */
     public static function despacharNotificacionCita(
@@ -289,7 +315,8 @@ class Email
         string $asunto,
         string $contenidoHtml,
         array $meta = [],
-        ?callable $transportePersonalizado = null
+        ?callable $transportePersonalizado = null,
+        ?string $contenidoTexto = null
     ): array {
         $proposito = 'cita_' . $tipo;
 
@@ -298,7 +325,8 @@ class Email
                 $destinatarioEmail,
                 $destinatarioNombre,
                 $asunto,
-                $contenidoHtml
+                $contenidoHtml,
+                $contenidoTexto
             );
 
             $transporteActivo = $transportePersonalizado ?? self::$transport;
@@ -443,5 +471,13 @@ class Email
         $appUrl = self::resolverAppUrl();
         $enlace = "{$appUrl}/recuperar?token=" . rawurlencode((string)$this->token);
         return $this->despachar('recuperacion', $enlace);
+    }
+
+    /** Conserva el flujo seguro de establecimiento de contraseña para el colaborador invitado. */
+    public function enviarInvitacion(): bool
+    {
+        $appUrl = self::resolverAppUrl();
+        $enlace = "{$appUrl}/recuperar?token=" . rawurlencode((string)$this->token);
+        return $this->despachar('invitacion', $enlace);
     }
 }

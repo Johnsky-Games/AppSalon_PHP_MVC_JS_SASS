@@ -9,12 +9,18 @@ use Services\ProfileService;
 final class ProfileIntegrationTest extends TestCase
 {
     private \mysqli $db;
+    private ?\mysqli $previousDb;
     private int $id;
     private ProfileService $service;
     protected function setUp(): void
     {
-        $this->db = ActiveRecord::getDB();
+        // Cada caso posee su conexión: otro módulo puede cerrar la suya al terminar.
+        $this->previousDb = ActiveRecord::getDB();
+        $this->db = new \mysqli(getenv('DB_HOST') ?: 'appsalon-test-db', getenv('DB_USER') ?: 'root',
+            getenv('DB_PASS') ?: 'root', getenv('DB_NAME') ?: 'appsalon_test', (int)(getenv('DB_PORT') ?: 3306));
+        $this->db->set_charset('utf8mb4');
         validar_base_datos_prueba($this->db);
+        ActiveRecord::setDB($this->db);
         $email = 'perfil-' . bin2hex(random_bytes(6)) . '@test.local';
         $stmt = $this->db->prepare("INSERT INTO usuarios(nombre,apellido,email,password,telefono,admin,confirmado) VALUES ('Perfil','Prueba',?,'hash','0991234567','0','1')");
         $stmt->bind_param('s',$email); $stmt->execute(); $stmt->close();
@@ -24,6 +30,8 @@ final class ProfileIntegrationTest extends TestCase
     protected function tearDown(): void
     {
         $stmt = $this->db->prepare('DELETE FROM usuarios WHERE id=?'); $stmt->bind_param('i',$this->id); $stmt->execute(); $stmt->close();
+        ActiveRecord::setDB($this->previousDb);
+        $this->db->close();
     }
     private function datos(): array { return ['nombre'=>'Ana','apellido'=>'Mora','telefono'=>'0991234567','marketing_email'=>'1','recordatorios'=>'0','contacto_email'=>'1']; }
     public function testPreferenciasConsentimientoYAllowlistPersistenSinCambiarCuenta(): void

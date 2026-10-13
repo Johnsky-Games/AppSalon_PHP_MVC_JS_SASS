@@ -1,8 +1,18 @@
-<p class="ui-eyebrow">BIENVENIDO A APPSALÓN</p>
-<h1 class="nombre-pagina">Confirma tu Cuenta</h1>
-<p class="descripcion-pagina">Hemos enviado las instrucciones para confirmar la cuenta a tu E-mail.</p>
+<p class="ui-eyebrow">TU CUENTA, A UN PASO</p>
+<h1 class="nombre-pagina">Revisa tu correo</h1>
+<p class="descripcion-pagina">Confirma tu dirección de correo para empezar a reservar.</p>
 
-<div class="acciones">
-    <a href="/reenviar-confirmacion">¿No recibiste el correo? Reenviar confirmación</a>
-    <a href="/">Iniciar Sesión</a>
-</div>
+<section class="ui-state-card ui-state-card--success" aria-labelledby="confirmacion-pendiente-titulo">
+    <?php $uiEstadoIcono = 'mail'; include __DIR__ . '/../errores/icono.php'; ?>
+    <h2 id="confirmacion-pendiente-titulo">Tu próximo momento empieza aquí</h2>
+    <ol class="ui-state-steps">
+        <li>Busca el mensaje de confirmación en tu bandeja de entrada.</li>
+        <li>Abre el enlace del correo para activar tu cuenta.</li>
+        <li>Inicia sesión y elige el servicio que quieres reservar.</li>
+    </ol>
+    <p>Si no encuentras el mensaje, revisa la carpeta de correo no deseado o solicita otro enlace.</p>
+    <div class="ui-state-actions">
+        <a class="boton" href="/">Iniciar sesión</a>
+        <a class="boton ui-button-quiet" href="/reenviar-confirmacion">Reenviar correo</a>
+    </div>
+</section>

@@ -1,0 +1,61 @@
+.ui-error { background: #f5f7f5; }
+.ui-error-shell { width: min(100% - 4rem, 112rem); min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; margin-inline: auto; }
+.ui-error-header { display: flex; align-items: center; justify-content: space-between; gap: 2rem; padding-block: 3rem; }
+.ui-error-label { color: var(--ui-muted); font-size: 1rem; letter-spacing: .12em; }
+.ui-error-main { display: grid; place-items: center; flex: 1; padding-block: 3rem 5rem; }
+.ui-error-card { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); width: 100%; border-radius: 2.8rem; overflow: hidden; box-shadow: 0 16px 60px rgba(24,52,62,.07); background: #fff; border: 1px solid var(--ui-border); }
+.ui-error-art { position: relative; overflow: hidden; background: #123b42; color: #d4e8df; display: flex; flex-direction: column; justify-content: center; min-height: 38rem; padding: clamp(3rem, 5vw, 6rem); }
+.ui-error-orbit { position: absolute; width: 36rem; height: 36rem; border: 1px solid rgba(212,232,223,.16); border-radius: 50%; top: -15rem; right: -13rem; }
+.ui-error-orbit::after { content: ''; position: absolute; inset: 4rem; border: 1px solid rgba(212,232,223,.18); border-radius: 50%; }
+.ui-error-number { font-size: clamp(8rem, 10vw, 13rem); font-weight: 650; letter-spacing: -.07em; line-height: 1.1; position: relative; }
+.ui-error-art-caption { font-size: 1.4rem; line-height: 1.6; color: #b9d1cb; margin-top: 1.8rem; }
+.ui-error-spark { color: #e0b792; font-size: 4.5rem; position: absolute; bottom: 3rem; right: 3rem; }
+.ui-error-content { align-self: center; min-width: 0; padding: clamp(2.4rem, 4.5vw, 6rem); }
+.ui-error-content h1 { margin: 1.2rem 0 2rem; font-size: clamp(2.8rem, 3.4vw, 4rem); line-height: 1.18; text-align: left; letter-spacing: -.045em; overflow-wrap: anywhere; }
+.ui-error-description { color: var(--ui-muted); font-size: 1.5rem; line-height: 1.8; margin-bottom: 2rem; }
+.ui-error-hint { background: #f3f7f4; border-left: 3px solid #c3dbcc; border-radius: 0 .8rem .8rem 0; padding: 1.2rem 1.5rem; font-size: 1.2rem; color: #46615f; }
+.ui-error-reference { font-size: 1.1rem; color: var(--ui-muted); margin-bottom: 0; overflow-wrap: anywhere; }
+.ui-error-reference span { font-family: monospace; }
+.ui-error-footer { border-top: 1px solid var(--ui-border); display: flex; flex-wrap: wrap; gap: 1rem; justify-content: space-between; padding-block: 2rem; color: var(--ui-muted); font-size: 1.1rem; overflow-wrap: anywhere; }
+.ui-error-footer > span { min-width: 0; }
+.ui-state-card { border: 1px solid var(--ui-border); border-radius: 2rem; background: #fff; padding: clamp(2rem, 4vw, 3.2rem); margin-block: 2rem; min-width: 0; }
+.ui-state-card h2 { font-size: clamp(2.1rem, 3vw, 2.7rem); letter-spacing: -.035em; line-height: 1.25; text-align: left; margin: 1.5rem 0 1rem; }
+.ui-state-card > p { color: var(--ui-muted); font-size: 1.4rem; overflow-wrap: anywhere; }
+.ui-state-card--success { background: #f5faf6; border-color: #d6e6d9; }
+.ui-state-card--warning { background: #fffcf6; border-color: #eddfc2; }
+.ui-state-card--error { background: #fff8f7; border-color: #efd8d3; }
+.ui-state-icon { display: inline-grid; place-items: center; color: var(--ui-accent); background: #e4f0e9; border-radius: 1.6rem; width: 5.6rem; height: 5.6rem; }
+.ui-state-icon svg { width: 2.7rem; height: 2.7rem; }
+.ui-state-card--warning .ui-state-icon { background: #f9edcf; color: #8a5a24; }
+.ui-state-card--error .ui-state-icon { background: #f8e6e0; color: #a34c3c; }
+.ui-state-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; margin-top: 2.4rem; }
+.ui-state-actions .boton { margin: 0; white-space: normal; text-align: center; }
+.ui-state-steps { list-style: none; padding: 0; margin: 2rem 0; display: grid; gap: 1.2rem; counter-reset: ui-step; }
+.ui-state-steps li { position: relative; padding-left: 3.6rem; font-size: 1.3rem; color: var(--ui-muted); counter-increment: ui-step; }
+.ui-state-steps li::before { content: counter(ui-step); position: absolute; left: 0; top: 0; width: 2.5rem; height: 2.5rem; border-radius: 50%; display: grid; place-items: center; font-size: 1.1rem; font-weight: 650; color: #2b6558; background: #e3efe7; }
+.ui-payment-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); gap: 1.5rem; margin-block: 2rem; }
+.ui-payment-summary dl { margin: 0; min-width: 0; border: 1px solid var(--ui-border); border-radius: 1.5rem; padding: 1.8rem; background: #fff; }
+.ui-payment-summary dt { color: var(--ui-muted); font-size: 1.15rem; margin-bottom: .6rem; }
+.ui-payment-summary dd { margin: 0; font-size: 1.6rem; font-weight: 650; overflow-wrap: anywhere; line-height: 1.4; }
+.ui-payment-summary dd.ui-payment-amount { font-size: 2.6rem; }
+.ui-payment-summary small { display: block; color: var(--ui-muted); font-size: 1.1rem; margin-top: .7rem; overflow-wrap: anywhere; }
+.ui-reservation-detail { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr)); gap: 1.5rem; margin: 1.8rem 0 0; }
+.ui-reservation-detail dt { font-size: 1.15rem; color: var(--ui-muted); }
+.ui-reservation-detail dd { margin: .3rem 0 0; font-size: 1.4rem; overflow-wrap: anywhere; }
+@media (max-width: 700px) {
+    .ui-error-shell { width: min(100% - 3rem, 58rem); }
+    .ui-error-header { padding-block: 2rem; }
+    .ui-error-label { display: none; }
+    .ui-error-main { padding-block: 1rem 3rem; }
+    .ui-error-card { grid-template-columns: minmax(0, 1fr); border-radius: 2rem; }
+    .ui-error-art { min-height: 18rem; padding: 2.4rem; }
+    .ui-error-number { font-size: 7rem; }
+    .ui-error-art-caption { margin-top: .5rem; font-size: 1.2rem; }
+    .ui-error-art-caption br { display: none; }
+    .ui-error-content { padding: 2.4rem; }
+    .ui-error-description { font-size: 1.4rem; }
+    .ui-error-header .ui-brand { font-size: 1.7rem; overflow-wrap: anywhere; }
+    .ui-error-header .ui-brand > span:last-child { min-width: 0; }
+    .ui-error-header .ui-brand-mark { flex-shrink: 0; }
+}
+@media (max-width: 380px) { .ui-state-actions { align-items: stretch; flex-direction: column; } .ui-state-actions .boton { width: 100%; } .ui-error-content { padding: 2rem; } }

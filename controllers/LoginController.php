@@ -49,6 +49,10 @@ class LoginController
         Usuario::limpiarAlertas();
         $alertas = [];
         $auth = new Usuario();
+        if (!empty($_SESSION['aviso_sesion_expirada'])) {
+            $alertas['error'][] = 'Tu sesión terminó o cambió tu acceso. Inicia sesión de nuevo para continuar.';
+            unset($_SESSION['aviso_sesion_expirada']);
+        }
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exigir_csrf();
@@ -76,8 +80,7 @@ class LoginController
                 $acceso = (new \Services\AuthorizationService())->contexto((int)$usuario->id);
                 if (!$acceso || (int)$acceso['activo'] !== 1) {
                     $_SESSION = [];
-                    http_response_code(403);
-                    echo 'Cuenta de acceso inactiva.';
+                    \Classes\ErrorResponse::render(403, ['mensaje' => 'Esta cuenta de acceso está inactiva. Consulta con la administración del salón para continuar.']);
                     detener_ejecucion(403);
                 }
                 $_SESSION['version_sesion'] = (int)$acceso['version_sesion'];
@@ -235,6 +238,8 @@ class LoginController
 
         if ($validacionToken['status'] === AuthService::STATUS_ERROR) {
             http_response_code(500);
+        } elseif ($error) {
+            http_response_code(410);
         }
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -254,6 +259,9 @@ class LoginController
                 $error = true;
             } elseif (!empty($resultadoReset['error'])) {
                 $error = true;
+                http_response_code(410);
+            } else {
+                http_response_code(422);
             }
         }
 
@@ -314,15 +322,26 @@ class LoginController
         Usuario::limpiarAlertas();
 
         $token = is_string($_GET['token'] ?? null) ? trim($_GET['token']) : '';
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'HEAD') {
+            // Los verificadores de enlaces no deben activar cuentas ni consumir tokens.
+            $validacion = self::obtenerAuthService()->validarTokenConfirmacion($token);
+            http_response_code($validacion['status'] === AuthService::STATUS_ERROR ? 500 :
+                ($validacion['status'] === AuthService::STATUS_OK ? 200 : 410));
+            header('Content-Type: text/html; charset=utf-8');
+            return;
+        }
         $resultado = self::obtenerAuthService()->confirmarCuenta($token);
         $alertas = $resultado['alertas'];
 
         if ($resultado['status'] === AuthService::STATUS_ERROR) {
             http_response_code(500);
+        } elseif ($resultado['status'] !== AuthService::STATUS_OK) {
+            http_response_code(410);
         }
 
         $router->render('auth/confirmar-cuenta', [
-            'alertas' => $alertas
+            'alertas' => $alertas,
+            'estadoConfirmacion' => $resultado['status'],
         ]);
     }
 }

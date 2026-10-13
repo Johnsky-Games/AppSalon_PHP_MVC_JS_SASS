@@ -10,13 +10,18 @@ use Services\NotificacionCitaService;
 final class ProfileNotificationIntegrationTest extends TestCase
 {
     private \mysqli $db;
+    private ?\mysqli $previousDb;
     private int $user;
     private int $cita;
     private NotificacionCitaRepository $repo;
     private NotificacionCitaService $service;
     protected function setUp(): void
     {
-        $this->db=ActiveRecord::getDB(); validar_base_datos_prueba($this->db);
+        $this->previousDb=ActiveRecord::getDB();
+        $this->db=new \mysqli(getenv('DB_HOST') ?: 'appsalon-test-db', getenv('DB_USER') ?: 'root',
+            getenv('DB_PASS') ?: 'root', getenv('DB_NAME') ?: 'appsalon_test', (int)(getenv('DB_PORT') ?: 3306));
+        $this->db->set_charset('utf8mb4'); validar_base_datos_prueba($this->db);
+        ActiveRecord::setDB($this->db);
         $this->db->query('DELETE FROM notificaciones_citas');
         $email='notif-' . bin2hex(random_bytes(5)) . '@test.local';
         $stmt=$this->db->prepare("INSERT INTO usuarios(nombre,apellido,email,password,telefono,admin,confirmado) VALUES ('Perfil','Correo',?,'hash','0991234567',0,1)"); $stmt->bind_param('s',$email);$stmt->execute();$stmt->close();$this->user=(int)$this->db->insert_id;
@@ -29,6 +34,8 @@ final class ProfileNotificationIntegrationTest extends TestCase
         $this->db->query('DELETE FROM notificaciones_citas WHERE cita_referencia_id=' . $this->cita);
         $this->db->query('DELETE FROM citas WHERE id=' . $this->cita);
         $this->db->query('DELETE FROM usuarios WHERE id=' . $this->user);
+        ActiveRecord::setDB($this->previousDb);
+        $this->db->close();
     }
     private function evento(string $tipo,string $fecha='2030-01-02',string $hora='11:00:00'): int
     {

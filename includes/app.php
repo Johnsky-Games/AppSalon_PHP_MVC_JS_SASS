@@ -16,8 +16,8 @@ spl_autoload_register(static function (string $class): void {
 $dotenv = Dotenv::createImmutable(__DIR__);
 $dotenv->safeLoad();
 
-require 'funciones.php';
-require 'database.php';
+require_once __DIR__ . '/funciones.php';
+require __DIR__ . '/database.php';
 
 // Conectarnos a la base de datos
 ActiveRecord::setDB($db);

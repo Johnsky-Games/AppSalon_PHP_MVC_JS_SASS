@@ -14,10 +14,8 @@ $db = @mysqli_connect($db_host, $db_user, $db_pass, $db_name, $db_port);
 if ($db) {
     $db->set_charset('utf8mb4');
 } else {
-    error_log("Error de conexión a MySQL (errno " . mysqli_connect_errno() . "): " . mysqli_connect_error());
+    error_log('[AppSalon] MySQL no disponible; errno=' . mysqli_connect_errno());
     if (php_sapi_name() !== 'cli') {
-        http_response_code(500);
-        echo "Error: No fue posible conectar con el servicio de base de datos.";
-        exit;
+        throw new \Classes\ServiceUnavailableException('Servicio de datos temporalmente no disponible.');
     }
 }

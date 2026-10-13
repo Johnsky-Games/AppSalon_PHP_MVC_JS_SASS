@@ -35,7 +35,7 @@ class EquipoController
             }
             $message='Acceso actualizado. Las sesiones anteriores fueron revocadas.';
             if (isset($invite)) {
-                $sent=(new Email($invite['nombre'],$invite['email'],$invite['token']))->enviarInstrucciones();
+                $sent=(new Email($invite['nombre'],$invite['email'],$invite['token']))->enviarInvitacion();
                 $message=$sent?'Invitación enviada: el colaborador establecerá su contraseña desde su correo.':'La cuenta se guardó pero el correo no pudo enviarse. Corrige SMTP y pulsa Reenviar invitación.';
             }
             $_SESSION['equipo_alertas']=['exito'=>[$message]];

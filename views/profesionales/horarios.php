@@ -29,14 +29,13 @@ include __DIR__ . '/../templates/alertas.php';
         $filasRenderizar = !empty($franjasDia) ? array_values($franjasDia) : [null];
     ?>
     <div class="horario-dia-grupo ui-schedule-day" data-dia="<?php echo $numDiaInt; ?>" data-next-index="<?php echo count($filasRenderizar); ?>">
-        <div class="horario-dia-cabecera" style="display: flex; align-items: center; justify-content: space-between; margin: 1rem 0 0.5rem 0;">
+        <div class="horario-dia-cabecera">
             <strong><?php echo s($nombreDia); ?></strong>
             <button
                 type="button"
                 class="boton btn-agregar-franja"
                 data-dia="<?php echo $numDiaInt; ?>"
                 data-nombre-dia="<?php echo s($nombreDia); ?>"
-                style="margin: 0; padding: 0.6rem 1.2rem; font-size: 1.4rem;"
             >+ Añadir franja</button>
         </div>
         <div class="horario-dia-franjas" data-dia-contenedor="<?php echo $numDiaInt; ?>">
@@ -84,7 +83,6 @@ include __DIR__ . '/../templates/alertas.php';
                     type="button"
                     class="boton-eliminar btn-retirar-franja"
                     data-dia="<?php echo $numDiaInt; ?>"
-                    style="margin: 0 0 0 0.8rem; padding: 0.6rem 1rem; font-size: 1.3rem;"
                 >Retirar franja</button>
             </div>
             <?php } ?>
@@ -173,7 +171,6 @@ include __DIR__ . '/../templates/alertas.php';
             btnRetirar.type = 'button';
             btnRetirar.className = 'boton-eliminar btn-retirar-franja';
             btnRetirar.setAttribute('data-dia', numDia);
-            btnRetirar.style.cssText = 'margin: 0 0 0 0.8rem; padding: 0.6rem 1rem; font-size: 1.3rem;';
             btnRetirar.textContent = 'Retirar franja';
 
             fila.appendChild(inputEnviado);

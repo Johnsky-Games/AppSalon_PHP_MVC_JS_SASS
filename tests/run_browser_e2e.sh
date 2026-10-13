@@ -125,3 +125,15 @@ docker run --rm --network "$net" -v "$repo_dir:/var/www/html:ro" -w /var/www/htm
 
 # El worker debe seguir vivo; un fallo de procesamiento no debe quedar oculto.
 [[ $(docker inspect -f '{{.State.Running}}' "$worker") == true ]]
+
+# Contratos HTTP y regresiones visuales sobre las mismas fixtures aisladas.
+node tests/error_routes_http_checks.js 2>&1 | tee "$artifacts/error-routes.log"
+TEST_ERROR_OUTPUT_DIR="$artifacts/errors" node tests/error_visual_test.js 2>&1 | tee "$artifacts/error-layout.log"
+node tests/ui_navigation_test.js 2>&1 | tee "$artifacts/navigation.log"
+TEST_RESPONSIVE_OUTPUT_DIR="$artifacts/responsive" node tests/responsive_views_test.js 2>&1 | tee "$artifacts/responsive.log"
+
+# Previsualizaciones exclusivamente ficticias: renderizado real sin enviar correos.
+docker run --rm --network "$net" -v "$repo_dir:/var/www/html:ro" -w /var/www/html \
+    -v "$artifacts:/e2e-artifacts" "${common_env[@]}" -e APP_URL="$app_url" "$image" \
+    php tests/fixtures/email_previews.php /e2e-artifacts/email-previews
+node tests/email_visual_test.js "$artifacts/email-previews" 2>&1 | tee "$artifacts/email-layout.log"

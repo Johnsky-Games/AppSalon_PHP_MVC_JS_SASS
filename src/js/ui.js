@@ -22,14 +22,50 @@
     window.AppSalonUI = Object.freeze({ notify });
     document.addEventListener('DOMContentLoaded', () => {
         const navigation = document.getElementById('ui-main-navigation');
+        const navigationPanel = document.getElementById('ui-navigation-panel');
         const navigationToggle = document.querySelector('[data-nav-toggle]');
-        if (navigation && navigationToggle) {
+        if (navigation && navigationPanel && navigationToggle) {
+            const compactNavigation = window.matchMedia('(max-width: 1024px)');
+            const toggleLabel = navigationToggle.querySelector('[data-nav-toggle-label]');
+            const sidebar = navigationToggle.closest('.ui-sidebar');
+            let menuOpen = false;
+            const setNavigation = (open, focusFirst = false) => {
+                menuOpen = compactNavigation.matches && open;
+                const expanded = !compactNavigation.matches || menuOpen;
+                // Devolver el foco antes de ocultar evita dejarlo dentro de una sección invisible.
+                if (!expanded && navigationPanel.contains(document.activeElement)) navigationToggle.focus();
+                navigationPanel.hidden = !expanded;
+                navigation.classList.toggle('is-open', expanded);
+                navigationToggle.setAttribute('aria-expanded', String(expanded));
+                if (toggleLabel) toggleLabel.textContent = menuOpen ? 'Cerrar' : 'Menú';
+                navigationToggle.setAttribute('aria-label', menuOpen ? 'Cerrar menú de navegación' : 'Abrir menú de navegación');
+                if (menuOpen && focusFirst) {
+                    const firstLink = navigation.querySelector('[aria-current="page"]') || navigation.querySelector('a[href]');
+                    firstLink?.focus();
+                }
+            };
             document.body.classList.add('ui-navigation-ready');
+            setNavigation(false);
             navigationToggle.addEventListener('click', () => {
-                const open = navigation.classList.toggle('is-open');
-                navigationToggle.setAttribute('aria-expanded', String(open));
-                navigationToggle.textContent = open ? 'Cerrar menú' : 'Menú';
+                setNavigation(!menuOpen, !menuOpen);
             });
+            document.addEventListener('keydown', event => {
+                if (event.key === 'Escape' && menuOpen && !document.querySelector('dialog[open], .swal2-container')) {
+                    event.preventDefault();
+                    setNavigation(false);
+                    navigationToggle.focus();
+                }
+            });
+            navigation.addEventListener('click', event => {
+                if (event.target.closest('a[href]') && menuOpen) setNavigation(false);
+            });
+            document.addEventListener('click', event => {
+                if (menuOpen && sidebar && !sidebar.contains(event.target)) setNavigation(false);
+            });
+            // Al pasar de escritorio a móvil la navegación vuelve a un estado claro y consistente.
+            const resetNavigation = () => setNavigation(false);
+            if (typeof compactNavigation.addEventListener === 'function') compactNavigation.addEventListener('change', resetNavigation);
+            else compactNavigation.addListener(resetNavigation);
         }
         document.querySelectorAll('[data-modal-open]').forEach(button => {
             button.addEventListener('click', () => {

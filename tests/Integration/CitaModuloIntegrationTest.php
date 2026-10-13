@@ -591,7 +591,9 @@ class CitaModuloIntegrationTest extends TestCase
             }
 
             $this->assertSame(500, http_response_code());
-            $this->assertStringContainsString('Error 500: No fue posible cancelar la cita debido a un error de base de datos.', $salidaHtml);
+            $this->assertStringContainsString('ui-error-card', $salidaHtml);
+            $this->assertStringContainsString('No pudimos completar esta acción', $salidaHtml);
+            $this->assertStringNotContainsString('error de base de datos', $salidaHtml);
             $this->assertStringNotContainsString('Fallo SQL interno secreto', $salidaHtml, 'No debe exponer detalles SQL internos');
             $this->assertStringNotContainsString('SQLSTATE', $salidaHtml);
 

@@ -1,0 +1,172 @@
+// Keep shrinking and wrapping local to the application content. Tables retain
+// their columns and scroll in their labelled region rather than widening main.
+.app { overflow-wrap: anywhere; }
+.ui-grid > *, .ui-integral-grid > *, .ui-form-grid > *,
+.ui-profile-grid > *, .growth-grid > *, .reportes-kpis > *,
+.ui-dashboard-stats > *, .ui-report-charts > *, .agenda-tarjeta > * {
+  min-width: 0;
+}
+.listado-servicios > *, .intervalos-grid > * { min-width: 0; max-width: 100%; }
+.ui-person-card > div, .professional-preview > div,
+.ui-toolbar > *, .ops-toolbar > *, .growth-heading > *,
+.growth-inline > *, .growth-list li > *, .acciones > *,
+.ui-page-header > *, .ui-page-heading > * { min-width: 0; max-width: 100%; }
+.ui-person-card .ui-avatar, .professional-preview img { flex: none; }
+.ui-badge, .ops-badge { max-width: 100%; white-space: normal; }
+.ui-section-title, .ui-page-heading { flex-wrap: wrap; }
+.ui-page-heading { display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; }
+.ui-page-heading > div { flex: 1 1 28rem; }
+
+.reporte-kpi, .growth-card, .ui-stat { min-width: 0; }
+.reporte-kpi .kpi-valor, .growth-number, .ui-stat strong {
+  font-size: clamp(2.4rem, 3vw, 3.8rem);
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+.reporte-kpi__titulo, .reporte-kpi__valor, .reporte-kpi__sub { display: block; }
+.reporte-kpi__titulo { font-size: 1.2rem; color: var(--ui-muted); }
+.reporte-kpi__valor { margin-block: .8rem; font-size: 1.8rem; line-height: 1.45; }
+.reporte-kpi__sub { font-size: 1.2rem; color: var(--ui-muted); }
+
+.tabla-contenedor, .ui-table-scroll, .ops-table-wrap, .growth-table-wrap {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scroll-padding-inline: 1rem;
+  &:focus-visible { outline-offset: 2px; }
+  th, td { vertical-align: top; overflow-wrap: anywhere; }
+}
+.growth-table-wrap table { min-width: 52rem; }
+.growth-table-wrap th { background: #f1f7f4; }
+.ops-table th, .growth-table-wrap th, .ui-permissions-table th {
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+.ops-table td, .growth-table-wrap td { min-width: 14rem; }
+td.ui-table-number, td.ui-table-date, td.ui-table-code {
+  white-space: nowrap;
+  overflow-wrap: normal;
+  font-variant-numeric: tabular-nums;
+}
+.growth-table-wrap td form { display: grid; gap: .6rem; min-width: 14rem; }
+.growth-table-wrap td .boton { margin: 0; }
+.ui-permissions-table {
+  width: 100%; min-width: 40rem; border-collapse: collapse; font-size: 1.3rem;
+  th, td { text-align: left; padding: 1.2rem 1.4rem; border-bottom: 1px solid var(--ui-border); }
+  th { background: #f1f7f4; }
+  th:first-child, td:first-child { width: 12rem; }
+  tbody tr:last-child td { border-bottom: 0; }
+}
+
+// These controls also occur outside .campo in agenda filters and inline forms.
+.agenda-filtros input, .agenda-reprogramar input,
+.growth-inline select, .growth-table-wrap select {
+  min-width: 0; max-width: 100%; min-height: 4.8rem;
+  padding: 1.1rem 1.3rem; border: 1px solid #dce4e1; border-radius: 1.1rem;
+  color: var(--ui-ink); background: #fafcf9;
+  &:focus { border-color: var(--ui-accent); box-shadow: 0 0 0 3px rgba(22,118,108,.1); }
+}
+.agenda-filtros input, .agenda-reprogramar input { width: 100%; }
+.growth-inline select { flex: 1 1 25rem; }
+.growth-inline label { font-weight: 600; }
+.agenda-integral .agenda-filtros label { min-width: 0; }
+.agenda-integral .agenda-tarjeta { grid-template-columns: 12rem minmax(0, 1fr) minmax(15rem, 22rem); }
+.agenda-integral .agenda-momento { min-width: 0; }
+.agenda-integral .agenda-acciones form { margin: 0; }
+.agenda-lista, .horario-dia-franjas { container-type: inline-size; }
+
+.formulario fieldset, .growth-question { min-width: 0; max-width: 100%; }
+.formulario legend { max-width: 100%; }
+.ui-profile-preferences label, .growth-check { min-height: 4.4rem; }
+.ui-profile-preferences label > span { min-width: 0; }
+.campo textarea { resize: vertical; min-height: 10rem; }
+.campo input[type=file] { overflow: hidden; padding: .8rem; }
+.campo input[type=file]::file-selector-button {
+  max-width: 100%; margin-right: .7rem; border: 0; border-radius: .6rem;
+  padding: .6rem .8rem; background: #e5eee8; color: var(--ui-ink);
+}
+.horario-franja-fila > * { min-width: 0; max-width: 100%; }
+.horario-dia-cabecera { display: flex; align-items: center; justify-content: space-between; margin: 1rem 0 .5rem; }
+.horario-dia-cabecera .btn-agregar-franja { margin: 0; padding: .8rem 1.2rem; }
+.horario-franja-fila .btn-retirar-franja { margin: 0; padding: .8rem 1rem; }
+
+dialog {
+  max-width: calc(100vw - 3.2rem);
+  max-height: calc(100dvh - 3.2rem);
+  margin: auto;
+  overflow: auto;
+  overscroll-behavior: contain;
+  overflow-wrap: anywhere;
+  padding: clamp(1.6rem, 4vw, 3rem);
+}
+.ops-modal, .growth-dialog, .ui-profile-dialog {
+  max-width: calc(100vw - 3.2rem);
+  max-height: calc(100dvh - 3.2rem);
+  padding: clamp(1.6rem, 4vw, 3rem);
+}
+dialog [data-modal-close], .ops-modal-close, .ui-profile-close {
+  flex: none; min-width: 4.4rem; min-height: 4.4rem;
+}
+dialog [data-modal-close]:not(.ops-modal-close) {
+  border: 1px solid var(--ui-border); border-radius: 1rem; padding: .8rem 1.2rem;
+  color: var(--ui-ink); background: #f1f7f4; cursor: pointer;
+}
+.growth-dialog .growth-heading { align-items: flex-start; }
+.growth-dialog .growth-heading h2 { flex: 1 1 12rem; }
+.ops-commission-panel { margin-top: 3rem; }
+details > summary { min-height: 4.4rem; padding-block: 1rem; cursor: pointer; font-weight: 600; }
+.growth-card dd { margin-inline-start: 1.5rem; }
+.ops-toolbar a:not(.boton) { min-height: 4.4rem; display: inline-flex; align-items: center; }
+
+// Available panel width can be smaller than the viewport with a sidebar or
+// enlarged text. Container queries preserve that reflow on wide screens too.
+@container (max-width: 52rem) {
+  .agenda-integral .agenda-tarjeta { grid-template-columns: minmax(0, 1fr); }
+  .agenda-integral .agenda-momento { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+  .agenda-integral .agenda-momento span { grid-column: 1 / -1; justify-self: start; }
+  .agenda-integral .agenda-acciones { grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); }
+}
+@container (max-width: 56rem) {
+  .horario-franja-fila { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto minmax(0, 1fr); }
+  .horario-franja-fila .btn-retirar-franja { grid-column: 1 / -1; justify-self: start; }
+}
+@container (max-width: 36rem) {
+  .horario-franja-fila { grid-template-columns: minmax(0, 1fr); }
+  .horario-franja-fila label, .horario-franja-fila .btn-retirar-franja { grid-column: 1; }
+  .horario-franja-fila > span { justify-self: start; }
+}
+@media (max-width: 1100px) {
+  .agenda-integral .agenda-tarjeta { grid-template-columns: minmax(0, 1fr); }
+  .agenda-integral .agenda-momento { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+  .agenda-integral .agenda-momento span { grid-column: 1 / -1; justify-self: start; }
+  .agenda-integral .agenda-acciones { grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); }
+}
+@media (max-width: 600px) {
+  // Two native time inputs in one row cut off their controls on a 320px device.
+  .horario-franja-fila { grid-template-columns: minmax(0, 1fr); gap: .8rem; }
+  .horario-franja-fila label, .horario-franja-fila .btn-retirar-franja { grid-column: 1; }
+  .horario-franja-fila > span { justify-self: start; }
+  .horario-dia-cabecera .btn-agregar-franja { width: 100%; }
+  .ui-toolbar > .campo, .ui-toolbar > .ui-list-filter,
+  .ops-filter > .campo, .agenda-integral .agenda-filtros label { flex-basis: 100%; width: 100%; }
+  .agenda-integral .agenda-filtros { padding: 1.6rem; gap: 1.2rem; }
+  .agenda-integral .agenda-filtros .boton { width: 100%; margin: 0; }
+  .acciones-reportes { margin-top: 0; }
+  .acciones-reportes > *, .growth-inline > .boton { width: 100%; }
+  .ui-profile-card, .growth-card, .agenda-integral .agenda-tarjeta { padding: 1.6rem; }
+  .ui-profile-photo { width: min(16rem, 100%); height: auto; aspect-ratio: 1; }
+}
+@media (max-width: 480px) {
+  // Font size 16px avoids automatic zoom when focusing inputs on iOS.
+  .formulario input:not([type=checkbox]):not([type=radio]):not([type=hidden]):not([type=submit]),
+  .formulario select, .formulario textarea,
+  .growth-inline select, .growth-table-wrap select { font-size: 1.6rem; }
+  .acciones > .boton, .acciones > .boton-eliminar, .acciones > form { width: 100%; }
+  .acciones > form > .boton, .acciones > form > .boton-eliminar { width: 100%; }
+  .ui-quick-links a { flex: 1 1 100%; }
+  .tabs button { overflow-wrap: normal; }
+  .ui-auth .nombre-pagina { font-size: 3rem; }
+  .ui-profile-preferences { padding: 1.2rem; }
+}

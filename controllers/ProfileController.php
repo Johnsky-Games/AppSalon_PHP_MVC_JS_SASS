@@ -35,7 +35,7 @@ final class ProfileController
             if (!$perfil) { http_response_code(404); detener_ejecucion(404); }
         } catch (\InvalidArgumentException $e) { http_response_code(422); $alertas['error'][] = $e->getMessage(); $perfil = $service->obtener($id); }
         catch (\AppTerminationException $e) { throw $e; }
-        catch (\Throwable $e) { http_response_code(500); echo 'No fue posible cargar el perfil.'; return; }
+        catch (\Throwable $e) { \Classes\ErrorResponse::fromThrowable($e); return; }
         $router->render('perfil/index',['perfil'=>$perfil,'alertas'=>$alertas]);
     }
     public static function guardarFoto(Router $router): void
@@ -46,8 +46,8 @@ final class ProfileController
             else { self::service()->subirFoto($id,$_FILES['foto'] ?? []); }
             header('Location: /perfil?id=' . $id . '&foto=actualizada'); detener_ejecucion(302);
         } catch (\AppTerminationException $e) { throw $e; }
-        catch (\InvalidArgumentException $e) { http_response_code(422); echo s($e->getMessage()); }
-        catch (\Throwable $e) { http_response_code(500); echo 'No fue posible guardar la foto.'; }
+        catch (\InvalidArgumentException $e) { \Classes\ErrorResponse::render(422, ['mensaje' => $e->getMessage()]); }
+        catch (\Throwable $e) { \Classes\ErrorResponse::fromThrowable($e); }
     }
     public static function foto(Router $router): void
     {

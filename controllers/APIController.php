@@ -464,7 +464,7 @@ class APIController
                         'error' => $resultado['error'] ?? 'No tienes autorización para eliminar esta cita'
                     ]);
                 } else {
-                    echo "Error 403: No tienes autorización para eliminar esta cita.";
+                    \Classes\ErrorResponse::render(403, ['format' => 'html']);
                 }
                 detener_ejecucion(403);
                 return;
@@ -480,7 +480,7 @@ class APIController
                         'error' => $mensajeError
                     ]);
                 } else {
-                    echo "Error 500: " . s((string)$mensajeError);
+                    \Classes\ErrorResponse::render(500, ['format' => 'html']);
                 }
                 detener_ejecucion(500);
                 return;

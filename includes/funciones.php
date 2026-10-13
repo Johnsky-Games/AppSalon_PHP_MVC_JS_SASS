@@ -89,13 +89,7 @@ function iniciar_sesion_segura(): void
  */
 function es_peticion_json(): bool
 {
-    $accept = $_SERVER['HTTP_ACCEPT'] ?? '';
-    $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
-    $uri = $_SERVER['REQUEST_URI'] ?? '';
-
-    return str_contains($accept, 'application/json') ||
-           str_contains($contentType, 'application/json') ||
-           str_starts_with($uri, '/api/');
+    return \Classes\ErrorResponse::wantsJson();
 }
 
 /**
@@ -108,7 +102,7 @@ function isAuth(): void
         $contexto = (new \Services\AuthorizationService())->contexto((int)($_SESSION['id'] ?? 0));
         if (!$contexto || (int)$contexto['activo'] !== 1 || (int)$contexto['confirmado'] !== 1 ||
             (isset($_SESSION['version_sesion']) && (int)$contexto['version_sesion'] !== (int)$_SESSION['version_sesion'])) {
-            $_SESSION = [];
+            $_SESSION = ['aviso_sesion_expirada' => true];
         } else {
             // Una sola adopción para cuentas activas tras actualizar una instalación anterior.
             $_SESSION['version_sesion'] = (int)$contexto['version_sesion'];
@@ -146,8 +140,8 @@ function isAdmin(): void
             echo json_encode(['resultado' => false, 'error' => 'Acceso denegado']);
             detener_ejecucion(403);
         } else {
-            header('Location: /');
-            detener_ejecucion(302);
+            \Classes\ErrorResponse::render(403, ['mensaje' => 'Tu cuenta no tiene acceso a esta sección. Si lo necesitas, solicita autorización a la administración del salón.']);
+            detener_ejecucion(403);
         }
     }
 }
@@ -195,7 +189,7 @@ function exigir_csrf(): void
             header('Content-Type: application/json; charset=utf-8');
             echo json_encode(['resultado' => false, 'error' => 'Token CSRF inválido o ausente']);
         } else {
-            echo "Error 403: Solicitud no autorizada (CSRF inválido o ausente).";
+            \Classes\ErrorResponse::render(403, ['mensaje' => 'La validación de esta página venció o no es válida. Vuelve a abrirla antes de enviar la solicitud de nuevo.']);
         }
         detener_ejecucion(403);
     }
@@ -221,7 +215,9 @@ function exigir_permiso(string $permiso): void
     if (es_peticion_json()) {
         header('Content-Type: application/json; charset=utf-8');
         echo json_encode(['resultado' => false, 'error' => 'No tienes permiso para esta operación']);
-    } else { echo 'Error 403: No tienes permiso para esta operación.'; }
+    } else {
+        \Classes\ErrorResponse::render(403, ['mensaje' => 'Tu cuenta no tiene permiso para realizar esta operación. Consulta con la administración del salón si necesitas acceso.']);
+    }
     detener_ejecucion(403);
 }
 

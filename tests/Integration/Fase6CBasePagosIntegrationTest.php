@@ -287,6 +287,7 @@ class Fase6CBasePagosIntegrationTest extends TestCase
 
         // 1. El cliente navega a GET /pago/resultado manipulando parámetros en la URL (?status=completado&estado=pagado&aprobado=1)
         $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_SERVER['REQUEST_URI'] = '/pago/resultado';
         $_SERVER['HTTP_ACCEPT'] = 'text/html';
         $_GET = [
             'referencia' => $referencia,
@@ -301,8 +302,9 @@ class Fase6CBasePagosIntegrationTest extends TestCase
         $htmlRedirect = (string)ob_get_clean();
 
         $this->assertSame(200, http_response_code());
-        $this->assertStringContainsString('Pendiente de Confirmación', $htmlRedirect);
-        $this->assertStringContainsString('La confirmación de pagos nunca se realiza mediante parámetros en la URL del navegador', $htmlRedirect);
+        $this->assertStringContainsString('Pendiente de confirmación', $htmlRedirect);
+        $this->assertStringContainsString('El regreso a esta página no confirma el pago', $htmlRedirect);
+        $this->assertStringContainsString('data-estado="pendiente"', $htmlRedirect);
 
         // Verificar en MySQL que el pago y la cita siguen estrictamente en 'pendiente'
         $filaPagoAntes = self::$db->query("SELECT estado, pagado_at FROM pagos WHERE referencia_pago = '{$referencia}'")->fetch_assoc();
@@ -313,6 +315,7 @@ class Fase6CBasePagosIntegrationTest extends TestCase
 
         // 2. Webhook con firma inválida -> HTTP 401 y sin cambios en MySQL
         $_SERVER['REQUEST_METHOD'] = 'POST';
+        $_SERVER['REQUEST_URI'] = '/api/pagos/webhook';
         $_SERVER['HTTP_ACCEPT'] = 'application/json';
         $_SERVER['HTTP_X_MOCK_SIGNATURE'] = 'firma_invalida_12345';
         $payloadWebhook = [
@@ -371,6 +374,7 @@ class Fase6CBasePagosIntegrationTest extends TestCase
         // 5. Ahora GET /pago/resultado refleja el estado confirmado en base de datos
         PagoController::setRawJsonOverride(null);
         $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_SERVER['REQUEST_URI'] = '/pago/resultado';
         $_SERVER['HTTP_ACCEPT'] = 'text/html';
         $_GET = ['referencia' => $referencia];
 
@@ -379,7 +383,8 @@ class Fase6CBasePagosIntegrationTest extends TestCase
         $htmlConfirmado = (string)ob_get_clean();
 
         $this->assertSame(200, http_response_code());
-        $this->assertStringContainsString('Pago Completado (Confirmado en Servidor)', $htmlConfirmado);
+        $this->assertStringContainsString('Pago confirmado', $htmlConfirmado);
+        $this->assertStringContainsString('data-estado="completado"', $htmlConfirmado);
         $this->assertStringContainsString('$120.00 USD', $htmlConfirmado);
     }
 

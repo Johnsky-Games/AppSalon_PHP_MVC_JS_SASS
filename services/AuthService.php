@@ -435,11 +435,27 @@ class AuthService
     }
 
     /**
-     * Verifica si un token de recuperación es válido y vigente para mostrar el formulario `/recuperar`.
+     * Verifica un enlace de confirmación sin consumirlo, para solicitudes HEAD.
      *
      * @param mixed $tokenRaw Token recibido por query string.
-     * @return array Resultado estructurado con `status`, `resultado`, `error`, `usuario` y `alertas`.
+     * @return array Resultado estructurado con `status`, `resultado`, `usuario` y `alertas`.
      */
+    public function validarTokenConfirmacion($tokenRaw): array
+    {
+        $token = is_string($tokenRaw) ? trim($tokenRaw) : '';
+        try {
+            $usuario = $token !== '' ? $this->repository->findByValidToken($token, 'confirmacion') : null;
+        } catch (PersistenceException $exception) {
+            return $this->construirRespuesta(self::STATUS_ERROR, false, null,
+                ['error' => ['No fue posible verificar el enlace en este momento.']]);
+        }
+        return $usuario !== null
+            ? $this->construirRespuesta(self::STATUS_OK, true, $usuario, [])
+            : $this->construirRespuesta(self::STATUS_INVALID, false, null,
+                ['error' => ['El enlace no es válido, ya fue utilizado o venció.']]);
+    }
+
+    /** Verifica la vigencia del enlace antes de mostrar el formulario de recuperación. */
     public function validarTokenRecuperacion($tokenRaw): array
     {
         Usuario::limpiarAlertas();

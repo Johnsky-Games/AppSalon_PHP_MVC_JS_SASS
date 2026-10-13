@@ -19,6 +19,13 @@ use Services\PagoService;
  */
 class PagoController
 {
+    private const ERROR_CONFIGURACION = 'El servicio de pagos no está disponible temporalmente. Intenta nuevamente más tarde.';
+
+    private static function registrarErrorConfiguracion(\Throwable $exception): void
+    {
+        error_log(sprintf('[AppSalon][Pagos] %s code=%d at %s:%d', get_class($exception), (int)$exception->getCode(), basename($exception->getFile()), $exception->getLine()));
+    }
+
     private static ?PagoService $pagoService = null;
 
     /**
@@ -190,13 +197,14 @@ class PagoController
         try {
             $service = self::obtenerPagoService();
         } catch (\RuntimeException $e) {
+            self::registrarErrorConfiguracion($e);
             http_response_code(500);
             echo json_encode([
                 'resultado' => false,
                 'status' => PagoService::STATUS_ERROR,
                 'codigo_error' => 'PAYMENT_CONFIGURATION_ERROR',
-                'error' => $e->getMessage(),
-                'errores' => [$e->getMessage()],
+                'error' => self::ERROR_CONFIGURACION,
+                'errores' => [self::ERROR_CONFIGURACION],
             ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
             detener_ejecucion(500);
             return;
@@ -231,13 +239,14 @@ class PagoController
         try {
             $service = self::obtenerPagoService();
         } catch (\RuntimeException $e) {
+            self::registrarErrorConfiguracion($e);
             http_response_code(500);
             echo json_encode([
                 'resultado' => false,
                 'status' => PagoService::STATUS_ERROR,
                 'codigo_error' => 'PAYMENT_CONFIGURATION_ERROR',
-                'error' => $e->getMessage(),
-                'errores' => [$e->getMessage()],
+                'error' => self::ERROR_CONFIGURACION,
+                'errores' => [self::ERROR_CONFIGURACION],
             ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
             detener_ejecucion(500);
             return;
@@ -271,12 +280,12 @@ class PagoController
         $usuarioId = (int)($_SESSION['id'] ?? 0);
         $esAdmin = puede('finanzas.gestionar');
 
-        $accept = $_SERVER['HTTP_ACCEPT'] ?? '';
-        $quiereJson = str_contains($accept, 'application/json') || (($_GET['format'] ?? '') === 'json');
+        $quiereJson = es_peticion_json() || (($_GET['format'] ?? '') === 'json');
 
         try {
             $service = self::obtenerPagoService();
         } catch (\RuntimeException $e) {
+            self::registrarErrorConfiguracion($e);
             http_response_code(500);
             if ($quiereJson) {
                 header('Content-Type: application/json; charset=utf-8');
@@ -284,8 +293,8 @@ class PagoController
                     'resultado' => false,
                     'status' => PagoService::STATUS_ERROR,
                     'codigo_error' => 'PAYMENT_CONFIGURATION_ERROR',
-                    'error' => $e->getMessage(),
-                    'errores' => [$e->getMessage()],
+                    'error' => self::ERROR_CONFIGURACION,
+                    'errores' => [self::ERROR_CONFIGURACION],
                 ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
                 detener_ejecucion(500);
                 return;
@@ -294,8 +303,8 @@ class PagoController
             $router->render('pagos/resultado', [
                 'nombre' => $_SESSION['nombre'] ?? '',
                 'apellido' => $_SESSION['apellido'] ?? '',
-                'alertas' => ['error' => [$e->getMessage()]],
-                'resultadoPago' => ['status' => PagoService::STATUS_ERROR, 'errores' => [$e->getMessage()]],
+                'alertas' => ['error' => [self::ERROR_CONFIGURACION]],
+                'resultadoPago' => ['status' => PagoService::STATUS_ERROR, 'errores' => [self::ERROR_CONFIGURACION]],
                 'pago' => null,
                 'cita' => null,
                 'advertenciaSeguridad' => null,
@@ -306,9 +315,6 @@ class PagoController
 
         $resultado = $service->consultarResultadoPago($_GET, $usuarioId, $esAdmin);
         $httpCode = (int)($resultado['http_code'] ?? 200);
-
-        $accept = $_SERVER['HTTP_ACCEPT'] ?? '';
-        $quiereJson = str_contains($accept, 'application/json') || (($_GET['format'] ?? '') === 'json');
 
         if ($quiereJson) {
             header('Content-Type: application/json; charset=utf-8');
@@ -376,13 +382,14 @@ class PagoController
         try {
             $service = self::obtenerPagoService();
         } catch (\RuntimeException $e) {
+            self::registrarErrorConfiguracion($e);
             http_response_code(500);
             echo json_encode([
                 'resultado' => false,
                 'status' => PagoService::STATUS_ERROR,
                 'codigo_error' => 'PAYMENT_CONFIGURATION_ERROR',
-                'error' => $e->getMessage(),
-                'errores' => [$e->getMessage()],
+                'error' => self::ERROR_CONFIGURACION,
+                'errores' => [self::ERROR_CONFIGURACION],
             ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
             detener_ejecucion(500);
             return;

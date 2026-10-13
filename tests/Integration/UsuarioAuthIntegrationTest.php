@@ -246,6 +246,53 @@ class UsuarioAuthIntegrationTest extends TestCase
         $this->assertStringNotContainsString('SQLSTATE', $htmlLoginError);
     }
 
+    public function testHeadConfirmacionNoConsumeTokenYGetLoConsumeUnaSolaVez(): void
+    {
+        $serverBackup = $_SERVER;
+        try {
+            $_SERVER['HTTP_ACCEPT'] = 'text/html';
+            $repo = new UsuarioRepository(self::$db);
+            $usuario = new Usuario([
+                'nombre' => 'Enlace', 'apellido' => 'Seguro', 'email' => 'enlace-seguro@correo.test',
+                'password' => password_hash('ClaveSegura123', PASSWORD_BCRYPT),
+                'telefono' => '0991234567', 'confirmado' => '0',
+            ]);
+            $token = $usuario->generarTokenSeguro('confirmacion', 24);
+            $id = $repo->create($usuario);
+            $_GET = ['token' => $token];
+            $_SERVER['REQUEST_URI'] = '/confirmar-cuenta?token=' . $token;
+            $router = new Router();
+            $router->get('/confirmar-cuenta', [LoginController::class, 'confirmar']);
+
+            $_SERVER['REQUEST_METHOD'] = 'HEAD';
+            ob_start();
+            $router->comprobarRutas();
+            $headBody = ob_get_clean();
+            $this->assertSame(200, http_response_code());
+            $this->assertSame('', $headBody);
+            $sinConsumir = $repo->findById($id);
+            $this->assertSame('0', (string)$sinConsumir->confirmado);
+            $this->assertNotNull($sinConsumir->token_hash);
+
+            $_SERVER['REQUEST_METHOD'] = 'GET';
+            ob_start();
+            $router->comprobarRutas();
+            $confirmado = ob_get_clean();
+            $this->assertSame(200, http_response_code());
+            $this->assertStringContainsString('Tu cuenta está lista', $confirmado);
+            $this->assertSame('1', (string)$repo->findById($id)->confirmado);
+            $this->assertNull($repo->findById($id)->token_hash);
+
+            ob_start();
+            $router->comprobarRutas();
+            $reutilizado = ob_get_clean();
+            $this->assertSame(410, http_response_code());
+            $this->assertStringContainsString('Solicitar otro enlace', $reutilizado);
+        } finally {
+            $_SERVER = $serverBackup;
+        }
+    }
+
     public function testRepositorioLanzaPersistenceExceptionEnOperacionesConConexionCerrada(): void
     {
         $closedDb = new mysqli(

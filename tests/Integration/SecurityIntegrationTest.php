@@ -371,7 +371,8 @@ class SecurityIntegrationTest extends TestCase
             isAdmin();
             $this->fail('isAdmin debió lanzar AppTerminationException para usuario no administrador');
         } catch (AppTerminationException $e) {
-            $this->assertSame(302, $e->getStatusCode());
+            $this->assertSame(403, $e->getStatusCode());
+            $this->assertSame(403, http_response_code());
         } finally {
             ob_end_clean();
         }
