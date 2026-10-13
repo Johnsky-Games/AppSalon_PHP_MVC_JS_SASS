@@ -131,7 +131,7 @@ final class FallosTest extends QaCase
     public function test_mutaciones_de_equipo_con_campos_arreglo_dan_4xx_o_redireccion_sin_advertencias(string $ruta, string $campo): void
     {
         // Existe al menos una ficha para que ?id=1 sea válido en /ficha.
-        if ((int)self::escalar('SELECT COUNT(*) FROM colaboradores WHERE id=1') === 0) { $this->markTestSkipped('sin ficha 1'); }
+        $this->assertSame(1, (int)self::escalar('SELECT COUNT(*) FROM colaboradores WHERE id=1'), 'precondición: el propietario del arnés debe tener la ficha 1');
         $csrf = $this->csrfDe(self::$owner);
         $base = ['nombre' => 'A', 'apellido' => 'B', 'email' => self::correo('arr2'), 'telefono' => '', 'puesto' => '', 'rol' => 'recepcion', 'fecha_ingreso' => '', 'id' => '1', 'estado' => 'activo', 'notas_rh' => '', 'idem_key' => Idem::clave()];
         $crudo = http_build_query(['csrf_token' => $csrf] + array_diff_key($base, [$campo => 1])) . '&' . rawurlencode($campo) . '[]=x&' . rawurlencode($campo) . '[k][z]=y';

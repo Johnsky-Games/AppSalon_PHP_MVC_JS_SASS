@@ -56,25 +56,31 @@ final class AutorizacionHttpTest extends QaCase
         return self::$nav[$k];
     }
 
-    /** Ruta => permisos que la habilitan (cualquiera de ellos). Fuente: controladores. */
+    /**
+     * Ruta => roles de equipo que la abren (200). Escritos a mano a partir de la matriz de permisos documentada
+     * (docs/ARQUITECTURA_IDENTIDADES.md §5), NO importados de AuthorizationService::ROLES: si el código cambiara un permiso, esta
+     * prueba lo detecta en lugar de seguirlo.
+     */
     private const RUTAS = [
-        '/admin/equipo' => ['equipo.gestionar'],
-        '/admin/clientes' => ['clientes.ver', 'clientes.analitica', 'clientes.ver_propios'],
-        '/admin/clientes/exportar' => ['clientes.exportar'],
-        '/profesionales' => ['profesionales.gestionar'],
-        '/admin/finanzas' => ['finanzas.gestionar'],
-        '/admin/inventario' => ['inventario.gestionar'],
-        '/admin/crecimiento' => ['marketing.gestionar'],
-        '/admin/ajustes' => ['ajustes.gestionar'],
-        '/admin/reportes' => ['reportes.ver'],
-        '/admin' => ['agenda.gestionar'],
-        '/servicios' => ['servicios.gestionar'],
-        '/agenda' => ['agenda.gestionar', 'agenda.ver_propia'],
+        '/admin/equipo' => ['propietario'],
+        '/admin/clientes' => ['propietario', 'gerente', 'recepcion', 'profesional', 'finanzas'],
+        '/admin/clientes/exportar' => ['propietario', 'gerente'],
+        '/profesionales' => ['propietario', 'gerente'],
+        '/admin/finanzas' => ['propietario', 'gerente', 'finanzas'],
+        '/admin/inventario' => ['propietario', 'gerente', 'finanzas'],
+        '/admin/crecimiento' => ['propietario', 'gerente'],
+        '/admin/ajustes' => ['propietario', 'gerente'],
+        '/admin/reportes' => ['propietario', 'gerente', 'finanzas'],
+        '/admin' => ['propietario', 'gerente', 'recepcion'],
+        '/servicios' => ['propietario', 'gerente'],
+        '/agenda' => ['propietario', 'gerente', 'recepcion', 'profesional'],
     ];
 
-    private function permitido(string $rol, array $perms): bool
+    private const M_PERM = 'Tu cuenta no tiene permiso para realizar esta operación. Consulta con la administración del salón si necesitas acceso.';
+
+    private function permitido(string $rol, string $ruta): bool
     {
-        return count(array_intersect($perms, AuthorizationService::ROLES[$rol] ?? [])) > 0;
+        return in_array($rol, self::RUTAS[$ruta], true);
     }
 
     public static function personasEquipo(): array
@@ -88,11 +94,15 @@ final class AutorizacionHttpTest extends QaCase
         $rol = self::$p[$persona]['rol'];
         $n = $this->nav($persona);
         $fallos = [];
-        foreach (self::RUTAS as $ruta => $perms) {
+        foreach (self::RUTAS as $ruta => $roles) {
             $r = $n->get($ruta);
-            $esperado = $this->permitido($rol, $perms) ? [200] : [403];
-            if (!in_array($r['status'], $esperado, true) && !($ruta === '/admin/clientes/exportar' && $r['status'] === 200)) {
-                $fallos[] = "$persona $ruta => {$r['status']} (esperado " . implode('/', $esperado) . ')';
+            $esperado = $this->permitido($rol, $ruta) ? 200 : 403;
+            if ($r['status'] !== $esperado) {
+                $fallos[] = "$persona $ruta => {$r['status']} (esperado exactamente $esperado)";
+            } elseif ($esperado === 403 && !str_contains($r['body'], self::M_PERM)) {
+                $fallos[] = "$persona $ruta => 403 sin el mensaje de permiso esperado";
+            } elseif ($r['location'] !== null) {
+                $fallos[] = "$persona $ruta => {$r['status']} no debe llevar Location ({$r['location']})";
             }
         }
         $this->assertSame([], $fallos);
@@ -104,7 +114,7 @@ final class AutorizacionHttpTest extends QaCase
         $fallos = [];
         foreach (array_keys(self::RUTAS) as $ruta) {
             $r = $n->get($ruta);
-            if ($r['status'] !== 403) { $fallos[] = "$ruta => {$r['status']}"; }
+            if ($r['status'] !== 403 || !str_contains($r['body'], self::M_PERM)) { $fallos[] = "$ruta => {$r['status']}"; }
         }
         foreach (['/admin/equipo/ficha?id=1', '/admin/clientes/ficha?id=1'] as $ruta) {
             $r = $n->get($ruta);
@@ -113,22 +123,32 @@ final class AutorizacionHttpTest extends QaCase
         $this->assertSame([], $fallos);
     }
 
-    public function test_anonimo_es_redirigido_o_401_nunca_ve_contenido(): void
+    /**
+     * Contrato exacto para el anónimo (isAuth): navegación → 302 con Location `/` (acceso de clientes, el único público; el portal del
+     * equipo solo se conoce por la marca de una sesión previa); rutas /api → 401 JSON. Nunca contenido.
+     * OBSERVACIÓN: las pantallas del equipo (/admin…) mandan al anónimo a `/` y no a `/equipo/login`; es coherente con el código
+     * (sin sesión no se sabe a qué portal iba) y `/` enlaza el acceso del equipo, así que no se considera defecto.
+     */
+    public function test_anonimo_es_redirigido_a_la_raiz_o_401_json_exacto_nunca_ve_contenido(): void
     {
         $n = new Navegador(self::$base);
         $fallos = [];
-        foreach (array_keys(self::RUTAS) + [] as $ruta) { }
         foreach (array_keys(self::RUTAS) as $ruta) {
             $r = $n->get($ruta);
-            if (!($r['status'] === 302 && in_array($r['location'], ['/', '/equipo/login'], true))) { $fallos[] = "$ruta => {$r['status']} {$r['location']}"; }
+            if (!($r['status'] === 302 && $r['location'] === '/' && $r['body'] === '')) { $fallos[] = "$ruta => {$r['status']} {$r['location']}"; }
         }
-        foreach (['/admin/equipo/ficha?id=1', '/admin/clientes/ficha?id=1', '/perfil', '/api/mis-citas'] as $ruta) {
+        foreach (['/admin/equipo/ficha?id=1', '/admin/clientes/ficha?id=1', '/perfil'] as $ruta) {
             $r = $n->get($ruta);
-            if (!in_array($r['status'], [302, 401], true)) { $fallos[] = "$ruta => {$r['status']}"; }
+            if (!($r['status'] === 302 && $r['location'] === '/' && $r['body'] === '')) { $fallos[] = "$ruta => {$r['status']} {$r['location']}"; }
         }
         $this->assertSame([], $fallos);
-        $this->assertSame(401, $n->get('/api/mis-citas')['status']);
-        $this->assertSame(401, $n->get('/api/mis-citas', ['Accept: text/html'])['status'], 'las rutas /api responden JSON/401 incluso con Accept html');
+        $r = $n->get('/api/mis-citas');
+        $this->assertSame(401, $r['status']);
+        $this->assertSame(['resultado' => false, 'status' => 'unauthorized', 'codigo' => 'no_autenticado', 'citas' => [], 'error' => 'No autenticado'], json_decode($r['body'], true));
+        $this->assertSame('application/json; charset=utf-8', $r['headers']['content-type'][0]);
+        $r = $n->get('/api/mis-citas', ['Accept: text/html']);
+        $this->assertSame(401, $r['status'], 'las rutas /api responden JSON/401 incluso con Accept html');
+        $this->assertSame('application/json; charset=utf-8', $r['headers']['content-type'][0]);
     }
 
     public function test_persona_con_ambos_perfiles_en_portal_cliente_no_tiene_privilegios_laborales(): void
@@ -162,8 +182,9 @@ final class AutorizacionHttpTest extends QaCase
         $fallos = [];
         foreach (array_keys(self::RUTAS) as $ruta) {
             $r = $n->get($ruta, ["Cookie: PHPSESSID=$id"]);
-            // Una sesión de portal "equipo" sobre una cuenta sin rol laboral debe terminar: 302 a login o 403, nunca 200.
-            if (!in_array($r['status'], [302, 403], true)) { $fallos[] = "$ruta => {$r['status']}"; }
+            // Una sesión de portal «equipo» sobre una cuenta sin rol laboral caduca (sesionVigente): isAuth() la vacía y redirige
+            // al acceso del EQUIPO (la marca de portal de la sesión), exactamente. Nunca 200 ni 403.
+            if ($r['status'] !== 302 || $r['location'] !== '/equipo/login' || $r['body'] !== '') { $fallos[] = "$ruta => {$r['status']} {$r['location']}"; }
         }
         $this->assertSame([], $fallos);
     }
@@ -177,9 +198,8 @@ final class AutorizacionHttpTest extends QaCase
         $fallos = [];
         foreach (array_keys(self::RUTAS) as $ruta) {
             $r = $n->get($ruta, ["Cookie: PHPSESSID=$id"]);
-            // Denegado = 403, o 302/401 cuando la sesión forjada se invalida por no tener membresía de cliente
-            // (resultado más estricto desde que cada membresía tiene su propio estado). Nunca 200.
-            if (!in_array($r['status'], [302, 401, 403], true)) { $fallos[] = "$ruta => {$r['status']}"; }
+            // Cuenta solo laboral (sin membresía de cliente) con sesión de portal «cliente»: sesionVigente=false → 302 a `/`, exacto.
+            if ($r['status'] !== 302 || $r['location'] !== '/' || $r['body'] !== '') { $fallos[] = "$ruta => {$r['status']} {$r['location']}"; }
         }
         $this->assertSame([], $fallos);
     }
@@ -220,8 +240,10 @@ final class AutorizacionHttpTest extends QaCase
         $svc = new \Services\ColaboradorService(new \Repositories\ColaboradorRepository(self::db()), new \Services\CorreoSalidaService(new \Repositories\CorreoSalidaRepository(self::db())));
         $this->assertSame('ok', $svc->cambiarAcceso(self::$p['propietario']['id'], $m['colaborador_id'], 'recepcion', 'suspendido')['status']);
         $r = $n->get('/admin');
-        $this->assertContains($r['status'], [302, 403]);
-        $this->assertNotSame(200, $r['status']);
+        $this->assertSame(302, $r['status']);
+        $this->assertSame('/equipo/login', $r['location'], 'la sesión revocada vuelve al acceso del equipo');
+        $this->assertSame('', $r['body']);
+        $this->assertStringContainsString('Tu sesión terminó', $n->get('/equipo/login')['body']);
         // Intento de login posterior: mensaje de suspensión, 403.
         self::q('TRUNCATE intentos_login');
         $r = (new Navegador(self::$base))->login('equipo', $m['email'], $m['password']);
@@ -236,10 +258,13 @@ final class AutorizacionHttpTest extends QaCase
         $this->assertSame('ok', $svc->cambiarAcceso(self::$p['propietario']['id'], $m['colaborador_id'], 'recepcion', 'baja')['status']);
         self::q('TRUNCATE intentos_login');
         $r = (new Navegador(self::$base))->login('equipo', $m['email'], $m['password']);
-        $this->assertContains($r['status'], [403, 422], 'baja: sin acceso al equipo');
+        $this->assertSame(403, $r['status'], 'baja: sin acceso al equipo (403)');
+        $this->assertStringContainsString('Tu acceso al equipo está suspendido', $r['body']);
         self::q('TRUNCATE intentos_login');
         $r = (new Navegador(self::$base))->login('cliente', $m['email'], $m['password']);
-        $this->assertNotSame(302, $r['status'], 'una baja laboral no debe convertirse en cliente con sesión activa');
+        $this->assertSame(422, $r['status'], 'una baja laboral no debe convertirse en cliente con sesión activa');
+        $this->assertStringContainsString('Esta cuenta pertenece al equipo del salón', $r['body']);
+        $this->assertNull($r['location']);
     }
 
     public function test_invitado_pendiente_no_inicia_sesion_en_el_equipo_con_credenciales_inexistentes(): void
@@ -258,7 +283,8 @@ final class AutorizacionHttpTest extends QaCase
         $this->assertSame(200, $n->get('/cita')['status']);
         self::q("UPDATE clientes SET estado='suspendido' WHERE usuario_id=?", [$c['id']]);
         $r = $n->get('/cita');
-        $this->assertNotSame(200, $r['status'], 'una membresía suspendida debe cerrar la sesión abierta');
+        $this->assertSame(302, $r['status'], 'una membresía suspendida debe cerrar la sesión abierta');
+        $this->assertSame('/', $r['location']);
         self::q('TRUNCATE intentos_login');
         $r = (new Navegador(self::$base))->login('cliente', $c['email'], $c['password']);
         $this->assertSame(403, $r['status']);
@@ -282,17 +308,27 @@ final class AutorizacionHttpTest extends QaCase
         self::q('TRUNCATE intentos_login');
         $this->assertSame(403, (new Navegador(self::$base))->login('cliente', $dual['email'], $dual['password'])['status']);
         // ...pero la sesión de cliente YA abierta debería terminar igual que la de un cliente puro.
-        $this->assertNotSame(200, $n->get('/cita')['status'], 'La sesión de cliente sigue activa tras suspender la membresía (contexto() solo desactiva a quien tiene rol cliente)');
+        $r = $n->get('/cita');
+        $this->assertSame(302, $r['status'], 'La sesión de cliente sigue activa tras suspender la membresía (contexto() solo desactiva a quien tiene rol cliente)');
+        $this->assertSame('/', $r['location']);
     }
 
     public function test_perfil_y_apis_exigen_sesion_y_no_filtran_por_rol_forjado(): void
     {
         $n = new Navegador(self::$base);
-        foreach (['/perfil', '/perfil/foto', '/api/mis-citas'] as $ruta) {
-            $r = $n->get($ruta);
-            $this->assertContains($r['status'], [302, 401, 404, 422], "$ruta anónimo => {$r['status']}");
-            $this->assertStringNotContainsString('"servicios"', $r['body']);
-        }
+        $r = $n->get('/perfil');
+        $this->assertSame([302, '/', ''], [$r['status'], $r['location'], $r['body']], '/perfil anónimo');
+        // /perfil/foto no exige sesión para decidir: sin id (ni de sesión) es un 404 de la página de error estándar.
+        $r = $n->get('/perfil/foto');
+        $this->assertSame(404, $r['status']);
+        $this->assertStringContainsString('No encontramos esta página', $r['body']);
+        $r = $n->get('/api/mis-citas');
+        $this->assertSame(401, $r['status']);
+        $this->assertSame('No autenticado', json_decode($r['body'], true)['error']);
+        $this->assertStringNotContainsString('"servicios"', $r['body']);
+        $r = $n->post('/api/pagos/iniciar', ['x' => '1']);
+        $this->assertSame(401, $r['status'], 'sin sesión se autentica antes de mirar el CSRF');
+        $this->assertSame(['resultado' => false, 'status' => 'unauthorized', 'error' => 'No autenticado'], json_decode($r['body'], true));
     }
 
     public static function mutaciones(): array
@@ -348,7 +384,8 @@ final class AutorizacionHttpTest extends QaCase
         $n = new Navegador(self::$base);
         $this->assertSame(200, $n->get('/equipo/aceptar?token=' . $tok)['status']);
         $h = $n->peticion('HEAD', '/equipo/aceptar?token=' . $tok);
-        $this->assertContains($h['status'], [200]);
+        $this->assertSame(200, $h['status']);
+        $this->assertSame('', $h['body']);
         $this->assertSame('pendiente', self::escalar('SELECT estado FROM colaborador_invitaciones WHERE colaborador_id=?', [self::$p['invitado']['colaborador_id']]));
         $r = $n->post('/equipo/aceptar?token=' . $tok, ['password' => 'Nueva-Pass-123', 'password_confirmacion' => 'Nueva-Pass-123', 'acepto' => '1']);
         $this->assertSame(403, $r['status']);

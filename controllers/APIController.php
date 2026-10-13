@@ -431,7 +431,7 @@ class APIController
                     detener_ejecucion($httpCode);
                     return;
                 }
-                header('Location: /admin');
+                header('Location: ' . inicio_portal());
                 detener_ejecucion(302);
                 return;
             }
@@ -449,7 +449,7 @@ class APIController
                     detener_ejecucion(404);
                     return;
                 }
-                header('Location: ' . ($_SERVER['HTTP_REFERER'] ?? '/admin'));
+                header('Location: ' . destino_retorno_seguro());
                 detener_ejecucion(302);
                 return;
             }
@@ -503,7 +503,7 @@ class APIController
                 return;
             }
 
-            $destino = $_SERVER['HTTP_REFERER'] ?? ($esAdmin ? '/admin' : '/cita');
+            $destino = destino_retorno_seguro();
             header('Location: ' . $destino);
             detener_ejecucion(302);
             return;
