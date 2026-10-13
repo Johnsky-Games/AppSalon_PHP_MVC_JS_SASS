@@ -249,7 +249,6 @@ final class R2bColaCorreosTest extends R2bCase
         $this->assertGreaterThanOrEqual(1, count($validos), 'el titular DEBE recibir el enlace vigente: ' . json_encode(['entregados' => count($entregados)]));
         $this->assertLessThanOrEqual(1, count($validos) , 'el enlace vigente solo debe entregarse una vez');
         // Ventana de carrera documentada (docs §5.7): se cuantifica y se acota por el número de reenvíos simultáneos.
-        file_put_contents('/tmp/qa2out/ventana_carrera.log', json_encode(['fecha' => date('c'), 'procesos' => 8, 'entregados' => count($entregados), 'validos' => count($validos), 'obsoletos_entregados' => $obsoletos]) . "\n", FILE_APPEND);
         $this->assertLessThan(8, $obsoletos, 'más correos con enlace inválido que reenvíos concurrentes');
         // Los obsoletos entregados llevan enlaces que ya no sirven: confirmar con uno debe fallar.
         foreach ($entregados as $tk) {

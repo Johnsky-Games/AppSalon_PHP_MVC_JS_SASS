@@ -186,7 +186,7 @@ final class AutorizacionMatrizTest extends QaCase
             if ($reales !== $esperadas) { $f[] = "auditoría de exportación: se esperaba $esperadas fila(s) nueva(s) (status {$resp['status']}) y hubo $reales"; }
         }
         if ($tablasEfecto) { $f[] = 'EFECTO en BD: ' . implode(', ', $tablasEfecto); }
-        if ($x['correo'] !== 0) { $f[] = "EFECTO: {$x['correo']} correo(s) enviados al buzón SMTP"; }
+        if ($x['correo'] !== 0) { $f[] = "EFECTO: {$x['correo']} correo(s) enviados al buzón SMTP" . (empty($x['correo_detalle']) ? '' : ' [' . implode('; ', $x['correo_detalle']) . ']'); }
         return array_map(fn ($m) => "[$celda] $m", $f);
     }
 
@@ -766,13 +766,19 @@ final class AutorizacionMatrizTest extends QaCase
     public function test_I_ninguna_redireccion_forma_bucle_ni_lleva_a_un_recurso_prohibido_para_quien_la_recibe(): void
     {
         $fallos = [];
-        $excluidas = []; // DEF-R2-02 corregido: POST /api/eliminar ya redirige al inicio de su portal y entra en la comprobación.
+        // DEF-R2-02 corregido: POST /api/eliminar ya redirige al inicio de su portal y entra en la comprobación.
+        // POST /admin/equipo/reasignar con roles que no son propietario se comprueba aparte en test_Defecto_R2B_11_… (defecto nuevo
+        // de la ronda 2B): se excluye de ESTA prueba solo para que un único defecto no oculte el resto de la matriz; la exclusión
+        // es solo por (ruta, persona) y el defecto sigue en rojo en su propia prueba.
+        $excluidas = [];
+        $exclPersona = ['POST /admin/equipo/reasignar' => ['gerente', 'recepcion', 'portal_inexistente_cuenta_equipo']];
         foreach (self::$rutas as $r0) {
             $r = $r0; $r['p'] = $this->resolver($r0['p']);
             if (in_array(self::etiqueta($r0), $excluidas, true) || $r0['g'] === 'especial') { continue; }
             foreach (self::pers() as $persona) {
                 $spec = $this->esperado($r, $persona);
                 if ($spec['k'] !== 'redir' || $spec['x'] === '@portal') { continue; }
+                if (in_array($persona, $exclPersona[self::etiqueta($r0)] ?? [], true)) { continue; }
                 $per = self::personas()[$persona];
                 $csrf = bin2hex(random_bytes(32));
                 $datos = ($per['sesion'])($csrf) ?? ['csrf_token' => $csrf];

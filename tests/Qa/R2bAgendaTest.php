@@ -779,6 +779,26 @@ final class R2bAgendaTest extends R2bCase
         foreach (['/admin/equipo/reasignar?id=1', '/admin/equipo/reasignar?id=' . $colId . '&x=1'] as $u) { $this->assertSame(403, $this->nav('cliente')->get($u)['status']); }
     }
 
+    /**
+     * DEF-R2B-11 (rojo): un formulario de reasignación manipulado o caducado (sin `id`) hace que la gerencia y la recepción -que tienen
+     * `agenda.gestionar` y SÍ ven esta pantalla- sean redirigidas a /admin/equipo, que exige `equipo.gestionar` (solo propietario):
+     * terminan en un 403. El destino de error debe ser una pantalla accesible para quien la recibe (p. ej. la propia revisión o el
+     * inicio de su portal).
+     */
+    public function test_Defecto_R2B_11_el_error_de_validacion_de_la_reasignacion_deja_a_gerencia_y_recepcion_en_un_403(): void
+    {
+        $e = $this->escenario();
+        $colId = (int)$e['origen']['colaborador_id'];
+        foreach (['gerente', 'recepcion'] as $quien) {
+            $n = $this->nav($quien);
+            $csrf = Navegador::csrfDe($n->get('/admin/equipo/reasignar?id=' . $colId)['body']);
+            $r = $n->post('/admin/equipo/reasignar', http_build_query(['csrf_token' => $csrf, 'motivo' => 'Baja', 'idem_key' => Idem::clave()]), ['Accept: text/html']);
+            $this->assertSame(302, $r['status'], $quien);
+            $destino = $n->get((string)$r['location'], ['Accept: text/html']);
+            $this->assertSame(200, $destino['status'], "$quien: POST sin id redirige a {$r['location']} que responde {$destino['status']} (callejón sin salida para un rol con agenda.gestionar)");
+        }
+    }
+
     public function test_csrf_idempotencia_y_formulario_vencido_en_la_reasignacion(): void
     {
         $e = $this->escenario();
