@@ -49,21 +49,41 @@ final class ConcurrenciaTest extends QaCase
         foreach ($estados as $e) { $this->assertContains($e, ['ok', 'rate_limited'], json_encode($estados)); }
     }
 
+    /**
+     * CAMBIO DE CONTRATO (ronda 2, DEF-13): el registro público es UNIFORME. Con 6 solicitudes simultáneas y claves distintas para el MISMO correo
+     * no «gana» una sola: todas las admitidas devuelven la misma respuesta (`ok`; las que superan el presupuesto de 3 por correo devuelven 429),
+     * las que encuentran la cuenta ya creada emiten un token nuevo (cliente sin confirmar) y cada solicitud aceptada deja su fila de idempotencia.
+     * El INVARIANTE real que se mantiene (y que antes se comprobaba con «solo una gana») es: UNA identidad, UNA membresía, la contraseña del primer alta
+     * intacta, UN token vigente y como máximo UN evento de correo activo; nunca un aviso de «cuenta existente» sobre una cuenta recién creada.
+     */
     public function test_registro_claves_distintas_mismo_correo_una_sola_identidad(): void
     {
         $email = self::correo('reg2');
         $post = ['nombre' => 'Rosa', 'apellido' => 'Diaz', 'email' => $email, 'password' => 'Abcdef123456', 'telefono' => '0991112222'];
         $t = [];
-        for ($i = 0; $i < 6; $i++) { $t[] = ['accion' => 'registrar', 'args' => ['post' => $post, 'clave' => Idem::clave(), 'actor' => 'anonimo:' . str_repeat('b', 32)]]; }
+        for ($i = 0; $i < 6; $i++) { $t[] = ['accion' => 'registrarCola', 'args' => ['post' => $post, 'clave' => Idem::clave(), 'actor' => 'anonimo:' . str_repeat('b', 32), 'ip' => '10.4.' . $i . '.1']]; }
         $res = self::concurrente($t);
         $this->sinErrores($res, 'registro claves distintas');
-        $this->assertSame(1, (int)self::escalar('SELECT COUNT(*) FROM usuarios WHERE LOWER(TRIM(email))=?', [$email]));
-        $this->assertSame(1, (int)self::escalar('SELECT COUNT(*) FROM clientes'));
-        $ok = count(array_filter($res, fn($r) => $r['resultado']['status'] === 'ok'));
-        $this->assertSame(1, $ok, 'solo UNA solicitud gana: ' . json_encode(array_column($res, 'resultado')));
-        $this->assertSame(1, array_sum(array_map(fn($r) => $r['resultado']['correos_enviados'], $res)));
-        // Sin filas de idempotencia huérfanas: las solicitudes perdedoras revierten su reserva.
-        $this->assertSame(1, (int)self::escalar('SELECT COUNT(*) FROM operaciones_idempotentes'), 'reservas huérfanas');
+        $estados = array_map(fn($r) => $r['resultado']['status'], $res);
+        foreach ($estados as $e) { $this->assertContains($e, ['ok', 'rate_limited'], json_encode($estados)); }
+        $aceptadas = count(array_filter($estados, fn($e) => $e === 'ok'));
+        $this->assertSame(3, $aceptadas, 'presupuesto por correo = 3 solicitudes admitidas en la ventana: ' . json_encode($estados));
+        $uid = (int)self::escalar('SELECT id FROM usuarios WHERE LOWER(TRIM(email))=?', [$email]);
+        $this->assertSame(1, (int)self::escalar('SELECT COUNT(*) FROM usuarios WHERE LOWER(TRIM(email))=?', [$email]), 'UNA identidad');
+        $this->assertSame(1, (int)self::escalar('SELECT COUNT(*) FROM clientes WHERE usuario_id=?', [$uid]), 'UNA membresía');
+        $this->assertTrue(password_verify('Abcdef123456', (string)self::escalar('SELECT password FROM usuarios WHERE id=?', [$uid])), 'la contraseña del primer alta debe conservarse');
+        // Una cuenta SIN confirmar nunca recibe «aviso de cuenta existente»: solo confirmaciones (altas o reemisiones).
+        $this->assertSame(0, (int)self::escalar("SELECT COUNT(*) FROM correos_salida WHERE destinatario_email=? AND tipo='aviso_cuenta_existente'", [$email]));
+        $this->assertSame(1, (int)self::escalar("SELECT COUNT(*) FROM usuarios WHERE id=? AND token_tipo='confirmacion' AND token_expira>NOW()", [$uid]), 'UN token vigente');
+        $activos = (int)self::escalar("SELECT COUNT(*) FROM correos_salida WHERE usuario_id=? AND tipo='confirmacion_cuenta' AND estado IN ('pendiente','enviando')", [$uid]);
+        $this->assertLessThanOrEqual(1, $activos, 'a lo sumo un evento activo');
+        // Una fila de idempotencia por solicitud ACEPTADA (las rechazadas por límite no reservan).
+        $this->assertSame($aceptadas, (int)self::escalar("SELECT COUNT(*) FROM operaciones_idempotentes WHERE scope='cliente.registro'"), 'reservas de idempotencia vs solicitudes aceptadas');
+        // El token que quedó vigente es el de un evento de la cola (nunca uno huérfano): el último en confirmarse.
+        $tokens = array_values(array_filter(array_map(fn($r) => $r['resultado']['token_enviado'] ?? null, $res)));
+        $this->assertNotEmpty($tokens, 'ningún proceso entregó un enlace');
+        $vigentes = array_filter(array_unique($tokens), fn($tk) => (int)self::escalar('SELECT COUNT(*) FROM usuarios WHERE id=? AND token_hash=?', [$uid, hash('sha256', $tk)]) === 1);
+        $this->assertCount(1, $vigentes, 'exactamente un enlace entregado sigue vigente');
     }
 
     public function test_registro_variantes_de_mayusculas_y_espacios_concurrentes_no_duplican_identidad(): void

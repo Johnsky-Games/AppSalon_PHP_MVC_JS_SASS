@@ -39,6 +39,42 @@ try {
             $r = $svc->registrar($a['post'], '10.1.' . random_int(1, 250) . '.' . random_int(1, 250), $a['clave'], $a['actor']);
             $res = ['status' => $r['status'], 'repetida' => $r['repetida'] ?? null, 'correos_enviados' => count($correos), 'alertas' => $r['alertas'] ?? []];
             break;
+        case 'registrarCola':
+            // Registro por la COLA real (sin despachador inyectado); el transporte de correo se captura, no sale nada.
+            $enviados = [];
+            \Classes\Email::setTransport(static function ($mail) use (&$enviados) {
+                $enviados[] = $mail->Body; return true;
+            });
+            $svc = new AuthService(new Repositories\UsuarioRepository($db));
+            $espera();
+            $t0 = microtime(true);
+            $r = $svc->registrar($a['post'], $a['ip'] ?? '10.1.0.1', $a['clave'], $a['actor']);
+            $tok = null;
+            foreach ($enviados as $cuerpo) { if (preg_match('~token=([a-f0-9]{64})~', $cuerpo, $m)) { $tok = $m[1]; } }
+            $res = ['status' => $r['status'], 'repetida' => $r['repetida'] ?? null, 'envios' => count($enviados), 'token_enviado' => $tok, 'alertas' => $r['alertas'] ?? []];
+            break;
+        case 'reenviarCola':
+            $enviados = [];
+            if (empty($a['smtp'])) {
+                \Classes\Email::setTransport(static function ($mail) use (&$enviados) {
+                    $enviados[] = $mail->Body; return true;
+                });
+            }
+            $svc = new AuthService(new Repositories\UsuarioRepository($db));
+            $espera();
+            // Arnés: el limitador (3 por correo y ventana) es correcto y frenaría la carrera; se vacía su tabla justo antes
+            // para poder provocar N emisiones realmente simultáneas sobre la misma cuenta.
+            if (!empty($a['sinLimite'])) { $db->query('DELETE FROM intentos_login'); }
+            $t0 = microtime(true);
+            $r = $svc->reenviarConfirmacion(['email' => $a['email']], $a['ip'] ?? '10.1.0.1');
+            for ($reint = 0; !empty($a['sinLimite']) && $r['status'] === 'rate_limited' && $reint < 5; $reint++) {
+                $db->query('DELETE FROM intentos_login');
+                $r = $svc->reenviarConfirmacion(['email' => $a['email']], $a['ip'] ?? '10.1.0.1');
+            }
+            $tok = null;
+            foreach ($enviados as $cuerpo) { if (preg_match('~token=([a-f0-9]{64})~', $cuerpo, $m)) { $tok = $m[1]; } }
+            $res = ['status' => $r['status'], 'envios' => count($enviados), 'token_enviado' => $tok];
+            break;
         case 'invitar':
             $svc = $servicioColab();
             $espera();

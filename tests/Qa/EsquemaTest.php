@@ -2,10 +2,10 @@
 
 namespace Tests\Qa;
 
-require_once __DIR__ . '/QaCase.php';
+require_once __DIR__ . '/R2bCase.php';
 
 /** E. Migraciones, esquema fresh vs upgrade, rollbacks, precheck de la 017 y respaldo/restauración. */
-final class EsquemaTest extends QaCase
+final class EsquemaTest extends R2bCase
 {
     private const BDS = ['fresh', 'upg', 'rb18', 'rb17', 'rb16', 'pre', 'bk', 'bkr', 'down', 'upg2'];
 
@@ -141,6 +141,7 @@ final class EsquemaTest extends QaCase
         $db->close();
     }
 
+    /** Rollback MANUAL del .sql saltándose el migrador (y por tanto el guard): solo para demostrar el límite documentado. */
     private function revertirSolo(string $nombre, string $migracion): void
     {
         $db = $this->conectar($nombre);
@@ -151,14 +152,24 @@ final class EsquemaTest extends QaCase
 
     public static function rollbacks(): array { return [['018_colaboradores_invitaciones', 'rb18'], ['017_idempotencia_unicidad', 'rb17'], ['016_clientes_membresia', 'rb16']]; }
 
-    /** @dataProvider rollbacks */
+    /**
+     * CAMBIO DE CONTRATO (ronda 2B, DEF-16 corregido): `migrador.php down` ya NO revierte una migración con datos de negocio sin
+     * `--aceptar-perdida=<migración>` por cada una y un respaldo verificable. Antes la prueba ejecutaba el rollback SQL a mano
+     * (saltándose el guard) y reaplicaba SOLO la migración revertida; eso dejaba inconsistentes las migraciones posteriores que
+     * dependen de ella (la 019 añade una columna a la tabla que crea la 018). La garantía que se mantiene es la misma:
+     * revertir y reaplicar deja un esquema idéntico a una instalación nueva y los datos ajenos intactos; ahora por el
+     * procedimiento SOPORTADO (`--hasta` revierte la migración y todas las posteriores, en orden inverso).
+     *
+     * @dataProvider rollbacks
+     */
     public function test_E2_rollback_individual_y_reaplicacion_dejan_el_esquema_identico_al_fresh(string $mig, string $sufijo): void
     {
         $nombre = $this->bd($sufijo);
         self::crearBd($nombre);
         $this->semilla($nombre);
         $esquemaCompleto = $this->esquema($nombre);
-        $this->revertirSolo($nombre, $mig);
+        $rev = self::revertirSeguro($nombre, $mig);
+        $this->assertSame(0, $rev['exit'], $rev['out']);
         $db = $this->conectar($nombre);
         $tablas = array_column($this->filas($db, 'SHOW TABLES'), 'Tables_in_' . $nombre);
         $objetivo = ['018_colaboradores_invitaciones' => ['colaboradores', 'colaborador_invitaciones', 'correos_salida'], '017_idempotencia_unicidad' => ['operaciones_idempotentes'], '016_clientes_membresia' => ['clientes']][$mig];
@@ -172,7 +183,7 @@ final class EsquemaTest extends QaCase
         // Datos ajenos intactos.
         $this->assertSame(3, (int)$this->filas($db, 'SELECT COUNT(*) n FROM usuarios')[0]['n']);
         $db->close();
-        // Re-aplicación con el migrador real, que solo aplica la pendiente.
+        // Re-aplicación con el migrador real, que aplica las pendientes (la revertida y las posteriores).
         $m = $this->migrar($nombre);
         $this->assertSame(0, $m['exit'], $m['out']);
         $this->assertStringContainsString("Aplicando migración: $mig", $m['out']);
@@ -180,31 +191,74 @@ final class EsquemaTest extends QaCase
         $db = $this->conectar($nombre);
         $this->assertSame(3, (int)$this->filas($db, 'SELECT COUNT(*) n FROM usuarios')[0]['n']);
         $db->close();
+        @unlink($rev['respaldo']); @unlink($rev['respaldo'] . '.manifest.json');
     }
 
+    /**
+     * DEF-16 (reverificado, ya sin omisión): revertir y reaplicar la 016 por el procedimiento soportado NO reactiva a un
+     * cliente suspendido, ni en la base ni en el login real (403).
+     */
     public function test_Defecto_E2_rollback_y_reaplicacion_de_016_reactiva_en_silencio_a_clientes_suspendidos(): void
     {
-        $this->markTestSkipped('Riesgo aceptado y documentado: el rollback de la 016 elimina la tabla por definición; solo para copias de prueba, ver guía §10 y el aviso en el archivo de rollback (DEF-16).');
         $nombre = $this->bd('rb16');
         self::crearBd($nombre);
         $this->semilla($nombre); // cliente 3 suspendido por recepción
-        $this->revertirSolo($nombre, '016_clientes_membresia');
+        $this->conectar($nombre)->query("UPDATE clientes SET suspendido_motivo='Impagos reiterados' WHERE usuario_id=3");
+        $rev = self::revertirSeguro($nombre, '016_clientes_membresia');
+        $this->assertSame(0, $rev['exit'], $rev['out']);
         $m = $this->migrar($nombre);
         $this->assertSame(0, $m['exit'], $m['out']);
         $db = $this->conectar($nombre);
-        $est = array_column($this->filas($db, 'SELECT usuario_id, estado FROM clientes'), 'estado', 'usuario_id');
+        $est = array_column($this->filas($db, 'SELECT usuario_id, estado, origen, suspendido_motivo FROM clientes'), null, 'usuario_id');
         $db->close();
-        $this->assertSame('suspendido', $est[3] ?? null, 'La retrocarga de 016 solo deriva la suspensión de usuario_accesos.activo; una suspensión explícita de cliente se reactiva al repetir el ciclo down/up');
+        $this->assertSame('suspendido', $est[3]['estado'] ?? null, 'La suspensión explícita se reactivó tras down/up');
+        $this->assertSame('Impagos reiterados', $est[3]['suspendido_motivo'], 'se perdió el motivo de la suspensión');
+        $this->assertSame('recepcion', $est[3]['origen']);
+        $this->assertSame('activo', $est[2]['estado']);
+        // Y el efecto observable: el suspendido sigue sin poder entrar.
+        $srv = self::servidor(['DB_NAME' => $nombre], 'rb16');
+        $n = new Navegador($srv);
+        $this->assertSame(403, $n->login('cliente', 'susp@rb.test', 'Clave-123456')['status'], 'el cliente suspendido pudo iniciar sesión tras reaplicar la 016');
+        $this->assertSame(302, (new Navegador($srv))->login('cliente', 'cli@rb.test', 'Clave-123456')['status'], 'el cliente activo debe seguir entrando');
+        self::pararServidor('rb16');
+        @unlink($rev['respaldo']); @unlink($rev['respaldo'] . '.manifest.json');
     }
 
+    /**
+     * Límite DOCUMENTADO (GUIA §7.4 límite a): ejecutar a mano el `*_rollback.sql` se salta el guard y destruye datos de negocio
+     * (018) sin aviso. Se confirma que el límite es real; el procedimiento soportado es siempre el migrador.
+     */
+    public function test_Limite_documentado_el_rollback_manual_de_018_se_salta_el_guard_y_elimina_colaboradores(): void
+    {
+        $nombre = $this->bd('rb18');
+        self::crearBd($nombre);
+        $this->semilla($nombre);
+        $this->revertirSolo($nombre, '018_colaboradores_invitaciones');
+        $db = $this->conectar($nombre);
+        $this->assertSame([], $this->filas($db, "SHOW TABLES LIKE 'colaboradores'"), 'el rollback manual eliminó la tabla con datos, sin guard (límite documentado)');
+        $db->close();
+        $guia = (string)file_get_contents(self::RAIZ . '/docs/GUIA_ACTUALIZACION_IDENTIDADES.md');
+        $this->assertStringContainsString('se salta el guard', $guia, 'el límite debe seguir documentado');
+    }
+
+    /**
+     * CAMBIO DE CONTRATO (ronda 2B, DEF-16): `down` sin `--aceptar-perdida` y respaldo ya no devuelve 0 sobre una base con datos;
+     * sale con 2 y no toca nada. La garantía original (down completo + up reproduce el esquema de una instalación nueva) se
+     * mantiene y se ejecuta ahora con el procedimiento soportado; además se comprueba que la suspensión sobrevive al ciclo completo.
+     */
     public function test_E2b_ciclo_completo_down_y_up_reproduce_el_esquema(): void
     {
         $fresh = $this->bd('fresh'); $d = $this->bd('down');
         if (!self::admin()->query("SELECT 1 FROM information_schema.schemata WHERE schema_name='$fresh'")->num_rows) { self::crearBd($fresh); }
         self::crearBd($d);
         $this->semilla($d);
-        $down = $this->migrar($d, 'down');
-        $this->assertSame(0, $down['exit'], 'migrador down falló: ' . $down['out']);
+        $antes = $this->esquema($d);
+        $negado = $this->migrar($d, 'down');
+        $this->assertSame(2, $negado['exit'], 'down sin aceptación ni respaldo debe negarse con código 2: ' . $negado['out']);
+        $this->assertStringContainsString('BLOQUEO', $negado['out']);
+        $this->assertEquals($antes, $this->esquema($d), 'down negado modificó el esquema');
+        $rev = self::revertirSeguro($d);
+        $this->assertSame(0, $rev['exit'], 'migrador down con aceptación y respaldo falló: ' . $rev['out']);
         $db = $this->conectar($d);
         $restantes = array_column($this->filas($db, 'SHOW TABLES'), 'Tables_in_' . $d);
         $db->close();
@@ -212,6 +266,10 @@ final class EsquemaTest extends QaCase
         $this->assertSame(0, $up['exit'], 'migrador up tras down falló: ' . $up['out'] . ' (tablas tras down: ' . implode(',', $restantes) . ')');
         $a = $this->esquema($fresh); $b = $this->esquema($d);
         foreach ($a as $parte => $v) { $this->assertEquals($v, $b[$parte], "tras down+up '$parte' difiere de fresh"); }
+        $db = $this->conectar($d);
+        $this->assertSame('suspendido', $this->filas($db, 'SELECT estado FROM clientes WHERE usuario_id=3')[0]['estado']);
+        $db->close();
+        @unlink($rev['respaldo']); @unlink($rev['respaldo'] . '.manifest.json');
     }
 
     // ------------------------------------------------------------------ E3
@@ -361,10 +419,13 @@ final class EsquemaTest extends QaCase
 
     public function test_Defecto_E5_conteo_de_tablas_y_documentacion(): void
     {
-        $db = $this->conectar($this->bd('bk'));
+        $bd = $this->bd('fresh');
+        if (!self::admin()->query("SELECT 1 FROM information_schema.schemata WHERE schema_name='$bd'")->num_rows) { self::crearBd($bd); }
+        $db = $this->conectar($bd);
         $n = (int)$this->filas($db, "SELECT COUNT(*) n FROM information_schema.tables WHERE table_schema=DATABASE() AND table_type='BASE TABLE'")[0]['n'];
         $db->close();
-        $this->assertSame(35, $n, 'tablas del esquema migrado (incluye migraciones y equipo_mutex)');
+        // CAMBIO DE CONTRATO (rondas 019-022): +7 tablas (resguardo_016, reasignaciones, decisiones de homónimos x2, auditoría CRM, versiones e historial de consentimiento).
+        $this->assertSame(42, $n, 'tablas del esquema migrado (incluye migraciones y equipo_mutex)');
         // La documentación citaba 30 (tras la 015) y el encabezado de backup_db.php "13 tablas": ya no describen la realidad.
         $this->assertFalse(str_contains((string)file_get_contents(self::RAIZ . '/scripts/backup_db.php'), '13 tablas en total'), 'documentación obsoleta en scripts/backup_db.php: dice "13 tablas en total" y el esquema migrado tiene 35');
     }

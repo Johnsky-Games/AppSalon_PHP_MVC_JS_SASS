@@ -64,7 +64,9 @@ final class InstaladorTest extends QaCase
         $detalle = json_encode(array_map(fn($r) => [$r['exit'], substr($r['out'], -200)], $res), JSON_UNESCAPED_UNICODE);
         $db = $this->conn();
         $migs = (int)$db->query('SELECT COUNT(*) n FROM migraciones')->fetch_assoc()['n'];
-        $this->assertSame(18, $migs, "migraciones aplicadas tras la instalación paralela: $detalle");
+        // CAMBIO DE CONTRATO (rondas 019-022): hay más migraciones; se cuentan los archivos reales en lugar de fijar un número.
+        $esperadas = count(array_filter(glob(self::RAIZ . '/database/migrations/*.sql'), static fn($f) => !str_ends_with($f, '_rollback.sql')));
+        $this->assertSame($esperadas, $migs, "migraciones aplicadas tras la instalación paralela: $detalle");
         $this->assertCount(1, $this->enlaces($res), "debe mostrarse UN solo enlace de activación: $detalle");
         $this->assertSame(1, (int)$db->query("SELECT COUNT(*) n FROM colaboradores WHERE rol='propietario'")->fetch_assoc()['n']);
         $this->assertSame(1, (int)$db->query("SELECT COUNT(*) n FROM colaborador_invitaciones WHERE estado='pendiente'")->fetch_assoc()['n']);

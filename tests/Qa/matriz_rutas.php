@@ -67,7 +67,10 @@ return [
         'unauth_json' => ['resultado' => false, 'status' => 'unauthorized', 'codigo' => 'no_autenticado', 'citas' => [], 'error' => 'No autenticado']],
     ['m' => 'POST', 'p' => '/api/citas',             'g' => 'sesion', 'orden' => 'auth', 'csrf' => 'json_api', 'ok' => [422, 'json', ['resultado' => false, 'status' => 'invalid', 'codigo' => 'solicitud_invalida']],
         'unauth_json' => ['resultado' => false, 'error' => 'No autenticado']],
-    ['m' => 'POST', 'p' => '/api/eliminar',          'g' => 'sesion', 'orden' => 'csrf', 'csrf' => 'exigir', 'ok' => [302, 'redir', '/admin']],
+    // CAMBIO DE CONTRATO (ronda 2, DEF-R2-02 corregido): un id inválido ya no redirige a /admin (403 para casi todos) sino al inicio del portal
+    // de la sesión (destino_retorno_seguro → inicio_portal): '@inicio' = /admin (propietario, gerente, recepción), /agenda (profesional),
+    // /admin/finanzas (finanzas), /cita (cliente).
+    ['m' => 'POST', 'p' => '/api/eliminar',          'g' => 'sesion', 'orden' => 'csrf', 'csrf' => 'exigir', 'ok' => [302, 'redir', '@inicio']],
     ['m' => 'POST', 'p' => '/api/pagos/iniciar',     'g' => 'sesion', 'orden' => 'auth', 'csrf' => 'json_api', 'csrf_json' => ['resultado' => false, 'status' => 'forbidden', 'error' => 'Token CSRF inválido o ausente'], 'ok' => [422, 'json', ['resultado' => false, 'status' => 'invalid', 'errores' => ['El identificador de la cita es obligatorio y debe ser un entero positivo.']]],
         'unauth_json' => ['resultado' => false, 'status' => 'unauthorized', 'error' => 'No autenticado']],
 
@@ -102,6 +105,13 @@ return [
     ['m' => 'GET',  'p' => '/admin/equipo/ficha?id={col_staff}', 'g' => 'permiso', 'roles' => ['propietario'], 'ok' => [200, 'html']],
     ['m' => 'GET',  'p' => '/admin/equipo/ficha?id=987654', 'g' => 'permiso', 'roles' => ['propietario'], 'ok' => [404, 'html', 'No encontramos esta página']],
     ['m' => 'POST', 'p' => '/admin/equipo/ficha',    'p_csrf' => '/admin/equipo/ficha?id={col_staff}', 'g' => 'permiso', 'roles' => ['propietario'], 'orden' => 'auth', 'csrf' => 'exigir', 'ok' => [404, 'html', 'No encontramos esta página']],
+    // Ronda 2B: asistente de agenda de la ficha (rh.gestionar + profesionales.gestionar: hoy solo el propietario reúne ambos).
+    ['m' => 'POST', 'p' => '/admin/equipo/ficha/agenda', 'p_csrf' => '/admin/equipo/ficha/agenda?id={col_staff}', 'g' => 'permiso', 'roles' => ['propietario'], 'orden' => 'auth', 'csrf' => 'exigir', 'ok' => [404, 'html', 'No encontramos esta página']],
+    // Reasignación asistida de citas (agenda.gestionar). Sin id → 404; con id de un colaborador SIN ficha profesional → 404; con un profesional → 200.
+    ['m' => 'GET',  'p' => '/admin/equipo/reasignar', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion'], 'ok' => [404, 'html', 'No encontramos esta página']],
+    ['m' => 'GET',  'p' => '/admin/equipo/reasignar?id={col_staff}', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion'], 'ok' => [404, 'html', 'No encontramos esta página']],
+    ['m' => 'GET',  'p' => '/admin/equipo/reasignar?id={col_prof}', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion'], 'ok' => [200, 'html']],
+    ['m' => 'POST', 'p' => '/admin/equipo/reasignar', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion'], 'orden' => 'auth', 'csrf' => 'exigir', 'ok' => [302, 'redir', '/admin/equipo']],
     ['m' => 'GET',  'p' => '/admin/finanzas',        'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'ok' => [200, 'html']],
     ['m' => 'POST', 'p' => '/admin/finanzas',        'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'orden' => 'auth', 'csrf' => 'exigir', 'ok' => [303, 'redir', '/admin/finanzas']],
     ['m' => 'GET',  'p' => '/admin/inventario',      'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'ok' => [200, 'html']],
@@ -115,7 +125,12 @@ return [
     ['m' => 'GET',  'p' => '/admin/clientes/ficha?id={ajeno}', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'profesional'], 'ok' => [200, 'html'],
         'ok_por_rol' => ['profesional' => [404, 'html', 'No encontramos este cliente o no tienes acceso a su ficha.']]],
     ['m' => 'GET',  'p' => '/admin/clientes/ficha?id=987654', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'profesional'], 'ok' => [404, 'html', 'No encontramos este cliente o no tienes acceso a su ficha.']],
-    ['m' => 'GET',  'p' => '/admin/clientes/exportar', 'g' => 'permiso', 'roles' => ['propietario', 'gerente'], 'ok' => [200, 'csv']],
+    // CAMBIO DE CONTRATO (ronda 2, CRM 5c): toda exportación pedida por una sesión autenticada deja EXACTAMENTE una fila en
+    // crm_exportaciones_auditoria (éxito o denegación 403); un anónimo o una sesión caducada no deja ninguna. Ver 'efecto_auditoria' en comparar().
+    ['m' => 'GET',  'p' => '/admin/clientes/exportar', 'g' => 'permiso', 'roles' => ['propietario', 'gerente'], 'ok' => [200, 'csv'], 'efecto_auditoria' => true],
+    ['m' => 'GET',  'p' => '/admin/clientes/auditoria', 'g' => 'permiso', 'roles' => ['propietario', 'gerente'], 'ok' => [200, 'html']],
+    ['m' => 'GET',  'p' => '/admin/clientes/nuevo',  'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion'], 'ok' => [200, 'html']],
+    ['m' => 'POST', 'p' => '/admin/clientes/nuevo',  'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion'], 'orden' => 'auth', 'csrf' => 'exigir', 'ok' => [422, 'html']],
     ['m' => 'POST', 'p' => '/api/pagos/reembolsar',  'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'orden' => 'auth', 'csrf' => 'json_api', 'csrf_json' => ['resultado' => false, 'status' => 'forbidden', 'error' => 'Token CSRF inválido o ausente'],
         'ok' => [422, 'json', ['resultado' => false, 'status' => 'invalid', 'errores' => ['La referencia de pago es obligatoria para solicitar un reembolso.']]]],
     // GET /perfil/foto: guardia híbrida (404 sin id; isAuth solo si hay login=true; 404 con cuerpo vacío si no hay foto): contrato en test_J.
