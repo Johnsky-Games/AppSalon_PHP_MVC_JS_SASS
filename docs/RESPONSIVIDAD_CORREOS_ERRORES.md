@@ -1,7 +1,7 @@
 # Responsividad, correos y páginas de error
 
 Base: `feature/plataforma-integral`, commit `c87863a3d72a140e295603c5eb079c02a0057f39`.
-Rama de trabajo local: `feature/responsividad-correos-errores`.
+Rama publicada: `feature/responsividad-correos-errores`.
 
 ## Cambios
 
@@ -21,7 +21,7 @@ Se conserva la configuración de transporte SMTP existente. La validación no en
 
 | Comprobación | Resultado |
 | --- | --- |
-| PHPUnit, orden aleatorio, semilla 1791863465 | 322 pruebas, 3611 aserciones; sin fallos ni advertencias |
+| PHPUnit, orden aleatorio, semilla 1791863465 | 323 pruebas, 3617 aserciones; sin fallos ni advertencias |
 | Compilación de assets | `npm run build` correcto |
 | Sintaxis PHP | 165 archivos, cero errores |
 | Errores del cliente JS | 3 escenarios: red, HTTP 500 y JSON incompatible |
@@ -33,7 +33,7 @@ Se conserva la configuración de transporte SMTP existente. La validación no en
 
 Entorno local aislado: PHP 8.3.6, MariaDB 10.11.14, servidor PHP y Chrome Headless Shell 155.0.8059.39. Se aplicaron las migraciones 001–015 sólo en bases efímeras de pruebas. Las comprobaciones de perfil ahora poseen su conexión y no dependen del orden de otros módulos.
 
-Las pruebas visuales incluyen 320, 360, 390, 768, 1024 y 1440 px, paisaje, texto al 200 %, contenido largo, pasos de reserva, teclado y diálogos. Se revisaron capturas del sidebar, administración, tablas, correos y 404. El runner Docker/Apache de CI incorpora las nuevas pruebas, pero su ejecución en PHP 8.2/MySQL 8 queda pendiente de publicar la rama con autorización.
+Las pruebas visuales incluyen 320, 360, 390, 768, 1024 y 1440 px, paisaje, texto al 200 %, contenido largo, pasos de reserva, teclado y diálogos. Se revisaron capturas del sidebar, administración, tablas, correos y 404. El runner Docker/Apache de CI incorpora las nuevas pruebas, y su ejecución en PHP 8.2/MySQL 8 terminó correctamente en GitHub Actions.
 
 ## Aplicar el paquete descargable
 
@@ -51,4 +51,11 @@ docker compose --env-file includes/.env -p appsalon-validacion up -d --build web
 
 En Git Bash de Windows, utilizar `npm.cmd` cuando el entorno lo requiera. Si `git apply --check` falla, revisar los cambios locales y la versión de partida; no forzar la aplicación ni borrar archivos propios. Los nuevos archivos PHP usan el autoload PSR-4 existente.
 
-La publicación en el repositorio público fue bloqueada por la revisión automática por falta de autorización explícita para esta subida. No se hizo push, merge ni despliegue.
+La rama está publicada en GitHub. La validación de CI comprueba PHP 8.2, MySQL 8, Apache, SMTP simulado, navegador y respaldo/restauración.
+
+## CI aprobado
+
+Código validado: `af470d2ee9a95704fce87000f70e4212a4186214`.
+Ejecución: https://github.com/Johnsky-Games/AppSalon_PHP_MVC_JS_SASS/actions/runs/38349231242
+
+PHP 8.2 + MySQL 8 + Apache: 323 pruebas y 3617 aserciones (semilla 1791867695), recorridos de negocio y SMTP simulado, 474 verificaciones responsive, 72 renders de errores, 28 de correos y navegación en 7 tamaños con 4 roles. Respaldo de 30 tablas y restauración con validación SHA-256 aprobados. Las 489 comprobaciones locales incluyen además una vista de pago válido con una fixture opcional.
