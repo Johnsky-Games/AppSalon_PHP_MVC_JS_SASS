@@ -25,6 +25,8 @@ final class InvitacionController
     public static function aceptar(Router $router): void
     {
         iniciar_sesion_segura();
+        // El enlace lleva un secreto en la URL: no se guarda en cachés ni se envía como referencia.
+        if (!headers_sent()) { header('Cache-Control: no-store'); header('Referrer-Policy: no-referrer'); }
         $token = is_string($_GET['token'] ?? null) ? trim($_GET['token']) : '';
         $servicio = self::servicio();
         $alertas = [];

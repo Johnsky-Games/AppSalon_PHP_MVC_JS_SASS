@@ -17,3 +17,7 @@ $db = Model\ActiveRecord::getDB();
 if (!$db instanceof mysqli) { fwrite(STDERR, "Sin conexión a la base de datos.\n"); exit(1); }
 $enviados = (new CorreoSalidaService(new CorreoSalidaRepository($db)))->procesarPendientes($limite);
 echo "Correos enviados: {$enviados}\n";
+
+// Retención: las claves de idempotencia vencidas ya no representan operaciones vigentes (30 días).
+$db->query('DELETE FROM operaciones_idempotentes WHERE expira_en < UTC_TIMESTAMP() LIMIT 1000');
+echo 'Claves de idempotencia vencidas eliminadas: ' . max(0, (int)$db->affected_rows) . "\n";

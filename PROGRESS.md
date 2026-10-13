@@ -829,6 +829,22 @@ Este archivo mantiene la trazabilidad estricta del avance del proyecto de acuerd
 
 
 
+## Identidades, clientes y equipo — entrega 2026-10-13 (rama `claude/blissful-hopper-f5k7a0`)
+
+Parte de `52c82e0` (`feature/responsividad-correos-errores`). Documentos: [`docs/ARQUITECTURA_IDENTIDADES.md`](docs/ARQUITECTURA_IDENTIDADES.md), [`docs/ENTREGA_IDENTIDADES.md`](docs/ENTREGA_IDENTIDADES.md), [`docs/GUIA_ACTUALIZACION_IDENTIDADES.md`](docs/GUIA_ACTUALIZACION_IDENTIDADES.md), [`docs/CRM_CLIENTES.md`](docs/CRM_CLIENTES.md).
+
+| Frente | Estado |
+| :--- | :---: |
+| Acceso de clientes verificados (sin aprobación laboral); «inactiva» ≠ fallo técnico (503) | `Hecho y probado` |
+| Altas sin duplicados (UI + idempotencia persistente + UNIQUE MySQL) en clientes, colaboradores y profesionales | `Hecho y probado` |
+| Portales y sesiones separados (clientes / equipo), perfil y ajustes por contexto | `Hecho y probado` |
+| Primer propietario automático e idempotente (`scripts/instalar.php`, servicio `instalador`) | `Hecho y probado` |
+| Colaboradores: invitación formal, aceptación, estados, ficha laboral, asistente de profesional | `Hecho y probado` |
+| CRM de clientes (listado, ficha, métricas definidas, RFM, CSV) | `Hecho y probado` |
+| Pasarela real, nómina/legal laboral, WhatsApp/SMS, despliegue público | `Fuera de alcance (ver límites)` |
+
+Migraciones nuevas: **016** `clientes`, **017** `operaciones_idempotentes` + UNIQUE de correo normalizado (con pre-validación), **018** `colaboradores`, `colaborador_invitaciones`, `correos_salida`, `profesionales.colaborador_id`. Tablas totales: **35**.
+
 ## Plataforma integral — entrega validada (2026-10-12)
 
 Rama `feature/plataforma-integral`, código `b1605d216940b76bd2c779f637d5084f78614450`. Roles/equipo, perfiles/fotos privadas, agenda/reprogramación, caja/inventario/comisiones, fidelidad/lista de espera/formularios y ajustes integrados. Menú móvil, modales, notificaciones y matriz de permisos comprensibles.
