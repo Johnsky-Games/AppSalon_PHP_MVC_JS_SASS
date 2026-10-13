@@ -49,6 +49,28 @@ class AdminReporteController
     }
 
     /**
+     * Los reportes financieros solo necesitan importes y servicios: quien no tiene `clientes.ver` (p. ej. finanzas)
+     * no recibe nombre, correo ni teléfono de clientes ni en pantalla ni en el CSV (QA DEF-R2-01).
+     */
+    protected static function ocultarDatosDeClientesSiCorresponde(array $reporte): array
+    {
+        if (puede('clientes.ver')) {
+            return $reporte;
+        }
+        foreach (['reservas', 'movimientos_financieros'] as $clave) {
+            foreach ($reporte[$clave] ?? [] as $i => $fila) {
+                if (!is_array($fila)) { continue; }
+                foreach (['cliente', 'cliente_email', 'cliente_telefono', 'cliente_nombre', 'cliente_apellido'] as $campo) {
+                    if (array_key_exists($campo, $fila)) { $fila[$campo] = ''; }
+                }
+                if (array_key_exists('cliente', $fila)) { $fila['cliente'] = 'Cliente reservado'; }
+                $reporte[$clave][$i] = $fila;
+            }
+        }
+        return $reporte;
+    }
+
+    /**
      * Renderiza el panel administrativo de reportes (`GET /admin/reportes`).
      */
     public static function index(Router $router): void
@@ -56,7 +78,7 @@ class AdminReporteController
         iniciar_sesion_segura();
         exigir_permiso('reportes.ver');
 
-        $resultado = self::obtenerReporteService()->consultarReporte($_GET);
+        $resultado = self::ocultarDatosDeClientesSiCorresponde(self::obtenerReporteService()->consultarReporte($_GET));
         $httpCode = (int)($resultado['http_code'] ?? 200);
         http_response_code($httpCode);
 
@@ -84,7 +106,7 @@ class AdminReporteController
         exigir_permiso('reportes.ver');
 
         $servicio = self::obtenerReporteService();
-        $resultado = $servicio->consultarReporte($_GET);
+        $resultado = self::ocultarDatosDeClientesSiCorresponde($servicio->consultarReporte($_GET));
         $httpCode = (int)($resultado['http_code'] ?? 200);
 
         if (

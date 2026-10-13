@@ -266,6 +266,30 @@ function inicio_portal(): string
     return '/cita';
 }
 
+/**
+ * Destino de retorno tras un envío de formulario. Solo se acepta el `Referer` si es del MISMO origen
+ * (host y puerto de la petición o de APP_URL); se reduce a ruta+consulta para impedir redirecciones abiertas
+ * (CWE-601). Cualquier otro caso devuelve el inicio del portal de la sesión, nunca una ruta que deniegue al rol.
+ */
+function destino_retorno_seguro(?string $referer = null): string
+{
+    $referer ??= (string)($_SERVER['HTTP_REFERER'] ?? '');
+    $porDefecto = inicio_portal();
+    if ($referer === '' || strlen($referer) > 2048 || preg_match('/[\x00-\x1f\x7f\\\\]/', $referer)) { return $porDefecto; }
+    $p = parse_url($referer);
+    if ($p === false || !isset($p['host'])) { return $porDefecto; }
+    $permitidos = [];
+    $solicitud = parse_url('//' . (string)($_SERVER['HTTP_HOST'] ?? ''));
+    if (!empty($solicitud['host'])) { $permitidos[] = strtolower($solicitud['host']) . ':' . ($solicitud['port'] ?? ''); }
+    $app = parse_url((string)($_ENV['APP_URL'] ?? getenv('APP_URL') ?: ''));
+    if (!empty($app['host'])) { $permitidos[] = strtolower($app['host']) . ':' . ($app['port'] ?? ''); }
+    $origen = strtolower($p['host']) . ':' . ($p['port'] ?? '');
+    if (!in_array($origen, $permitidos, true)) { return $porDefecto; }
+    $ruta = $p['path'] ?? '/';
+    if ($ruta === '' || $ruta[0] !== '/' || str_starts_with($ruta, '//')) { return $porDefecto; }
+    return $ruta . (isset($p['query']) ? '?' . $p['query'] : '');
+}
+
 function exigir_permiso(string $permiso): void
 {
     isAuth();

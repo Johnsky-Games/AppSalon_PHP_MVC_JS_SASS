@@ -430,7 +430,7 @@ $escalaServiciosUi = empty($serviciosGraficaUi) ? 0 : max(array_map(static funct
                     <p>Fecha: <span><?php echo s((string)$res['fecha']); ?></span></p>
                     <p>Horario: <span><?php echo s((string)$res['horario']); ?> (<?php echo s((string)$res['duracion_total_minutos']); ?> min)</span></p>
                     <p>Profesional: <span><?php echo s((string)$res['profesional_nombre']); ?></span></p>
-                    <p>Cliente: <span><?php echo s((string)$res['cliente']); ?> (<?php echo s((string)$res['cliente_email']); ?>)</span></p>
+                    <p>Cliente: <span><?php echo s((string)$res['cliente']); ?><?php if ((string)($res['cliente_email'] ?? '') !== '') { ?> (<?php echo s((string)$res['cliente_email']); ?>)<?php } ?></span></p>
                     <p>Estado Cita: <span><strong><?php echo s((string)($res['etiqueta_estado_cita'] ?? 'Confirmada')); ?></strong></span></p>
                     <h3>Servicios (Snapshot Histórico)</h3>
                     <?php foreach ($res['servicios'] as $srvItem) { ?>
