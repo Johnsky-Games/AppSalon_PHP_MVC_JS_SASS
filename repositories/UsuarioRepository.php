@@ -219,11 +219,19 @@ class UsuarioRepository
      * @return int Identificador primario autogenerado.
      * @throws PersistenceException Si ocurre un fallo SQL o la inserción no afecta exactamente 1 fila.
      */
-    public function create(Usuario $usuario): int
+    public function create(Usuario $usuario, ?string $origenCliente = null): int
     {
         $db = $this->resolveDb();
+        $transaccion = false;
 
         try {
+            // Con membresía cliente el alta de identidad y de cliente es atómica: no hay cuentas huérfanas.
+            if ($origenCliente !== null) {
+                if (!$db->begin_transaction()) {
+                    throw new PersistenceException("No se pudo iniciar la transacción de alta de cliente: " . $db->error);
+                }
+                $transaccion = true;
+            }
             $sql = "INSERT INTO usuarios (nombre, apellido, email, password, telefono, admin, confirmado, token, token_hash, token_tipo, token_expira)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
             $stmt = $db->prepare($sql);
@@ -260,7 +268,11 @@ class UsuarioRepository
 
             if (!$stmt->execute()) {
                 $err = $stmt->error;
+                $errno = $stmt->errno;
                 $stmt->close();
+                if ($errno === 1062) {
+                    throw new DuplicateEntryException("Correo ya registrado (restricción UNIQUE).");
+                }
                 throw new PersistenceException("Error al ejecutar inserción de usuario: " . $err);
             }
 
@@ -272,15 +284,48 @@ class UsuarioRepository
                 throw new PersistenceException("La inserción de usuario no afectó ninguna fila.");
             }
 
+            if ($origenCliente !== null) {
+                $this->insertarMembresiaCliente($db, $insertId, $origenCliente);
+                if (!$db->commit()) {
+                    throw new PersistenceException("Fallo al confirmar el alta de cliente: " . $db->error);
+                }
+                $transaccion = false;
+            }
+
             $usuario->id = $insertId;
             return $insertId;
         } catch (PersistenceException $e) {
-            error_log("[UsuarioRepository::create] " . $e->getMessage());
+            if ($transaccion) { @$db->rollback(); }
+            if (!$e instanceof DuplicateEntryException) {
+                error_log("[UsuarioRepository::create] " . $e->getMessage());
+            }
             throw $e;
         } catch (\Throwable $e) {
+            if ($transaccion) { @$db->rollback(); }
             error_log("[UsuarioRepository::create] Excepción inesperada: " . $e->getMessage());
             throw new PersistenceException("Fallo en la capa de persistencia al crear usuario.", 0, $e);
         }
+    }
+
+    /**
+     * Inserta la membresía cliente de una identidad dentro de la transacción del llamador.
+     */
+    private function insertarMembresiaCliente(mysqli $db, int $usuarioId, string $origen): void
+    {
+        if (!in_array($origen, ['registro_publico', 'migracion', 'recepcion'], true)) {
+            throw new PersistenceException("Origen de cliente no válido.");
+        }
+        $stmt = $db->prepare("INSERT INTO clientes (usuario_id, estado, origen) VALUES (?, 'activo', ?)");
+        if (!$stmt) {
+            throw new PersistenceException("Error al preparar la membresía de cliente: " . $db->error);
+        }
+        $stmt->bind_param('is', $usuarioId, $origen);
+        if (!$stmt->execute()) {
+            $err = $stmt->error;
+            $stmt->close();
+            throw new PersistenceException("Error al crear la membresía de cliente: " . $err);
+        }
+        $stmt->close();
     }
 
     /**

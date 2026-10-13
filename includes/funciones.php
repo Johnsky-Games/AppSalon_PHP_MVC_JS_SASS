@@ -44,6 +44,19 @@ function detener_ejecucion(int $codigo = 200): void
 }
 
 /**
+ * Redirige y termina la ejecución. Registra el destino para que las pruebas lo verifiquen
+ * (en CLI las cabeceras HTTP no son observables).
+ */
+function redirigir(string $destino, int $codigo = 302): void
+{
+    $GLOBALS['__appsalon_redireccion'] = $destino;
+    if (!headers_sent()) {
+        header('Location: ' . $destino);
+    }
+    detener_ejecucion($codigo);
+}
+
+/**
  * Emite de forma consistente las cabeceras HTTP de seguridad en respuestas web y API.
  *
  * @return array<string, string>

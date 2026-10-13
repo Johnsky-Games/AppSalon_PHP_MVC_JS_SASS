@@ -68,6 +68,30 @@ class LoginController
             if ($resultado['status'] === AuthService::STATUS_OK && $resultado['usuario'] instanceof Usuario) {
                 $usuario = $resultado['usuario'];
 
+                // El contexto se resuelve ANTES de abrir sesión. Si la autorización no está disponible
+                // (conexión, consulta, esquema sin migrar) se propaga ServiceUnavailableException → 503;
+                // jamás se presenta como "cuenta inactiva". Sólo un estado explícito suspende el acceso.
+                $autorizacion = new \Services\AuthorizationService();
+                $acceso = $autorizacion->contexto((int)$usuario->id);
+                if ($acceso === null) {
+                    http_response_code(401);
+                    $alertas = ['error' => ['No pudimos validar tu cuenta. Inténtalo de nuevo.']];
+                    $router->render('auth/login', ['alertas' => $alertas, 'auth' => $auth]);
+                    return;
+                }
+                if ((int)$acceso['activo'] !== 1) {
+                    $_SESSION = [];
+                    $mensaje = $acceso['rol'] === 'cliente'
+                        ? 'Tu cuenta de cliente está suspendida. Escribe o llama al salón para que revisen tu caso.'
+                        : 'Tu acceso al equipo está suspendido. Consulta con la administración del salón.';
+                    \Classes\ErrorResponse::render(403, ['mensaje' => $mensaje]);
+                    detener_ejecucion(403);
+                }
+                if ($acceso['rol'] === 'cliente' && $acceso['cliente_estado'] === null) {
+                    // Cuenta anterior a la membresía explícita: se materializa activa, nunca reactiva una suspendida.
+                    $autorizacion->asegurarMembresiaCliente((int)$usuario->id);
+                }
+
                 // Reconstruir sesión: limpiar datos y roles previos antes de poblar
                 $_SESSION = [];
                 session_regenerate_id(true);
@@ -77,12 +101,6 @@ class LoginController
                 $_SESSION['apellido'] = $usuario->apellido;
                 $_SESSION['email'] = $usuario->email;
                 $_SESSION['login'] = true;
-                $acceso = (new \Services\AuthorizationService())->contexto((int)$usuario->id);
-                if (!$acceso || (int)$acceso['activo'] !== 1) {
-                    $_SESSION = [];
-                    \Classes\ErrorResponse::render(403, ['mensaje' => 'Esta cuenta de acceso está inactiva. Consulta con la administración del salón para continuar.']);
-                    detener_ejecucion(403);
-                }
                 $_SESSION['version_sesion'] = (int)$acceso['version_sesion'];
                 $_SESSION['rol'] = $acceso['rol'];
 
@@ -90,12 +108,11 @@ class LoginController
                     if (in_array($acceso['rol'], ['propietario','gerente'], true)) { $_SESSION['admin'] = '1'; }
                     else { unset($_SESSION['admin']); }
                     $destino = $acceso['rol'] === 'profesional' ? '/agenda' : ($acceso['rol'] === 'finanzas' ? '/admin/finanzas' : '/admin');
-                    header('Location: ' . $destino);
+                    redirigir($destino);
                 } else {
                     unset($_SESSION['admin']);
-                    header('Location: /cita');
+                    redirigir('/cita');
                 }
-                detener_ejecucion(302);
                 return;
             } elseif ($resultado['status'] === AuthService::STATUS_INVALID_TYPE) {
                 http_response_code(422);

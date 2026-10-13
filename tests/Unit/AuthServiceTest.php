@@ -52,7 +52,7 @@ class InMemoryUsuarioRepositoryStub extends UsuarioRepository
         return $this->findByEmail($email) !== null;
     }
 
-    public function create(Usuario $usuario): int
+    public function create(Usuario $usuario, ?string $origenCliente = null): int
     {
         $this->checkFallo();
         $id = $this->autoIncrement++;

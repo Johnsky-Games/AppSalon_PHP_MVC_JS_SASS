@@ -5,6 +5,7 @@ namespace Services;
 use Classes\Email;
 use Classes\RateLimiter;
 use Model\Usuario;
+use Repositories\DuplicateEntryException;
 use Repositories\PersistenceException;
 use Repositories\UsuarioRepository;
 
@@ -184,7 +185,18 @@ class AuthService
 
             $usuario->hashPassword();
             $tokenPlano = $usuario->generarTokenSeguro('confirmacion', 24);
-            $insertId = $this->repository->create($usuario);
+            // Identidad y membresía cliente se crean en una sola transacción; el registro público
+            // nunca produce acceso laboral ni requiere aprobación del equipo.
+            $insertId = $this->repository->create($usuario, 'registro_publico');
+        } catch (DuplicateEntryException $e) {
+            // Otra solicitud concurrente ganó la carrera por el mismo correo: misma respuesta que el SELECT previo.
+            return $this->construirRespuesta(
+                self::STATUS_CONFLICT,
+                false,
+                $usuario,
+                ['error' => ['El usuario ya está registrado']],
+                ['id' => null, 'token' => null]
+            );
         } catch (PersistenceException $e) {
             return $this->construirRespuesta(
                 self::STATUS_ERROR,
