@@ -1,0 +1,220 @@
+// CRM de clientes (/admin/clientes). Todo es CSS puro: los gráficos son SVG/HTML con tabla alternativa.
+// Objetivos táctiles >= 44px (4.4rem); html usa 62.5 %, así que 1rem = 10px.
+
+.crm-sr {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden;
+  clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+
+.crm-card, .crm-seccion {
+  min-width: 0;
+}
+.crm-card {
+  background: var(--ui-surface, #fff);
+  border: 1px solid var(--ui-border, #e2e9e7);
+  border-radius: 1.8rem;
+  padding: clamp(1.4rem, 3vw, 2.4rem);
+  margin-block: 1.6rem;
+  box-shadow: var(--ui-shadow, 0 8px 32px rgba(24, 52, 62, .045));
+  h2 { font-size: 2rem; margin: 0 0 1.2rem; }
+}
+.crm-seccion {
+  margin-block: 3rem;
+  > h2 { font-size: 2.2rem; margin: 0 0 1.4rem; }
+}
+.crm-subtitulo { font-size: 1.6rem; margin: 2rem 0 1rem; }
+.crm-nota { font-size: 1.3rem; color: var(--ui-muted, #667a81); margin: 1rem 0 0; max-width: 90ch; }
+.crm-vacio {
+  margin: 1.2rem 0; padding: 1.6rem 1.8rem; border: 1px dashed var(--ui-border, #c9d6d3);
+  border-radius: 1.2rem; background: #f6faf8; color: #3d5560; font-size: 1.4rem; line-height: 1.6;
+}
+
+// ------------------------------------------------------------ filtros
+.crm-filtros {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+  gap: 1.4rem 1.6rem;
+  align-items: end;
+  .campo { min-width: 0; margin: 0; }
+  label { display: block; margin-bottom: .5rem; font-size: 1.3rem; font-weight: 600; }
+  input, select { width: 100%; min-height: 4.4rem; box-sizing: border-box; font-size: 1.5rem; }
+  .crm-ancho { grid-column: 1 / -1; }
+}
+.crm-filtros__acciones {
+  display: flex; flex-wrap: wrap; gap: 1rem; align-items: center;
+  .boton { min-height: 4.4rem; margin: 0; display: inline-flex; align-items: center; justify-content: center; }
+}
+
+// ------------------------------------------------------------ indicadores
+.crm-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr));
+  gap: 1.4rem;
+  margin-block: 1.2rem;
+}
+.crm-kpi {
+  min-width: 0;
+  background: var(--ui-surface, #fff);
+  border: 1px solid var(--ui-border, #e2e9e7);
+  border-radius: 1.6rem;
+  padding: 1.8rem 2rem;
+  &--dinero { border-color: #b9d9cf; }
+  &--sim { border-style: dashed; background: #fafaf6; }
+}
+.crm-kpi__titulo { font-size: 1.3rem; font-weight: 650; color: var(--ui-muted, #566b72); margin: 0; letter-spacing: .02em; }
+.crm-kpi__valor {
+  font-size: clamp(2.4rem, 3.2vw, 3.6rem); line-height: 1.15; font-weight: 700; margin: .6rem 0;
+  color: var(--ui-accent, #16766c); font-variant-numeric: tabular-nums; overflow-wrap: anywhere;
+}
+.crm-kpi__nota { font-size: 1.25rem; line-height: 1.55; color: #3d5560; margin: 0; }
+
+// ------------------------------------------------------------ gráficos
+.crm-graficos {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 38rem), 1fr));
+  gap: 1.6rem;
+}
+.crm-grafico {
+  margin: 0; min-width: 0;
+  background: var(--ui-surface, #fff);
+  border: 1px solid var(--ui-border, #e2e9e7);
+  border-radius: 1.8rem;
+  padding: clamp(1.4rem, 3vw, 2.2rem);
+}
+.crm-grafico__titulo { font-size: 1.7rem; margin: 0 0 .4rem; }
+.crm-grafico__desc { font-size: 1.25rem; color: #3d5560; margin: 0 0 1.2rem; line-height: 1.5; }
+.crm-grafico__lienzo {
+  overflow-x: auto; max-width: 100%; overscroll-behavior-inline: contain;
+  &:focus-visible { outline: 3px solid var(--ui-accent, #16766c); outline-offset: 2px; }
+  svg { display: block; width: 100%; height: auto; }
+}
+.crm-barra { fill: #16766c; }
+.crm-eje { stroke: #9fb4b0; stroke-width: 1; }
+.crm-etq { font-size: 11px; fill: #3d5560; }
+.crm-etq-eje { font-size: 10px; fill: #566b72; }
+
+.crm-hbarras { list-style: none; margin: 0; padding: 0; display: grid; gap: 1.1rem; }
+.crm-hbarra {
+  display: grid;
+  grid-template-columns: minmax(8rem, 1fr) minmax(0, 1.6fr) minmax(7rem, auto);
+  gap: 1rem; align-items: center; font-size: 1.3rem;
+  &__etq { overflow-wrap: anywhere; }
+  &__pista { height: 1.1rem; background: #edf2ee; border-radius: 1rem; overflow: hidden; display: block; }
+  &__relleno { display: block; height: 100%; background: #16766c; border-radius: inherit; min-width: .3rem; }
+  &__valor { font-variant-numeric: tabular-nums; text-align: right; small { display: block; font-weight: 400; color: #566b72; } }
+}
+
+.crm-datos {
+  margin-top: 1.2rem;
+  summary {
+    cursor: pointer; min-height: 4.4rem; display: inline-flex; align-items: center; padding-block: .6rem;
+    color: var(--ui-accent, #16766c); font-weight: 600; font-size: 1.3rem;
+  }
+}
+
+// ------------------------------------------------------------ segmentos
+.crm-reglas { margin: 1rem 0 1.4rem; padding-left: 2.2rem; line-height: 1.7; font-size: 1.4rem; li { margin-bottom: .6rem; } }
+.crm-etiqueta {
+  display: inline-block; padding: .4rem 1.1rem; border-radius: 2rem; font-size: 1.2rem; font-weight: 650;
+  background: #e5f4ed; color: #1c5d3e; white-space: nowrap;
+}
+.crm-seg--vip { background: #ece6f8; color: #4b2e83; }
+.crm-seg--nuevo { background: #e3f0fb; color: #1e4f7a; }
+.crm-seg--activo { background: #e5f4ed; color: #1c5d3e; }
+.crm-seg--en_riesgo { background: #fff0d4; color: #6b4a00; }
+.crm-seg--inactivo { background: #eceff0; color: #3d4a50; }
+.crm-hbarra__relleno {
+  &.crm-seg--vip { background: #6b4bb0; }
+  &.crm-seg--nuevo { background: #2b78b8; }
+  &.crm-seg--activo { background: #16766c; }
+  &.crm-seg--en_riesgo { background: #c28a1a; }
+  &.crm-seg--inactivo { background: #7b8a90; }
+}
+
+// ------------------------------------------------------------ tablas
+.crm-tabla {
+  width: 100%; max-width: 100%; min-width: 0; overflow-x: auto; overscroll-behavior-inline: contain;
+  background: var(--ui-surface, #fff); border: 1px solid var(--ui-border, #e2e9e7); border-radius: 1.4rem;
+  &:focus-visible { outline: 3px solid var(--ui-accent, #16766c); outline-offset: 2px; }
+  table { width: 100%; border-collapse: collapse; min-width: 44rem; font-size: 1.35rem; text-align: left; }
+  th, td { padding: 1.2rem 1.4rem; border-bottom: 1px solid #e6ede9; vertical-align: top; overflow-wrap: anywhere; }
+  thead th { background: #f1f7f4; white-space: nowrap; overflow-wrap: normal; }
+  tbody tr:last-child > * { border-bottom: 0; }
+  tbody th { font-weight: 600; }
+  small { display: block; color: #566b72; font-size: 1.15rem; margin-top: .2rem; }
+  a { display: inline-block; min-height: 4.4rem; line-height: 4.4rem; padding-inline: .2rem; }
+  td.ui-table-number, td.ui-table-date { white-space: nowrap; overflow-wrap: normal; font-variant-numeric: tabular-nums; }
+}
+.crm-tabla-clientes table { min-width: 86rem; }
+
+.crm-encabezado-lista {
+  display: flex; flex-wrap: wrap; gap: 1.2rem 2rem; align-items: center; justify-content: space-between; margin-bottom: .8rem;
+  h2 { margin: 0; }
+}
+.crm-exportar {
+  display: flex; flex-wrap: wrap; gap: 1rem;
+  .boton { min-height: 4.4rem; margin: 0; display: inline-flex; align-items: center; justify-content: center; text-align: center; }
+}
+
+// ------------------------------------------------------------ paginación
+.crm-paginacion {
+  display: flex; flex-wrap: wrap; gap: 1rem 2rem; align-items: center; justify-content: space-between; margin-top: 1.6rem;
+}
+.crm-paginacion__estado { margin: 0; font-size: 1.3rem; color: #3d5560; }
+.crm-paginacion__lista { display: flex; flex-wrap: wrap; gap: .6rem; list-style: none; margin: 0; padding: 0; }
+.crm-pagina {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 4.4rem; min-height: 4.4rem; padding: 0 1.2rem;
+  box-sizing: border-box; border: 1px solid var(--ui-border, #c9d6d3); border-radius: 1.1rem; background: #fff;
+  color: var(--ui-accent, #16766c); font-size: 1.35rem; font-weight: 600; text-decoration: none; transition: background .15s ease;
+  &:hover { background: #eef6f3; text-decoration: none; }
+  &:focus-visible { outline: 3px solid var(--ui-accent, #16766c); outline-offset: 2px; }
+  &.is-actual { background: #16766c; border-color: #16766c; color: #fff; }
+  &.is-deshabilitada { color: #7a8b90; background: #f4f6f6; cursor: default; }
+}
+
+// ------------------------------------------------------------ ficha
+.crm-ficha-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 34rem), 1fr));
+  gap: 1.6rem; align-items: start;
+  > .crm-card { margin-block: 0; }
+}
+.crm-dl {
+  margin: 0; display: grid; grid-template-columns: minmax(9rem, 14rem) minmax(0, 1fr); gap: .9rem 1.6rem; font-size: 1.4rem; line-height: 1.55;
+  dt { font-weight: 650; color: #35505a; }
+  dd { margin: 0; overflow-wrap: anywhere; }
+}
+.crm-lista-simple { margin: 0; padding-left: 1.8rem; line-height: 1.7; }
+.crm-definiciones .crm-dl { grid-template-columns: 1fr; gap: .3rem 0; dt { margin-top: 1.1rem; } dd { max-width: 90ch; } }
+
+.crm-cronologia {
+  list-style: none; margin: 1.2rem 0 0; padding: 0 0 0 2rem; border-left: 2px solid #cfe0db;
+}
+.crm-evento {
+  position: relative; display: grid; gap: .2rem; padding: 0 0 1.6rem 1.6rem; font-size: 1.35rem;
+  &::before {
+    content: ""; position: absolute; left: -2.8rem; top: .6rem; width: 1.2rem; height: 1.2rem; border-radius: 50%;
+    background: #16766c; border: 2px solid #fff; box-shadow: 0 0 0 1px #16766c;
+  }
+  time { font-size: 1.2rem; color: #566b72; font-variant-numeric: tabular-nums; }
+  span { color: #3d5560; overflow-wrap: anywhere; }
+  &--cobro::before { background: #2b78b8; box-shadow: 0 0 0 1px #2b78b8; }
+  &--devolucion::before { background: #b43f46; box-shadow: 0 0 0 1px #b43f46; }
+  &--cancelacion::before { background: #c28a1a; box-shadow: 0 0 0 1px #c28a1a; }
+  &--fidelidad::before { background: #6b4bb0; box-shadow: 0 0 0 1px #6b4bb0; }
+}
+
+// ------------------------------------------------------------ responsive
+@media (max-width: 480px) {
+  .crm-hbarra { grid-template-columns: minmax(0, 1fr) auto; &__pista { grid-column: 1 / -1; order: 3; } }
+  .crm-dl { grid-template-columns: 1fr; gap: .2rem 0; dt { margin-top: .8rem; } }
+  .crm-exportar .boton, .crm-filtros__acciones .boton { width: 100%; }
+  .crm-paginacion { justify-content: center; }
+}
+@media (min-width: 1024px) {
+  .crm-filtros { grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .crm-pagina { transition: none; }
+}
