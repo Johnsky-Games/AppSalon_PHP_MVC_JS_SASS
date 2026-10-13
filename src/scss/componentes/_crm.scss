@@ -118,6 +118,10 @@
   display: inline-block; padding: .4rem 1.1rem; border-radius: 2rem; font-size: 1.2rem; font-weight: 650;
   background: #e5f4ed; color: #1c5d3e; white-space: nowrap;
 }
+.crm-etiqueta--aviso { background: #fff0d4; color: #6b4a00; white-space: normal; }
+.crm-res--exitosa { background: #e5f4ed; color: #1c5d3e; }
+.crm-res--denegada { background: #fde9e7; color: #8a2a24; }
+.crm-res--fallida { background: #fff0d4; color: #6b4a00; }
 .crm-seg--vip { background: #ece6f8; color: #4b2e83; }
 .crm-seg--nuevo { background: #e3f0fb; color: #1e4f7a; }
 .crm-seg--activo { background: #e5f4ed; color: #1c5d3e; }
@@ -146,6 +150,7 @@
   td.ui-table-number, td.ui-table-date { white-space: nowrap; overflow-wrap: normal; font-variant-numeric: tabular-nums; }
 }
 .crm-tabla-clientes table { min-width: 86rem; }
+.crm-tabla-auditoria table { min-width: 96rem; }
 
 .crm-encabezado-lista {
   display: flex; flex-wrap: wrap; gap: 1.2rem 2rem; align-items: center; justify-content: space-between; margin-bottom: .8rem;
@@ -204,11 +209,31 @@
   &--fidelidad::before { background: #6b4bb0; box-shadow: 0 0 0 1px #6b4bb0; }
 }
 
+// ------------------------------------------------------------ alta de clientes y aviso de posibles homónimos
+.crm-alta .crm-filtros { margin-bottom: 1.6rem; }
+.crm-homonimos {
+  margin-top: 1.6rem; padding: clamp(1.2rem, 3vw, 2rem); border: 2px solid #c28a1a; border-radius: 1.4rem; background: #fffaf0; min-width: 0;
+  h3 { font-size: 1.8rem; margin: 0 0 .8rem; }
+  p { font-size: 1.4rem; line-height: 1.6; margin: 0 0 1.2rem; max-width: 80ch; }
+}
+.crm-homonimos__lista { list-style: none; margin: 0 0 1.4rem; padding: 0; display: grid; gap: 1rem; }
+.crm-homonimo {
+  display: grid; gap: .4rem; padding: 1.2rem 1.4rem; background: var(--ui-surface, #fff); border: 1px solid #ecd9ae; border-radius: 1rem; min-width: 0; overflow-wrap: anywhere;
+  strong { font-size: 1.5rem; }
+}
+.crm-homonimo__dato { font-size: 1.3rem; color: #3d5560; }
+.crm-homonimo__motivos { display: flex; flex-wrap: wrap; gap: .6rem; }
+.crm-homonimo__ver { display: inline-flex; align-items: center; min-height: 4.4rem; font-size: 1.35rem; font-weight: 600; }
+.crm-homonimos__acciones {
+  display: flex; flex-wrap: wrap; gap: 1rem;
+  .boton { min-height: 4.4rem; margin: 0; display: inline-flex; align-items: center; justify-content: center; text-align: center; }
+}
+
 // ------------------------------------------------------------ responsive
 @media (max-width: 480px) {
   .crm-hbarra { grid-template-columns: minmax(0, 1fr) auto; &__pista { grid-column: 1 / -1; order: 3; } }
   .crm-dl { grid-template-columns: 1fr; gap: .2rem 0; dt { margin-top: .8rem; } }
-  .crm-exportar .boton, .crm-filtros__acciones .boton { width: 100%; }
+  .crm-exportar .boton, .crm-filtros__acciones .boton, .crm-homonimos__acciones .boton { width: 100%; }
   .crm-paginacion { justify-content: center; }
 }
 @media (min-width: 1024px) {

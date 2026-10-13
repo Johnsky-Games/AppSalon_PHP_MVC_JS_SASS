@@ -32,12 +32,40 @@ final class CrmRepository
     ];
 
     private mysqli $db;
+    /** @var array{vigente:int,v1:int}|null */
+    private ?array $versiones = null;
 
-    public function __construct(?mysqli $db = null)
+    /** @param string $propositoConsentimiento propósito cuyas versiones rigen «consentimiento vigente» (marketing_email salvo en pruebas) */
+    public function __construct(?mysqli $db = null, private string $propositoConsentimiento = ConsentimientoRepository::MARKETING)
     {
         $conexion = $db ?? ActiveRecord::getDB();
         if (!$conexion instanceof mysqli) { throw new PersistenceException('Sin conexión a la base de datos.'); }
         $this->db = $conexion;
+    }
+
+    /**
+     * Ids de la versión de consentimiento vigente y de la versión 1 (histórica) del propósito. Se resuelven una vez por instancia
+     * y se incrustan como enteros (nunca texto del usuario) en el SQL. Un consentimiento sin versión registrada cuenta como la 1.
+     * @return array{vigente:int,v1:int}
+     */
+    public function versionesConsentimiento(): array
+    {
+        if ($this->versiones === null) {
+            $repo = new ConsentimientoRepository($this->db, $this->propositoConsentimiento);
+            $this->versiones = ['vigente' => (int)$repo->vigente()['id'], 'v1' => (int)($repo->porNumero(1)['id'] ?? 0)];
+        }
+        return $this->versiones;
+    }
+
+    /** Fragmentos SQL del estado de consentimiento (alias pf = perfiles_usuario). @return array{acepta:string,efectiva:string,vigente:string,anterior:string} */
+    private function sqlConsentimiento(): array
+    {
+        $v = $this->versionesConsentimiento();
+        $acepta = 'COALESCE(pf.marketing_email,0)=1 AND pf.consentimiento_marketing_at IS NOT NULL';
+        $efectiva = 'COALESCE(pf.consentimiento_marketing_version_id,' . $v['v1'] . ')';
+        return ['acepta' => $acepta, 'efectiva' => $efectiva,
+            'vigente' => "({$acepta} AND {$efectiva}=" . $v['vigente'] . ')',
+            'anterior' => "({$acepta} AND {$efectiva}<>" . $v['vigente'] . ')'];
     }
 
     // ---------------------------------------------------------------- utilidades
@@ -149,7 +177,7 @@ final class CrmRepository
     /** FROM con las uniones necesarias. $need: v (visitas históricas), vr (visitas del rango/filtro), g (gasto del rango). */
     private function desde(array $c, array $f, array $need): array
     {
-        $partes = [self::f(' FROM usuarios u LEFT JOIN usuario_accesos a ON a.usuario_id=u.id LEFT JOIN clientes cl ON cl.usuario_id=u.id LEFT JOIN perfiles_usuario pf ON pf.usuarioId=u.id')];
+        $partes = [self::f(' FROM usuarios u LEFT JOIN usuario_accesos a ON a.usuario_id=u.id LEFT JOIN clientes cl ON cl.usuario_id=u.id LEFT JOIN perfiles_usuario pf ON pf.usuarioId=u.id LEFT JOIN consentimiento_versiones cvv ON cvv.id=COALESCE(pf.consentimiento_marketing_version_id,' . (int)$this->versionesConsentimiento()['v1'] . ')')];
         if (!empty($need['v'])) {
             $partes[] = self::f(" LEFT JOIN (SELECT usuarioId,COUNT(*) visitas_total,MIN(fecha) primera,MAX(fecha) ultima FROM citas WHERE estado='completada' AND fecha<=? GROUP BY usuarioId) v ON v.usuarioId=u.id", 's', [$c['hoy']]);
         }
@@ -191,10 +219,16 @@ final class CrmRepository
         $membresia = (string)($f['membresia'] ?? '');
         if ($membresia === 'sin_registro') { $sql .= ' AND cl.usuario_id IS NULL'; }
         elseif ($membresia === 'activo' || $membresia === 'suspendido') { $sql .= ' AND cl.estado=?'; $t .= 's'; $p[] = $membresia; }
-        $acepta = 'COALESCE(pf.marketing_email,0)=1 AND pf.consentimiento_marketing_at IS NOT NULL';
-        if (($f['consentimiento'] ?? '') === 'si') { $sql .= " AND ({$acepta})"; }
-        elseif (($f['consentimiento'] ?? '') === 'no') { $sql .= " AND NOT ({$acepta})"; }
-        if (!empty($f['comercial'])) { $sql .= " AND ({$acepta}) AND u.confirmado=1 AND (cl.estado IS NULL OR cl.estado<>'suspendido')"; }
+        $con = $this->sqlConsentimiento();
+        $acepta = $con['acepta'];
+        // si = aceptó (cualquier versión) · vigente = aceptó el texto en vigor · anterior = aceptó una versión que ya no rige · no = no aceptó.
+        $consentimiento = (string)($f['consentimiento'] ?? '');
+        if ($consentimiento === 'si') { $sql .= " AND ({$acepta})"; }
+        elseif ($consentimiento === 'vigente') { $sql .= " AND {$con['vigente']}"; }
+        elseif ($consentimiento === 'anterior') { $sql .= " AND {$con['anterior']}"; }
+        elseif ($consentimiento === 'no') { $sql .= " AND NOT ({$acepta})"; }
+        // Política de campañas: la lista comercial solo incluye consentimientos de la versión VIGENTE del texto.
+        if (!empty($f['comercial'])) { $sql .= " AND {$con['vigente']} AND u.confirmado=1 AND (cl.estado IS NULL OR cl.estado<>'suspendido')"; }
         $partes = [self::f($sql, $t, $p)];
         if (!empty($f['segmento'])) {
             $partes[] = self::f(' AND (');
@@ -224,6 +258,9 @@ final class CrmRepository
         $columnas = "SELECT u.id,u.nombre,u.apellido,u.email,u.telefono,u.confirmado,COALESCE(a.rol,IF(u.admin=1,'propietario','cliente')) rol_efectivo,"
             . "COALESCE(cl.estado,'sin_registro') membresia,cl.origen,cl.suspendido_motivo,cl.creado_en alta,"
             . "IF(COALESCE(pf.marketing_email,0)=1 AND pf.consentimiento_marketing_at IS NOT NULL,1,0) consentimiento,pf.consentimiento_marketing_at consentimiento_en,"
+            . "IF(COALESCE(pf.marketing_email,0)=1 AND pf.consentimiento_marketing_at IS NOT NULL,cvv.version,NULL) consentimiento_version,"
+            . "IF(COALESCE(pf.marketing_email,0)=1 AND pf.consentimiento_marketing_at IS NOT NULL,cvv.es_historica,NULL) consentimiento_version_historica,"
+            . "IF(" . $this->sqlConsentimiento()['anterior'] . ",1,0) consentimiento_anterior,"
             . "COALESCE(v.visitas_total,0) visitas_total,v.primera primera_visita,v.ultima ultima_visita,IF(v.ultima IS NULL,NULL,DATEDIFF(?,v.ultima)) recencia,COALESCE(vr.n,0) visitas_rango,";
         $gasto = $analitica
             ? ",COALESCE(g.cobros_real,0) cobros_real,COALESCE(g.dev_real,0) dev_real,COALESCE(g.cobros_sim,0) cobros_sim,COALESCE(g.dev_sim,0) dev_sim,COALESCE(g.n_cobros_real,0) n_cobros_real"
@@ -252,6 +289,7 @@ final class CrmRepository
         [$sql, $t, $p] = self::unir(
             self::f('SELECT COUNT(*) total,COALESCE(SUM(cl.estado=\'activo\'),0) m_activa,COALESCE(SUM(cl.estado=\'suspendido\'),0) m_suspendida,COALESCE(SUM(cl.usuario_id IS NULL),0) m_sin_registro,'
                 . 'COALESCE(SUM(COALESCE(pf.marketing_email,0)=1 AND pf.consentimiento_marketing_at IS NOT NULL),0) con_consentimiento,'
+                . 'COALESCE(SUM(' . $this->sqlConsentimiento()['vigente'] . '),0) con_consentimiento_vigente,COALESCE(SUM(' . $this->sqlConsentimiento()['anterior'] . '),0) con_consentimiento_anterior,'
                 . 'COALESCE(SUM(cl.creado_en>=? AND cl.creado_en<?),0) nuevos,'
                 . 'COALESCE(SUM(v.primera BETWEEN ? AND ?),0) primera_visita_en_rango,'
                 . 'COALESCE(SUM(v.ultima IS NOT NULL AND DATEDIFF(?,v.ultima)<=?),0) activos,'
@@ -378,6 +416,12 @@ final class CrmRepository
     {
         $f = ['id' => $id, 'profesional_id' => null, 'servicio_id' => null, 'orden' => 'nombre', 'dir' => 'ASC'];
         return $this->listar($c, $f, 1, 0)[0] ?? null;
+    }
+
+    /** Historial de decisiones de consentimiento de la persona (sin IP ni huellas). @return array<int,array<string,mixed>> */
+    public function historialConsentimiento(int $id, int $limite = 20): array
+    {
+        return (new ConsentimientoRepository($this->db, $this->propositoConsentimiento))->historial($id, $limite);
     }
 
     /** Citas del cliente con servicios e importe histórico (snapshot). @return array<int,array<string,mixed>> */

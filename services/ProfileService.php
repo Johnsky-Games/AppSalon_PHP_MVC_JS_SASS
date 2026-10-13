@@ -16,11 +16,29 @@ final class ProfileService
     public function obtener(int $id): ?array { return $this->repo->obtener($id); }
 
     /**
+     * Datos del consentimiento comercial para pintar el formulario: texto y versión vigentes y, si la persona ya
+     * aceptó, con qué versión. `anterior` = aceptó un texto que ya no es el vigente (se pide reconfirmación expresa).
+     * @return array{vigente:array,aceptada:?array,anterior:bool}
+     */
+    public function consentimientoVista(array $perfil): array
+    {
+        $repo = $this->repo->consentimientos();
+        $vigente = $repo->vigente();
+        $acepto = (int)($perfil['marketing_email'] ?? 0) === 1 && !empty($perfil['consentimiento_marketing_at']);
+        $aceptada = null;
+        if ($acepto) {
+            $aceptada = $perfil['consentimiento_version_id'] !== null ? $repo->porId((int)$perfil['consentimiento_version_id']) : $repo->porNumero(1);
+        }
+        return ['vigente' => $vigente, 'aceptada' => $aceptada, 'anterior' => $aceptada !== null && (int)$aceptada['id'] !== (int)$vigente['id']];
+    }
+
+    /**
      * @param string|null $contexto 'cliente' (portal de clientes: edita sus comunicaciones; no publica retrato),
      *        'equipo' (portal del equipo: edita datos laborales y publicación del retrato; JAMÁS altera el
      *        consentimiento comercial ni las comunicaciones del cliente) o null (comportamiento heredado).
+     * @param array{actor_id?:?int,ip_hash?:?string} $meta contexto de auditoría de la decisión de consentimiento (quién y desde dónde)
      */
-    public function guardar(int $id, array $input, bool $esTitular = true, ?string $contexto = null): void
+    public function guardar(int $id, array $input, bool $esTitular = true, ?string $contexto = null, array $meta = []): void
     {
         $actual = $this->obtener($id);
         if (!$actual) { throw new \InvalidArgumentException('No se encontró el perfil.'); }
@@ -43,7 +61,13 @@ final class ProfileService
         if (!$esTitular && $data['marketing_email'] === 1 && !(bool)$actual['marketing_email']) { throw new \InvalidArgumentException('Sólo el titular puede otorgar consentimiento promocional.'); }
         // Only a linked active professional can explicitly publish a portrait.
         if ($data['foto_publica'] === 1 && !(bool)$actual['es_profesional']) { throw new \InvalidArgumentException('La foto del cliente es privada.'); }
-        $this->repo->guardar($id, $data);
+        // El consentimiento comercial se versiona: se guarda el texto que la persona VIO (id enviado en el formulario),
+        // y un consentimiento previo solo pasa a un texto más nuevo con reconfirmación expresa.
+        $data['consentimiento_version'] = $input['consentimiento_version'] ?? null;
+        $data['reconfirma_consentimiento'] = ($input['reconfirmar_consentimiento'] ?? '') === '1';
+        // Desde el portal del equipo el consentimiento no se toca jamás (ni para otorgarlo, ni para «corregirlo»).
+        $data['omitir_consentimiento'] = $contexto === 'equipo';
+        $this->repo->guardar($id, $data, $meta + ['origen' => 'perfil', 'canal' => 'portal_cliente']);
     }
 
     public static function validarImagen(string $path): array

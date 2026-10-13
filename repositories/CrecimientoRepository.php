@@ -8,7 +8,8 @@ use mysqli;
 class CrecimientoRepository
 {
     private mysqli $db;
-    public function __construct(?mysqli $db = null) { $this->db = $db ?? ActiveRecord::getDB(); }
+    /** @param string $propositoConsentimiento propósito cuyas versiones rigen el consentimiento vigente (marketing_email salvo en pruebas) */
+    public function __construct(?mysqli $db = null, private string $propositoConsentimiento = ConsentimientoRepository::MARKETING) { $this->db = $db ?? ActiveRecord::getDB(); }
     private function query(string $sql, string $types = '', array $params = []): \mysqli_stmt
     {
         try {
@@ -30,14 +31,31 @@ class CrecimientoRepository
     public function cliente(int $id): array
     {
         return ['consentimiento'=>$this->rows('SELECT marketing_email aceptado,consentimiento_marketing_at actualizado_en FROM perfiles_usuario WHERE usuarioId=?','i',[$id])[0] ?? ['aceptado'=>0],
+            'consentimiento_vista'=>$this->consentimientoVista($id),
             'espera'=>$this->rows('SELECT l.*,s.nombre servicio FROM lista_espera l JOIN servicios s ON s.id=l.servicio_id WHERE usuario_id=? ORDER BY fecha DESC LIMIT 100','i',[$id]),
             'saldo'=>(int)($this->rows('SELECT COALESCE(SUM(puntos),0) saldo FROM fidelidad_movimientos WHERE usuario_id=?','i',[$id])[0]['saldo'] ?? 0),
             'movimientos'=>$this->rows('SELECT puntos,tipo,referencia,beneficio_snapshot,canje_estado,creado_en FROM fidelidad_movimientos WHERE usuario_id=? ORDER BY id DESC LIMIT 100','i',[$id]),
             'formularios'=>$this->rows('SELECT f.*,r.respuestas FROM formularios_cliente f LEFT JOIN formulario_respuestas r ON r.formulario_id=f.id AND r.usuario_id=? WHERE f.activo=1 ORDER BY f.id DESC LIMIT 30','i',[$id])];
     }
-    public function consentimiento(int $id, bool $aceptado): void
+    /**
+     * Decisión de consentimiento comercial desde «Mi bienestar». Delegada en la fuente única versionada
+     * (ConsentimientoRepository::aplicarDecision): guarda el texto que la persona vio y anexa al historial.
+     * @param array{origen?:string,canal?:string,actor_id?:?int,ip_hash?:?string,reconfirma?:bool} $meta
+     */
+    public function consentimiento(int $id, bool $aceptado, mixed $versionVista = null, array $meta = []): void
     {
-        $this->query("INSERT INTO perfiles_usuario(usuarioId,marketing_email,consentimiento_marketing_at) VALUES(?,?,IF(?=1,NOW(),NULL)) ON DUPLICATE KEY UPDATE consentimiento_marketing_at=IF(VALUES(marketing_email)=1,COALESCE(consentimiento_marketing_at,NOW()),NULL),marketing_email=VALUES(marketing_email)",'iii',[$id,(int)$aceptado,(int)$aceptado])->close();
+        (new ConsentimientoRepository($this->db, $this->propositoConsentimiento))->aplicarDecision($id, $aceptado, $versionVista,
+            $meta + ['origen' => 'bienestar', 'canal' => 'portal_cliente', 'actor_id' => $id]);
+    }
+    /** Texto y versión vigentes y la versión que aceptó la persona (para pintar el formulario). @return array{vigente:array,aceptada:?array,anterior:bool} */
+    public function consentimientoVista(int $id): array
+    {
+        $repo = new ConsentimientoRepository($this->db, $this->propositoConsentimiento);
+        $vigente = $repo->vigente();
+        $p = $this->rows('SELECT marketing_email,consentimiento_marketing_at,consentimiento_marketing_version_id v FROM perfiles_usuario WHERE usuarioId=?','i',[$id])[0] ?? null;
+        $acepto = $p !== null && (int)$p['marketing_email'] === 1 && $p['consentimiento_marketing_at'] !== null;
+        $aceptada = $acepto ? ($p['v'] !== null ? $repo->porId((int)$p['v']) : $repo->porNumero(1)) : null;
+        return ['vigente'=>$vigente,'aceptada'=>$aceptada,'anterior'=>$aceptada !== null && (int)$aceptada['id'] !== (int)$vigente['id']];
     }
     public function agregarEspera(int $id, int $servicio, ?int $profesional, string $fecha): void
     {
@@ -96,10 +114,17 @@ class CrecimientoRepository
     }
     public function respuestasPrivadas(int $formulario): array
     { return $this->rows('SELECT u.nombre,u.apellido,r.respuestas,r.actualizado_en,f.preguntas FROM formulario_respuestas r JOIN usuarios u ON u.id=r.usuario_id JOIN formularios_cliente f ON f.id=r.formulario_id WHERE r.formulario_id=? ORDER BY r.id DESC LIMIT 100','i',[$formulario]); }
+    /**
+     * Audiencia de campaña: personas confirmadas con consentimiento comercial VIGENTE, es decir, aceptado y asociado a la
+     * versión de texto en vigor (política documentada: un consentimiento dado a una versión anterior no sirve para campañas
+     * hasta que la persona lo reconfirme). Sin versión registrada cuenta como la versión 1 histórica.
+     */
     public function segmento(string $segmento): array
     {
         $cond=$segmento==='inactivos' ? "AND NOT EXISTS(SELECT 1 FROM citas c WHERE c.usuarioId=u.id AND c.estado='completada' AND c.fecha>=DATE_SUB(CURDATE(),INTERVAL 90 DAY))" : '';
-        return $this->rows("SELECT u.id,u.nombre,u.apellido,u.email,m.consentimiento_marketing_at consentimiento_en FROM usuarios u JOIN perfiles_usuario m ON m.usuarioId=u.id AND m.marketing_email=1 AND m.consentimiento_marketing_at IS NOT NULL WHERE u.confirmado=1 $cond ORDER BY u.id LIMIT 1000");
+        $versiones=new ConsentimientoRepository($this->db,$this->propositoConsentimiento);
+        $vigente=(int)$versiones->vigente()['id']; $v1=(int)($versiones->porNumero(1)['id'] ?? 0);
+        return $this->rows("SELECT u.id,u.nombre,u.apellido,u.email,m.consentimiento_marketing_at consentimiento_en FROM usuarios u JOIN perfiles_usuario m ON m.usuarioId=u.id AND m.marketing_email=1 AND m.consentimiento_marketing_at IS NOT NULL AND COALESCE(m.consentimiento_marketing_version_id,?)=? WHERE u.confirmado=1 $cond ORDER BY u.id LIMIT 1000",'ii',[$v1,$vigente]);
     }
     public function completarCanje(int $id, int $actor): void
     { $s=$this->query("UPDATE fidelidad_movimientos SET canje_estado='entregado',atendido_por=?,atendido_en=NOW() WHERE id=? AND tipo='canje' AND canje_estado='pendiente'",'ii',[$actor,$id]); if ($s->affected_rows!==1) { $s->close(); throw new \InvalidArgumentException('El canje no está pendiente.'); } $s->close(); }
