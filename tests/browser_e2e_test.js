@@ -1418,7 +1418,9 @@ async function runBrowserTests() {
             estadoAttr: document.querySelector('#pago-estado-real')?.getAttribute('data-estado') || '',
             advertencia: document.querySelector('#pago-advertencia-redirect')?.textContent.trim() || ''
         }));
-        if (estadoTrasRedirect.estadoAttr !== 'pendiente' || !estadoTrasRedirect.advertencia.includes('nunca se realiza mediante parámetros en la URL')) {
+        if (estadoTrasRedirect.estadoAttr !== 'pendiente'
+            || !estadoTrasRedirect.advertencia.includes('no confirma el pago')
+            || !estadoTrasRedirect.advertencia.includes('estado validado por el proveedor')) {
             throw new Error(`GET /pago/resultado no bloqueó confirmación por redirección del navegador: ${JSON.stringify(estadoTrasRedirect)}`);
         }
 
