@@ -11,11 +11,12 @@ Convenciones: **DEFECTO** = el ataque rompió una garantía y existe una prueba 
 
 ```bash
 # Base propia (nunca appsalon_test). El nombre debe terminar en _test; el arnés exige el prefijo appsalon_qa_.
-export DB_HOST=127.0.0.1 DB_PORT=3306 DB_USER=root DB_PASS=root DB_NAME=appsalon_qa_test APP_ENV=testing \
+export DB_HOST=127.0.0.1 DB_PORT=3306 DB_USER=<usuario> DB_PASS=<contraseña-local> DB_NAME=appsalon_qa_test APP_ENV=testing \
        APP_URL=http://localhost:3000 APP_TIMEZONE=America/Guayaquil PAYMENT_WEBHOOK_SECRET=ci_test_webhook_secret_hmac_2026 \
        EMAIL_HOST=127.0.0.1 EMAIL_PORT=2599 EMAIL_USER=t EMAIL_PASSWORD=t
-mysql -h127.0.0.1 -uroot -proot -e "DROP DATABASE IF EXISTS appsalon_qa_test; CREATE DATABASE appsalon_qa_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
-mysql -h127.0.0.1 -uroot -proot appsalon_qa_test < database/schema_base.sql
+export MYSQL_PWD="$DB_PASS"        # evita la contraseña en la línea de comandos
+mysql -h"$DB_HOST" -u"$DB_USER" -e "DROP DATABASE IF EXISTS appsalon_qa_test; CREATE DATABASE appsalon_qa_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+mysql -h"$DB_HOST" -u"$DB_USER" appsalon_qa_test < database/schema_base.sql
 php database/migrador.php up
 cp -r <repo-principal>/vendor ./vendor && ln -s <repo-principal>/node_modules node_modules     # no se ejecuta composer install
 
@@ -31,7 +32,43 @@ y la concurrencia usa procesos PHP reales con una barrera de tiempo común (`tes
 
 ## 2. Resultado de la ejecución completa
 
-@@RESULTADO@@
+Salida literal de `php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --colors=never tests/Qa` (ejecución final, `DB_NAME=appsalon_qa_test`):
+
+```
+Time: 03:38.908, Memory: 16.00 MB
+Tests: 203, Assertions: 1516, Failures: 22, Skipped: 1.
+```
+
+- **203 pruebas** en 12 archivos (`AtaquesVarios` 20, `AutorizacionHttp` 37, `CabecerasYDisponibilidad` 6, `Concurrencia` 17, `Correo` 6, `Esquema` 12, `Fallos` 47, `Frontend` 7, `Instalador` 9, `Privacidad` 20, `RegresionNegocio` 6, `Tokens` 16) + arnés (`QaCase`, `Navegador`, `worker.php`, `smtp_qa.php`, `router.php`, `frontend_qa.cjs`).
+- **22 fallos, todos intencionados**: 20 métodos `test_Defecto_*` (uno con 3 casos de datos). **0 fallos entre las pruebas que no son `Defecto_*`** (180 pasan).
+- **1 omitida** (`TokensTest::test_cuenta_existente_sin_confirmar_recupera_sesiones_y_tokens_previos`): el sistema no emite recuperación para una cuenta sin confirmar, de modo que no hay token que reutilizar (comportamiento válido).
+- Estabilidad: la suite completa se ejecutó 4 veces. La 1.ª mostró 5 errores y 4 fallos que NO eran defectos de la aplicación sino contaminación entre clases del arnés (una conexión cerrada que `ActiveRecord` conservaba tras `InstaladorTest`); se corrigió en `QaCase::db()`. En la 3.ª solo hubo 21 rojas porque este mismo informe contenía el texto que buscaba la comprobación documental de DEF-17 (ahora excluye este archivo). La 2.ª y la final dieron exactamente las mismas 22 rojas y 0 fallos fuera de `Defecto_*`.
+
+Las pruebas rojas `Defecto_*` y el defecto que demuestran:
+
+| Prueba | Defecto |
+|---|---|
+| `AtaquesVariosTest::…cambiar_el_acceso_de_un_profesional_desvincula_su_ficha_de_la_cuenta`, `…suspender_y_reactivar_a_un_profesional…` | DEF-01 |
+| `RegresionNegocioTest::…cita_nueva_en_carrera_con_la_suspension…` | DEF-02 |
+| `AutorizacionHttpTest::…cliente_suspendido_con_rol_laboral_conserva_sesion…`, `AtaquesVariosTest::…cliente_suspendido_con_rol_laboral_puede_reservar…` | DEF-03 |
+| `AtaquesVariosTest::…colaborador_suspendido_con_membresia_de_cliente_activa…` | DEF-04 |
+| `FallosTest::…listado_del_equipo_se_bloquea…con_smtp_colgado` | DEF-05 |
+| `ConcurrenciaTest::…reenvio_simultaneo_evade_la_espera…` | DEF-06 |
+| `AtaquesVariosTest::…no_se_puede_reinvitar…` | DEF-07 |
+| `AtaquesVariosTest::…ficha_profesional_heredada_queda_inutilizable…` | DEF-08 |
+| `FallosTest::…clave_derivada_de_desarrollo…` | DEF-09 |
+| `InstaladorTest::…regenerar_activacion_con_otro_correo…` | DEF-10 |
+| `InstaladorTest::…instalador_paralelo_sobre_base_vacia…` | DEF-11 |
+| `FallosTest::…invitar_con_campo_arreglo_emite_advertencia…` (3 casos) | DEF-12 |
+| `TokensTest::…registro_publico_revela_si_un_correo_ya_tiene_cuenta` | DEF-13 |
+| `AtaquesVariosTest::…recepcion_puede_editar_el_perfil_del_propietario…` | DEF-14 |
+| `AtaquesVariosTest::…nombre_y_apellido_de_60_caracteres…` | DEF-15 |
+| `EsquemaTest::…E2_rollback_y_reaplicacion_de_016…` | DEF-16 |
+| `CorreoTest::…el_outbox_de_correos_no_tiene_proceso_programado…` | DEF-17 |
+| `EsquemaTest::…E5_conteo_de_tablas_y_documentacion` | DEF-18 |
+
+**Resumen de severidad (18 defectos):** 1 Alta (DEF-01); 4 Media (DEF-02, DEF-03, DEF-04, DEF-05); 5 Media-Baja (DEF-06, DEF-07, DEF-09, DEF-10, DEF-14); 8 Baja (DEF-08, DEF-11, DEF-12, DEF-13, DEF-15, DEF-16, DEF-17, DEF-18).
+Ningún ataque permitió acceder a una ruta laboral sin el permiso correspondiente, ver datos privados (formularios, fotos, notas de RR. HH., importes) fuera de su alcance ni tomar una cuenta ajena. Los defectos de autorización encontrados son DEF-03, DEF-04 (estado de sesión de personas con ambos perfiles) y DEF-14 (un rol inferior edita el perfil del propietario).
 
 ## 3. Defectos priorizados
 

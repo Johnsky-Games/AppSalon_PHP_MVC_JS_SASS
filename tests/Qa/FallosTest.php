@@ -292,7 +292,8 @@ final class FallosTest extends QaCase
         $this->assertStringNotContainsString('SQL', $r['body'] . $j['body']);
         $this->assertStringNotContainsString('usuario_accesos', $r['body'] . $j['body']);
         // Login (credenciales válidas) contra esquema sin migrar: 503, no "credenciales incorrectas".
-        $db = new \mysqli('127.0.0.1', 'root', 'root', $nombre);
+        $db = self::admin();
+        $db->select_db($nombre);
         $db->query("INSERT INTO usuarios(nombre,apellido,email,password,telefono,admin,confirmado) VALUES ('A','B','u@example.test','" . password_hash('Clave-123456', PASSWORD_BCRYPT) . "','0991112222',0,1)");
         $n = new Navegador($srv);
         $r = $n->login('cliente', 'u@example.test', 'Clave-123456');

@@ -18,6 +18,13 @@ abstract class QaCase extends TestCase
     /** @var \mysqli|null */
     private static $conexion = null;
 
+    /** Parámetro de conexión tomado del entorno (nunca se versionan credenciales). */
+    protected static function cfg(string $k, string $defecto): string
+    {
+        $v = $_ENV[$k] ?? getenv($k);
+        return is_string($v) && $v !== '' ? $v : $defecto;
+    }
+
     protected static function nombreBd(): string
     {
         $n = (string)($_ENV['DB_NAME'] ?? getenv('DB_NAME'));
@@ -32,7 +39,7 @@ abstract class QaCase extends TestCase
         self::nombreBd();
         if (self::$conexion === null || !@self::$conexion->ping()) {
             mysqli_report(MYSQLI_REPORT_OFF);
-            self::$conexion = new \mysqli('127.0.0.1', 'root', 'root', self::nombreBd(), 3306);
+            self::$conexion = new \mysqli(self::cfg('DB_HOST', '127.0.0.1'), self::cfg('DB_USER', 'root'), self::cfg('DB_PASS', ''), self::nombreBd(), (int)self::cfg('DB_PORT', '3306'));
             self::$conexion->set_charset('utf8mb4');
         }
         // Otras pruebas pueden haber apuntado ActiveRecord a una base aislada (ya cerrada): se restablece siempre.
@@ -155,7 +162,7 @@ abstract class QaCase extends TestCase
     protected static function admin(): \mysqli
     {
         mysqli_report(MYSQLI_REPORT_OFF);
-        $a = new \mysqli('127.0.0.1', 'root', 'root', '', 3306);
+        $a = new \mysqli(self::cfg('DB_HOST', '127.0.0.1'), self::cfg('DB_USER', 'root'), self::cfg('DB_PASS', ''), '', (int)self::cfg('DB_PORT', '3306'));
         $a->set_charset('utf8mb4');
         return $a;
     }
