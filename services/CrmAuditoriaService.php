@@ -14,7 +14,7 @@ use Repositories\CrmAuditoriaRepository;
 final class CrmAuditoriaService
 {
     public const RESULTADOS = ['exitosa' => 'Exitosa', 'denegada' => 'Denegada', 'fallida' => 'Fallida'];
-    public const TIPOS = ['clientes' => 'Clientes (operativa)', 'comercial' => 'Lista comercial', 'invalido' => 'Tipo no válido'];
+    public const TIPOS = ['clientes' => 'Clientes (operativa)', 'comercial' => 'Lista comercial', 'campana' => 'Campaña (Clientes y Fidelidad)', 'invalido' => 'Tipo no válido'];
     public const POR_PAGINA = [25, 50, 100];
     public const TIMEZONE = 'America/Guayaquil';
     /** Filtros de la exportación que no son datos personales y se guardan tal cual. */
@@ -58,7 +58,7 @@ final class CrmAuditoriaService
         if ($resultado === 'exitosa') {
             // Versión de consentimiento VIGENTE en el momento de exportar y política aplicada a esta exportación.
             $versionId = (int)($this->consentimientos ?? new ConsentimientoRepository())->vigente()['id'];
-            $politica = $tipo === 'comercial' ? 'solo_version_vigente' : 'informativo';
+            $politica = in_array($tipo, ['comercial', 'campana'], true) ? 'solo_version_vigente' : 'informativo';
         }
         $columnas = $exportacion['columnas'] ?? null;
         return $this->repo->registrar([

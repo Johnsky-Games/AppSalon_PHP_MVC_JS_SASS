@@ -63,6 +63,7 @@ final class CrmAuditoriaConsentimientoIntegrationTest extends TestCase
         if ($this->db->ping()) {
             foreach ($this->usuarios as $id) { $this->db->query('DELETE FROM usuarios WHERE id=' . (int)$id); }
         }
+        @$this->db->query("DROP TRIGGER IF EXISTS test_fail_aud_{$this->tag}");
         foreach ($this->bases as $nombre) { @$this->db->query('DROP DATABASE IF EXISTS `' . $nombre . '`'); }
         $_SESSION = []; $_GET = []; $_POST = [];
         $_SERVER['REQUEST_METHOD'] = 'GET';
@@ -462,7 +463,7 @@ final class CrmAuditoriaConsentimientoIntegrationTest extends TestCase
 
     public function testCsvNeutralizaTabuladorRetornoDeCarroYOtrosDisparadoresDeFormula(): void
     {
-        $nombres = ["\t=cmd|' /C calc'!A0", "\r+1+1", "=HYPERLINK(\"http://x\")", "-2+3", "@SUM(A1)", "  =1+1", "\n=2+2"];
+        $nombres = ["\t=cmd|' /C calc'!A0", "\r+1+1", "=HYPERLINK(\"http://x\")", "-2+3", "@SUM(A1)", "  =1+1", "\n=2+2", "\tSoloTabulador", "\rSoloRetorno"];
         foreach ($nombres as $i => $n) { $this->usuario($n, 'Formula' . $i . ' ' . $this->tag); }
         $this->sesion($this->propietario());
         $r = $this->exportar(['tipo' => 'clientes', 'q' => $this->tag]);
@@ -478,6 +479,35 @@ final class CrmAuditoriaConsentimientoIntegrationTest extends TestCase
         }
         $this->assertContains("'\t=cmd|' /C calc'!A0", array_column($filas, 'Nombre'));
         $this->assertContains("'\r+1+1", array_column($filas, 'Nombre'));
+        $this->assertContains("'\tSoloTabulador", array_column($filas, 'Nombre'), 'Un tabulador inicial se neutraliza aunque lo siguiente parezca inofensivo.');
+        $this->assertContains("'\rSoloRetorno", array_column($filas, 'Nombre'));
+    }
+
+    public function testLaExportacionDeCampanasDeClientesYFidelidadTambienSeAudita(): void
+    {
+        $this->usuario('Campana', 'Audit ' . $this->tag, ['consentimiento' => $this->dia(-3) . ' 10:00:00']);
+        $actor = $this->propietario();
+        $this->sesion($actor);
+        $_SERVER['REQUEST_METHOD'] = 'POST'; $_SERVER['REQUEST_URI'] = '/admin/crecimiento';
+        $_POST = ['csrf_token' => 'aud-csrf', 'accion' => 'segmento', 'segmento' => 'todos'];
+        $r = $this->invocar(fn() => \Controllers\CrecimientoController::index(new Router()));
+        $this->assertStringStartsWith('ID,Nombre,Apellido,Correo,Consentimiento', $r['cuerpo']);
+        $filas = $this->filasAuditoria($actor);
+        $this->assertCount(1, $filas);
+        $this->assertSame(['campana', 'exitosa', hash('sha256', $r['cuerpo']), 'solo_version_vigente'], [$filas[0]['tipo'], $filas[0]['resultado'], $filas[0]['contenido_sha256'], $filas[0]['consentimiento_politica']]);
+        $this->assertSame(['ID', 'Nombre', 'Apellido', 'Correo', 'Consentimiento'], json_decode($filas[0]['columnas_lista'], true));
+        // Sin auditoría no hay archivo: se fuerza un fallo real de escritura con un trigger temporal.
+        $this->db->query("CREATE TRIGGER test_fail_aud_{$this->tag} BEFORE INSERT ON crm_exportaciones_auditoria FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'fallo simulado'");
+        $prev = ini_set('error_log', '/dev/null');
+        ob_start(); $excepcion = null;
+        try { \Controllers\CrecimientoController::index(new Router()); }
+        catch (\Throwable $t) { $excepcion = $t; }
+        $salida = (string)ob_get_clean();
+        ini_set('error_log', $prev === false ? '' : $prev);
+        $this->db->query("DROP TRIGGER IF EXISTS test_fail_aud_{$this->tag}");
+        $this->assertInstanceOf(ServiceUnavailableException::class, $excepcion);
+        $this->assertSame('', $salida);
+        $this->assertCount(1, $this->filasAuditoria($actor));
     }
 
     // ================================================================ B. VERSIÓN DEL CONSENTIMIENTO
