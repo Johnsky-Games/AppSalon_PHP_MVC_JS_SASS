@@ -221,6 +221,73 @@ final class ColaboradorRepository
         });
     }
 
+    // ------------------------------------------------------------------ Primer propietario (instalación)
+
+    /**
+     * Aprovisiona al PRIMER propietario de forma idempotente y concurrente-segura. Nunca cambia contraseña
+     * ni rol de una cuenta existente por su cuenta y nunca crea un segundo propietario: si ya hay uno activo
+     * (o una activación pendiente) no hace nada.
+     *
+     * Con $password crea la cuenta activa (secreto de instalación aportado por quien opera el servidor,
+     * 12–72 caracteres; una cuenta existente solo se eleva si coincide su contraseña). Sin $password emite una
+     * invitación de propietario de un solo uso: la persona define su propia contraseña al aceptarla.
+     *
+     * @return array{estado:string,token?:string,correo_id?:int,usuario_id?:int}
+     *         estado: existente | pendiente | creado | activacion_emitida
+     */
+    public function aprovisionarPropietarioInicial(string $email, string $nombre, string $apellido, ?string $password, bool $regenerar = false): array
+    {
+        $emailNorm = \Classes\Identidad::normalizarEmail($email);
+        return Transaccion::ejecutar($this->db, function () use ($email, $emailNorm, $nombre, $apellido, $password, $regenerar): array {
+            $this->sql('SELECT id FROM equipo_mutex WHERE id=1 FOR UPDATE')->close();
+            $activos = $this->una("SELECT COUNT(*) total FROM usuarios u LEFT JOIN usuario_accesos a ON a.usuario_id=u.id
+                WHERE COALESCE(a.rol,IF(u.admin=1,'propietario','cliente'))='propietario' AND COALESCE(a.activo,1)=1 AND u.confirmado=1");
+            if ((int)$activos['total'] > 0) { return ['estado' => 'existente']; }
+
+            $pendiente = $this->una("SELECT c.id, c.usuario_id FROM colaboradores c WHERE c.rol='propietario' AND c.estado='invitado' LIMIT 1 FOR UPDATE");
+            if ($pendiente && !$regenerar) { return ['estado' => 'pendiente']; }
+            if ($pendiente) {
+                foreach ($this->todas("SELECT id FROM colaborador_invitaciones WHERE colaborador_id=? AND estado='pendiente' FOR UPDATE", 'i', [(int)$pendiente['id']]) as $previa) {
+                    $this->sql("UPDATE colaborador_invitaciones SET estado='revocada', revocada_en=UTC_TIMESTAMP() WHERE id=?", 'i', [(int)$previa['id']])->close();
+                    (new CorreoSalidaRepository($this->db))->cancelar('invitacion:' . (int)$previa['id']);
+                }
+                $inv = $this->emitirInvitacion((int)$pendiente['id'], null);
+                $correoId = $this->encolarInvitacion($inv, $emailNorm, trim($nombre . ' ' . $apellido), 'propietario', 'Propietario');
+                $this->auditar(null, null, 'bootstrap_activacion_regenerada', 'propietario');
+                return ['estado' => 'activacion_emitida', 'token' => $inv['token'], 'correo_id' => $correoId];
+            }
+
+            $usuario = $this->una('SELECT id, password FROM usuarios WHERE LOWER(TRIM(email))=? LIMIT 1 FOR UPDATE', 's', [$emailNorm]);
+            if ($password !== null) {
+                if ($usuario) {
+                    if (!password_verify($password, (string)$usuario['password'])) { throw new \DomainException('La contraseña no coincide con la cuenta existente'); }
+                    $usuarioId = (int)$usuario['id'];
+                } else {
+                    $this->sql("INSERT INTO usuarios(nombre,apellido,email,password,telefono,admin,confirmado) VALUES (?,?,?,?,NULL,1,1)", 'ssss',
+                        [$nombre, $apellido, $emailNorm, password_hash($password, PASSWORD_BCRYPT)])->close();
+                    $usuarioId = (int)$this->db->insert_id;
+                }
+                $this->sql("INSERT INTO usuario_accesos(usuario_id,rol,activo) VALUES(?,'propietario',1) ON DUPLICATE KEY UPDATE rol='propietario',activo=1", 'i', [$usuarioId])->close();
+                $this->sql('UPDATE usuarios SET admin=1, confirmado=1, version_sesion=version_sesion+1 WHERE id=?', 'i', [$usuarioId])->close();
+                $this->sql("INSERT INTO colaboradores(usuario_id,email_norm,nombre,apellido,rol,estado,aceptado_en,fecha_ingreso)
+                    VALUES (?,?,?,?,'propietario','activo',UTC_TIMESTAMP(),DATE(CONVERT_TZ(UTC_TIMESTAMP(),'+00:00','-05:00')))
+                    ON DUPLICATE KEY UPDATE rol='propietario', estado='activo'", 'isss', [$usuarioId, $emailNorm, $nombre, $apellido])->close();
+                $this->sql("UPDATE colaboradores SET codigo=CONCAT('COL-',LPAD(id,6,'0')) WHERE usuario_id=? AND codigo IS NULL", 'i', [$usuarioId])->close();
+                $this->auditar(null, $usuarioId, 'bootstrap_propietario', 'Provisionado por el instalador con secreto de instalación');
+                return ['estado' => 'creado', 'usuario_id' => $usuarioId];
+            }
+
+            $this->sql("INSERT INTO colaboradores(usuario_id,email_norm,nombre,apellido,telefono,puesto,rol,estado) VALUES (?,?,?,?,NULL,'Propietario','propietario','invitado')",
+                'isss', [$usuario ? (int)$usuario['id'] : null, $emailNorm, $nombre, $apellido])->close();
+            $colaboradorId = (int)$this->db->insert_id;
+            $this->sql('UPDATE colaboradores SET codigo=? WHERE id=?', 'si', [sprintf('COL-%06d', $colaboradorId), $colaboradorId])->close();
+            $inv = $this->emitirInvitacion($colaboradorId, null);
+            $correoId = $this->encolarInvitacion($inv, $emailNorm, trim($nombre . ' ' . $apellido), 'propietario', 'Propietario');
+            $this->auditar(null, $usuario ? (int)$usuario['id'] : null, 'bootstrap_activacion', 'propietario');
+            return ['estado' => 'activacion_emitida', 'token' => $inv['token'], 'correo_id' => $correoId];
+        });
+    }
+
     // ------------------------------------------------------------------ Aceptación
 
     /**

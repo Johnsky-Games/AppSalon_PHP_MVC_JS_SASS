@@ -214,7 +214,8 @@ async function inspect(page, route) {
 }
 
 async function login(page, email, destination) {
-    await page.goto(new URL('/', baseUrl).href, { waitUntil: 'networkidle2' });
+    // El destino laboral implica el portal del equipo; /cita es el portal de clientes.
+    await page.goto(new URL(destination === '/cita' ? '/cliente/login' : '/equipo/login', baseUrl).href, { waitUntil: 'networkidle2' });
     await page.type('#email', email);
     await page.type('#password', password);
     await Promise.all([

@@ -141,4 +141,24 @@ class EmailTest extends TestCase
             $this->assertSame('UTF-8', $mailer->CharSet);
         }
     }
+
+    public function testPasswordSmtpAceptaEmailPassYEmailPasswordConPrioridadDelSegundo(): void
+    {
+        $previo = [$_ENV['EMAIL_PASSWORD'] ?? null, $_ENV['EMAIL_PASS'] ?? null];
+        try {
+            unset($_ENV['EMAIL_PASSWORD'], $_ENV['EMAIL_PASS']);
+            putenv('EMAIL_PASSWORD'); putenv('EMAIL_PASS');
+            $this->assertSame('', Email::resolverPasswordSmtp());
+            $_ENV['EMAIL_PASS'] = 'desde-plantilla';
+            $this->assertSame('desde-plantilla', Email::resolverPasswordSmtp());
+            $_ENV['EMAIL_PASSWORD'] = 'nombre-historico';
+            $this->assertSame('nombre-historico', Email::resolverPasswordSmtp());
+            $mailer = (new Email('A', 'a@dominio.com', 't'))->prepararMailer('confirmacion', 'https://salon.example/x');
+            $this->assertSame('nombre-historico', $mailer->Password);
+        } finally {
+            foreach (['EMAIL_PASSWORD', 'EMAIL_PASS'] as $i => $k) {
+                if ($previo[$i] === null) { unset($_ENV[$k]); } else { $_ENV[$k] = $previo[$i]; }
+            }
+        }
+    }
 }

@@ -251,8 +251,8 @@ async function runBrowserTests() {
         // ------------------------------------------------------------------
         // BLOQUE ADMINISTRATIVO (FASE 2A): CRUD de Catálogo de Servicios
         // ------------------------------------------------------------------
-        console.log('>>> [FASE 2A - ADMIN] Autenticación de Administrador y CRUD de Servicios...');
-        await page.goto(`${BASE_URL}/`, { waitUntil: 'networkidle0' });
+        console.log('>>> [FASE 2A - ADMIN] Autenticación de Administrador (acceso del equipo) y CRUD de Servicios...');
+        await page.goto(`${BASE_URL}/equipo/login`, { waitUntil: 'networkidle0' });
         await verifyResponsivePage('login');
         await verifyAccessibleLogin();
 

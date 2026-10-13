@@ -17,7 +17,9 @@ module.exports = async function verifyPlatform({ browser, baseUrl, recordTest, s
         const page = await context.newPage();
         page.on('pageerror', error => errors.push(error.message));
         page.on('requestfailed', request => errors.push(`${request.url()}: ${request.failure()?.errorText}`));
-        await page.goto(`${baseUrl}/`, { waitUntil: 'networkidle0' });
+        // Cuentas laborales entran por el portal del equipo; las de clientes por el suyo.
+        const portal = ['admin@appsalon.com', 'recepcion@platform.test'].includes(email) ? '/equipo/login' : '/cliente/login';
+        await page.goto(`${baseUrl}${portal}`, { waitUntil: 'networkidle0' });
         await page.type('input[name="email"]', email);
         await page.type('input[name="password"]', 'Password123!');
         await Promise.all([page.waitForNavigation({ waitUntil: 'networkidle0' }),page.click('input[type="submit"]')]);

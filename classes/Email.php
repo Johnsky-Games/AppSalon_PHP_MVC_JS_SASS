@@ -149,6 +149,22 @@ class Email
     }
 
     /**
+     * Contraseña SMTP. La plantilla de entorno y Docker Compose usan `EMAIL_PASS`; el nombre histórico del
+     * código es `EMAIL_PASSWORD`. Se aceptan ambos (EMAIL_PASSWORD tiene prioridad) para que una instalación
+     * hecha según la plantilla autentique el envío.
+     */
+    public static function resolverPasswordSmtp(): string
+    {
+        foreach (['EMAIL_PASSWORD', 'EMAIL_PASS'] as $nombre) {
+            $valor = $_ENV[$nombre] ?? getenv($nombre);
+            if (is_string($valor) && $valor !== '') {
+                return $valor;
+            }
+        }
+        return '';
+    }
+
+    /**
      * Sanea texto para cabeceras de correo (asunto, nombres) eliminando saltos de línea y caracteres de control.
      */
     public static function sanearTextoCabecera(string $valor, int $maxLongitud = 180): string
@@ -184,7 +200,7 @@ class Email
         $email->SMTPAuth = true;
         $email->Port = (int)($_ENV['EMAIL_PORT'] ?? (getenv('EMAIL_PORT') ?: 25));
         $email->Username = (string)($_ENV['EMAIL_USER'] ?? (getenv('EMAIL_USER') ?: ''));
-        $email->Password = (string)($_ENV['EMAIL_PASSWORD'] ?? (getenv('EMAIL_PASSWORD') ?: ''));
+        $email->Password = self::resolverPasswordSmtp();
         $email->Timeout = 5;
 
         $remitente = self::resolverRemitente();
@@ -257,7 +273,7 @@ class Email
         $email->SMTPAuth = true;
         $email->Port = (int)($_ENV['EMAIL_PORT'] ?? (getenv('EMAIL_PORT') ?: 25));
         $email->Username = (string)($_ENV['EMAIL_USER'] ?? (getenv('EMAIL_USER') ?: ''));
-        $email->Password = (string)($_ENV['EMAIL_PASSWORD'] ?? (getenv('EMAIL_PASSWORD') ?: ''));
+        $email->Password = self::resolverPasswordSmtp();
         $email->Timeout = 5;
 
         $remitente = self::resolverRemitente();

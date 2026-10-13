@@ -45,7 +45,11 @@ final class ProfileNotificationIntegrationTest extends TestCase
     public function testOptoutEvitaGeneracionYDescartaRecordatorioYaEnColaPeroNoConfirmacion(): void
     {
         $this->db->query('INSERT INTO perfiles_usuario(usuarioId,recordatorios) VALUES (' . $this->user . ',0)');
-        $resultado=$this->service->procesarRecordatorios(24); self::assertSame(0,$resultado['enviados']);
+        // Otras pruebas pueden dejar citas confirmadas en la misma fecha fija de la base compartida:
+        // la garantía a verificar es que ESTA persona (con recordatorios desactivados) no recibe ninguno.
+        $this->service->procesarRecordatorios(24);
+        $propios=(int)$this->db->query('SELECT COUNT(*) n FROM notificaciones_citas WHERE cita_referencia_id=' . $this->cita . " AND tipo='recordatorio'")->fetch_assoc()['n'];
+        self::assertSame(0,$propios,'Con recordatorios desactivados no se genera ningún evento para su cita');
         $recordatorio=$this->evento('recordatorio');$confirmacion=$this->evento('confirmacion');
         $this->service->procesarPendientesYReintentos();
         self::assertSame('descartada',$this->repo->findById($recordatorio)->estado);

@@ -32,6 +32,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      instalador:
+        condition: service_completed_successfully
     environment: &app_environment
       APP_ENV: ${APP_ENV:-production}
       APP_URL: ${APP_URL:-http://localhost:8085}
@@ -51,8 +53,32 @@ services:
       RESERVA_EXIGIR_PROFESIONAL: ${RESERVA_EXIGIR_PROFESIONAL:-1}
       PAYMENT_GATEWAY_PROVIDER: ${PAYMENT_GATEWAY_PROVIDER:-mock}
       PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:-change_me_in_production_32_bytes_secret}
+      APP_KEY: ${APP_KEY:-}
+      OWNER_EMAIL: ${OWNER_EMAIL:-}
+      OWNER_NOMBRE: ${OWNER_NOMBRE:-}
+      OWNER_APELLIDO: ${OWNER_APELLIDO:-}
+      APPSALON_OWNER_PASSWORD: ${APPSALON_OWNER_PASSWORD:-}
+      APPSALON_AUTO_MIGRATE: ${APPSALON_AUTO_MIGRATE:-0}
     ports:
       - "${WEB_EXTERNAL_PORT:-8085}:80"
+    volumes:
+      - ./:/var/www/html
+    networks:
+      - appsalon_network
+
+  # Instalador de un solo paso: migra una base NUEVA y aprovisiona al primer propietario. Es idempotente:
+  # al reiniciar no crea otro propietario ni cambia contraseñas. En una base con datos NO migra por sí solo
+  # (haz respaldo y usa `docker compose run --rm instalador php scripts/instalar.php --migrar`).
+  instalador:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment: *app_environment
+    command: ["php", "scripts/instalar.php"]
     volumes:
       - ./:/var/www/html
     networks:

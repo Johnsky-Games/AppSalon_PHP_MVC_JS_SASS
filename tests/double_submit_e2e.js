@@ -146,7 +146,7 @@ async function registroCliente(browser, etiqueta) {
         const ownerPassword = process.env.E2E_OWNER_PASSWORD;
         if (ownerEmail && ownerPassword) {
             const { page, context } = await nuevaPagina(browser);
-            await page.goto(`${baseUrl}/`, { waitUntil: 'networkidle0' });
+            await page.goto(`${baseUrl}/equipo/login`, { waitUntil: 'networkidle0' });
             await page.type('input[name="email"]', ownerEmail);
             await page.type('input[name="password"]', ownerPassword);
             await Promise.all([page.waitForNavigation({ waitUntil: 'networkidle0' }), page.click('input[type="submit"]')]);
