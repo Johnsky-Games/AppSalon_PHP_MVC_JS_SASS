@@ -93,7 +93,11 @@ class Router
             !is_file(__DIR__ . "/views/$view.php")) {
             throw new \RuntimeException('Vista no disponible.');
         }
-        extract($datos, EXTR_SKIP);
+        // «datos» también es el nombre usado por varias vistas para su contenido.
+        // Liberarlo permite ese contrato sin que una clave sobrescriba «view».
+        $viewData = $datos;
+        unset($datos);
+        extract($viewData, EXTR_SKIP);
         if (!headers_sent()) {
             header('Content-Type: text/html; charset=utf-8');
         }

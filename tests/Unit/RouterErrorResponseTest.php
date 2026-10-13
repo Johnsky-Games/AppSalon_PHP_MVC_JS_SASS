@@ -267,4 +267,34 @@ final class RouterErrorResponseTest extends TestCase
         return [['propietario', '/admin'], ['gerente', '/admin'], ['recepcion', '/admin'],
             ['profesional', '/agenda'], ['finanzas', '/admin/finanzas'], ['cliente', '/cita']];
     }
+
+    public function testVistaRecibeDatosAnidadosSinPermitirCambiarElArchivoDeVista(): void
+    {
+        $level = ob_get_level();
+        ob_start();
+        try {
+            (new Router())->render('bienestar/index', [
+                'view' => 'auth/login',
+                'datos' => [
+                    'saldo' => 147,
+                    'servicios' => [['id' => 91, 'nombre' => 'Servicio seleccionado']],
+                    'formularios' => [[
+                        'id' => 93, 'titulo' => 'Ficha publicada para el cliente',
+                        'preguntas' => json_encode([['id' => 'p0', 'etiqueta' => 'Preferencia de atención',
+                            'tipo' => 'texto', 'requerida' => false]], JSON_UNESCAPED_UNICODE),
+                    ]],
+                ],
+                'ajustes' => [], 'mensaje' => '', 'error' => '',
+            ]);
+            $body = ob_get_contents();
+        } finally {
+            while (ob_get_level() > $level) ob_end_clean();
+        }
+        $this->assertStringContainsString('147 <small>puntos</small>', $body);
+        $this->assertStringContainsString('Ficha publicada para el cliente', $body);
+        $this->assertStringContainsString('name="formulario_id" value="93"', $body);
+        $this->assertStringContainsString('Servicio seleccionado', $body);
+        $this->assertStringContainsString('Preferencia de atención', $body);
+        $this->assertStringNotContainsString('action="/" method="POST"', $body);
+    }
 }
