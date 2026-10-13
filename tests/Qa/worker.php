@@ -85,6 +85,13 @@ try {
             $r = $svc->crear($a['post'], $a['clave'], $a['actor']);
             $res = ['status' => $r['status'], 'id' => $r['id'] ?? null, 'repetida' => $r['repetida'] ?? null];
             break;
+        case 'reservarProfesional':
+            $svc = new Services\CitaService();
+            $espera();
+            $t0 = microtime(true);
+            $r = $svc->reservarConProfesional((int)$a['usuario'], ['profesionalId' => $a['profesional'], 'fecha' => $a['fecha'], 'hora' => $a['hora'], 'servicios' => (string)$a['servicio']]);
+            $res = ['status' => $r['status'], 'codigo' => $r['codigo'] ?? null, 'id' => $r['id'] ?? null];
+            break;
         case 'propietarioInicial':
             $repo = new ColaboradorRepository($db);
             $espera();

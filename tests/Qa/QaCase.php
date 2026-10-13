@@ -225,6 +225,36 @@ abstract class QaCase extends TestCase
         return $id;
     }
 
+    /** @var array<int,array> */
+    private static array $smtp = [];
+
+    /** Arranca el SMTP simulado del QA. Devuelve la ruta del buzón JSON. */
+    protected static function iniciarSmtp(int $port = 2598): string
+    {
+        $buzon = sys_get_temp_dir() . "/qa_buzon_$port.json";
+        $p = proc_open([PHP_BINARY, __DIR__ . '/smtp_qa.php', (string)$port, $buzon], [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes);
+        for ($i = 0; $i < 50; $i++) { $c = @fsockopen('127.0.0.1', $port, $en, $es, 0.2); if ($c) { fclose($c); break; } usleep(100000); }
+        self::$smtp[$port] = ['proc' => $p, 'buzon' => $buzon];
+        register_shutdown_function(static function () use ($port): void { if (isset(self::$smtp[$port])) { @proc_terminate(self::$smtp[$port]['proc']); } });
+        return $buzon;
+    }
+
+    protected static function detenerSmtp(int $port = 2598): void
+    {
+        if (isset(self::$smtp[$port])) { @proc_terminate(self::$smtp[$port]['proc']); @proc_close(self::$smtp[$port]['proc']); unset(self::$smtp[$port]); }
+    }
+
+    /** @return array<int,array{to:array,cuerpo:string,cabeceras:string}> */
+    protected static function buzon(int $port = 2598): array
+    {
+        return json_decode((string)@file_get_contents(self::$smtp[$port]['buzon'] ?? ''), true) ?: [];
+    }
+
+    protected static function tokenEnCorreo(array $mensaje, string $ruta): ?string
+    {
+        return preg_match('~' . preg_quote($ruta, '~') . '\?token=([a-f0-9]{64})~', $mensaje['cuerpo'], $m) ? $m[1] : null;
+    }
+
     protected static function pararServidor(string $clave = 'base'): void
     {
         if (isset(self::$servidores[$clave])) { @proc_terminate(self::$servidores[$clave]['proc']); proc_close(self::$servidores[$clave]['proc']); unset(self::$servidores[$clave]); }
