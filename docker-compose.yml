@@ -84,8 +84,8 @@ services:
     networks:
       - appsalon_network
 
+  # Worker de notificaciones de citas y cola de correos de cuenta (reintentos). Arranca con `docker compose up`.
   notificaciones:
-    profiles: ["worker"]
     build:
       context: .
       dockerfile: Dockerfile

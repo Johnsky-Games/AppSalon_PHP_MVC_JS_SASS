@@ -197,17 +197,17 @@ Solo reactiva eventos `fallido` con carga (vuelven a `pendiente`, 0 intentos, ve
 
 ### 5.6 Comandos por entorno
 
-**Docker (Linux, macOS o Windows con Docker Desktop)** — el servicio `notificaciones` (perfil `worker`) ejecuta `scripts/notificaciones_worker.php`, que lanza `scripts/procesar_notificaciones.php` y `scripts/procesar_correos.php` en cada ciclo:
+**Docker (Linux, macOS o Windows con Docker Desktop)** — el servicio `notificaciones` (arranca con el `docker compose up` normal desde la ronda 2) ejecuta `scripts/notificaciones_worker.php`, que lanza `scripts/procesar_notificaciones.php` y `scripts/procesar_correos.php` en cada ciclo:
 
 ```bash
-docker compose --profile worker up -d notificaciones          # arrancar el worker
+docker compose up -d notificaciones                            # arrancar solo el worker
 docker compose exec web php scripts/procesar_correos.php --estado
 docker compose exec web php scripts/procesar_correos.php --reintentar=todos-fallidos
 docker compose exec web php scripts/procesar_correos.php      # procesar la cola ahora
 docker compose logs -f notificaciones                          # ver el worker
 ```
 
-> El servicio `notificaciones` solo arranca con `--profile worker`. Sin él (un `docker compose up` normal) los reintentos **no se ejecutan**: el primer intento inmediato sigue funcionando, pero un correo que falle quedará `pendiente` hasta que arranques el worker o ejecutes `procesar_correos.php` a mano.
+> Antes de la ronda 2 el servicio llevaba `profiles: ["worker"]` y no arrancaba con `docker compose up`; se retiró para que los reintentos de correo no dependan de un paso manual. `--profile worker` sigue siendo válido (se ignora). Si detienes el worker, un correo que falle quedará `pendiente` hasta que lo arranques o ejecutes `procesar_correos.php` a mano.
 
 **Windows PowerShell (con Docker)** — mismos comandos; si el proyecto usa un nombre/`--env-file` propio añade `--env-file includes/.env -p <proyecto>`:
 
