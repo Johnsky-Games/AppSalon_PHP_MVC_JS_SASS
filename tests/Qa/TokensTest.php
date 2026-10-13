@@ -250,21 +250,33 @@ final class TokensTest extends QaCase
         $this->assertSame($ea['status'], $eb['status']);
     }
 
+    /**
+     * DEF-13 (reverificado, SIN omisión): el registro público no revela si el correo ya tiene cuenta. Estado, redirección, cuerpo y
+     * pantalla final son idénticos para un correo nuevo, un cliente confirmado, uno sin confirmar, el personal y un cliente suspendido.
+     * (El ataque completo —cabeceras, cookies, límite, idempotencia, efectos, concurrencia— está en R2bRegistroUniformeTest.)
+     */
     public function test_Defecto_registro_publico_revela_si_un_correo_ya_tiene_cuenta(): void
     {
-        $this->markTestSkipped('Riesgo aceptado y documentado: el registro público conserva el mensaje histórico «El usuario ya está registrado» (limitado por intentos); ver docs/GUIA_ACTUALIZACION_IDENTIDADES.md §10 (DEF-13).');
         $existente = self::cliente(['email' => self::correo('enu2')]);
+        $sinConfirmar = self::cliente(['email' => self::correo('enu2b'), 'confirmado' => false]);
+        $suspendido = self::cliente(['email' => self::correo('enu2c'), 'estado' => 'suspendido']);
         $miembro = self::miembro(self::$dueno['id'], 'recepcion');
         $nuevo = self::correo('enu3');
         $envia = function (string $email): array {
+            self::q('TRUNCATE intentos_login');
             $n = new Navegador(self::$base);
             $csrf = $n->csrf('/cliente/registro');
             $k = Idem::clave();
-            return $n->post('/cliente/registro', ['csrf_token' => $csrf, 'idem_key' => $k, 'nombre' => 'A', 'apellido' => 'B', 'email' => $email, 'telefono' => '0991112222', 'password' => 'Abcdef123456']);
+            $r = $n->post('/cliente/registro', ['csrf_token' => $csrf, 'idem_key' => $k, 'nombre' => 'A', 'apellido' => 'B', 'email' => $email, 'telefono' => '0991112222', 'password' => 'Abcdef123456']);
+            $final = $r['location'] ? $n->get($r['location']) : ['status' => null, 'body' => ''];
+            $norm = static fn(string $h): string => preg_replace(['/value="[a-f0-9]{64}"/', '/value="[a-f0-9]{32}"/'], '', $h);
+            return ['status' => $r['status'], 'location' => $r['location'], 'cuerpo' => $norm($r['body']), 'final' => [$final['status'], $norm($final['body'])]];
         };
-        $rExiste = $envia($existente['email']); $rStaff = $envia($miembro['email']); $rNuevo = $envia($nuevo);
-        $this->assertSame($rNuevo['status'], $rExiste['status'], 'el estado HTTP de un correo existente difiere del de uno nuevo: permite enumerar clientes (' . $rExiste['status'] . ' vs ' . $rNuevo['status'] . ')');
-        $this->assertSame($rNuevo['status'], $rStaff['status'], 'permite descubrir correos del personal');
+        $base = $envia($nuevo);
+        $this->assertSame(302, $base['status']);
+        foreach (['existe' => $existente['email'], 'sin_confirmar' => $sinConfirmar['email'], 'suspendido' => $suspendido['email'], 'personal' => $miembro['email'], 'propietario' => self::$dueno['email']] as $rama => $email) {
+            $this->assertSame($base, $envia($email), "el registro con un correo «{$rama}» se distingue del de un correo nuevo: permite enumerar cuentas");
+        }
     }
 
     public function test_olvide_y_reenvio_de_confirmacion_no_enumeran(): void

@@ -18,6 +18,8 @@ use Services\AuthService;
 use Services\ColaboradorService;
 use Services\CorreoSalidaService;
 
+// Arnés: permite simular un reloj PHP en otra zona (el contenedor corre en UTC mientras el salón opera en America/Guayaquil, UTC-5).
+if (getenv('QA_PHP_TZ')) { date_default_timezone_set((string)getenv('QA_PHP_TZ')); }
 [, $accion, $json, $inicio] = $argv + [null, '', '{}', '0'];
 $a = json_decode($json, true) ?: [];
 $db = ActiveRecord::getDB();
@@ -38,6 +40,42 @@ try {
             $t0 = microtime(true);
             $r = $svc->registrar($a['post'], '10.1.' . random_int(1, 250) . '.' . random_int(1, 250), $a['clave'], $a['actor']);
             $res = ['status' => $r['status'], 'repetida' => $r['repetida'] ?? null, 'correos_enviados' => count($correos), 'alertas' => $r['alertas'] ?? []];
+            break;
+        case 'registrarCola':
+            // Registro por la COLA real (sin despachador inyectado); el transporte de correo se captura, no sale nada.
+            $enviados = [];
+            \Classes\Email::setTransport(static function ($mail) use (&$enviados) {
+                $enviados[] = $mail->Body; return true;
+            });
+            $svc = new AuthService(new Repositories\UsuarioRepository($db));
+            $espera();
+            $t0 = microtime(true);
+            $r = $svc->registrar($a['post'], $a['ip'] ?? '10.1.0.1', $a['clave'], $a['actor']);
+            $tok = null;
+            foreach ($enviados as $cuerpo) { if (preg_match('~token=([a-f0-9]{64})~', $cuerpo, $m)) { $tok = $m[1]; } }
+            $res = ['status' => $r['status'], 'repetida' => $r['repetida'] ?? null, 'envios' => count($enviados), 'token_enviado' => $tok, 'alertas' => $r['alertas'] ?? []];
+            break;
+        case 'reenviarCola':
+            $enviados = [];
+            if (empty($a['smtp'])) {
+                \Classes\Email::setTransport(static function ($mail) use (&$enviados) {
+                    $enviados[] = $mail->Body; return true;
+                });
+            }
+            $svc = new AuthService(new Repositories\UsuarioRepository($db));
+            $espera();
+            // Arnés: el limitador (3 por correo y ventana) es correcto y frenaría la carrera; se vacía su tabla justo antes
+            // para poder provocar N emisiones realmente simultáneas sobre la misma cuenta.
+            if (!empty($a['sinLimite'])) { $db->query('DELETE FROM intentos_login'); }
+            $t0 = microtime(true);
+            $r = $svc->reenviarConfirmacion(['email' => $a['email']], $a['ip'] ?? '10.1.0.1');
+            for ($reint = 0; !empty($a['sinLimite']) && $r['status'] === 'rate_limited' && $reint < 5; $reint++) {
+                $db->query('DELETE FROM intentos_login');
+                $r = $svc->reenviarConfirmacion(['email' => $a['email']], $a['ip'] ?? '10.1.0.1');
+            }
+            $tok = null;
+            foreach ($enviados as $cuerpo) { if (preg_match('~token=([a-f0-9]{64})~', $cuerpo, $m)) { $tok = $m[1]; } }
+            $res = ['status' => $r['status'], 'envios' => count($enviados), 'token_enviado' => $tok];
             break;
         case 'invitar':
             $svc = $servicioColab();
@@ -91,6 +129,33 @@ try {
             $t0 = microtime(true);
             $r = $svc->reservarConProfesional((int)$a['usuario'], ['profesionalId' => $a['profesional'], 'fecha' => $a['fecha'], 'hora' => $a['hora'], 'servicios' => (string)$a['servicio']]);
             $res = ['status' => $r['status'], 'codigo' => $r['codigo'] ?? null, 'id' => $r['id'] ?? null];
+            break;
+        case 'configurarAgenda':
+            $svc = $servicioColab();
+            $espera();
+            $t0 = microtime(true);
+            $r = $svc->configurarAgenda((int)$a['actor'], (int)$a['colaborador'], $a['post'], $a['clave']);
+            $res = array_intersect_key($r, array_flip(['status', 'repetida', 'errores', 'estado']));
+            break;
+        case 'reasignar':
+            $svc = new Services\ReasignacionCitasService();
+            $espera();
+            $t0 = microtime(true);
+            $r = $svc->aplicar((int)$a['actor'], (int)$a['colaborador'], $a['decisiones'], $a['motivo'] ?? 'Baja programada', $a['clave']);
+            $res = array_intersect_key($r, array_flip(['status', 'repetida', 'errores', 'reasignadas', 'canceladas', 'pendientes', 'codigo']));
+            break;
+        case 'consentimiento':
+            $repoC = new Repositories\ConsentimientoRepository($db);
+            $espera();
+            $t0 = microtime(true);
+            $res = ['cambio' => $repoC->aplicarDecision((int)$a['usuario'], (bool)$a['acepta'], $a['version'] ?? null, ['origen' => 'perfil', 'canal' => 'portal_cliente', 'actor_id' => (int)$a['usuario'], 'reconfirma' => (bool)($a['reconfirma'] ?? false)])];
+            break;
+        case 'altaCliente':
+            $svcA = new Services\AltaClienteService(new Repositories\UsuarioRepository($db), new Repositories\AltaClienteRepository($db));
+            $espera();
+            $t0 = microtime(true);
+            $r = $svcA->registrar((int)$a['actor'], $a['rol'] ?? 'recepcion', $a['post'], $a['clave'], null);
+            $res = array_intersect_key($r, array_flip(['status', 'id', 'repetida', 'errores']));
             break;
         case 'propietarioInicial':
             $repo = new ColaboradorRepository($db);

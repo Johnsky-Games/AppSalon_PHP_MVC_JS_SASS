@@ -73,7 +73,13 @@ abstract class QaCase extends TestCase
         return $f ? array_values($f[0])[0] : null;
     }
 
-    /** Vacía todas las tablas excepto `migraciones` y `equipo_mutex` (semilla). */
+    /**
+     * Vacía todas las tablas excepto `migraciones` y `equipo_mutex` (semilla) y RESTABLECE la semilla de `consentimiento_versiones`.
+     * CAMBIO DE CONTRATO (ronda 2B, migración 022): la versión 1 del texto de consentimiento es un dato semilla; sin ella el CRM y «Mi perfil»
+     * responden 503. Vaciar la tabla con TRUNCATE (que no activa sus triggers de inmutabilidad) dejaba la base sin versión vigente y rompía
+     * ~50 pruebas por un artefacto del arnés, no por la aplicación; y no vaciarla acumulaba versiones publicadas por otras clases.
+     * Por eso se vacía y se vuelve a sembrar exactamente la fila de la migración.
+     */
     protected static function limpiar(): void
     {
         $db = self::db();
@@ -82,6 +88,7 @@ abstract class QaCase extends TestCase
             if (in_array($r['t'], ['migraciones', 'equipo_mutex'], true)) { continue; }
             $db->query('TRUNCATE TABLE `' . $r['t'] . '`');
         }
+        $db->query("INSERT INTO consentimiento_versiones (proposito, version, texto, texto_hash, vigente_desde, es_historica, creado_en) SELECT 'marketing_email', 1, 'Acepto recibir promociones por correo (opcional)', SHA2('Acepto recibir promociones por correo (opcional)', 256), NULL, 1, UTC_TIMESTAMP() FROM DUAL");
         $db->query('SET FOREIGN_KEY_CHECKS=1');
     }
 
@@ -259,11 +266,19 @@ abstract class QaCase extends TestCase
     protected static function servidor(array $env = [], string $clave = 'base'): string
     {
         if (isset(self::$servidores[$clave])) { return self::$servidores[$clave]['url']; }
-        $s = stream_socket_server('tcp://127.0.0.1:0');
-        $port = (int)explode(':', stream_socket_get_name($s, false))[1];
-        fclose($s);
+        // Puertos reservados al QA (briefing de la ronda 2): HTTP 8150-8199.
+        $port = 0;
+        for ($candidato = 8150; $candidato <= 8199 && $port === 0; $candidato++) {
+            $s = @stream_socket_server("tcp://127.0.0.1:$candidato", $en, $es);
+            if ($s) { fclose($s); $port = $candidato; }
+        }
+        if ($port === 0) { throw new \RuntimeException('Sin puertos HTTP libres en 8150-8199'); }
         $log = sys_get_temp_dir() . '/qa_web_' . $port . '.log';
         $sess = sys_get_temp_dir() . '/qa_sess_' . $port;
+        // Los puertos del QA son un rango pequeño y se reutilizan entre clases: el registro y las sesiones de un servidor anterior
+        // NO deben contaminar las aserciones sobre el registro de errores (p. ej. «sin Warning» en el log del servidor actual).
+        foreach ([$log, $log . '.out', $log . '.err'] as $viejo) { @unlink($viejo); }
+        foreach (glob($sess . '/sess_*') ?: [] as $viejo) { @unlink($viejo); }
         @mkdir($sess, 0777, true);
         $envp = array_merge(getenv(), ['DB_NAME' => self::nombreBd(), 'APP_ENV' => 'testing', 'EMAIL_HOST' => '127.0.0.1', 'EMAIL_PORT' => '2599', 'EMAIL_USER' => 't', 'EMAIL_PASSWORD' => 't', 'EMAIL_FORCE_SMTP' => '1'], $env);
         $p = proc_open([PHP_BINARY, '-d', 'variables_order=EGPCS', '-d', 'error_log=' . $log, '-d', 'session.save_path=' . $sess, '-S', "127.0.0.1:$port", '-t', self::RAIZ . '/public', __DIR__ . '/router.php'],

@@ -292,8 +292,11 @@ trait MatrizHttp
         $r = $n->peticion($m, $o['p'], $campos, $cabeceras);
         $despues = self::huellaBd();
         $dif = self::difHuella($antes, $despues);
+        $buzonDespues = self::leerBuzon();
+        // Diagnóstico (sin cuerpos): destinatarios y asunto de lo que llegó durante la petición, para atribuir un correo inesperado.
+        $nuevos = array_map(static fn ($c) => implode(',', (array)($c['to'] ?? [])) . ' | ' . (preg_match('/^Subject:\s*(.+)$/mi', (string)($c['cabeceras'] ?? ''), $mm) ? trim($mm[1]) : '(sin asunto)'), array_slice($buzonDespues, $buzonAntes));
         return ['r' => $r, 'sesion' => $datos, 'csrf' => $csrf, 'cookie' => $cookie, 'dif' => $dif, 'tablas' => self::textoDif($dif),
-            'correo' => count(self::leerBuzon()) - $buzonAntes];
+            'correo' => count($buzonDespues) - $buzonAntes, 'correo_detalle' => $nuevos];
     }
 
     /** ¿Algún centinela de los grupos NO permitidos aparece en el texto (crudo, escapado HTML/URL/JSON)? @return string[] */

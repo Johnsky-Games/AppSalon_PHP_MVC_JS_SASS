@@ -2,7 +2,7 @@
 
 Revisión adversarial e independiente del commit `4e542af` (rama `claude/blissful-hopper-f5k7a0`, «instalador idempotente…»).
 Todas las pruebas son nuevas y viven en `tests/Qa/`; no se modificó código de la aplicación ni pruebas existentes.
-Fecha de ejecución: 2026-10-13. **Ronda 2 (matriz de autorización exacta): ver la sección «Ronda 2» al final del documento.** Entorno: PHP 8.3.6 (el objetivo es 8.2; ver «No cubierto»), MySQL 8.0.46, PHPUnit 10.5.66, Chromium 1194 con puppeteer-core.
+Fecha de ejecución: 2026-10-13. **Ronda 2 (matriz de autorización exacta): ver la sección «Ronda 2» al final del documento.** **Ronda 2B (reverificación de las correcciones de la ronda 2): ver «Ronda 2B – Reverificación» al final.** Entorno: PHP 8.3.6 (el objetivo es 8.2; ver «No cubierto»), MySQL 8.0.46, PHPUnit 10.5.66, Chromium 1194 con puppeteer-core.
 
 Convenciones: **DEFECTO** = el ataque rompió una garantía y existe una prueba roja `test_Defecto_*`; **PASA** = el ataque se ejecutó y el sistema resistió;
 **OBSERVACIÓN** = comportamiento discutible sin prueba roja; **NO PROBADO** = no se alcanzó. Hechos comprobados y suposiciones se separan expresamente.
@@ -521,3 +521,176 @@ Tests: 362, Assertions: 1803, Failures: 3, Skipped: 2.     (tiempo: 7 min 41 s)
 
 `tests/Qa/matriz_rutas.php` (matriz declarativa), `tests/Qa/MatrizHttp.php` (siembra, modalidades, huellas, centinelas), `tests/Qa/AutorizacionMatrizTest.php` (A–K y defectos),
 `tests/Qa/AutorizacionHttpTest.php` (aserciones exactas), `tests/Qa/Navegador.php` (`HEAD` sin cuerpo, `CURLOPT_PATH_AS_IS`), `tests/Qa/FrontendTest.php` y `frontend_qa.cjs` (`CHROME_BIN`, `QA_EXIGIR_NAVEGADOR`), y retoques para eliminar omisiones en `EsquemaTest`, `FallosTest`, `TokensTest`.
+
+---
+
+# Ronda 2B – Reverificación
+
+Reverificación independiente («qa2») del código integrado (rama `wt/qa2`, base `461dbf8`) frente a las correcciones de la ronda 2. Se actuó solo sobre `tests/Qa/**`, `.github/qa_omitidas_permitidas.txt` y este documento: **no se modificó ningún archivo de la aplicación**. Criterio de redacción: «verificado» significa que lo ejecutó una prueba o un comando cuyo resultado literal se cita; lo que no se ejecutó figura como hipótesis o como no cubierto (§R2B.9).
+
+Entorno: PHP 8.3.6, MySQL 8.0, PHPUnit 10.5.66, base `appsalon_qa_ronda2_test` (el arnés exige `appsalon_qa_*_test`), HTTP real con `php -S` (puertos 8150-8199), SMTP simulado propio (2590-2599; ningún correo real), procesos PHP concurrentes reales con barrera, Chromium 1194 con `puppeteer-core`.
+
+## R2B.1 Estado de los defectos anteriores
+
+| Defecto | Estado tras la reverificación | Evidencia |
+|---|---|---|
+| DEF-13 (registro revela si el correo tiene cuenta) | **Corregido en lo funcional.** Respuesta, cabeceras, cookies, pantalla final y efectos visibles idénticos en 5 ramas (nuevo, sin confirmar, confirmado, personal, propietario/suspendido). Quedan **canales de temporización** (DEF-R2B-02, -08, -09) y un enlace roto en el aviso (DEF-R2B-01). | `TokensTest::test_Defecto_registro_publico_revela…` (reescrita, ya no se omite) y `R2bRegistroUniformeTest` (20 pruebas) |
+| DEF-16 (rollback/reaplicación de la 016 reactiva suspendidos) | **Corregido por la vía soportada** (`migrador down` con `--aceptar-perdida` y respaldo verificado): la suspensión, su motivo y su origen sobreviven a dos ciclos `down`/`up` con cambios intermedios, y el login sigue denegado. El rollback SQL **manual** de la 018 sigue destruyendo datos (límite documentado en una prueba). Hallazgo nuevo: DEF-R2B-05. | `EsquemaTest::test_Defecto_E2_…` (ya no se omite), `R2bReversionTest` (11 pruebas) |
+| DEF-R2-01 (reportes con PII al rol finanzas) | Corregido: la prueba roja de la ronda 2 pasa y la matriz exige que ningún centinela de PII llegue a finanzas. | `AutorizacionMatrizTest` |
+| DEF-R2-02 (`/api/eliminar` con id inválido redirige a un 403) | Corregido para cliente, profesional, finanzas y equipo; el destino es el inicio del portal y es accesible (200). La exclusión de la celda en `test_I_*` se retiró. | `R2bRedireccionTest::test_sin_referer_…`, `test_I_*` |
+| DEF-R2-03 (open redirect por `Referer`, CWE-601) | Corregido: 31 variantes hostiles (userinfo, `javascript:`, `data:`, `//`, `\`, CRLF codificado, puertos, mayúsculas, IPv6, `Host`/`X-Forwarded-Host` manipulados) terminan siempre en una ruta local de un solo `/`. | `R2bRedireccionTest` (31 pruebas) |
+| DEF-12 (campos arreglo → advertencias PHP) | **REGRESIÓN.** Corregido en la ronda 1 (`ddade89`), reaparece en el código integrado: ver DEF-R2B-04. | `FallosTest` (8 casos rojos) |
+
+## R2B.2 Hallazgos nuevos (pruebas rojas, ninguna debilitada ni omitida)
+
+Todos los fallos de la ejecución completa son los de esta lista. Cada prueba contiene la reproducción mínima.
+
+### DEF-R2B-01 (Baja) El aviso «ya tienes una cuenta» enlaza a `/login`, que no existe
+- `classes/Email.php` genera el botón «Ir a iniciar sesión» con `/login`; esa ruta no está en `public/index.php` y responde **404**. Es el único correo que recibe el titular legítimo de la cuenta.
+- Repro: `POST /cliente/registro` con el correo de una cuenta confirmada → el buzón recibe el aviso → `GET <enlace del botón>` → 404.
+- Prueba: `R2bRegistroUniformeTest::test_Defecto_R2B_01_el_aviso_de_cuenta_existente_enlaza_a_una_ruta_inexistente`.
+
+### DEF-R2B-02 (Baja, canal lateral) La segunda solicitud de registro distingue una cuenta confirmada de un correo nuevo por el tiempo
+- Con un SMTP simulado de 300 ms: la 2.ª solicitud sobre un correo nuevo o sin confirmar tardó **433 ms** y sobre una cuenta confirmada ya avisada en la hora **98 ms** (cociente 4,4; umbral de la prueba < 2). La primera solicitud sí está equilibrada; el aviso del titular se limita a uno por hora y esa rama deja de enviar.
+- Prueba: `R2bRegistroUniformeTest::test_Defecto_R2B_02_el_tiempo_de_la_segunda_solicitud_distingue_cuentas_confirmadas_de_nuevas`.
+
+### DEF-R2B-03 (Baja, privacidad) `correos_salida.ultimo_error` guarda la dirección del destinatario
+- Un servidor SMTP que rechaza el destinatario repite la dirección en su respuesta (`The following recipients failed: <dirección>: …`); `CorreoSalidaService`/`Email::sanearMensajeError` no la elimina y queda en `ultimo_error` (verificado). La prueba también comprueba lo que imprime `scripts/procesar_correos.php --estado` (que `docs/NOTIFICACIONES_WORKER.md` §5.4 declara «sin datos personales») cuando el evento llega a `fallido`.
+- Prueba: `R2bColaCorreosTest::test_Defecto_R2B_03_el_error_guardado_y_el_diagnostico_estado_contienen_el_correo_del_destinatario` (la primera aserción, sobre `ultimo_error`, es la que falla; la de `--estado` queda sin ejecutar hasta corregir la primera).
+
+### DEF-R2B-04 (Baja, regresión de DEF-12) Campos arreglo vuelven a emitir `PHP Warning: Array to string conversion`
+- `views/equipo/index.php:15` conserva los arreglos (`is_array($v) ? $v : (string)$v`) y las líneas 29-41 hacen `s($previo['nombre'])` → `includes/funciones.php:18`. Además `views/equipo/_agenda_asistente.php:15` (`array_map('strval', (array)$ag['seleccion'])`) falla con `servicios[][a]=1`.
+- Repro: sesión de propietario, `POST /admin/equipo/crear` con `nombre[]=x` (o `telefono[]`, `puesto[]`, `fecha_ingreso[]`, `nombre_profesional[]`, `servicios[][a]=1`) → 302 → `GET /admin/equipo` → advertencia en el log del servidor. No hay 500 ni fuga visible.
+- Pruebas (ya existentes, vuelven a estar rojas): `FallosTest::test_Defecto_invitar_con_campo_arreglo_emite_advertencia_al_reproducir_el_formulario` (3), `test_mutaciones_de_equipo_con_campos_arreglo_dan_4xx_o_redireccion_sin_advertencias` (4), `test_invitar_con_servicios_no_escalares_o_inexistentes_da_error_controlado` (1). Estaban rojas ya en la primera ejecución sobre `461dbf8` (sin cambios míos en `FallosTest`).
+
+### DEF-R2B-05 (Baja, operación) Aceptar la pérdida de la 022 no permite revertir y el mensaje no explica el remedio
+- Con una fila en `crm_exportaciones_auditoria`, `migrador down --hasta=022… --aceptar-perdida=022… --respaldo=<válido>` imprime el bloqueo, el aviso «Pérdida aceptada…» y luego `[ERROR] … Subquery returns more than 1 row` (error 1242 de la guarda SQL de la 022). El rollback se niega por diseño (la auditoría es de solo anexado), **sin modificar nada** (verificado con la huella de toda la base), pero el flag `--aceptar-perdida` sugiere que es posible y el mensaje no dice que hay que archivar y vaciar las tablas a mano.
+- Prueba: `R2bReversionTest::test_Defecto_R2B_05_aceptar_la_perdida_de_022_no_permite_revertir_y_el_mensaje_no_lo_dice` (la parte de «no cambia nada» pasa en `…_el_rollback_de_022_se_niega_sin_modificar_nada`).
+
+### DEF-R2B-06 (Baja/Media) Un cliente registrado puede inundar la auditoría de exportaciones (solo anexado)
+- Toda petición denegada de `GET /admin/clientes/exportar` añade una fila permanente (triggers 1644 impiden borrarla). El alta pública es abierta, así que cualquiera con una cuenta de cliente puede crecer la tabla sin límite. La documentación descarta auditar al anónimo «por ser vía de inundación»; un cliente es un anónimo con un paso más.
+- Repro: login de cliente, 60 × `GET /admin/clientes/exportar?tipo=clientes&i=N` → 60 filas nuevas (esperado < 60).
+- Prueba: `R2bCrmAuditoriaTest::test_Defecto_R2B_06_…`.
+
+### DEF-R2B-07 (Baja) La exportación de campañas y fidelidad no neutraliza tabulador ni retorno de carro iniciales
+- `CrecimientoController::csv` (línea 49) antepone `'` solo si tras los espacios en blanco iniciales sigue `= + @ -` (`/^[\s]*[=+@\-]/u`). Una celda que empieza por tabulador o retorno de carro **sin** otro disparador (`\tsolotab`, `\rsolocr`) sale sin neutralizar, y OWASP recomienda neutralizar también esos dos caracteres iniciales. El CSV de clientes del CRM sí los neutraliza (la prueba lo comprueba con una celda `=HYPERLINK…`).
+- Repro: cliente con nombre `\tsolotab` / `\rsolocr` → exportación de campañas → celdas sin comilla inicial (filas 8 y 9 del CSV de la prueba).
+- Prueba: `R2bCrmAuditoriaTest::test_Defecto_R2B_07_campana_de_clientes_y_fidelidad_no_neutraliza_tabulador_y_retorno_de_carro_iniciales`.
+
+### DEF-R2B-08 (Baja, canal lateral) `/olvide` revela si la cuenta existe por el tiempo de respuesta
+- Con un SMTP simulado de 400 ms: cuenta existente **460 ms** frente a inexistente **12 ms** (cociente 39). El envío se hace dentro de la petición solo cuando la cuenta existe y está confirmada. El registro público sí se corrigió; `/olvide` y `/reenviar-confirmacion` quedaron con el patrón anterior (la documentación lo reconoce como residuo).
+- Prueba: `R2bRegistroUniformeTest::test_Defecto_R2B_08_olvide_revela_si_la_cuenta_existe_por_el_tiempo_de_respuesta`.
+
+### DEF-R2B-09 (Baja, canal lateral) `/reenviar-confirmacion` revela si existe una cuenta pendiente por el tiempo
+- Cuenta pendiente **468 ms** frente a inexistente **12 ms** (SMTP de 400 ms): aunque el evento va a la cola persistente, el primer intento se hace en línea solo si la cuenta existe y está pendiente.
+- Prueba: `R2bRegistroUniformeTest::test_Defecto_R2B_09_reenviar_confirmacion_revela_si_la_cuenta_pendiente_existe_por_el_tiempo_de_respuesta`.
+
+### DEF-R2B-10 (Media, dependiente de la zona horaria del proceso PHP) Retirar un servicio o poner un descanso ignora las citas de HOY por la noche
+- `ProfesionalRepository` calcula «hoy» con `date('Y-m-d')` (líneas 776, 926, 965, 1135 del archivo leído). No hay `date_default_timezone_set` ni `date.timezone` en el código, en el `Dockerfile` ni en `docker/` (verificado con `grep`), y en este entorno `date_default_timezone_get()` devuelve `UTC`. El salón opera en `America/Guayaquil` (UTC-5): entre las 19:00 y las 23:59 locales «hoy» de PHP ya es mañana y una cita confirmada de esta misma noche no cuenta como futura, de modo que se puede retirar el servicio o crear un descanso sobre ella. `ColaboradorRepository::citasFuturasDeProfesional` sí convierte a -05:00 (por eso la baja sí lo detecta).
+- Reproducción **simulada** (no se alteró el reloj del sistema): el proceso que ejecuta la operación corre con `date_default_timezone_set('Pacific/Kiritimati')` (`QA_PHP_TZ`, solo en `tests/Qa/worker.php`), cuya fecha es la de mañana en Guayaquil. Controles que pasan: sin desfase y con el reloj en Guayaquil la operación **sí** se rechaza (422). Con el desfase se acepta (`status ok`).
+- Hipótesis no comprobada: que el despliegue real use la zona UTC de PHP (es el valor por defecto de la imagen `php:8.2-apache` sin `date.timezone`).
+- Prueba: `R2bAgendaTest::test_Defecto_R2B_10_…`.
+
+### DEF-R2B-11 (Baja) Error de validación de la reasignación deja a gerencia y recepción en un 403
+- `EquipoController::reasignarAplicar` (id ausente/no válido, `decision` no arreglo o `motivo` no cadena) redirige a `/admin/equipo`, que exige `equipo.gestionar` (solo propietario). Gerencia y recepción —que tienen `agenda.gestionar` y sí ven la pantalla de reasignación— reciben un 403. La verificación general de cadenas de redirección (`test_I_*`) lo detectó en la matriz.
+- Repro: login de gerente, abrir `/admin/equipo/reasignar?id=<profesional>`, `POST /admin/equipo/reasignar` con CSRF válido y sin `id` → `302 /admin/equipo` → `403`.
+- Prueba: `R2bAgendaTest::test_Defecto_R2B_11_el_error_de_validacion_de_la_reasignacion_deja_a_gerencia_y_recepcion_en_un_403`. `test_I_*` excluye únicamente las tres celdas (gerente, recepción, `portal_inexistente_cuenta_equipo`) de `POST /admin/equipo/reasignar` para que un solo defecto no oculte el resto; la exclusión está comentada en el código y el defecto sigue rojo en su prueba.
+
+## R2B.3 Observaciones (sin prueba roja; comportamiento actual medido)
+
+1. **Cola de correos: «al menos una vez», no «exactamente una».** Un worker matado a mitad del envío puede duplicar el mensaje, siempre con el mismo enlace vigente (`test_worker_matado_a_mitad_del_envio…`). Con ocho reenvíos simultáneos queda un único token válido, pero llegan a entregarse hasta 8 correos y solo uno sirve (última ejecución: 7 entregados, **6 con enlaces ya invalidados**) (el titular los recibe y falla con 410; cuatro ejecuciones de la prueba entregaron 6, 8, 7 y 7 correos con un único enlace válido en cada una; la ventana está acotada por el número de reenvíos simultáneos, y la prueba lo exige: `< 8`). La documentación (§5.7) ya reconoce la ventana y no promete entrega única (`test_los_documentos_no_prometen_entrega_exactamente_una_vez`). Sobrepromesas de redacción, sin consecuencia funcional: el titular «no pierde el correo» (un evento llega a `fallido` tras unos 31 minutos acumulados de reintentos y requiere `--reintentar`), y los comentarios «nunca se duplica» (`ReasignacionCitasService`) y «backoff sin duplicados» (`NotificacionCitaService`).
+2. **SMTP colgado**: el alta pública espera el tiempo de espera del cliente SMTP: medido **10,11 s** con un servidor que acepta la conexión y no responde (`cuelga`) frente a 0,17 s (cerrado), 0,10 s (RCPT 4xx), 0,09 s (RCPT 5xx) y 0,14 s (DATA 5xx). El resultado para el usuario es el mismo en todos los casos y el evento queda `pendiente`.
+3. `procesar_correos.php --reintentar` **sin valor** no falla: ejecuta una tanda normal del worker. Con valores hostiles (`1;DROP`, vacío, negativo, no numérico) sale con código 2 sin tocar la base.
+4. El teléfono que teclea un operador en el aviso de homónimos se vuelve a mostrar en el formulario (dato que el propio operador acaba de escribir; sin fuga cruzada).
+
+## R2B.4 Expectativas modificadas por cambios de contrato deliberados
+
+Ninguna aserción se relajó para ocultar un fallo. Cada cambio refleja un contrato nuevo y deliberado de la integración, justificado también en un comentario del propio archivo:
+
+| Prueba | Antes | Ahora | Justificación |
+|---|---|---|---|
+| `TokensTest::test_Defecto_registro_publico_revela_si_un_correo_ya_tiene_cuenta` | omitida (riesgo aceptado) | activa: la firma de la respuesta (estado, cabeceras, cookies, cuerpo normalizado) debe ser idéntica para nuevo / existe / sin confirmar / suspendido / personal / propietario | DEF-13 se corrigió con registro uniforme (`AuthService::registrar`, aviso 1/h, límite 3 por correo y 10 por IP cada 15 min) |
+| `EsquemaTest::test_Defecto_E2_…` | omitida (el rollback elimina la tabla) | activa: se revierte con `migrador down --aceptar-perdida --respaldo`; la suspensión, el motivo y el origen se conservan y el login sigue denegado tras `up` | DEF-16: la reversión segura exige respaldo verificado y deja `clientes_resguardo_016` |
+| `EsquemaTest::test_E2_*`, `test_E2b_*` | rollback SQL directo | `revertirSeguro()` (migrador) y, para el ciclo completo, el migrador **rechaza** (código 2) sin aceptación y la reversión total con aceptación deja un esquema igual al de una instalación nueva | la vía soportada es el migrador; el rollback manual de la 018 queda documentado en `test_Limite_documentado_el_rollback_manual_de_018…` |
+| `EsquemaTest::test_Defecto_E5_conteo_de_tablas_y_documentacion` | 35 tablas | 42 (comparado con una base `fresh`) | las migraciones 018-022 añaden tablas |
+| `CorreoTest` (registro con SMTP caído) | el registro informaba el fallo de envío | respuesta uniforme y exactamente **un** evento `confirmacion_cuenta` `pendiente` con `intentos = 1`; el reenvío cancela el evento anterior | el envío pasa a la cola persistente (outbox) |
+| `ConcurrenciaTest::test_registro_claves_distintas_mismo_correo_una_sola_identidad` | un solo `ok` y el resto conflicto | tres `ok` (límite de 3 por correo), 1 identidad y 1 membresía, contraseña original intacta, 1 token válido, ≤ 1 evento activo, filas de idempotencia = aceptadas | no hay conflicto distinguible por diseño (DEF-13); el invariante pasa a ser «una identidad» |
+| `AtaquesVariosTest::test_homonimo_de_profesional_exige_confirmacion_explicita` (+ nueva `…token_forjado_reutilizado_u_otra_clave_no_crea_nada`) | alta directa | el alta con homónimo exige `decision=confirmar` + token HMAC ligado a actor, clave e ids | contrato del aviso de homónimos |
+| `InstaladorTest` | número fijo de migraciones | número de archivos `.sql` que no son de reversión | evita fijar el contador |
+| `matriz_rutas.php` / `AutorizacionMatrizTest` | `/api/eliminar` esperaba `/admin`; 82 rutas | `@inicio` (inicio del portal); nuevas rutas `POST /admin/equipo/ficha/agenda`, `GET\|POST /admin/equipo/reasignar` (404 y 200 según id), `GET /admin/clientes/auditoria`, `GET\|POST /admin/clientes/nuevo`; una excepción acotada: una exportación (200 o 403) debe dejar **exactamente una** fila de auditoría | DEF-R2-02 y contratos nuevos |
+| `QaCase::limpiar()` | vaciaba todas las tablas | vacía y vuelve a sembrar la versión 1 de `consentimiento_versiones` | la 022 la siembra; sin ella el consentimiento no funciona (arnés, no aplicación) |
+
+## R2B.5 Cobertura nueva (qué se atacó)
+
+| Área | Archivo (pruebas) | Qué se verificó |
+|---|---|---|
+| Registro uniforme | `R2bRegistroUniformeTest` (20) | igualdad de respuesta en 5 ramas; errores de validación/CSRF/clave independientes de la cuenta; alias `/crear-cuenta`; sin efectos sobre contraseña ni privilegios; aviso sin token ni enlace de activación; 1 aviso por hora y correo; mayúsculas y espacios; límites por correo y por IP; misma clave repetida / misma clave con otro correo (409 igual); concurrencia con 6 procesos reales; temporización de login / olvide / reenvío |
+| Cola de correos | `R2bColaCorreosTest` (23) | SMTP cerrado, colgado, RCPT 4xx/5xx, DATA 5xx, aceptar y cortar, lento; worker real `scripts/procesar_correos.php`; backoff exacto 60/120/240/480/960 s; agotamiento a `fallido`; `--estado` sin PII (salvo DEF-R2B-03); `--reintentar`; 8 reenvíos concurrentes; lease vencido / vigente; worker matado; 2 workers simultáneos; corte tras 3 fallos; evento vencido a 24 h; token nunca en claro en cola, logs ni errores; argumentos hostiles |
+| Reversión | `R2bReversionTest` (11) | bases aisladas; respaldos inválidos rechazados antes de tocar nada; aceptación parcial / sin respaldo / de una migración ajena; manifiesto (sha256, base, fecha < 24 h, versión, filas); guardas 016/017/018/022; dos ciclos con cambios intermedios |
+| Agenda y reasignación | `R2bAgendaTest` (53) | asistente (invitación y ficha) con cargas inválidas → 422 sin tocar filas; ficha nueva inactiva; ficha heredada intacta salvo casilla; retirar servicios / descansos con citas; reasignación con destinos inválidos por formulario manipulado; comisión devengada; baja y suspensión bloqueadas en servidor; baja simultánea con reserva; dos reasignaciones al mismo hueco; seis procesos con doble clic; permisos por rol y PII mínima |
+| CRM | `R2bCrmAuditoriaTest` (14), `R2bConsentimientoTest` (10), `R2bHomonimosTest` (24) | auditoría antes de la salida y sin bytes si falla; append-only; truncado de 10 100 filas; neutralización CSV; versión del consentimiento mostrada vs vigente; homónimos de clientes y profesionales (token forjado, reutilizado, otra clave, otro operador); `diagnosticar_duplicados` solo informa |
+| Redirecciones | `R2bRedireccionTest` (31) | ver DEF-R2-02/03 |
+| Frontend | `R2bFrontendTest` (5) + `frontend_r2b.cjs` | Chromium de 320 a 1440 px: sin desbordes ni errores de consola, contrato JS del asistente, foco, reducción de movimiento, objetivos táctiles ≥ 44 px, comportamiento sin JavaScript |
+
+## R2B.6 Sensibilidad de las pruebas (mutaciones sobre una COPIA, `/tmp/qa2_mut`; el árbol real queda intacto)
+
+Cada mutación se aplicó a la copia con la base `appsalon_qa_r2bm_test`, se ejecutó la prueba indicada y se comprobó que falla.
+
+| # | Mutación (archivo) | Resultado | Prueba que la detecta |
+|---|---|---|---|
+| M01 | el registro de un correo con cuenta responde distinto (conflicto 422) (`services/AuthService.php`) | ROJO | `R2bRegistroUniformeTest::test_la_respuesta_es_identica_en_todas_las_ramas_incluidas_cabeceras_cookies_y_pantalla_final` |
+| M02 | sin ventana horaria: un aviso por solicitud (inundación del titular) (`services/AuthService.php`) | ROJO | `R2bRegistroUniformeTest::test_el_aviso_se_limita_a_uno_por_hora_y_correo_aunque_se_repita_la_solicitud` |
+| M03 | el reenvío no cancela los eventos de enlaces reemplazados (`services/AuthService.php`) | ROJO | `R2bColaCorreosTest::test_reenviar_sucesivo_cancela_el_evento_anterior_y_jamas_envia_un_enlace_reemplazado` |
+| M04 | el worker no comprueba la vigencia del enlace (`services/CorreoSalidaService.php`) | ROJO | `R2bColaCorreosTest::test_cuenta_confirmada_por_otra_via_cancela_el_evento_pendiente_sin_enviar` |
+| M05 | retroceso constante de 60 s en lugar de exponencial (`repositories/CorreoSalidaRepository.php`) | ROJO | `R2bColaCorreosTest::test_backoff_exacto_agotamiento_fallido_estado_sin_pii_y_reintentar_manual` |
+| M06 | el migrador no verifica el respaldo (`database/migrador_reversion.php`) | ROJO | `R2bReversionTest::test_respaldos_invalidos_se_rechazan_antes_de_tocar_nada` |
+| M07 | el migrador no exige aceptar cada migración (`database/migrador.php`) | ROJO | `R2bReversionTest::test_aceptacion_parcial_o_sin_respaldo_o_con_aceptacion_de_una_migracion_ajena_se_niega_sin_tocar_nada` |
+| M08 | el rollback de la 016 no resguarda las suspensiones (`database/migrations/016_clientes_membresia_rollback.sql`) | ROJO | `R2bReversionTest::test_suspension_sobrevive_a_dos_ciclos_down_up_con_cambios_intermedios_y_el_login_sigue_denegado` |
+| M09 | la reasignación no revalida el hueco del destino (`repositories/ReasignacionCitasRepository.php`) | ROJO | `R2bAgendaTest::test_reasignar_a_destinos_invalidos_por_formulario_manipulado_no_mueve_nada` |
+| M10 | la reasignación ignora la comisión devengada (`repositories/ReasignacionCitasRepository.php`) | ROJO | `R2bAgendaTest::test_comision_devengada_bloquea_la_reasignacion_aunque_se_fuerce_el_formulario` |
+| M11 | la baja no comprueba citas futuras (`repositories/ColaboradorRepository.php`) | ROJO | `R2bAgendaTest::test_baja_y_suspension_se_bloquean_en_servidor_con_citas_sin_resolver_aunque_se_manipule_el_formulario` |
+| M12 | el asistente admite franjas solapadas (`services/AgendaSemanalValidador.php`) | ROJO | `R2bAgendaTest::test_la_ficha_rechaza_cargas_invalidas_con_422_sin_tocar_ni_una_fila_y_sin_advertencias` |
+| M13 | la exportación se entrega aunque no se pueda auditar (`controllers/CrmController.php`) | ROJO | `R2bCrmAuditoriaTest::test_si_la_auditoria_falla_no_sale_ni_un_byte_del_archivo` |
+| M14 | el consentimiento guarda la última versión y no la mostrada (`repositories/ConsentimientoRepository.php`) | ROJO | `R2bConsentimientoTest::test_se_guarda_la_version_mostrada_aunque_se_haya_publicado_otra_mientras_tanto` |
+| M15 | el consentimiento sube de versión sin reconfirmación (`repositories/ConsentimientoRepository.php`) | ROJO | `R2bConsentimientoTest::test_un_consentimiento_previo_no_sube_de_version_solo_ni_con_un_formulario_viejo` |
+| M16 | el token de homónimos no está ligado al operador (`services/AltaClienteService.php`) | ROJO | `R2bHomonimosTest::test_tokens_forjados_ajenos_viejos_o_reutilizados_no_crean_nada` |
+| M17 | destino_retorno_seguro acepta cualquier origen (`includes/funciones.php`) | ROJO | `R2bRedireccionTest::test_la_cancelacion_por_formulario_nunca_redirige_fuera_del_origen (con juegos de datos)` |
+| M18 | la ficha nueva del asistente nace activa (`repositories/ColaboradorRepository.php`) | ROJO | `R2bAgendaTest::test_ficha_nueva_del_asistente_no_aparece_en_disponibilidad_ni_reservas_hasta_aceptar_la_invitacion` |
+| M19 | el token de homónimos de profesional no está ligado a la clave (`services/HomonimosProfesionalesService.php`) | ROJO | `R2bHomonimosTest::test_profesional_tokens_forjados_confirmacion_cancelacion_y_doble_clic` |
+| M20 | la lista comercial incluye consentimientos de versión anterior (`repositories/CrecimientoRepository.php`) | ROJO | `R2bConsentimientoTest::test_crm_distingue_version_anterior_y_las_listas_comerciales_solo_incluyen_la_vigente` |
+| M21 | una denegación de exportación no se audita (`controllers/CrmController.php`) | ROJO | `R2bCrmAuditoriaTest::test_denegadas_por_rol_quedan_registradas_y_los_anonimos_o_sesiones_caducadas_no` |
+| M22 | el SMTP caído hace fallar el alta (el despacho propaga la excepción) (`services/CorreoSalidaService.php`, `catch (\Throwable)` → `catch (\LogicException)` en `despacharTrasCommit`) | **SOBREVIVIÓ (equivalente)** | `despachar()` captura internamente cualquier fallo de envío y devuelve `false`, por lo que ese `catch` externo solo protege errores inesperados de base de datos; para el caso de SMTP caído la mutación no cambia el comportamiento. Se sustituyó por M23, que sí lo cambia. |
+| M23 | un fallo de SMTP no se registra (el evento queda «enviando» hasta que venza el arrendamiento) (`services/CorreoSalidaService.php`) | ROJO | `R2bColaCorreosTest::test_el_alta_con_smtp_roto_responde_igual_no_pierde_el_correo_y_el_worker_real_lo_entrega` (los 5 casos) |
+
+M22 se descartó por equivalente y se sustituyó por M23: todas las mutaciones no equivalentes (22 de 22) fueron detectadas. Cada una se aplicó sobre la copia con la base `appsalon_qa_r2bm_test`; el árbol real quedó intacto (`git status` limpio de archivos de aplicación).
+
+## R2B.7 Resultado de la ejecución completa
+
+Comando (desde la raíz del árbol, con `DB_NAME=appsalon_qa_ronda2_test`, SMTP simulado propio y `QA_EXIGIR_NAVEGADOR=1`):
+
+```
+php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --colors=never --log-junit <junit.xml> tests/Qa
+Tests: 564, Assertions: 4492, Failures: 18.        (DURACION_SEG=794, es decir 13 min 14 s)
+```
+
+- **Omitidas: 0** (PHPUnit no imprime «Skipped»; el informe JUnit lo confirma: `php scripts/ci_verificar_omitidas.php <junit.xml> .github/qa_omitidas_permitidas.txt` → `Pruebas en el informe: 564; omitidas: 0`, código 0).
+- **Los 18 fallos son las pruebas rojas de los defectos de §R2B.2**, ninguno es de arnés: DEF-R2B-01 (1), -02 (1), -03 (1), -04 (8 casos de `FallosTest`), -05 (1), -06 (1), -07 (1), -08 (1), -09 (1), -10 (1) y -11 (1).
+- Una primera ejecución completa (563 pruebas, 19 fallos) mostró además dos fallos que no eran de estas pruebas rojas: (a) `test_I_*` por `POST /admin/equipo/reasignar` de gerencia y recepción, que dio lugar a DEF-R2B-11 y a su prueba propia; (b) **una celda aislada** de la matriz (`POST /olvide | profesional | html`) que midió «1 correo(s) enviados al buzón SMTP» en una petición sin cuerpo que no puede enviar ninguno. **No se pudo reproducir**: pasó tres veces sola, pasó la clase `AutorizacionMatrizTest` completa (167 pruebas, 4 min 2 s) y la segunda ejecución completa. No se identificó la causa (hipótesis sin comprobar: correo de otra prueba que llegó al mismo buzón del puerto 2599 durante la ventana de medida). Se añadió al mensaje de fallo el destinatario y el asunto de cualquier correo inesperado para atribuirlo si vuelve a ocurrir.
+- Tiempos por clase (segundos, ejecución final): `AutorizacionMatrizTest` 261, `R2bAgendaTest` 60, `ConcurrenciaTest` 52, `R2bReversionTest` 46, `EsquemaTest` 43, `R2bColaCorreosTest` 40, `InstaladorTest` 38, `R2bRegistroUniformeTest` 32; el resto, menos de 15 s cada una. Los tiempos de `FrontendTest` y `R2bFrontendTest` no figuran por clase (la medición ocurre en la preparación de la clase) pero están incluidos en los 794 s.
+- Regresión de los desarrolladores (suites por defecto `tests/Unit` + `tests/Integration`, base aparte `appsalon_qa_r2bdev_test`): `OK (667 tests, 10140 assertions)`, 3 min 58 s (`DURACION_SEG=238`).
+- E2E de navegador del CI (sin Docker, ver §R2B.9): 8 etapas, todas con código 0.
+- Las pruebas de DEF-R2B-02/-08/-09 son pruebas de temporización con cociente (umbral 2,0) sobre un SMTP simulado de 300-400 ms, no dependen de la velocidad absoluta de la máquina; los cocientes observados fueron 4,4, 39 y 40.
+
+## R2B.8 Omitidas
+
+**Lista exacta de pruebas omitidas: ninguna.** `.github/qa_omitidas_permitidas.txt` queda con la lista definitiva **vacía** (solo comentarios que explican por qué), de modo que cualquier omisión futura hace fallar el CI. Las dos omisiones de la ronda 2 se eliminaron (ambas pruebas ejecutan ahora la corrección). Las pruebas que dependen de Chromium (`FrontendTest`, `R2bFrontendTest`) solo se omiten en una máquina sin navegador **y sin** `QA_EXIGIR_NAVEGADOR=1`; el CI fija esa variable, por lo que allí fallan en lugar de omitirse. No se usa ninguna variable de entorno para activar o desactivar una prueba.
+
+## R2B.9 No cubierto, con motivo
+
+- **Docker/Apache**: el entorno no tiene Docker. Las 8 etapas E2E del CI (`tests/browser_e2e_test.js`, `assert_browser_e2e.php`, `error_routes_http_checks.js`, `error_visual_test.js`, `ui_navigation_test.js`, `double_submit_e2e.js`, `responsive_views_test.js` y las vistas previas de correo) se ejecutaron sin Docker con un guion propio fuera del repositorio (`php -S` + SMTP simulado sobre una base `appsalon_e2e_test`); resultado literal: `E2E_TOTAL_RC=0` con las 8 etapas en `RC=0`. No se verificó `.htaccess`, `mod_rewrite` ni las cabeceras de Apache.
+- **SMTP real o remoto**: prohibido; todo el correo es simulado (fallos incluidos). No se probaron TLS, autenticación ni límites de un proveedor.
+- **Zona horaria real**: el desfase nocturno de DEF-R2B-10 se simula con un reloj PHP adelantado en el proceso de la operación; no se alteró el reloj del sistema ni se probó el horario de verano (Ecuador no lo usa).
+- **Rate limit con IPv6 o detrás de proxy**: solo IPv4 directo (127.0.0.1).
+- **Navegadores**: solo Chromium 1194; no Firefox ni WebKit ni dispositivos reales.
+- **Escala**: el CRM se probó con 10 100 clientes; la cola, con decenas de eventos.
+- **Intermitencia no explicada** de una celda de la matriz (`POST /olvide | profesional | html`, un correo inesperado) observada una vez y no reproducida: ver §R2B.7.

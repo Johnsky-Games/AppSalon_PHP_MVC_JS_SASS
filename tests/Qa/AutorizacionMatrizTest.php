@@ -50,10 +50,16 @@ final class AutorizacionMatrizTest extends QaCase
 
     private function resolver(string $p): string
     {
-        return strtr($p, ['{cliente}' => self::$P['cliente']['id'], '{ajeno}' => self::$D['ajeno']['id'], '{col_staff}' => self::$D['col_staff'], '{uid_staff}' => self::$P['colab_baja']['id'], '{servicio}' => self::$D['servicio'], '{pro}' => self::$P['profesional']['profesional_id']]);
+        return strtr($p, ['{cliente}' => self::$P['cliente']['id'], '{ajeno}' => self::$D['ajeno']['id'], '{col_staff}' => self::$D['col_staff'], '{col_prof}' => self::$P['profesional']['colaborador_id'], '{uid_staff}' => self::$P['colab_baja']['id'], '{servicio}' => self::$D['servicio'], '{pro}' => self::$P['profesional']['profesional_id']]);
     }
 
     private static function base(string $p): string { return explode('?', $p, 2)[0]; }
+
+    /** Inicio del portal según el ROL REAL de la persona en el servidor (inicio_portal()). */
+    private static function inicioDe(string $persona): string
+    {
+        return match (self::personas()[$persona]['rol'] ?? 'cliente') { 'cliente' => '/cita', 'profesional' => '/agenda', 'finanzas' => '/admin/finanzas', default => '/admin' };
+    }
 
     private static function etiqueta(array $r): string { return $r['m'] . ' ' . $r['p']; }
 
@@ -116,7 +122,7 @@ final class AutorizacionMatrizTest extends QaCase
         $cuerpo = $resp['body'];
         switch ($spec['k']) {
             case 'redir':
-                $destino = $spec['x'] === '@portal' ? ((($x['sesion']['portal'] ?? '') === 'equipo') ? '/equipo/login' : '/') : $spec['x'];
+                $destino = $spec['x'] === '@portal' ? ((($x['sesion']['portal'] ?? '') === 'equipo') ? '/equipo/login' : '/') : ($spec['x'] === '@inicio' ? self::inicioDe($persona) : $spec['x']);
                 if ($loc !== $destino) { $f[] = "Location: esperado " . var_export($destino, true) . '; obtenido ' . var_export($loc, true); }
                 if ($cuerpo !== '') { $f[] = 'una redirección no debe llevar cuerpo (' . strlen($cuerpo) . ' bytes)'; }
                 break;
@@ -124,7 +130,7 @@ final class AutorizacionMatrizTest extends QaCase
                 if (!str_starts_with(strtolower($ct), 'text/html; charset=utf-8')) { $f[] = "Content-Type html esperado; obtenido '$ct'"; }
                 if ($loc !== null) { $f[] = "no debe haber Location (obtenido $loc)"; }
                 if (!$head) {
-                    foreach ((array)($spec['x'] ?? []) as $t) { if (!str_contains($cuerpo, $t)) { $f[] = "falta el texto «$t»; cuerpo: " . substr(trim(preg_replace('/\s+/', ' ', strip_tags($cuerpo))), 0, 140); } }
+                    foreach ((array)($spec['x'] ?? []) as $t) { if (!str_contains($cuerpo, $t)) { $f[] = "falta el texto «{$t}»; cuerpo: " . substr(trim(preg_replace('/\s+/', ' ', strip_tags($cuerpo))), 0, 140); } }
                 }
                 break;
             case 'json': case 'jsonx': case 'json_lista':
@@ -168,8 +174,19 @@ final class AutorizacionMatrizTest extends QaCase
         $fugas = self::fugas($cuerpo . "\n" . $cab, self::prohibidos($persona, $r !== null ? self::base($r['p']) : null));
         if ($fugas) { $f[] = 'FUGA de datos privados: ' . implode(', ', $fugas); }
         // Efectos: una petición benigna (o denegada) no modifica nada.
-        if ($x['tablas']) { $f[] = 'EFECTO en BD: ' . implode(', ', $x['tablas']); }
-        if ($x['correo'] !== 0) { $f[] = "EFECTO: {$x['correo']} correo(s) enviados al buzón SMTP"; }
+        $tablasEfecto = $x['tablas'];
+        if ($r !== null && !empty($r['efecto_auditoria']) && isset($x['dif'])) {
+            // Única excepción de contrato: la auditoría append-only de exportaciones registra el intento (éxito 200 o denegación 403).
+            $esperadas = in_array($resp['status'], [200, 403], true) ? 1 : 0;
+            $reales = 0;
+            $tablasEfecto = [];
+            foreach ($x['tablas'] as $t) {
+                if (preg_match('/^crm_exportaciones_auditoria\(n (\d+)→(\d+)\)$/u', $t, $mm)) { $reales = (int)$mm[2] - (int)$mm[1]; } else { $tablasEfecto[] = $t; }
+            }
+            if ($reales !== $esperadas) { $f[] = "auditoría de exportación: se esperaba $esperadas fila(s) nueva(s) (status {$resp['status']}) y hubo $reales"; }
+        }
+        if ($tablasEfecto) { $f[] = 'EFECTO en BD: ' . implode(', ', $tablasEfecto); }
+        if ($x['correo'] !== 0) { $f[] = "EFECTO: {$x['correo']} correo(s) enviados al buzón SMTP" . (empty($x['correo_detalle']) ? '' : ' [' . implode('; ', $x['correo_detalle']) . ']'); }
         return array_map(fn ($m) => "[$celda] $m", $f);
     }
 
@@ -749,13 +766,19 @@ final class AutorizacionMatrizTest extends QaCase
     public function test_I_ninguna_redireccion_forma_bucle_ni_lleva_a_un_recurso_prohibido_para_quien_la_recibe(): void
     {
         $fallos = [];
-        $excluidas = ['POST /api/eliminar']; // ver test_Defecto_api_eliminar_*: su destino /admin es 403 para quien no gestiona la agenda.
+        // DEF-R2-02 corregido: POST /api/eliminar ya redirige al inicio de su portal y entra en la comprobación.
+        // POST /admin/equipo/reasignar con roles que no son propietario se comprueba aparte en test_Defecto_R2B_11_… (defecto nuevo
+        // de la ronda 2B): se excluye de ESTA prueba solo para que un único defecto no oculte el resto de la matriz; la exclusión
+        // es solo por (ruta, persona) y el defecto sigue en rojo en su propia prueba.
+        $excluidas = [];
+        $exclPersona = ['POST /admin/equipo/reasignar' => ['gerente', 'recepcion', 'portal_inexistente_cuenta_equipo']];
         foreach (self::$rutas as $r0) {
             $r = $r0; $r['p'] = $this->resolver($r0['p']);
             if (in_array(self::etiqueta($r0), $excluidas, true) || $r0['g'] === 'especial') { continue; }
             foreach (self::pers() as $persona) {
                 $spec = $this->esperado($r, $persona);
                 if ($spec['k'] !== 'redir' || $spec['x'] === '@portal') { continue; }
+                if (in_array($persona, $exclPersona[self::etiqueta($r0)] ?? [], true)) { continue; }
                 $per = self::personas()[$persona];
                 $csrf = bin2hex(random_bytes(32));
                 $datos = ($per['sesion'])($csrf) ?? ['csrf_token' => $csrf];

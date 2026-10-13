@@ -347,19 +347,98 @@ final class AtaquesVariosTest extends QaCase
         $this->assertSame(200, $n->get('/cita')['status'], 'La sesión de cliente se invalida en la petición siguiente porque contexto().activo=0 se calcula con el estado laboral (suspendido) y no distingue el portal');
     }
 
+    /**
+     * CAMBIO DE CONTRATO deliberado (ronda 2, AGENDA_OPERATIVA «Aviso de posibles homónimos»): la casilla `confirmar_homonimo` ya NO
+     * confirma nada. El segundo paso correcto exige la MISMA clave de operación, el MISMO correo (la huella de idempotencia lo incluye),
+     * `decision=confirmar` y el `token_confirmacion` HMAC que devolvió el primer paso. Se mantiene la garantía original: nunca se crea
+     * la ficha de un homónimo sin una confirmación explícita del operador y el servidor recalcula las coincidencias.
+     */
     public function test_homonimo_de_profesional_exige_confirmacion_explicita(): void
     {
         $svc = $this->svc();
         $dueno = self::$p['propietario']['id'];
         $sid = self::servicio();
-        self::q("INSERT INTO profesionales(nombre,activo) VALUES ('  Laura   Gómez ',1)");
-        $base = ['nombre' => 'Laura', 'apellido' => 'Gómez', 'telefono' => '', 'puesto' => '', 'rol' => 'profesional', 'fecha_ingreso' => '', 'servicios' => [(string)$sid], 'nombre_profesional' => 'laura gómez'];
-        $a = $svc->invitar($dueno, $base + ['email' => self::correo('hom1')], Idem::clave());
+        $sufijo = bin2hex(random_bytes(3));
+        self::q("INSERT INTO profesionales(nombre,activo) VALUES (?,1)", ["  Laura   Gómez $sufijo "]);
+        $base = ['nombre' => 'Laura', 'apellido' => "Gómez $sufijo", 'telefono' => '', 'puesto' => '', 'rol' => 'profesional', 'fecha_ingreso' => '', 'servicios' => [(string)$sid], 'nombre_profesional' => "laura gómez $sufijo"];
+        $email = self::correo('hom1');
+        $clave = Idem::clave();
+        $a = $svc->invitar($dueno, $base + ['email' => $email], $clave);
         $this->assertSame('invalid', $a['status'], json_encode($a));
         $this->assertTrue($a['requiere_homonimo'] ?? false);
-        $this->assertSame(0, (int)self::escalar("SELECT COUNT(*) FROM profesionales WHERE colaborador_id IS NOT NULL AND LOWER(nombre)='laura gómez'"));
-        $b = $svc->invitar($dueno, $base + ['email' => self::correo('hom2'), 'confirmar_homonimo' => '1'], Idem::clave());
+        $this->assertSame(0, (int)self::escalar("SELECT COUNT(*) FROM profesionales WHERE colaborador_id IS NOT NULL AND nombre=?", ["laura gómez $sufijo"]));
+        $b = $svc->invitar($dueno, $base + ['email' => $email, 'decision' => 'confirmar', 'token_confirmacion' => $a['homonimos']['token']], $clave);
         $this->assertSame('ok', $b['status'], json_encode($b));
+    }
+
+    /** Ataques al token del aviso de homónimos: no forjable, no reutilizable, ligado a operador, clave y conjunto de coincidencias. */
+    public function test_homonimo_de_profesional_token_forjado_reutilizado_u_otra_clave_no_crea_nada(): void
+    {
+        $svc = $this->svc();
+        $dueno = self::$p['propietario']['id'];
+        $gerente = self::$p['gerente']['id'];
+        $sid = self::servicio();
+        $sufijo = bin2hex(random_bytes(3));
+        self::q("INSERT INTO profesionales(nombre,activo) VALUES (?,1)", ["Marta Ríos $sufijo"]);
+        $original = self::q("SELECT * FROM profesionales WHERE nombre=?", ["Marta Ríos $sufijo"])[0];
+        $base = ['nombre' => 'Marta', 'apellido' => "Ríos $sufijo", 'telefono' => '', 'puesto' => '', 'rol' => 'profesional', 'fecha_ingreso' => '', 'servicios' => [(string)$sid], 'nombre_profesional' => "Marta Ríos $sufijo"];
+        $creadas = fn() => (int)self::escalar("SELECT COUNT(*) FROM profesionales WHERE colaborador_id IS NOT NULL AND nombre=?", ["Marta Ríos $sufijo"]);
+        $emailA = self::correo('mr');
+        $claveA = Idem::clave();
+        $a = $svc->invitar($dueno, $base + ['email' => $emailA], $claveA);
+        $this->assertSame('invalid', $a['status']);
+        $token = $a['homonimos']['token'];
+        $this->assertMatchesRegularExpression('/^[a-f0-9]{64}$/', $token);
+
+        $intenta = function (int $actor, string $clave, array $extra, string $email) use ($svc, $base): array {
+            return $svc->invitar($actor, $base + ['email' => $email] + $extra, $clave);
+        };
+        // 1. casilla vieja (ya no confirma), con y sin decisión
+        $this->assertSame('invalid', $intenta($dueno, $claveA, ['confirmar_homonimo' => '1'], $emailA)['status']);
+        $this->assertSame('invalid', $intenta($dueno, $claveA, ['confirmar_homonimo' => '1', 'decision' => 'confirmar'], $emailA)['status'], 'decisión sin token');
+        // 2. token vacío, basura, de longitud correcta pero falso, o enviado como arreglo
+        foreach (['', 'abc', str_repeat('0', 64), strtoupper($token), $token . 'x', ' ' . $token] as $t) {
+            $r = $intenta($dueno, $claveA, ['decision' => 'confirmar', 'token_confirmacion' => $t], $emailA);
+            $this->assertSame('invalid', $r['status'], "token «{$t}» aceptado");
+        }
+        $r = $intenta($dueno, $claveA, ['decision' => 'confirmar', 'token_confirmacion' => [$token]], $emailA);
+        $this->assertSame('invalid', $r['status'], 'token en arreglo aceptado');
+        // 3. token válido de OTRO operador (gerente usa el del propietario)
+        $this->assertSame('invalid', $intenta($gerente, $claveA, ['decision' => 'confirmar', 'token_confirmacion' => $token], $emailA)['status'], 'el token no debe valer para otro operador');
+        // 4. token válido con OTRA clave de operación
+        $claveB = Idem::clave();
+        $this->assertSame('invalid', $intenta($dueno, $claveB, ['decision' => 'confirmar', 'token_confirmacion' => $token], $emailA)['status'], 'el token no debe valer con otra clave');
+        // 5. el conjunto de coincidencias cambió (aparece un homónimo nuevo): el token viejo deja de valer
+        self::q("INSERT INTO profesionales(nombre,activo) VALUES (?,0)", ["marta rios $sufijo"]);
+        $r = $intenta($dueno, $claveA, ['decision' => 'confirmar', 'token_confirmacion' => $token], $emailA);
+        $this->assertSame('invalid', $r['status'], 'token con un conjunto distinto de ids aceptado');
+        $this->assertTrue($r['homonimos']['confirmacion_invalida'] ?? false);
+        $this->assertSame(0, $creadas(), 'se creó una ficha con un token que no corresponde');
+        $this->assertSame(0, (int)self::escalar("SELECT COUNT(*) FROM colaboradores WHERE email_norm=?", [mb_strtolower($emailA)]), 'se creó colaborador');
+        // 6. con el token NUEVO (recalculado por el servidor para el conjunto real) sí se crea, una sola vez; reutilizarlo no crea otra
+        $tokenNuevo = $r['homonimos']['token'];
+        $this->assertNotSame($token, $tokenNuevo);
+        $ok = $intenta($dueno, $claveA, ['decision' => 'confirmar', 'token_confirmacion' => $tokenNuevo], $emailA);
+        $this->assertSame('ok', $ok['status'], json_encode($ok));
+        $this->assertSame(1, $creadas());
+        $rep = $intenta($dueno, $claveA, ['decision' => 'confirmar', 'token_confirmacion' => $tokenNuevo], $emailA);
+        $this->assertSame('ok', $rep['status']);
+        $this->assertTrue($rep['repetida'] ?? false);
+        $this->assertSame(1, $creadas(), 'doble clic: una sola ficha');
+        $emailB = self::correo('mr2');
+        $claveC = Idem::clave();
+        $otra = $intenta($dueno, $claveC, ['decision' => 'confirmar', 'token_confirmacion' => $tokenNuevo], $emailB);
+        $this->assertSame('invalid', $otra['status'], 'un token ya usado no autoriza un alta nueva con otra clave');
+        $this->assertSame(1, $creadas());
+        // 7. cancelar no crea nada ni toca al homónimo existente
+        $claveD = Idem::clave();
+        $this->assertSame('invalid', $intenta($dueno, $claveD, [], $emailB)['status']);
+        $can = $intenta($dueno, $claveD, ['decision' => 'cancelar'], $emailB);
+        $this->assertSame('cancelado', $can['status'], json_encode($can));
+        $this->assertSame(1, $creadas());
+        // 8. el homónimo preexistente no se modificó ni se borró ni se fusionó
+        $this->assertSame($original, self::q("SELECT * FROM profesionales WHERE id=?", [$original['id']])[0]);
+        $this->assertSame(1, (int)self::escalar("SELECT COUNT(*) FROM profesionales WHERE id=?", [$original['id']]));
     }
 
     public function test_identificadores_hostiles_en_fichas_y_perfiles_dan_404_sin_advertencias(): void

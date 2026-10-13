@@ -95,25 +95,36 @@ final class CorreoTest extends QaCase
         $this->assertCount(1, $this->correosPara($email));
     }
 
+    /**
+     * CAMBIO DE CONTRATO (ronda 2, ítem 4): el correo de confirmación del registro YA usa el outbox (`correos_salida`). Con el SMTP caído
+     * el alta no falla, el evento queda `pendiente` (1 intento fallido) y el worker lo entrega cuando el SMTP vuelve. La garantía original
+     * se mantiene y se refuerza: no se pierde la cuenta ni el correo, y la pantalla sigue ofreciendo «Reenviar» como vía manual.
+     * (La cobertura profunda de SMTP caído/colgado/4xx/5xx y del worker real está en R2bColaCorreosTest.)
+     */
     public function test_registro_con_smtp_caido_informa_la_via_de_recuperacion_y_no_pierde_la_cuenta(): void
     {
-        // Observación: el correo de confirmación de registro NO usa el outbox; con SMTP caído no hay reintento automático.
         $email = self::correo('regcaido');
         $n = new Navegador(self::$caido);
         $csrf = $n->csrf('/cliente/registro');
         $r = $n->post('/cliente/registro', ['csrf_token' => $csrf, 'idem_key' => Idem::clave(), 'nombre' => 'A', 'apellido' => 'B', 'email' => $email, 'telefono' => '0991112222', 'password' => 'Abcdef123456']);
         $this->assertSame(302, $r['status']);
         $this->assertSame(0, (int)self::escalar('SELECT confirmado FROM usuarios WHERE email=?', [$email]));
-        $this->assertSame(0, (int)self::escalar("SELECT COUNT(*) FROM correos_salida WHERE destinatario_email=?", [$email]), 'registro: sin outbox (comportamiento heredado)');
+        $ev = self::q("SELECT estado, intentos, ultimo_error FROM correos_salida WHERE destinatario_email=? AND tipo='confirmacion_cuenta'", [$email]);
+        $this->assertCount(1, $ev, 'registro: el correo de confirmación debe quedar en la cola (outbox), exactamente un evento');
+        $this->assertSame('pendiente', $ev[0]['estado'], 'con el SMTP caído el evento queda pendiente para el worker');
+        $this->assertSame(1, (int)$ev[0]['intentos']);
+        $this->assertNotEmpty($ev[0]['ultimo_error']);
         $pagina = $n->get('/mensaje');
         $this->assertStringContainsString('/reenviar-confirmacion', $pagina['body'], 'la pantalla debe ofrecer reenviar el correo');
-        // El reenvío por la vía oficial funciona cuando el SMTP vuelve.
+        // El reenvío por la vía oficial funciona cuando el SMTP vuelve, y deja UN solo evento activo (el anterior queda cancelado).
         $n2 = new Navegador(self::$ok);
         $csrf = $n2->csrf('/reenviar-confirmacion');
         $antes = count(self::buzon(2596));
         $n2->post('/reenviar-confirmacion', ['csrf_token' => $csrf, 'email' => $email]);
         usleep(400000);
         $this->assertGreaterThan($antes, count(self::buzon(2596)));
+        $this->assertSame(1, (int)self::escalar("SELECT COUNT(*) FROM correos_salida WHERE destinatario_email=? AND tipo='confirmacion_cuenta' AND estado IN ('pendiente','enviando','enviado')", [$email]), 'tras el reenvío solo un evento no cancelado');
+        $this->assertSame('cancelado', self::escalar("SELECT estado FROM correos_salida WHERE id=?", [self::escalar("SELECT MIN(id) FROM correos_salida WHERE destinatario_email=? AND tipo='confirmacion_cuenta'", [$email])]));
     }
 
     public function test_Defecto_el_outbox_de_correos_no_tiene_proceso_programado_ni_documentacion_operativa(): void
