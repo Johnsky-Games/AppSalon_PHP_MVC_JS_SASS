@@ -66,6 +66,12 @@ class InMemoryUsuarioRepositoryStub extends UsuarioRepository
         return $this->create($usuario);
     }
 
+    /** Sin base de datos: el doble ejecuta el trabajo directamente (el registro público ahora corre dentro de una transacción). */
+    public function enTransaccion(callable $trabajo): mixed
+    {
+        return $trabajo();
+    }
+
     public function findByValidToken(string $tokenRaw, string $tipo): ?Usuario
     {
         $this->checkFallo();

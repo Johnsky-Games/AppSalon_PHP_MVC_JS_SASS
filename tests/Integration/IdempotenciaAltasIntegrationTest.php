@@ -174,10 +174,14 @@ final class IdempotenciaAltasIntegrationTest extends TestCase
         $r1 = $this->auth()->registrar($this->datosCliente($email), null, Idempotencia::nuevaClave(), 'anonimo:idem-d');
         $r2 = $this->auth()->registrar($this->datosCliente($email), null, Idempotencia::nuevaClave(), 'anonimo:idem-d');
         $this->assertSame(AuthService::STATUS_OK, $r1['status']);
-        $this->assertSame(AuthService::STATUS_CONFLICT, $r2['status']);
-        $this->assertSame(['error' => ['El usuario ya está registrado']], $r2['alertas'], 'Sin detalles internos');
+        // Contrato deliberadamente cambiado (DEF-13): antes STATUS_CONFLICT + «El usuario ya está registrado» (enumeración).
+        // Ahora la respuesta es la misma que la de un correo nuevo, sin alertas ni identidad nueva.
+        $this->assertSame(AuthService::STATUS_OK, $r2['status']);
+        $this->assertSame([], $r2['alertas'], 'Sin mensajes que revelen la existencia de la cuenta');
+        $this->assertNull($r2['id'], 'La segunda solicitud no creó identidad');
         $this->assertSame(1, $this->contar("SELECT COUNT(*) n FROM usuarios WHERE email='{$email}'"));
-        $this->assertSame(1, $this->correos);
+        // La cuenta seguía sin confirmar: la segunda solicitud emite un token nuevo y reenvía la confirmación (2 envíos en total).
+        $this->assertSame(2, $this->correos);
     }
 
     public function testElUniqueSqlImpideCorreosEquivalentesAunSaltandoseLaAplicacion(): void
@@ -440,12 +444,13 @@ final class IdempotenciaAltasIntegrationTest extends TestCase
             $this->lanzar('cliente', Idempotencia::nuevaClave(), $email, 400, 'anonimo:idem-l1'),
             $this->lanzar('cliente', Idempotencia::nuevaClave(), $email, 400, 'anonimo:idem-l2'),
         ]);
-        $estados = array_column($res, 'status');
-        sort($estados);
-        $this->assertSame([AuthService::STATUS_CONFLICT, AuthService::STATUS_OK], $estados, 'Una gana y la otra recibe conflicto controlado, no un error SQL: ' . json_encode($res));
+        // Contrato deliberadamente cambiado (DEF-13): ya no hay «conflicto» público. Ambas respuestas son OK; una crea la
+        // identidad y la perdedora de la carrera (UNIQUE) repite su transacción y trata el correo como cuenta sin confirmar.
+        $this->assertSame([AuthService::STATUS_OK, AuthService::STATUS_OK], array_column($res, 'status'), json_encode($res));
+        $this->assertSame(1, count(array_filter(array_column($res, 'id'), fn($id) => $id !== null)), 'Solo una solicitud crea la identidad: ' . json_encode($res));
         $this->assertSame(1, $this->contar("SELECT COUNT(*) n FROM usuarios WHERE email='{$email}'"));
         $this->assertSame(1, $this->contar("SELECT COUNT(*) n FROM clientes c JOIN usuarios u ON u.id=c.usuario_id WHERE u.email='{$email}'"));
-        $this->assertSame(1, $res[0]['correos'] + $res[1]['correos']);
+        $this->assertSame(2, $res[0]['correos'] + $res[1]['correos'], 'Una confirmación del alta y otra del token reemitido; ninguna cuenta extra');
     }
 
     public function testDosProcesosConcurrentesConLaMismaClaveCreanUnSoloProfesional(): void

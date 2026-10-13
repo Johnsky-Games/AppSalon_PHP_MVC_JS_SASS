@@ -133,6 +133,9 @@ $router->post('/admin/ajustes', [\Controllers\AjustesController::class, 'index']
 $router->get('/admin/clientes', [\Controllers\CrmController::class, 'index']);
 $router->get('/admin/clientes/ficha', [\Controllers\CrmController::class, 'ficha']);
 $router->get('/admin/clientes/exportar', [\Controllers\CrmController::class, 'exportar']);
+$router->get('/admin/clientes/auditoria', [\Controllers\CrmController::class, 'auditoria']);
+$router->get('/admin/clientes/nuevo', [\Controllers\AltaClienteController::class, 'nuevo']);
+$router->post('/admin/clientes/nuevo', [\Controllers\AltaClienteController::class, 'nuevo']);
 
 // Comprueba y valida las rutas, que existan y les asigna las funciones del Controlador
     emitir_cabeceras_seguridad();

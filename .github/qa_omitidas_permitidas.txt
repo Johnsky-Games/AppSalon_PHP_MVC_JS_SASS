@@ -1,0 +1,3 @@
+# Omisiones PERMITIDAS en la suite tests/Qa dentro del CI. Formato: Clase::metodo | motivo
+# Cualquier otra prueba omitida hace fallar el CI (scripts/ci_verificar_omitidas.php).
+# La lista definitiva la fija la reverificación del QA independiente.

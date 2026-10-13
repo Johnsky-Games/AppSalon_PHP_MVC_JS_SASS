@@ -3,9 +3,17 @@
 /**
  * Script de ejecución y control de migraciones de base de datos
  * Uso: php database/migrador.php [status|up|down]
+ *
+ * `down` revierte TODAS las migraciones registradas (orden inverso) y se NIEGA a hacerlo si la reversión destruiría datos
+ * de negocio (código de salida 2, sin tocar nada). Para aceptar la pérdida de forma explícita:
+ *   php database/migrador.php down [--hasta=<migracion>] --aceptar-perdida=<migracion> [--aceptar-perdida=<otra>] --respaldo=<archivo.sql.gz>
+ * `--hasta=NNN_nombre` limita la reversión a esa migración (inclusive) y las más recientes; sin él se revierten todas.
+ * El respaldo (scripts/backup_db.php --gzip) debe ser reciente y verificable. `down --simular` solo informa.
+ * Ver database/migrador_reversion.php y docs/GUIA_ACTUALIZACION_IDENTIDADES.md §7.
  */
 
 require_once __DIR__ . '/../includes/app.php';
+require_once __DIR__ . '/migrador_reversion.php';
 
 use Model\ActiveRecord;
 
@@ -152,8 +160,105 @@ if ($comando === 'status') {
         echo "[OK] Migración {$nombre} aplicada exitosamente.\n";
     }
 } elseif ($comando === 'down') {
+    $opciones = migrador_opciones_down(array_slice($argv, 2));
+    if (!empty($opciones['errores'])) {
+        foreach ($opciones['errores'] as $error) {
+            echo "[ERROR] {$error}\n";
+        }
+        echo "Uso: php database/migrador.php down [--simular] [--hasta=<migracion>] [--aceptar-perdida=<migracion>]... [--respaldo=<archivo.sql.gz>]\n";
+        exit(1);
+    }
+
     $rollbackFiles = glob(__DIR__ . '/migrations/*_rollback.sql');
     rsort($rollbackFiles);
+
+    // Fase 1 (sin tocar nada): qué se revertiría y qué datos de negocio se perderían.
+    $plan = [];
+    foreach ($rollbackFiles as $archivo) {
+        $nombre = basename($archivo, '_rollback.sql');
+        $stmtPlan = $db->prepare("SELECT id FROM migraciones WHERE migracion = ?");
+        if (!$stmtPlan) {
+            echo "[ERROR] Error al preparar verificación de rollback para {$nombre}: " . $db->error . "\n";
+            exit(1);
+        }
+        $stmtPlan->bind_param('s', $nombre);
+        $stmtPlan->execute();
+        $registrada = $stmtPlan->get_result();
+        $estaRegistrada = $registrada && $registrada->num_rows > 0;
+        $stmtPlan->close();
+        if ($estaRegistrada) {
+            $plan[] = $nombre;
+        }
+    }
+    if ($opciones['hasta'] !== null) {
+        // Reversión parcial: solo las migraciones registradas desde la indicada (inclusive) hacia las más recientes.
+        if (!in_array($opciones['hasta'], $plan, true)) {
+            echo "[ERROR] --hasta no corresponde a una migración registrada con rollback: {$opciones['hasta']}\n";
+            exit(1);
+        }
+        $plan = array_values(array_filter($plan, static fn($n) => strcmp($n, $opciones['hasta']) >= 0));
+        $rollbackFiles = array_values(array_filter($rollbackFiles, static fn($f) => strcmp(basename($f, '_rollback.sql'), $opciones['hasta']) >= 0));
+    }
+    $perdidas = [];
+    foreach ($plan as $nombre) {
+        $p = migrador_perdida($db, __DIR__ . '/migrations', $nombre);
+        if (!empty($p)) {
+            $perdidas[$nombre] = $p;
+        }
+    }
+    $desconocidas = array_diff($opciones['aceptar'], $plan);
+    if (!empty($desconocidas)) {
+        echo "[ERROR] --aceptar-perdida no corresponde a una migración registrada con rollback: " . implode(', ', $desconocidas) . "\n";
+        exit(1);
+    }
+
+    if (!empty($perdidas)) {
+        echo "[BLOQUEO] Revertir destruiría datos de negocio:\n";
+        foreach ($perdidas as $nombre => $lista) {
+            $aceptada = in_array($nombre, $opciones['aceptar'], true) ? 'aceptada' : 'NO aceptada';
+            echo "  {$nombre} ({$aceptada}):\n";
+            foreach ($lista as $p) {
+                echo "    - {$p['mensaje']}\n";
+            }
+        }
+        $sinAceptar = array_diff(array_keys($perdidas), $opciones['aceptar']);
+        $tablas = [];
+        foreach ($perdidas as $lista) {
+            foreach ($lista as $p) {
+                if ($p['tabla'] !== null) {
+                    $tablas[] = $p['tabla'];
+                }
+            }
+        }
+        $motivos = [];
+        if (!empty($sinAceptar)) {
+            $motivos[] = 'Falta aceptar de forma explícita: ' . implode(' ', array_map(static fn($n) => "--aceptar-perdida={$n}", $sinAceptar));
+        }
+        if ($opciones['respaldo'] === null) {
+            $motivos[] = 'Falta --respaldo=<archivo.sql.gz> (genéralo antes con: php scripts/backup_db.php --gzip).';
+        } else {
+            foreach (migrador_verificar_respaldo($db, $opciones['respaldo'], $tablas) as $motivo) {
+                $motivos[] = $motivo;
+            }
+        }
+        if (!empty($motivos)) {
+            foreach ($motivos as $motivo) {
+                echo "[BLOQUEO] {$motivo}\n";
+            }
+            echo $opciones['simular']
+                ? "[SIMULACIÓN] No se modificó ninguna tabla.\n"
+                : "[AVISO] No se modificó ninguna tabla ni la tabla de control 'migraciones'.\n";
+            exit(2);
+        }
+        if ($opciones['simular']) {
+            echo "[SIMULACIÓN] Con estas opciones la reversión se permitiría (pérdida aceptada y respaldo verificado). No se modificó ninguna tabla.\n";
+            exit(0);
+        }
+        echo "[AVISO] Pérdida aceptada de forma explícita con respaldo verificado: " . implode(', ', array_keys($perdidas)) . ".\n";
+    } elseif ($opciones['simular']) {
+        echo "[SIMULACIÓN] La reversión no destruye datos de negocio (" . count($plan) . " migraciones). No se modificó ninguna tabla.\n";
+        exit(0);
+    }
 
     foreach ($rollbackFiles as $archivo) {
         $nombre = basename($archivo, '_rollback.sql');

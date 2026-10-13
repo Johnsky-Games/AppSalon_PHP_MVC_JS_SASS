@@ -267,6 +267,19 @@ class UsuarioRepository
         }
     }
 
+    /**
+     * Ejecuta `$trabajo` dentro de una transacción (anidable) sobre la conexión del repositorio.
+     * Lo usa el registro público para que alta/aviso y evento de correo en cola se confirmen juntos.
+     *
+     * @template T
+     * @param callable():T $trabajo
+     * @return T
+     */
+    public function enTransaccion(callable $trabajo): mixed
+    {
+        return \Classes\Transaccion::ejecutar($this->resolveDb(), static fn(mysqli $db): mixed => $trabajo());
+    }
+
     private function insertarUsuario(mysqli $db, Usuario $usuario): int
     {
         $sql = "INSERT INTO usuarios (nombre, apellido, email, password, telefono, admin, confirmado, token, token_hash, token_tipo, token_expira)

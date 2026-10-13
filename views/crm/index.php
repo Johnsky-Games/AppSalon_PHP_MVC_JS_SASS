@@ -29,7 +29,13 @@ $hastaEf = $res['hasta_efectivo'] ?? ($f['hasta'] ?? '');
         <h1 class="nombre-pagina"><?= $modo === 'propios' ? 'Mis clientes' : 'Clientes' ?></h1>
         <p class="descripcion-pagina"><?php if ($modo === 'propios'): ?>Personas a las que has atendido. Solo contacto operativo y servicios realizados contigo.<?php elseif ($modo === 'analitica'): ?>Indicadores agregados de la base de clientes. No incluye datos personales individuales.<?php else: ?>Quiénes son, cuándo vinieron, qué prefieren y cómo cuidar la relación con ellos.<?php endif; ?></p>
     </div>
-    <?php if ($modo !== 'propios'): ?><a class="boton ui-button-quiet" href="#como-se-calcula">Cómo se calcula</a><?php endif; ?>
+    <?php if ($modo !== 'propios'): ?>
+    <div class="crm-exportar">
+        <?php if (!empty($acceso['alta'])): ?><a class="boton" href="/admin/clientes/nuevo">Nuevo cliente</a><?php endif; ?>
+        <?php if ($puedeExportar): ?><a class="boton ui-button-quiet" href="/admin/clientes/auditoria">Auditoría de exportaciones</a><?php endif; ?>
+        <a class="boton ui-button-quiet" href="#como-se-calcula">Cómo se calcula</a>
+    </div>
+    <?php endif; ?>
 </header>
 <?php include __DIR__ . '/../templates/barra.php'; include __DIR__ . '/../templates/alertas.php'; ?>
 
@@ -84,7 +90,7 @@ $hastaEf = $res['hasta_efectivo'] ?? ($f['hasta'] ?? '');
         <div class="campo"><label for="crm-serv">Servicio recibido</label><select id="crm-serv" name="servicio_id"><option value="">Cualquier servicio</option><?php foreach ($catalogos['servicios'] as $sv): ?><option value="<?= (int)$sv['id'] ?>"<?= (int)$f['servicio_id'] === (int)$sv['id'] ? ' selected' : '' ?>><?= s($sv['nombre']) ?></option><?php endforeach; ?></select></div>
         <div class="campo"><label for="crm-seg">Segmento</label><select id="crm-seg" name="segmento"><option value="">Todos</option><?php foreach (CrmService::SEGMENTOS as $k => $et): if ($k === 'vip' && !$analitica) { continue; } ?><option value="<?= s($k) ?>"<?= $f['segmento'] === $k ? ' selected' : '' ?>><?= s($et) ?></option><?php endforeach; ?></select></div>
         <div class="campo"><label for="crm-mem">Membresía</label><select id="crm-mem" name="membresia"><option value="">Todas</option><?php foreach (CrmService::MEMBRESIAS as $k => $et): ?><option value="<?= s($k) ?>"<?= $f['membresia'] === $k ? ' selected' : '' ?>><?= s($et) ?></option><?php endforeach; ?></select></div>
-        <div class="campo"><label for="crm-con">Consentimiento comercial</label><select id="crm-con" name="consentimiento"><option value="">Todos</option><option value="si"<?= $f['consentimiento'] === 'si' ? ' selected' : '' ?>>Aceptó</option><option value="no"<?= $f['consentimiento'] === 'no' ? ' selected' : '' ?>>No aceptó</option></select></div>
+        <div class="campo"><label for="crm-con">Consentimiento comercial</label><select id="crm-con" name="consentimiento"><option value="">Todos</option><option value="si"<?= $f['consentimiento'] === 'si' ? ' selected' : '' ?>>Aceptó (cualquier versión)</option><option value="vigente"<?= $f['consentimiento'] === 'vigente' ? ' selected' : '' ?>>Aceptó la versión vigente</option><option value="anterior"<?= $f['consentimiento'] === 'anterior' ? ' selected' : '' ?>>Aceptó una versión anterior</option><option value="no"<?= $f['consentimiento'] === 'no' ? ' selected' : '' ?>>No aceptó</option></select></div>
         <div class="campo"><label for="crm-orden">Ordenar por</label><select id="crm-orden" name="orden">
             <?php foreach (['nombre' => 'Apellido y nombre', 'alta' => 'Fecha de alta', 'ultima' => 'Última visita', 'visitas' => 'Visitas del periodo', 'visitas_total' => 'Visitas totales'] + ($analitica ? ['gasto' => 'Gasto neto real'] : []) as $k => $et): ?><option value="<?= s($k) ?>"<?= $f['orden'] === $k ? ' selected' : '' ?>><?= s($et) ?></option><?php endforeach; ?></select></div>
         <div class="campo"><label for="crm-dir">Dirección</label><select id="crm-dir" name="dir"><option value="asc"<?= $f['dir'] === 'asc' ? ' selected' : '' ?>>Ascendente</option><option value="desc"<?= $f['dir'] === 'desc' ? ' selected' : '' ?>>Descendente</option></select></div>
@@ -148,7 +154,7 @@ $hastaEf = $res['hasta_efectivo'] ?? ($f['hasta'] ?? '');
         <article class="crm-kpi">
             <h3 class="crm-kpi__titulo">Consentimiento comercial</h3>
             <p class="crm-kpi__valor"><?= $entero($res['con_consentimiento']) ?></p>
-            <p class="crm-kpi__nota">Clientes que aceptaron recibir promociones por correo, de <?= $entero($res['clientes_total']) ?>. No aceptar es el estado por defecto.</p>
+            <p class="crm-kpi__nota">Clientes que aceptaron recibir promociones por correo, de <?= $entero($res['clientes_total']) ?>. No aceptar es el estado por defecto. De ellos, <?= $entero($res['con_consentimiento_vigente']) ?> aceptaron la versión vigente del texto y <?= $entero($res['con_consentimiento_anterior']) ?> una versión anterior (esos no entran en la lista comercial hasta que reconfirmen).</p>
         </article>
     </div>
 
@@ -297,7 +303,7 @@ $hastaEf = $res['hasta_efectivo'] ?? ($f['hasta'] ?? '');
                     <td><span class="crm-etiqueta crm-seg--<?= s($r['segmento']) ?>"><?= s(CrmService::SEGMENTOS[$r['segmento']] ?? $r['segmento']) ?></span></td>
                     <td class="ui-table-number"><?= $entero($r['visitas_rango']) ?><small>Total: <?= $entero($r['visitas_total']) ?></small></td>
                     <td class="ui-table-date"><?= $r['ultima_visita'] === null ? 'Sin visitas' : s($r['ultima_visita']) ?><?php if ($r['recencia'] !== null): ?><small>hace <?= $entero($r['recencia']) ?> días</small><?php endif; ?></td>
-                    <td><?= (int)$r['consentimiento'] === 1 ? 'Aceptó' : 'No aceptó' ?></td>
+                    <td><?= (int)$r['consentimiento'] === 1 ? 'Aceptó' : 'No aceptó' ?><?php if ((int)$r['consentimiento_anterior'] === 1): ?> <span class="crm-etiqueta crm-etiqueta--aviso" title="Aceptó una versión del texto que ya no está vigente">Versión anterior (v<?= (int)$r['consentimiento_version'] ?>)</span><?php elseif ((int)$r['consentimiento'] === 1 && (int)$r['consentimiento_version_historica'] === 1): ?><small>Versión 1 · histórica</small><?php endif; ?></td>
                     <?php if ($analitica): ?><td class="ui-table-number"><?= s(CrmService::dinero((int)$r['cobros_real'] - (int)$r['dev_real'])) ?><?php if ((int)$r['cobros_sim'] !== 0 || (int)$r['dev_sim'] !== 0): ?><small>Simulado: <?= s(CrmService::dinero((int)$r['cobros_sim'] - (int)$r['dev_sim'])) ?></small><?php endif; ?></td><?php endif; ?>
                 </tr>
             <?php endforeach; ?>
@@ -323,7 +329,7 @@ $hastaEf = $res['hasta_efectivo'] ?? ($f['hasta'] ?? '');
         <?php if ($analitica): ?><dt>Gasto observado</dt><dd>Cobros reales (pagos completados o luego reembolsados, de cualquier proveedor distinto de la pasarela simulada) en su fecha de cobro, menos devoluciones en su fecha de reembolso. Una devolución de otro mes se resta en el mes de la devolución. Los pagos del proveedor «mock» se muestran aparte y no se suman. Se atribuye al titular de la cita. Solo visible con permiso de analítica.</dd>
         <dt>Ticket</dt><dd>Por <strong>cobro</strong>: cobros reales brutos del periodo ÷ número de cobros reales. No es por prestación ni por visita y no descuenta devoluciones.</dd><?php endif; ?>
         <dt>Fidelidad</dt><dd>Puntos vigentes = suma de movimientos registrados (10 por visita sincronizada, −100 por canje). Los canjes están pendientes o entregados. Los puntos se registran cuando el cliente consulta su espacio de bienestar, por lo que pueden ir por detrás de las visitas.</dd>
-        <dt>Consentimiento</dt><dd>Estado de aceptación de promociones por correo y su fecha. El esquema actual no guarda la versión del texto aceptado, por eso no se muestra.</dd>
+        <dt>Consentimiento</dt><dd>Estado de aceptación de promociones por correo, su fecha y la <strong>versión del texto</strong> que la persona vio al decidir. «Aceptó una versión anterior» marca a quienes aceptaron un texto que ya no es el vigente: siguen registrados tal como lo dieron, pero la lista comercial y las campañas solo incluyen la versión vigente hasta que reconfirmen. La versión 1 es la histórica: se asignó a los consentimientos existentes antes del versionado, sin inventar su fecha.</dd>
         <dt>Datos privados</dt><dd>Las respuestas de formularios y fichas privadas no se leen ni se muestran en este módulo, ni en pantalla ni en exportaciones.</dd>
     </dl>
 </section>
