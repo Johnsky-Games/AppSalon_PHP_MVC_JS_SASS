@@ -7,6 +7,7 @@ final class Navegador
 {
     private string $jar;
     public array $ultimo = [];
+    public int $timeout = 60;
 
     public function __construct(private string $base)
     {
@@ -22,7 +23,7 @@ final class Navegador
         $h = [];
         curl_setopt_array($ch, [
             CURLOPT_CUSTOMREQUEST => $metodo, CURLOPT_RETURNTRANSFER => true, CURLOPT_HEADER => false,
-            CURLOPT_COOKIEJAR => $this->jar, CURLOPT_COOKIEFILE => $this->jar, CURLOPT_FOLLOWLOCATION => false, CURLOPT_TIMEOUT => 60,
+            CURLOPT_COOKIEJAR => $this->jar, CURLOPT_COOKIEFILE => $this->jar, CURLOPT_FOLLOWLOCATION => false, CURLOPT_TIMEOUT => $this->timeout,
             CURLOPT_HEADERFUNCTION => static function ($c, $line) use (&$h) {
                 if (str_contains($line, ':')) { [$k, $v] = explode(':', $line, 2); $h[strtolower(trim($k))][] = trim($v); }
                 return strlen($line);

@@ -148,6 +148,70 @@ abstract class QaCase extends TestCase
         return (int)self::db()->insert_id;
     }
 
+    // ------------------------------------------------------------------ bases aisladas
+
+    /** Admin de MySQL sin base seleccionada (solo para crear/borrar bases `appsalon_qa_*_test`). */
+    protected static function admin(): \mysqli
+    {
+        mysqli_report(MYSQLI_REPORT_OFF);
+        $a = new \mysqli('127.0.0.1', 'root', 'root', '', 3306);
+        $a->set_charset('utf8mb4');
+        return $a;
+    }
+
+    protected static function nombreAislado(string $n): string
+    {
+        if (!preg_match('/^appsalon_qa_[a-z0-9_]+_test$/', $n)) { throw new \RuntimeException("Nombre de base no permitido: $n"); }
+        return $n;
+    }
+
+    /** Recrea una base aislada con schema_base y las migraciones <= $hasta (null = todas, con el migrador real). */
+    protected static function crearBd(string $nombre, ?int $hasta = null): void
+    {
+        self::nombreAislado($nombre);
+        $a = self::admin();
+        $a->query("DROP DATABASE IF EXISTS `$nombre`");
+        $a->query("CREATE DATABASE `$nombre` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+        $a->select_db($nombre);
+        self::ejecutarSql($a, (string)file_get_contents(self::RAIZ . '/database/schema_base.sql'));
+        if ($hasta === null) {
+            $p = proc_open([PHP_BINARY, '-d', 'variables_order=EGPCS', self::RAIZ . '/database/migrador.php', 'up'], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, self::RAIZ, array_merge(getenv(), ['DB_NAME' => $nombre]));
+            $out = stream_get_contents($pipes[1]) . stream_get_contents($pipes[2]);
+            if (proc_close($p) !== 0) { throw new \RuntimeException("migrador up falló: $out"); }
+        } else {
+            self::migrarHasta($a, $hasta);
+        }
+        $a->close();
+    }
+
+    protected static function ejecutarSql(\mysqli $a, string $sql): void
+    {
+        if (!$a->multi_query($sql)) { throw new \RuntimeException('SQL: ' . $a->error); }
+        do { if ($r = $a->store_result()) { $r->free(); } } while ($a->more_results() && $a->next_result());
+        if ($a->errno) { throw new \RuntimeException('SQL: ' . $a->error); }
+    }
+
+    /** Aplica y registra migraciones numeradas <= $hasta sobre la conexión dada (misma semántica que el migrador). */
+    protected static function migrarHasta(\mysqli $a, int $hasta, int $desde = 0): void
+    {
+        $a->query("CREATE TABLE IF NOT EXISTS migraciones (id INT AUTO_INCREMENT PRIMARY KEY, migracion VARCHAR(255) NOT NULL UNIQUE, aplicada_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $archivos = array_filter(glob(self::RAIZ . '/database/migrations/*.sql'), fn($f) => !str_ends_with($f, '_rollback.sql'));
+        sort($archivos);
+        foreach ($archivos as $f) {
+            $n = basename($f, '.sql');
+            $num = (int)substr($n, 0, 3);
+            if ($num > $hasta || $num <= $desde) { continue; }
+            self::ejecutarSql($a, (string)file_get_contents($f));
+            $a->query("INSERT INTO migraciones(migracion) VALUES ('" . $a->real_escape_string($n) . "')");
+        }
+    }
+
+    protected static function borrarBd(string $nombre): void
+    {
+        self::nombreAislado($nombre);
+        $a = self::admin(); $a->query("DROP DATABASE IF EXISTS `$nombre`"); $a->close();
+    }
+
     // ------------------------------------------------------------------ procesos con barrera
 
     /**
