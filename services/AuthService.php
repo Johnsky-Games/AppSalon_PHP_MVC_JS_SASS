@@ -419,6 +419,13 @@ class AuthService
      * Preserva anti-enumeración de cuentas, rate limiting por IP/email, actualización atómica
      * con condición `confirmado = '0'` y envío de correo solo tras persistir el token.
      *
+     * Entrega: por la COLA PERSISTENTE de correos (`correos_salida`). El token nuevo (que invalida el anterior al
+     * reemplazar su hash), el evento de correo y la cancelación de los eventos pendientes de tokens anteriores del
+     * usuario se confirman en UNA transacción; después se intenta un envío inmediato y, si el SMTP falla, el worker
+     * (`scripts/procesar_correos.php`) reintenta con retroceso exponencial. Los reenvíos concurrentes del mismo usuario
+     * se serializan por el bloqueo de su fila: al final queda UN token válido (el último) y UN evento activo.
+     * Con `$emailDispatcher` inyectado (pruebas unitarias) se conserva el envío síncrono sin cola ni transacción.
+     *
      * @param array $datos Datos de entrada (`email`).
      * @param string $ip Dirección IP del cliente.
      * @return array Resultado estructurado con `status`, `resultado`, `usuario` y `alertas`.
@@ -467,8 +474,10 @@ class AuthService
 
             $usuario = $this->repository->findByEmail($email);
             if ($usuario !== null && (string)$usuario->confirmado !== '1') {
-                $tokenPlano = $this->repository->issueConfirmationToken($usuario, 24);
-                if ($tokenPlano === null) {
+                $emitido = is_callable($this->emailDispatcher)
+                    ? $this->emitirConfirmacionSincrona($usuario)
+                    : $this->emitirConfirmacionEnCola($usuario);
+                if (!$emitido) {
                     error_log("AuthService::reenviarConfirmacion fallo al persistir token para usuario ID {$usuario->id}");
                     return $this->construirRespuesta(
                         self::STATUS_ERROR,
@@ -476,12 +485,6 @@ class AuthService
                         $auth,
                         ['error' => ['No fue posible procesar la solicitud en este momento. Intenta nuevamente.']]
                     );
-                }
-
-                // Enviar correo de confirmación únicamente después de persistir exitosamente el token
-                $enviado = $this->despacharCorreo('confirmacion', (string)$usuario->email, (string)$usuario->nombre, $tokenPlano);
-                if (!$enviado) {
-                    error_log("AuthService::reenviarConfirmacion fallo al despachar correo para usuario ID {$usuario->id}");
                 }
             }
         } catch (PersistenceException $e) {
@@ -500,6 +503,70 @@ class AuthService
             $auth,
             ['exito' => ['Si la cuenta existe y está pendiente de confirmación, hemos enviado un nuevo enlace a tu correo electrónico.']]
         );
+    }
+
+    /** Reenvío con despachador inyectado (pruebas unitarias): comportamiento original, síncrono y sin cola. */
+    private function emitirConfirmacionSincrona(Usuario $usuario): bool
+    {
+        $tokenPlano = $this->repository->issueConfirmationToken($usuario, 24);
+        if ($tokenPlano === null) {
+            return false;
+        }
+        // Enviar correo de confirmación únicamente después de persistir exitosamente el token
+        $enviado = $this->despacharCorreo('confirmacion', (string)$usuario->email, (string)$usuario->nombre, $tokenPlano);
+        if (!$enviado) {
+            error_log("AuthService::reenviarConfirmacion fallo al despachar correo para usuario ID {$usuario->id}");
+        }
+        return true;
+    }
+
+    /**
+     * Reenvío por la cola persistente. En UNA transacción: emite el token (reemplaza el hash anterior, así que el
+     * enlace previo deja de servir), encola el correo y cancela los eventos anteriores aún no entregados del usuario.
+     * La fila del usuario queda bloqueada hasta el commit, de modo que dos reenvíos concurrentes se ejecutan en serie
+     * y el último en confirmar deja su token como el único válido y su evento como el único activo.
+     * Un interbloqueo (1213) con el worker u otro reenvío se reintenta, como en Classes\Idempotencia.
+     *
+     * @return bool false si no se emitió token (cuenta ya confirmada entre tanto)
+     * @throws PersistenceException si la base de datos falla de forma persistente
+     */
+    private function emitirConfirmacionEnCola(Usuario $usuario): bool
+    {
+        $db = $this->repository->getDb();
+        $cola = new CorreoSalidaService(new \Repositories\CorreoSalidaRepository($db));
+        $eventoId = null;
+        for ($intento = 1; ; $intento++) {
+            $errno = 0;
+            try {
+                $eventoId = \Classes\Transaccion::ejecutar($db, function () use ($usuario, $cola, $db, &$errno): ?int {
+                    try {
+                        $tokenPlano = $this->repository->issueConfirmationToken($usuario, 24);
+                        if ($tokenPlano === null) {
+                            return null;
+                        }
+                        $id = $cola->encolarConfirmacionCuenta((int)$usuario->id, (string)$usuario->email, (string)$usuario->nombre, $tokenPlano);
+                        $cola->cancelarConfirmacionesAnteriores((int)$usuario->id, $id);
+                        return $id;
+                    } catch (\Throwable $e) {
+                        $errno = (int)$db->errno ?: ($e->getCode() > 0 ? (int)$e->getCode() : 0);
+                        throw $e;
+                    }
+                });
+                break;
+            } catch (\Throwable $e) {
+                if (in_array($errno, [1213, 1205], true) && $intento < 4) {
+                    usleep(random_int(20000, 80000) * $intento);
+                    continue;
+                }
+                throw $e instanceof PersistenceException ? $e : new PersistenceException('No se pudo emitir la confirmación', 0, $e);
+            }
+        }
+        if ($eventoId === null) {
+            return false;
+        }
+        // Intento inmediato tras el commit: si el SMTP falla, el evento ya es durable y el worker lo reintenta.
+        $cola->despacharTrasCommit($eventoId);
+        return true;
     }
 
     /**

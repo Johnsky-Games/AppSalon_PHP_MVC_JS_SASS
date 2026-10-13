@@ -13,6 +13,8 @@ class Email
     public array $detallesExtra = [];
     /** Portal al que pertenece la cuenta: 'cliente' o 'equipo'. Cambia textos y enlaces del correo. */
     public string $portal = 'cliente';
+    /** Motivo saneado (sin tokens ni credenciales) del último envío fallido; null si no hubo fallo. */
+    public ?string $errorEnvio = null;
 
     /**
      * Transporte simulado para pruebas automatizadas (evita envíos reales).
@@ -174,12 +176,21 @@ class Email
     }
 
     /**
-     * Sanea un mensaje de error de transporte para registro seguro en base de datos.
+     * Sanea un mensaje de error de transporte para registro seguro en base de datos y logs: sin saltos de línea,
+     * sin secuencias que parezcan tokens (32+ caracteres hexadecimales/base64url), sin `token=...` de enlaces y sin
+     * el usuario ni la contraseña SMTP configurados, que un servidor o una traza podrían repetir.
      */
     public static function sanearMensajeError(string $mensaje): string
     {
         $limpio = preg_replace('/[\r\n\x00-\x1F\x7F]+/', ' ', trim($mensaje));
         $texto = trim((string)$limpio);
+        foreach ([self::resolverPasswordSmtp(), (string)($_ENV['EMAIL_USER'] ?? getenv('EMAIL_USER') ?: '')] as $secreto) {
+            if (strlen($secreto) >= 4) {
+                $texto = str_replace([$secreto, base64_encode($secreto)], '***', $texto);
+            }
+        }
+        $texto = preg_replace('/(token|password|pass|pwd|secret)=[^\s&"\']+/i', '$1=***', $texto) ?? $texto;
+        $texto = preg_replace('/\b[A-Za-z0-9_\-]{32,}\b/', '[redactado]', $texto) ?? $texto;
         if ($texto === '') {
             $texto = 'Error desconocido en transporte de correo.';
         }
@@ -449,6 +460,7 @@ class Email
      */
     protected function despachar(string $proposito, string $enlace): bool
     {
+        $this->errorEnvio = null;
         try {
             // Construir el mensaje real mediante PHPMailer sin omitir su configuración
             $mail = $this->prepararMailer($proposito, $enlace);
@@ -471,14 +483,21 @@ class Email
                         'enlace' => $enlace,
                         'mailer' => $mail
                     ];
+                } else {
+                    $this->errorEnvio = 'El transporte de correo rechazó el envío.';
                 }
                 return $exito;
             }
 
-            return $mail->send();
+            $enviado = $mail->send();
+            if (!$enviado) {
+                $this->errorEnvio = self::sanearMensajeError($mail->ErrorInfo ?: 'El servidor de correo no aceptó el mensaje.');
+            }
+            return $enviado;
         } catch (\Throwable $e) {
             // Registro operativo sin exponer tokens ni credenciales
-            error_log("Email::despachar fallo al despachar correo ($proposito): " . $e->getMessage());
+            $this->errorEnvio = self::sanearMensajeError($e->getMessage());
+            error_log("Email::despachar fallo al despachar correo ($proposito): " . $this->errorEnvio);
             return false;
         }
     }
