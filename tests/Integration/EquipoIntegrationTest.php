@@ -59,8 +59,10 @@ class EquipoIntegrationTest extends TestCase
         $ip='203.0.113.'.random_int(1,254);
         $first=$service->registrar($datos,$ip);
         $this->assertSame(\Services\AuthService::STATUS_OK,$first['status']);$this->ids[]=(int)$first['id'];
-        $this->assertSame(\Services\AuthService::STATUS_CONFLICT,$service->registrar($datos,$ip)['status']);
-        $this->assertSame(\Services\AuthService::STATUS_CONFLICT,$service->registrar($datos,$ip)['status']);
+        // Contrato deliberadamente cambiado (DEF-13): un correo ya registrado ya NO responde «conflicto»; la respuesta pública es
+        // uniforme (OK), no crea cuentas adicionales y sigue consumiendo el mismo presupuesto de intentos.
+        $this->assertSame(\Services\AuthService::STATUS_OK,$service->registrar($datos,$ip)['status']);
+        $this->assertSame(\Services\AuthService::STATUS_OK,$service->registrar($datos,$ip)['status']);
         $blocked=$service->registrar($datos,$ip);
         $this->assertSame(\Services\AuthService::STATUS_RATE_LIMITED,$blocked['status']);
         $this->assertGreaterThan(0,$blocked['segundos_restantes']);

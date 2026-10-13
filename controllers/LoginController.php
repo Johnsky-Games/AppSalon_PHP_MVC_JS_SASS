@@ -359,6 +359,8 @@ class LoginController
             $alertas = $resultado['alertas'];
 
             if ($resultado['status'] === AuthService::STATUS_OK) {
+                // Respuesta pública UNIFORME (DEF-13): idéntica para correo nuevo, cliente confirmado o sin confirmar,
+                // personal laboral y cuentas suspendidas. No se añade ningún dato de la cuenta ni se distingue `repetida`.
                 redirigir('/mensaje');
                 return;
             } elseif ($resultado['status'] === AuthService::STATUS_RATE_LIMITED) {
