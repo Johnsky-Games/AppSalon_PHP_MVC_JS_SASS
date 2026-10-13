@@ -25,7 +25,7 @@ final class ProfileController
         try {
             if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 exigir_csrf();
-                $service->guardar($id,$_POST,$id === (int)$_SESSION['id']);
+                $service->guardar($id,$_POST,$id === (int)$_SESSION['id'],portal_sesion());
                 if ($id === (int)$_SESSION['id']) {
                     $_SESSION['nombre'] = trim($_POST['nombre']); $_SESSION['apellido'] = trim($_POST['apellido']);
                 }
@@ -36,7 +36,7 @@ final class ProfileController
         } catch (\InvalidArgumentException $e) { http_response_code(422); $alertas['error'][] = $e->getMessage(); $perfil = $service->obtener($id); }
         catch (\AppTerminationException $e) { throw $e; }
         catch (\Throwable $e) { \Classes\ErrorResponse::fromThrowable($e); return; }
-        $router->render('perfil/index',['perfil'=>$perfil,'alertas'=>$alertas]);
+        $router->render('perfil/index',['perfil'=>$perfil,'alertas'=>$alertas,'portal'=>portal_sesion(),'propio'=>$id === (int)$_SESSION['id']]);
     }
     public static function guardarFoto(Router $router): void
     {

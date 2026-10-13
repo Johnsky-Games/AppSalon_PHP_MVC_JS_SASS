@@ -15,7 +15,12 @@ final class ProfileService
     }
     public function obtener(int $id): ?array { return $this->repo->obtener($id); }
 
-    public function guardar(int $id, array $input, bool $esTitular = true): void
+    /**
+     * @param string|null $contexto 'cliente' (portal de clientes: edita sus comunicaciones; no publica retrato),
+     *        'equipo' (portal del equipo: edita datos laborales y publicación del retrato; JAMÁS altera el
+     *        consentimiento comercial ni las comunicaciones del cliente) o null (comportamiento heredado).
+     */
+    public function guardar(int $id, array $input, bool $esTitular = true, ?string $contexto = null): void
     {
         $actual = $this->obtener($id);
         if (!$actual) { throw new \InvalidArgumentException('No se encontró el perfil.'); }
@@ -29,7 +34,9 @@ final class ProfileService
         if (!is_string($telefono) || !preg_match('/^[0-9]{7,10}$/D', trim($telefono))) { throw new \InvalidArgumentException('El teléfono debe tener entre 7 y 10 dígitos.'); }
         $data['telefono'] = trim($telefono);
         foreach (['contacto_email','marketing_email','recordatorios','foto_publica'] as $campo) {
-            $valor = $input[$campo] ?? '0';
+            // Cada portal solo gobierna sus propios campos; el resto conserva su valor guardado.
+            $ajeno = ($contexto === 'equipo' && $campo !== 'foto_publica') || ($contexto === 'cliente' && $campo === 'foto_publica');
+            $valor = $ajeno ? (int)$actual[$campo] : ($input[$campo] ?? '0');
             if (!in_array($valor, ['0','1',0,1], true)) { throw new \InvalidArgumentException('Preferencia inválida.'); }
             $data[$campo] = (int)$valor;
         }

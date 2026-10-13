@@ -13,4 +13,5 @@ include __DIR__ . '/../templates/alertas.php';
     <input type="submit" value="Guardar Profesional" class="boton">
 </form>
 
+<p class="ui-form-help">Esta ficha organiza la agenda y no crea una cuenta de acceso. Para que la persona ingrese con su propio correo, invítala desde <a href="/admin/equipo">Equipo y permisos</a> (allí puedes vincular una ficha existente o crear una nueva junto con la invitación).</p>
 <div class="acciones"><a href="/profesionales" class="ui-back-link">← Volver a profesionales</a></div>

@@ -391,7 +391,7 @@ class AuthService
                 }
 
                 // Enviar instrucciones únicamente después de persistir exitosamente el token
-                $enviado = $this->despacharCorreo('recuperacion', (string)$usuario->email, (string)$usuario->nombre, $tokenPlano);
+                $enviado = $this->despacharCorreo('recuperacion', (string)$usuario->email, (string)$usuario->nombre, $tokenPlano, $this->portalDeCuenta((int)$usuario->id));
                 if (!$enviado) {
                     error_log("AuthService::solicitarRecuperacion fallo al despachar correo de recuperacion para usuario ID {$usuario->id}");
                 }
@@ -649,16 +649,28 @@ class AuthService
         );
     }
 
+    /** Portal al que pertenece la cuenta: 'equipo' solo si es laboral y no tiene membresía de cliente. */
+    private function portalDeCuenta(int $usuarioId): string
+    {
+        try {
+            $c = (new AuthorizationService($this->repository->getDb()))->contexto($usuarioId);
+            return $c && $c['rol'] !== 'cliente' && $c['cliente_estado'] === null ? 'equipo' : 'cliente';
+        } catch (\Throwable) {
+            return 'cliente';
+        }
+    }
+
     /**
      * Despacha el correo transaccional correspondiente utilizando el dispatcher inyectado o `Classes\Email`.
      */
-    private function despacharCorreo(string $tipo, string $emailDestino, string $nombre, string $tokenPlano): bool
+    private function despacharCorreo(string $tipo, string $emailDestino, string $nombre, string $tokenPlano, string $portal = 'cliente'): bool
     {
         if (is_callable($this->emailDispatcher)) {
             return (bool)call_user_func($this->emailDispatcher, $tipo, $emailDestino, $nombre, $tokenPlano);
         }
 
         $email = new Email($nombre, $emailDestino, $tokenPlano);
+        $email->portal = $portal;
         if ($tipo === 'recuperacion') {
             return $email->enviarInstrucciones();
         }

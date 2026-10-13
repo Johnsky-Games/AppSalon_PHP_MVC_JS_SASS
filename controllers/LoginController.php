@@ -45,6 +45,23 @@ class LoginController
      */
     public static function login(Router $router)
     {
+        self::autenticar($router, 'cliente');
+    }
+
+    /** Acceso del portal de clientes (/cliente/login). `/` conserva el mismo comportamiento por compatibilidad. */
+    public static function loginCliente(Router $router)
+    {
+        self::autenticar($router, 'cliente');
+    }
+
+    /** Acceso del portal del equipo (/equipo/login): solo cuentas con colaborador activo y rol laboral. */
+    public static function loginEquipo(Router $router)
+    {
+        self::autenticar($router, 'equipo');
+    }
+
+    private static function autenticar(Router $router, string $portal)
+    {
         iniciar_sesion_segura();
         Usuario::limpiarAlertas();
         $alertas = [];
@@ -52,6 +69,10 @@ class LoginController
         if (!empty($_SESSION['aviso_sesion_expirada'])) {
             $alertas['error'][] = 'Tu sesión terminó o cambió tu acceso. Inicia sesión de nuevo para continuar.';
             unset($_SESSION['aviso_sesion_expirada']);
+        }
+
+        if ($portal === 'equipo' && ($_GET['invitacion'] ?? '') === 'aceptada' && $_SERVER['REQUEST_METHOD'] === 'GET') {
+            $alertas['exito'][] = 'Invitación aceptada. Ingresa con tu correo y tu contraseña para entrar al equipo.';
         }
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -79,17 +100,40 @@ class LoginController
                     $router->render('auth/login', ['alertas' => $alertas, 'auth' => $auth]);
                     return;
                 }
-                if ((int)$acceso['activo'] !== 1) {
-                    $_SESSION = [];
-                    $mensaje = $acceso['rol'] === 'cliente'
-                        ? 'Tu cuenta de cliente está suspendida. Escribe o llama al salón para que revisen tu caso.'
-                        : 'Tu acceso al equipo está suspendido. Consulta con la administración del salón.';
-                    \Classes\ErrorResponse::render(403, ['mensaje' => $mensaje]);
-                    detener_ejecucion(403);
-                }
-                if ($acceso['rol'] === 'cliente' && $acceso['cliente_estado'] === null) {
-                    // Cuenta anterior a la membresía explícita: se materializa activa, nunca reactiva una suspendida.
-                    $autorizacion->asegurarMembresiaCliente((int)$usuario->id);
+                $esEquipo = $acceso['rol'] !== 'cliente';
+                $clienteSuspendido = $acceso['cliente_estado'] === 'suspendido';
+                if ($portal === 'cliente') {
+                    if ($esEquipo && $acceso['cliente_estado'] === null) {
+                        // Cuenta solo laboral: no entra como cliente ni conserva privilegios; se la orienta a su portal.
+                        http_response_code(422);
+                        $alertas = ['error' => ['Esta cuenta pertenece al equipo del salón. Ingresa desde el acceso del equipo.']];
+                        $router->render('auth/login', ['alertas' => $alertas, 'auth' => $auth, 'enlaceEquipo' => true]);
+                        return;
+                    }
+                    if ($clienteSuspendido || (!$esEquipo && (int)$acceso['activo'] !== 1)) {
+                        $_SESSION = [];
+                        \Classes\ErrorResponse::render(403, ['mensaje' => 'Tu cuenta de cliente está suspendida. Escribe o llama al salón para que revisen tu caso.']);
+                        detener_ejecucion(403);
+                    }
+                    if (!$esEquipo && $acceso['cliente_estado'] === null) {
+                        // Cuenta anterior a la membresía explícita: se materializa activa, nunca reactiva una suspendida.
+                        $autorizacion->asegurarMembresiaCliente((int)$usuario->id);
+                    }
+                } else {
+                    if (!$esEquipo) {
+                        http_response_code(403);
+                        $pendiente = ($acceso['colaborador_estado'] ?? null) === 'invitado';
+                        $alertas = ['error' => [$pendiente
+                            ? 'Tu invitación al equipo sigue pendiente. Acéptala desde el enlace que recibiste por correo; hasta entonces no tienes acceso laboral.'
+                            : 'Esta cuenta no tiene acceso al equipo. Si eres cliente, ingresa desde el acceso de clientes.']];
+                        $router->render('auth/login-equipo', ['alertas' => $alertas, 'auth' => $auth]);
+                        return;
+                    }
+                    if ((int)$acceso['activo'] !== 1) {
+                        $_SESSION = [];
+                        \Classes\ErrorResponse::render(403, ['mensaje' => 'Tu acceso al equipo está suspendido. Consulta con la administración del salón.']);
+                        detener_ejecucion(403);
+                    }
                 }
 
                 // Reconstruir sesión: limpiar datos y roles previos antes de poblar
@@ -102,13 +146,14 @@ class LoginController
                 $_SESSION['email'] = $usuario->email;
                 $_SESSION['login'] = true;
                 $_SESSION['version_sesion'] = (int)$acceso['version_sesion'];
-                $_SESSION['rol'] = $acceso['rol'];
+                $_SESSION['portal'] = $portal;
+                // El rol de la sesión es el del portal: en el portal de clientes nunca se heredan permisos laborales.
+                $_SESSION['rol'] = $portal === 'equipo' ? $acceso['rol'] : 'cliente';
 
-                if ($acceso['rol'] !== 'cliente') {
+                if ($portal === 'equipo') {
                     if (in_array($acceso['rol'], ['propietario','gerente'], true)) { $_SESSION['admin'] = '1'; }
                     else { unset($_SESSION['admin']); }
-                    $destino = $acceso['rol'] === 'profesional' ? '/agenda' : ($acceso['rol'] === 'finanzas' ? '/admin/finanzas' : '/admin');
-                    redirigir($destino);
+                    redirigir($acceso['rol'] === 'profesional' ? '/agenda' : ($acceso['rol'] === 'finanzas' ? '/admin/finanzas' : '/admin'));
                 } else {
                     unset($_SESSION['admin']);
                     redirigir('/cita');
@@ -125,7 +170,7 @@ class LoginController
             }
         }
 
-        $router->render('auth/login', [
+        $router->render($portal === 'equipo' ? 'auth/login-equipo' : 'auth/login', [
             'alertas' => $alertas,
             'auth' => $auth
         ]);
@@ -146,6 +191,7 @@ class LoginController
 
         exigir_csrf();
 
+        $destino = ($_SESSION['portal'] ?? '') === 'equipo' ? '/equipo/login' : '/';
         $_SESSION = [];
 
         if (ini_get('session.use_cookies')) {
@@ -162,8 +208,7 @@ class LoginController
         }
 
         session_destroy();
-        header('Location: /');
-        detener_ejecucion(302);
+        redirigir($destino);
     }
 
     /**
@@ -266,8 +311,7 @@ class LoginController
             $alertas = $resultadoReset['alertas'];
 
             if ($resultadoReset['status'] === AuthService::STATUS_OK) {
-                header('Location: /');
-                detener_ejecucion(302);
+                redirigir(($_GET['portal'] ?? '') === 'equipo' ? '/equipo/login' : '/');
                 return;
             } elseif ($resultadoReset['status'] === AuthService::STATUS_INVALID_TYPE) {
                 http_response_code(422);

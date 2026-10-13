@@ -1,6 +1,6 @@
 <?php
 $uiAutenticado = !empty($_SESSION['id']);
-$uiAdmin = !empty($_SESSION['admin']);
+$uiPortal = $uiAutenticado ? portal_sesion() : 'cliente';
 $uiNombreComercial = 'App Salón';
 $uiContacto = '';
 try {
@@ -17,7 +17,8 @@ $uiGestion = $uiAutenticado && $uiRol !== 'cliente';
 $uiDia = [];
 $uiServicios = [];
 $uiNegocio = [];
-$uiCuenta = [['/perfil', 'Mi Perfil', 'users']];
+$uiCuenta = [['/perfil', $uiPortal === 'equipo' ? 'Mi cuenta' : 'Mi Perfil', 'users']];
+$uiAjustesNegocio = [];
 if (puede('agenda.gestionar')) $uiDia[] = ['/admin', 'Ver Citas', 'calendar'];
 if (puede('agenda.gestionar') || puede('agenda.ver_propia')) $uiDia[] = ['/agenda', 'Agenda', 'calendar'];
 if (puede('servicios.gestionar')) {
@@ -32,8 +33,12 @@ foreach ([
     ['reportes.ver','/admin/reportes','Ver Reportes','chart'],
     ['marketing.gestionar','/admin/crecimiento','Clientes y Fidelidad','sparkles'],
 ] as [$permiso,$href,$texto,$icono]) if (puede($permiso)) $uiNegocio[] = [$href,$texto,$icono];
-if (puede('ajustes.gestionar')) $uiCuenta[] = ['/admin/ajustes', 'Ajustes', 'check'];
-if (!$uiAdmin && $uiRol === 'cliente') {
+if (puede('clientes.ver')) { $uiNegocio[] = ['/admin/clientes', 'Clientes', 'users']; }
+elseif (puede('clientes.analitica')) { $uiNegocio[] = ['/admin/clientes', 'Analítica de clientes', 'chart']; }
+elseif (puede('clientes.ver_propios')) { $uiNegocio[] = ['/admin/clientes', 'Mis clientes', 'users']; }
+// "Mi cuenta" (persona) y "Ajustes del negocio" (organización) son secciones distintas.
+if (puede('ajustes.gestionar')) $uiAjustesNegocio[] = ['/admin/ajustes', 'Ajustes del negocio', 'check'];
+if ($uiRol === 'cliente') {
     $uiDia[] = ['/cita', 'Reservar Cita', 'calendar'];
     $uiDia[] = ['/mis-citas', 'Mis Citas', 'check'];
     $uiCuenta[] = ['/mi-bienestar', 'Mi Bienestar', 'sparkles'];
@@ -42,9 +47,10 @@ $uiGrupos = array_filter([
     ['titulo' => $uiGestion ? 'Tu día' : 'Tus citas', 'enlaces' => $uiDia],
     ['titulo' => 'Servicios y equipo', 'enlaces' => $uiServicios],
     ['titulo' => 'Gestión comercial', 'enlaces' => $uiNegocio],
-    ['titulo' => $uiGestion ? 'Cuenta y ajustes' : 'Tu cuenta', 'enlaces' => $uiCuenta],
+    ['titulo' => 'Ajustes del negocio', 'enlaces' => $uiAjustesNegocio],
+    ['titulo' => $uiGestion ? 'Mi cuenta' : 'Tu cuenta', 'enlaces' => $uiCuenta],
 ], static fn(array $grupo): bool => !empty($grupo['enlaces']));
-$uiInicio = $uiDia[0][0] ?? '/perfil';
+$uiInicio = $uiAutenticado ? inicio_portal() : '/';
 // La coincidencia más específica evita marcar dos secciones en las vistas de creación.
 $uiEnlaceActivo = '';
 foreach ($uiGrupos as $uiGrupo) foreach ($uiGrupo['enlaces'] as [$uiHref]) {

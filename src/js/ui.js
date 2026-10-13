@@ -124,6 +124,18 @@
             }, true);
             window.addEventListener('pageshow', event => { if (event.persisted) liberar(); });
         });
+        // Campos que solo aplican a un rol (p. ej. ficha profesional). Sin JavaScript permanecen visibles y rotulados.
+        document.querySelectorAll('[data-rol-form]').forEach(form => {
+            const select = form.querySelector('[data-rol-select]');
+            if (!select) return;
+            const aplicar = () => form.querySelectorAll('[data-solo-rol]').forEach(bloque => {
+                const activo = bloque.dataset.soloRol === select.value;
+                bloque.hidden = !activo;
+                bloque.querySelectorAll('input, select, textarea').forEach(campo => { campo.disabled = !activo; });
+            });
+            select.addEventListener('change', aplicar);
+            aplicar();
+        });
         document.querySelectorAll('[data-modal-open]').forEach(button => {
             button.addEventListener('click', () => {
                 const modal = document.getElementById(button.dataset.modalOpen);

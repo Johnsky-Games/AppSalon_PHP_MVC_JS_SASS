@@ -331,9 +331,18 @@ class SecurityIntegrationTest extends TestCase
         $_POST['email'] = 'admin@appsalon.com';
         $_POST['password'] = 'admin123';
 
+        // Una cuenta solo laboral NO entra por el portal de clientes ni abre sesión alguna.
+        ob_start();
+        LoginController::loginCliente($router);
+        $rechazo = ob_get_clean();
+        $this->assertSame(422, http_response_code());
+        $this->assertStringContainsString('pertenece al equipo', $rechazo);
+        $this->assertFalse($_SESSION['login'] ?? false);
+        http_response_code(200);
+
         try {
             ob_start();
-            LoginController::login($router);
+            LoginController::loginEquipo($router);
         } catch (AppTerminationException $e) {
             $this->assertSame(302, $e->getStatusCode());
         } finally {
@@ -341,6 +350,7 @@ class SecurityIntegrationTest extends TestCase
         }
 
         $this->assertSame('1', (string)($_SESSION['admin'] ?? '0'));
+        $this->assertSame('equipo', $_SESSION['portal']);
         $this->assertSame($admin->id, $_SESSION['id']);
 
         // 3. En la MISMA sesión, se autentica el Cliente

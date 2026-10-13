@@ -3,7 +3,7 @@
 <p class="descripcion-pagina">Llena el siguiente formulario para crear una cuenta</p>
 
 <?php include __DIR__ . '/../templates/alertas.php'; ?>
-<form class="formulario" method="POST" action="/crear-cuenta" data-una-vez>
+<form class="formulario" method="POST" action="/cliente/registro" data-una-vez>
     <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
     <input type="hidden" name="idem_key" value="<?php echo s(clave_operacion_formulario()); ?>">
     <div class="campo">

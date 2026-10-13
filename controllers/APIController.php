@@ -293,6 +293,10 @@ class APIController
         // entregando la identidad verificada desde la sesión (nunca del POST)
         $usuarioIdAutenticado = $_SESSION['id'];
         $resultado = self::obtenerCitaService()->reservar($usuarioIdAutenticado, $_POST);
+        if (($resultado['status'] ?? '') === CitaService::STATUS_OK) {
+            // Quien reserva es cliente a efectos de CRM aunque su cuenta sea también laboral (idempotente).
+            try { (new \Services\AuthorizationService())->asegurarMembresiaCliente((int)$usuarioIdAutenticado); } catch (\Throwable $e) { /* la reserva ya se confirmó */ }
+        }
 
         if ($resultado['status'] === CitaService::STATUS_UNAUTHORIZED) {
             http_response_code(401);

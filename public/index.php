@@ -24,8 +24,18 @@ require_once __DIR__ . '/../includes/app.php';
 $router = new Router();
 
 //Iniciar sesion
+// Portal de clientes (compatibilidad: `/` y `/crear-cuenta` siguen funcionando).
 $router->get('/', [LoginController::class, 'login']);
 $router->post('/', [LoginController::class, 'login']);
+$router->get('/cliente/login', [LoginController::class, 'loginCliente']);
+$router->post('/cliente/login', [LoginController::class, 'loginCliente']);
+$router->get('/cliente/registro', [LoginController::class, 'crear']);
+$router->post('/cliente/registro', [LoginController::class, 'crear']);
+// Portal del equipo: sin registro público; las cuentas nacen de una invitación aceptada.
+$router->get('/equipo/login', [LoginController::class, 'loginEquipo']);
+$router->post('/equipo/login', [LoginController::class, 'loginEquipo']);
+$router->get('/equipo/aceptar', [\Controllers\InvitacionController::class, 'aceptar']);
+$router->post('/equipo/aceptar', [\Controllers\InvitacionController::class, 'aceptar']);
 $router->get('/logout', [LoginController::class, 'logout']);
 $router->post('/logout', [LoginController::class, 'logout']);
 
@@ -94,6 +104,9 @@ $router->get('/admin/equipo', [\Controllers\EquipoController::class, 'index']);
 $router->post('/admin/equipo/crear', [\Controllers\EquipoController::class, 'crear']);
 $router->post('/admin/equipo/actualizar', [\Controllers\EquipoController::class, 'actualizar']);
 $router->post('/admin/equipo/invitar', [\Controllers\EquipoController::class, 'invitar']);
+$router->post('/admin/equipo/revocar', [\Controllers\EquipoController::class, 'revocar']);
+$router->get('/admin/equipo/ficha', [\Controllers\EquipoController::class, 'ficha']);
+$router->post('/admin/equipo/ficha', [\Controllers\EquipoController::class, 'ficha']);
 $router->get('/perfil', [\Controllers\ProfileController::class, 'index']);
 $router->post('/perfil', [\Controllers\ProfileController::class, 'index']);
 $router->get('/perfil/foto', [\Controllers\ProfileController::class, 'foto']);

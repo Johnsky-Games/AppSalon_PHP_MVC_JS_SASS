@@ -33,6 +33,11 @@ try {
         });
         $r = $servicio->registrar(['nombre' => 'Conc', 'apellido' => 'Urrente', 'telefono' => '0991234567', 'email' => $dato, 'password' => 'ClaveSegura123'], null, $clave, $actor);
         echo json_encode(['status' => $r['status'], 'id' => $r['id'] ?? null, 'repetida' => $r['repetida'] ?? null, 'correos' => $correos]) . "\n";
+    } elseif ($flujo === 'colaborador') {
+        // $servicioId transporta aquí el id del propietario que invita.
+        $svc = new \Services\ColaboradorService(new \Repositories\ColaboradorRepository($db), new \Services\CorreoSalidaService(new \Repositories\CorreoSalidaRepository($db)));
+        $r = $svc->invitar($servicioId, ['nombre' => 'Conc', 'apellido' => 'Colab', 'email' => $dato, 'rol' => 'recepcion', 'puesto' => 'Mostrador'], $clave);
+        echo json_encode(['status' => $r['status'], 'id' => $r['colaborador_id'] ?? null, 'repetida' => $r['repetida'] ?? null]) . "\n";
     } else {
         $servicio = new \Services\ProfesionalService(new \Repositories\ProfesionalRepository($db), new \Repositories\ServicioRepository($db));
         $r = $servicio->crear(['nombre' => $dato, 'activo' => '1', 'servicios' => [(string)$servicioId]], $clave, $actor);

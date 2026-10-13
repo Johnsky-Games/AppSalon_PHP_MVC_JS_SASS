@@ -111,11 +111,15 @@ function es_peticion_json(): bool
 function isAuth(): void
 {
     iniciar_sesion_segura();
+    $loginDestino = '/';
     if (($_SESSION['login'] ?? false) === true) {
         $contexto = (new \Services\AuthorizationService())->contexto((int)($_SESSION['id'] ?? 0));
-        if (!$contexto || (int)$contexto['activo'] !== 1 || (int)$contexto['confirmado'] !== 1 ||
+        $loginDestino = ($_SESSION['portal'] ?? '') === 'equipo' ? '/equipo/login' : '/';
+        // La membresía del portal debe seguir vigente: una sesión de equipo exige rol laboral activo.
+        $sinMembresiaEquipo = $contexto && ($_SESSION['portal'] ?? '') === 'equipo' && $contexto['rol'] === 'cliente';
+        if (!$contexto || $sinMembresiaEquipo || (int)$contexto['activo'] !== 1 || (int)$contexto['confirmado'] !== 1 ||
             (isset($_SESSION['version_sesion']) && (int)$contexto['version_sesion'] !== (int)$_SESSION['version_sesion'])) {
-            $_SESSION = ['aviso_sesion_expirada' => true];
+            $_SESSION = ['aviso_sesion_expirada' => true, 'portal_aviso' => $loginDestino];
         } else {
             // Una sola adopción para cuentas activas tras actualizar una instalación anterior.
             $_SESSION['version_sesion'] = (int)$contexto['version_sesion'];
@@ -128,8 +132,7 @@ function isAuth(): void
             echo json_encode(['resultado' => false, 'error' => 'No autenticado']);
             detener_ejecucion(401);
         } else {
-            header('Location: /');
-            detener_ejecucion(302);
+            redirigir($_SESSION['portal_aviso'] ?? $loginDestino);
         }
     }
 }
@@ -235,7 +238,32 @@ function puede(string $permiso): bool
     $c = $service->contexto((int)($_SESSION['id'] ?? 0));
     if (!$c || (int)$c['activo'] !== 1 || (int)$c['confirmado'] !== 1) { return false; }
     if (isset($_SESSION['version_sesion']) && (int)$c['version_sesion'] !== (int)$_SESSION['version_sesion']) { return false; }
+    // Una sesión abierta en el portal de clientes nunca porta privilegios laborales, aunque la misma
+    // persona también sea colaboradora: los contextos están separados en sesión y en autorización.
+    if (portal_sesion($c) !== 'equipo') { return false; }
     return in_array($permiso, \Services\AuthorizationService::ROLES[$c['rol']] ?? [], true);
+}
+
+/**
+ * Portal de la sesión: 'cliente' o 'equipo'. Se fija al iniciar sesión en cada portal. Las sesiones
+ * anteriores a esta separación (sin marca) se derivan del rol verificado en el servidor, nunca del navegador.
+ */
+function portal_sesion(?array $contexto = null): string
+{
+    $marca = $_SESSION['portal'] ?? null;
+    if ($marca === 'cliente' || $marca === 'equipo') { return $marca; }
+    $c = $contexto ?? (new \Services\AuthorizationService())->contexto((int)($_SESSION['id'] ?? 0));
+    return $c && $c['rol'] !== 'cliente' ? 'equipo' : 'cliente';
+}
+
+/** Página de inicio según el portal de la sesión (logo y redirecciones coherentes). */
+function inicio_portal(): string
+{
+    if (($_SESSION['login'] ?? false) !== true) { return '/'; }
+    if (portal_sesion() === 'equipo') {
+        return match (rol_actual()) { 'profesional' => '/agenda', 'finanzas' => '/admin/finanzas', default => '/admin' };
+    }
+    return '/cita';
 }
 
 function exigir_permiso(string $permiso): void
@@ -255,11 +283,12 @@ function exigir_permiso(string $permiso): void
 function rol_actual(): string
 {
     $c = (new \Services\AuthorizationService())->contexto((int)($_SESSION['id'] ?? 0));
-    return $c && (int)$c['activo'] === 1 ? (string)$c['rol'] : 'cliente';
+    if (!$c || (int)$c['activo'] !== 1 || portal_sesion($c) !== 'equipo') { return 'cliente'; }
+    return (string)$c['rol'];
 }
 
 function profesional_actual_id(): ?int
 {
     $c = (new \Services\AuthorizationService())->contexto((int)($_SESSION['id'] ?? 0));
-    return $c && (int)$c['activo'] === 1 && $c['profesional_id'] !== null ? (int)$c['profesional_id'] : null;
+    return $c && (int)$c['activo'] === 1 && portal_sesion($c) === 'equipo' && $c['profesional_id'] !== null ? (int)$c['profesional_id'] : null;
 }
