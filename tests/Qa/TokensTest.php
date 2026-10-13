@@ -201,14 +201,14 @@ final class TokensTest extends QaCase
         $this->auth($cap2)->registrar(['nombre' => 'Atac', 'apellido' => 'Ante', 'email' => $email2, 'password' => 'Atacante-Pass-1', 'telefono' => '0991112222'], '10.6.0.5', Idem::clave(), 'anonimo:atacante3');
         $this->auth($cap2)->solicitarRecuperacion(['email' => $email2], '10.6.0.6');
         $rec = array_values(array_filter($cap2, fn($c) => $c['tipo'] !== 'confirmacion'));
+        // Si no se emitió recuperación para la cuenta sin confirmar no hay nada que invalidar (invariante cumplido por construcción).
+        $invalidado = true;
         if ($rec) {
             $inv2 = $this->invitar($email2);
             $this->svc()->aceptar($inv2['token'], ['acepto' => '1', 'password' => 'Victima-Pass-123', 'password_confirmacion' => 'Victima-Pass-123'], '10.6.0.7');
-            $v = $this->auth($cap2)->validarTokenRecuperacion($rec[0]['token']);
-            $this->assertTrue((bool)$v['error'], 'un token de recuperación emitido antes de la aceptación sigue siendo válido: permitiría cambiar la contraseña tras la toma de control');
-        } else {
-            $this->markTestSkipped('No se emitió recuperación para cuenta sin confirmar (comportamiento válido).');
+            $invalidado = (bool)$this->auth($cap2)->validarTokenRecuperacion($rec[0]['token'])['error'];
         }
+        $this->assertTrue($invalidado, 'un token de recuperación emitido antes de la aceptación sigue siendo válido: permitiría cambiar la contraseña tras la toma de control');
     }
 
     public function test_invitacion_a_correo_de_cliente_confirmado_exige_su_contrasena_y_conserva_citas(): void

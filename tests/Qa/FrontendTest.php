@@ -9,11 +9,32 @@ final class FrontendTest extends QaCase
 {
     private static array $r = [];
     private static array $cfg = [];
+    private const CHROME_RESPALDO = '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+    private static ?string $motivoSinNavegador = null;
+
+    /** Ejecutable de Chromium: CHROME_BIN (si existe y es ejecutable) y, solo como respaldo, la ruta local conocida. */
+    private static function chromium(): ?string
+    {
+        $env = getenv('CHROME_BIN');
+        if (is_string($env) && $env !== '') {
+            // Si el entorno declara un binario, es el único válido: no se «rescata» silenciosamente con otro distinto.
+            return is_file($env) && is_executable($env) ? $env : null;
+        }
+        return is_file(self::CHROME_RESPALDO) && is_executable(self::CHROME_RESPALDO) ? self::CHROME_RESPALDO : null;
+    }
 
     public static function setUpBeforeClass(): void
     {
-        $chrome = '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
-        if (!is_file($chrome) || !is_dir(self::RAIZ . '/node_modules/puppeteer-core')) { return; }
+        // Chromium: CHROME_BIN manda; la ruta de /opt/pw-browsers es solo respaldo local.
+        $chrome = self::chromium();
+        if ($chrome === null || !is_dir(self::RAIZ . '/node_modules/puppeteer-core')) {
+            $env = getenv('CHROME_BIN');
+            $faltan = [];
+            if ($chrome === null) { $faltan[] = (is_string($env) && $env !== '') ? "Chromium: CHROME_BIN='$env' no existe o no es ejecutable" : 'Chromium: CHROME_BIN sin definir y no existe el respaldo ' . self::CHROME_RESPALDO; }
+            if (!is_dir(self::RAIZ . '/node_modules/puppeteer-core')) { $faltan[] = 'node_modules/puppeteer-core no está instalado (npm ci)'; }
+            self::$motivoSinNavegador = implode('; ', $faltan);
+            return;
+        }
         self::limpiar();
         $base = self::servidor();
         $dueno = self::propietario('dueno@example.test');
@@ -24,7 +45,7 @@ final class FrontendTest extends QaCase
         self::$cfg = ['base' => $base, 'owner' => ['email' => $dueno['email'], 'password' => $dueno['password']], 'token' => $token, 'colId' => (int)$inv['colaborador_id'],
             'emailDobleClic' => 'doble@example.test', 'emailLento' => 'lento@example.test', 'emailSinJs' => 'sinjs@example.test', 'captura' => sys_get_temp_dir() . '/qa_equipo_320.png'];
         self::q('TRUNCATE intentos_login');
-        $p = proc_open(['node', self::RAIZ . '/tests/Qa/frontend_qa.cjs'], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, self::RAIZ, array_merge(getenv(), ['QA_CONFIG' => json_encode(self::$cfg)]));
+        $p = proc_open(['node', self::RAIZ . '/tests/Qa/frontend_qa.cjs'], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, self::RAIZ, array_merge(getenv(), ['QA_CONFIG' => json_encode(self::$cfg), 'CHROME_BIN' => $chrome]));
         $out = stream_get_contents($pipes[1]); $err = stream_get_contents($pipes[2]);
         proc_close($p);
         self::$r = json_decode($out, true) ?: ['error' => 'sin salida JSON: ' . $err . substr($out, 0, 300)];
@@ -34,7 +55,12 @@ final class FrontendTest extends QaCase
 
     protected function setUp(): void
     {
-        if (!self::$cfg) { $this->markTestSkipped('Chromium o puppeteer-core no disponibles'); }
+        if (!self::$cfg) {
+            $motivo = self::$motivoSinNavegador ?? 'Chromium o puppeteer-core no disponibles';
+            // En CI (QA_EXIGIR_NAVEGADOR=1) la ausencia del navegador es un fallo, nunca una omisión silenciosa.
+            if (getenv('QA_EXIGIR_NAVEGADOR') === '1') { $this->fail('QA_EXIGIR_NAVEGADOR=1: ' . $motivo); }
+            $this->markTestSkipped($motivo);
+        }
         $this->assertArrayNotHasKey('error', self::$r, self::$r['error'] ?? '');
     }
 

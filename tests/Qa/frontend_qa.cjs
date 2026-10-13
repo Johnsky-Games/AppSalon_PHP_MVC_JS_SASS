@@ -3,6 +3,7 @@
 const puppeteer = require('puppeteer-core');
 const cfg = JSON.parse(process.env.QA_CONFIG);
 const CHROME = process.env.CHROME_BIN || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+if (!require('fs').existsSync(CHROME)) { console.log(JSON.stringify({ error: 'Chromium no encontrado en ' + CHROME + ' (define CHROME_BIN)' })); process.exit(0); }
 const ANCHOS = [320, 390, 768, 1440];
 const out = { desbordamiento: [], consola: [], guardian: {}, teclado: {}, sinJs: {}, capturas: [] };
 
