@@ -19,9 +19,9 @@ Este directorio contiene las migraciones versionadas y scripts de soporte para l
   - `008_notificaciones_outbox_lease.sql` / `008_notificaciones_outbox_lease_rollback.sql`: Columnas `worker_token` y `lease_expires_at` en `notificaciones_citas` con índice `idx_notificaciones_lease` para soporte de arrendamientos de worker y recuperación resiliente de outbox.
 
   - `009` … `015`: reembolsos con fecha, equipo/permisos (`usuario_accesos`, `version_sesion`, `equipo_mutex`), perfiles y fotos, agenda operativa, finanzas e inventario, fidelidad/formularios y comisiones (ver `docs/`).
-  - `016_clientes_membresia.sql` / `_rollback.sql`: tabla `clientes` (membresía de cliente: `estado`, `origen`) con retrocarga que conserva suspensiones y no eleva privilegios.
+  - `016_clientes_membresia.sql` / `_rollback.sql` / **`016_….guard.php`**: tabla `clientes` (membresía de cliente: `estado`, `origen`) con retrocarga que conserva suspensiones y no eleva privilegios; `clientes_resguardo_016` conserva las membresías al revertir y las restaura al reaplicar.
   - `017_idempotencia_unicidad.sql` / `_rollback.sql` / **`017_….precheck.php`**: tabla `operaciones_idempotentes` (clave SHA-256, huella HMAC, actor, expiración) y `UNIQUE` funcional `uq_usuarios_email_normalizado` sobre `LOWER(TRIM(email))`. Requiere MySQL ≥ 8.0.13. El archivo `.precheck.php` se ejecuta **antes** de alterar el esquema y aborta con el detalle si existen correos equivalentes (no borra ni fusiona).
-  - `018_colaboradores_invitaciones.sql` / `_rollback.sql`: `colaboradores` (ficha laboral, estado, rol), `colaborador_invitaciones` (una pendiente por colaborador), `correos_salida` (outbox con carga cifrada y clave única por causa) y `profesionales.colaborador_id`. Retrocarga cada acceso laboral existente como colaborador (roles y suspensiones intactos).
+  - `018_colaboradores_invitaciones.sql` / `_rollback.sql`: `colaboradores` (ficha laboral, estado, rol), `colaborador_invitaciones` (una pendiente por colaborador), `correos_salida` (outbox con carga cifrada y clave única por causa) y `profesionales.colaborador_id`. Retrocarga cada acceso laboral existente como colaborador (roles y suspensiones intactos). Los rollbacks de la 017 y la 018 llevan `.guard.php`.
 
 ---
 
@@ -37,11 +37,30 @@ php database/migrador.php status
 # Aplicar migraciones pendientes
 php database/migrador.php up
 
-# Revertir migraciones registradas (alcance: procesa todas las migraciones con rollback en orden inverso)
+# Revertir migraciones registradas (alcance: procesa todas las migraciones con rollback en orden inverso).
+# Se NIEGA (código 2, sin tocar nada) si la reversión destruiría datos de negocio. Ver "Reversión segura" abajo.
 php database/migrador.php down
 ```
 
 > **Alcance del comando `down`:** Actualmente `php database/migrador.php down` procesa en orden cronológico inverso (`rsort`) **todas** las migraciones registradas en la tabla `migraciones` que cuenten con su respectivo archivo `*_rollback.sql`, revirtiendo el esquema completo hacia el estado base, no únicamente la última migración aplicada. Si en producción o desarrollo se requiere revertir de forma granular una sola migración intermedia, ejecute manualmente el archivo SQL de rollback específico (`database/migrations/<archivo>_rollback.sql`) y actualice la tabla de control `migraciones`.
+
+### Reversión segura (`down`)
+
+`down` ejecuta primero un análisis **sin efectos** de los datos que se perderían y se niega a continuar (código de salida `2`) salvo que se indique, migración por migración,
+`--aceptar-perdida=<migracion>` **y** un respaldo verificable `--respaldo=<archivo.sql.gz>` (de `scripts/backup_db.php`, con su manifiesto SHA-256, de esta base, del esquema actual, de las últimas 24 horas).
+
+```bash
+php database/migrador.php down --simular                                  # informa; no modifica nada
+php database/migrador.php down --hasta=016_clientes_membresia \
+  --aceptar-perdida=016_clientes_membresia --aceptar-perdida=017_idempotencia_unicidad \
+  --aceptar-perdida=018_colaboradores_invitaciones --respaldo=storage/respaldos/antes.sql.gz
+```
+
+* `--hasta=NNN_nombre`: revierte solo esa migración y las posteriores.
+* Detección de pérdida: un `NNN_nombre.guard.php` (`fn(mysqli): array` de `['mensaje'=>..., 'tabla'=>...]`; vacío = seguro) tiene prioridad; sin él se analiza el SQL de
+  `NNN_nombre_rollback.sql` (`DROP TABLE` / `DROP COLUMN`) contra los datos reales. Datos efímeros declarados en `database/migrador_reversion.php` no bloquean.
+* 016: el rollback copia las membresías a `clientes_resguardo_016` (persistente) y la 016 las restaura al reaplicar; las suspensiones no se reactivan.
+* Guía completa, comandos para Windows/Docker y Linux e inventario de rollbacks: `docs/GUIA_ACTUALIZACION_IDENTIDADES.md` §7.
 
 ---
 
