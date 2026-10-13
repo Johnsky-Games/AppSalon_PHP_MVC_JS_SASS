@@ -317,4 +317,17 @@ final class AtaquesVariosTest extends QaCase
         $r = $svc->invitar(self::$p['propietario']['id'], ['nombre' => str_repeat('a', 60), 'apellido' => str_repeat('b', 59), 'email' => self::correo('largo2'), 'telefono' => '', 'puesto' => '', 'rol' => 'recepcion', 'fecha_ingreso' => ''], Idem::clave());
         $this->assertSame('ok', $r['status'], 'el caso de 119 caracteres sí debe funcionar: ' . json_encode($r));
     }
+
+    public function test_Defecto_recepcion_puede_editar_el_perfil_del_propietario_y_de_otro_personal_por_perfil_id(): void
+    {
+        $n = $this->nav('recepcion');
+        $csrf = $n->csrf('/equipo/login');
+        $duenoId = self::$p['propietario']['id'];
+        $antes = self::q('SELECT nombre, apellido, telefono FROM usuarios WHERE id=?', [$duenoId])[0];
+        $r = $n->post('/perfil?id=' . $duenoId, ['csrf_token' => $csrf, 'nombre' => 'Hackeado', 'apellido' => 'Por Recepcion', 'telefono' => '0990000000', 'contacto_email' => '1', 'recordatorios' => '1']);
+        $despues = self::q('SELECT nombre, apellido, telefono FROM usuarios WHERE id=?', [$duenoId])[0];
+        // Restaurar para no contaminar otras pruebas.
+        self::q('UPDATE usuarios SET nombre=?, apellido=?, telefono=? WHERE id=?', [$antes['nombre'], $antes['apellido'], $antes['telefono'], $duenoId]);
+        $this->assertSame($antes, $despues, 'perfiles.gestionar (recepción) debería limitarse a perfiles de CLIENTES; pudo reescribir nombre y teléfono de la cuenta del propietario (HTTP ' . $r['status'] . ')');
+    }
 }
