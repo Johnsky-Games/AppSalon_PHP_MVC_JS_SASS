@@ -2,13 +2,13 @@
 
 namespace Tests\Qa;
 
-require_once __DIR__ . '/QaCase.php';
+require_once __DIR__ . '/R2bCase.php';
 
 /**
  * A. Concurrencia con PROCESOS reales y barrera de tiempo común.
  * Cada prueba lanza varios procesos PHP que ejecutan a la vez el mismo servicio de dominio de producción.
  */
-final class ConcurrenciaTest extends QaCase
+final class ConcurrenciaTest extends R2bCase
 {
     protected function setUp(): void
     {
@@ -59,6 +59,15 @@ final class ConcurrenciaTest extends QaCase
     public function test_registro_claves_distintas_mismo_correo_una_sola_identidad(): void
     {
         $email = self::correo('reg2');
+        self::iniciarSmtpFallo(2594, 'ok');
+        putenv('EMAIL_PORT=2594'); // el worker real (proceso aparte) y los procesos de la carrera usan este buzón propio
+        try {
+            $this->registroClavesDistintas($email);
+        } finally { putenv('EMAIL_PORT=2599'); self::detenerSmtpFallo(2594); }
+    }
+
+    private function registroClavesDistintas(string $email): void
+    {
         $post = ['nombre' => 'Rosa', 'apellido' => 'Diaz', 'email' => $email, 'password' => 'Abcdef123456', 'telefono' => '0991112222'];
         $t = [];
         for ($i = 0; $i < 6; $i++) { $t[] = ['accion' => 'registrarCola', 'args' => ['post' => $post, 'clave' => Idem::clave(), 'actor' => 'anonimo:' . str_repeat('b', 32), 'ip' => '10.4.' . $i . '.1']]; }
@@ -75,15 +84,21 @@ final class ConcurrenciaTest extends QaCase
         // Una cuenta SIN confirmar nunca recibe «aviso de cuenta existente»: solo confirmaciones (altas o reemisiones).
         $this->assertSame(0, (int)self::escalar("SELECT COUNT(*) FROM correos_salida WHERE destinatario_email=? AND tipo='aviso_cuenta_existente'", [$email]));
         $this->assertSame(1, (int)self::escalar("SELECT COUNT(*) FROM usuarios WHERE id=? AND token_tipo='confirmacion' AND token_expira>NOW()", [$uid]), 'UN token vigente');
-        $activos = (int)self::escalar("SELECT COUNT(*) FROM correos_salida WHERE usuario_id=? AND tipo='confirmacion_cuenta' AND estado IN ('pendiente','enviando')", [$uid]);
-        $this->assertLessThanOrEqual(1, $activos, 'a lo sumo un evento activo');
+        // CAMBIO DE CONTRATO (fase 2): ningún correo sale dentro de la petición. Cada solicitud admitida deja SU evento pendiente (hasta 3
+        // antes de que corra el worker); el invariante que importa se comprueba tras el worker real: se entrega UN solo correo, con el
+        // único enlace vigente, y los eventos de enlaces ya reemplazados se cancelan SIN enviarse (antes se entregaban enlaces muertos).
+        $this->assertSame($aceptadas, (int)self::escalar("SELECT COUNT(*) FROM correos_salida WHERE usuario_id=? AND tipo='confirmacion_cuenta'", [$uid]), 'un evento por solicitud admitida');
+        $this->assertCount(0, self::buzonFallo(2594), 'antes del worker el buzón debe seguir vacío');
+        $hashVigente = (string)self::escalar('SELECT token_hash FROM usuarios WHERE id=?', [$uid]);
+        self::entregarCola(2594);
+        $this->assertSame(0, (int)self::escalar("SELECT COUNT(*) FROM correos_salida WHERE usuario_id=? AND tipo='confirmacion_cuenta' AND estado IN ('pendiente','enviando')", [$uid]), 'tras el worker no queda ningún evento activo');
+        $mapa = array_column(self::q("SELECT estado, COUNT(*) n FROM correos_salida WHERE usuario_id=? AND tipo='confirmacion_cuenta' GROUP BY estado", [$uid]), 'n', 'estado');
+        $this->assertSame(['cancelado' => $aceptadas - 1, 'enviado' => 1], array_filter($mapa), 'estados finales: ' . json_encode($mapa));
+        $msgs = array_values(array_filter(self::buzonFallo(2594), fn($m) => in_array($email, $m['to'], true)));
+        $this->assertCount(1, $msgs, 'se debe entregar un único correo de confirmación');
+        $this->assertSame($hashVigente, hash('sha256', (string)self::tokenEnCorreo($msgs[0], '/confirmar-cuenta')), 'el enlace entregado debe ser el vigente');
         // Una fila de idempotencia por solicitud ACEPTADA (las rechazadas por límite no reservan).
         $this->assertSame($aceptadas, (int)self::escalar("SELECT COUNT(*) FROM operaciones_idempotentes WHERE scope='cliente.registro'"), 'reservas de idempotencia vs solicitudes aceptadas');
-        // El token que quedó vigente es el de un evento de la cola (nunca uno huérfano): el último en confirmarse.
-        $tokens = array_values(array_filter(array_map(fn($r) => $r['resultado']['token_enviado'] ?? null, $res)));
-        $this->assertNotEmpty($tokens, 'ningún proceso entregó un enlace');
-        $vigentes = array_filter(array_unique($tokens), fn($tk) => (int)self::escalar('SELECT COUNT(*) FROM usuarios WHERE id=? AND token_hash=?', [$uid, hash('sha256', $tk)]) === 1);
-        $this->assertCount(1, $vigentes, 'exactamente un enlace entregado sigue vigente');
     }
 
     public function test_registro_variantes_de_mayusculas_y_espacios_concurrentes_no_duplican_identidad(): void

@@ -288,6 +288,10 @@ trait MatrizHttp
         if (!empty($o['limpiar_intentos'])) { self::q('TRUNCATE intentos_login'); }
         $antes = self::huellaBd();
         $buzonAntes = count(self::leerBuzon());
+        // Auditoría de exportaciones (fase 2): una denegación idéntica (mismo actor, tipo y motivo) dentro de 10 minutos se agrupa en UNA fila.
+        // La expectativa se deriva del estado previo de la tabla, no del código de la aplicación: ¿ya había una denegación igual hace < 10 min?
+        $audPrevias = (int)self::escalar("SELECT COUNT(*) FROM crm_exportaciones_auditoria WHERE resultado='denegada' AND tipo='clientes' AND motivo='sin_permiso'
+            AND actor_usuario_id=? AND ocurrido_en >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 10 MINUTE)", [(int)($datos['id'] ?? 0)]);
         $n = new Navegador(self::$D['base']);
         $r = $n->peticion($m, $o['p'], $campos, $cabeceras);
         $despues = self::huellaBd();
@@ -296,7 +300,7 @@ trait MatrizHttp
         // Diagnóstico (sin cuerpos): destinatarios y asunto de lo que llegó durante la petición, para atribuir un correo inesperado.
         $nuevos = array_map(static fn ($c) => implode(',', (array)($c['to'] ?? [])) . ' | ' . (preg_match('/^Subject:\s*(.+)$/mi', (string)($c['cabeceras'] ?? ''), $mm) ? trim($mm[1]) : '(sin asunto)'), array_slice($buzonDespues, $buzonAntes));
         return ['r' => $r, 'sesion' => $datos, 'csrf' => $csrf, 'cookie' => $cookie, 'dif' => $dif, 'tablas' => self::textoDif($dif),
-            'correo' => count($buzonDespues) - $buzonAntes, 'correo_detalle' => $nuevos];
+            'correo' => count($buzonDespues) - $buzonAntes, 'correo_detalle' => $nuevos, 'aud_previas' => $audPrevias];
     }
 
     /** ¿Algún centinela de los grupos NO permitidos aparece en el texto (crudo, escapado HTML/URL/JSON)? @return string[] */

@@ -77,6 +77,19 @@ try {
             foreach ($enviados as $cuerpo) { if (preg_match('~token=([a-f0-9]{64})~', $cuerpo, $m)) { $tok = $m[1]; } }
             $res = ['status' => $r['status'], 'envios' => count($enviados), 'token_enviado' => $tok];
             break;
+        case 'olvideCola':
+            // Recuperación de contraseña por la COLA real (sin despachador inyectado): solo encola; el correo lo entrega el worker.
+            $svc = new AuthService(new Repositories\UsuarioRepository($db));
+            $espera();
+            if (!empty($a['sinLimite'])) { $db->query('DELETE FROM intentos_login'); }
+            $t0 = microtime(true);
+            $r = $svc->solicitarRecuperacion(['email' => $a['email']], $a['ip'] ?? '10.1.0.1');
+            for ($reint = 0; !empty($a['sinLimite']) && $r['status'] === 'rate_limited' && $reint < 5; $reint++) {
+                $db->query('DELETE FROM intentos_login');
+                $r = $svc->solicitarRecuperacion(['email' => $a['email']], $a['ip'] ?? '10.1.0.1');
+            }
+            $res = ['status' => $r['status']];
+            break;
         case 'invitar':
             $svc = $servicioColab();
             $espera();

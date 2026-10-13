@@ -337,15 +337,36 @@ final class R2bReversionTest extends R2bCase
      * (error 1242 del truco de la guarda) sin decir que hay que archivar y vaciar las tablas a mano. El flag --aceptar-perdida=022 sugiere
      * que es posible revertir y no lo es.
      */
-    public function test_Defecto_R2B_05_aceptar_la_perdida_de_022_no_permite_revertir_y_el_mensaje_no_lo_dice(): void
+    public function test_R2B_05_la_negativa_del_rollback_de_022_explica_el_remedio_y_el_remedio_funciona(): void
     {
         $bd = $this->preparar('r2brev');
         $this->sql($bd, "INSERT INTO crm_exportaciones_auditoria(actor_usuario_id,actor_rol,formato,tipo,resultado,ocurrido_en) VALUES (1,'propietario','csv','clientes','exitosa',UTC_TIMESTAMP())");
         $respaldo = $this->respaldo($bd);
-        $r = $this->down($bd, ['--hasta=022_crm_auditoria_consentimiento_homonimos', '--aceptar-perdida=022_crm_auditoria_consentimiento_homonimos', "--respaldo=$respaldo"]);
+        $antes = $this->huellaTotal($bd);
+        $args = ['--hasta=022_crm_auditoria_consentimiento_homonimos', '--aceptar-perdida=022_crm_auditoria_consentimiento_homonimos', "--respaldo=$respaldo"];
+        $r = $this->down($bd, $args);
         $this->assertSame(1, $r['exit']);
-        // El operador cumplió TODO lo que el migrador pidió y aun así falla: el mensaje debe indicar el remedio (archivar y vaciar a mano).
-        $this->assertMatchesRegularExpression('/archiv|vac[ií]a|TRUNCATE|a mano/i', $r['out'], 'el migrador no explica cómo continuar tras la negativa del rollback de la 022: ' . $r['out']);
+        // El operador cumplió TODO lo que el migrador pidió y aun así el propio rollback SQL se niega a propósito: el mensaje debe decir cómo continuar.
+        $this->assertStringContainsString('[BLOQUEO]', $r['out'], $r['out']);
+        $this->assertMatchesRegularExpression('/A PROP[ÓO]SITO/u', $r['out']);
+        $this->assertMatchesRegularExpression('/archiv|vac[ií]a/i', $r['out'], 'el migrador no explica cómo continuar: ' . $r['out']);
+        $this->assertStringContainsString('No se modificó nada', $r['out']);
+        $this->assertSame($antes, $this->huellaTotal($bd), 'el rollback negado modificó la base');
+        // Y lo que el mensaje pide FUNCIONA: archivar (el respaldo ya contiene la auditoría) y vaciar con un usuario administrador; después la reversión se completa.
+        $this->sql($bd, 'TRUNCATE TABLE crm_exportaciones_auditoria');
+        $r2 = $this->down($bd, $args);
+        $this->assertSame(0, $r2['exit'], 'tras vaciar la tabla la reversión debía completarse: ' . $r2['out']);
+        $this->assertSame(0, (int)$this->filas($bd, "SELECT COUNT(*) n FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='crm_exportaciones_auditoria'")[0]['n'], 'la tabla debía desaparecer con la reversión');
+    }
+
+    /** Con la auditoría VACÍA no hay pérdida que aceptar: la reversión de 022 se completa sin pista de bloqueo (la pista solo aparece ante la negativa deliberada). */
+    public function test_R2B_05_sin_datos_en_riesgo_la_reversion_de_022_se_completa_sin_pista_de_bloqueo(): void
+    {
+        $bd = $this->preparar('r2brev');
+        $r = $this->down($bd, ['--hasta=022_crm_auditoria_consentimiento_homonimos']);
+        $this->assertSame(0, $r['exit'], $r['out']);
+        $this->assertStringNotContainsString('[BLOQUEO] La reversión', $r['out']);
+        $this->assertStringNotContainsString('A PROPÓSITO', $r['out']);
     }
 
     // ------------------------------------------------------------------ 016: suspensiones y ciclos repetidos

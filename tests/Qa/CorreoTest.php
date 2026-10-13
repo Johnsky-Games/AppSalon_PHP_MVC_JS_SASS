@@ -2,10 +2,10 @@
 
 namespace Tests\Qa;
 
-require_once __DIR__ . '/QaCase.php';
+require_once __DIR__ . '/R2bCase.php';
 
 /** D/G. Contenido real de los correos (SMTP simulado propio): enlaces, cabecera Host, inyección y comportamiento ante SMTP caído. */
-final class CorreoTest extends QaCase
+final class CorreoTest extends R2bCase
 {
     private static string $ok;
     private static string $caido;
@@ -96,10 +96,11 @@ final class CorreoTest extends QaCase
     }
 
     /**
-     * CAMBIO DE CONTRATO (ronda 2, ítem 4): el correo de confirmación del registro YA usa el outbox (`correos_salida`). Con el SMTP caído
-     * el alta no falla, el evento queda `pendiente` (1 intento fallido) y el worker lo entrega cuando el SMTP vuelve. La garantía original
-     * se mantiene y se refuerza: no se pierde la cuenta ni el correo, y la pantalla sigue ofreciendo «Reenviar» como vía manual.
-     * (La cobertura profunda de SMTP caído/colgado/4xx/5xx y del worker real está en R2bColaCorreosTest.)
+     * CAMBIO DE CONTRATO (ronda 2 + fase 2): el correo de confirmación del registro usa el outbox (`correos_salida`) y, desde la fase 2,
+     * NO se envía dentro de la petición (ni siquiera un primer intento): el alta solo encola y lo entrega el worker. Antes el evento
+     * quedaba `pendiente` con 1 intento fallido tras la respuesta; ahora queda `pendiente` con 0 intentos y sin error hasta que el
+     * worker real lo intenta (con el SMTP caído: 1 intento fallido). La garantía original se mantiene: no se pierde la cuenta ni el
+     * correo, y la pantalla sigue ofreciendo «Reenviar». (SMTP caído/colgado/4xx/5xx a fondo: R2bColaCorreosTest.)
      */
     public function test_registro_con_smtp_caido_informa_la_via_de_recuperacion_y_no_pierde_la_cuenta(): void
     {
@@ -111,18 +112,27 @@ final class CorreoTest extends QaCase
         $this->assertSame(0, (int)self::escalar('SELECT confirmado FROM usuarios WHERE email=?', [$email]));
         $ev = self::q("SELECT estado, intentos, ultimo_error FROM correos_salida WHERE destinatario_email=? AND tipo='confirmacion_cuenta'", [$email]);
         $this->assertCount(1, $ev, 'registro: el correo de confirmación debe quedar en la cola (outbox), exactamente un evento');
-        $this->assertSame('pendiente', $ev[0]['estado'], 'con el SMTP caído el evento queda pendiente para el worker');
+        $this->assertSame('pendiente', $ev[0]['estado'], 'el evento queda pendiente para el worker');
+        $this->assertSame(0, (int)$ev[0]['intentos'], 'NUEVO CONTRATO: la petición no intenta el envío');
+        $this->assertEmpty($ev[0]['ultimo_error']);
+        // El worker real, con el SMTP aún caído, hace el primer intento fallido y reprograma.
+        self::entregarCola(2599);
+        $ev = self::q("SELECT estado, intentos, ultimo_error FROM correos_salida WHERE destinatario_email=? AND tipo='confirmacion_cuenta'", [$email]);
+        $this->assertSame('pendiente', $ev[0]['estado']);
         $this->assertSame(1, (int)$ev[0]['intentos']);
         $this->assertNotEmpty($ev[0]['ultimo_error']);
         $pagina = $n->get('/mensaje');
         $this->assertStringContainsString('/reenviar-confirmacion', $pagina['body'], 'la pantalla debe ofrecer reenviar el correo');
-        // El reenvío por la vía oficial funciona cuando el SMTP vuelve, y deja UN solo evento activo (el anterior queda cancelado).
+        // El reenvío por la vía oficial tampoco envía en la petición: reemplaza el evento (el anterior queda cancelado) y el worker
+        // lo entrega cuando el SMTP está disponible.
         $n2 = new Navegador(self::$ok);
         $csrf = $n2->csrf('/reenviar-confirmacion');
         $antes = count(self::buzon(2596));
         $n2->post('/reenviar-confirmacion', ['csrf_token' => $csrf, 'email' => $email]);
-        usleep(400000);
+        $this->assertCount($antes, self::buzon(2596), 'la petición de reenvío no debe enviar correo');
+        self::entregarCola(2596);
         $this->assertGreaterThan($antes, count(self::buzon(2596)));
+        $this->assertSame(1, (int)self::escalar('SELECT COUNT(*) FROM usuarios WHERE email=?', [$email]));
         $this->assertSame(1, (int)self::escalar("SELECT COUNT(*) FROM correos_salida WHERE destinatario_email=? AND tipo='confirmacion_cuenta' AND estado IN ('pendiente','enviando','enviado')", [$email]), 'tras el reenvío solo un evento no cancelado');
         $this->assertSame('cancelado', self::escalar("SELECT estado FROM correos_salida WHERE id=?", [self::escalar("SELECT MIN(id) FROM correos_salida WHERE destinatario_email=? AND tipo='confirmacion_cuenta'", [$email])]));
     }

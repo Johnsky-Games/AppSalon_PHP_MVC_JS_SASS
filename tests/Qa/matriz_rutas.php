@@ -111,7 +111,7 @@ return [
     ['m' => 'GET',  'p' => '/admin/equipo/reasignar', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion'], 'ok' => [404, 'html', 'No encontramos esta página']],
     ['m' => 'GET',  'p' => '/admin/equipo/reasignar?id={col_staff}', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion'], 'ok' => [404, 'html', 'No encontramos esta página']],
     ['m' => 'GET',  'p' => '/admin/equipo/reasignar?id={col_prof}', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion'], 'ok' => [200, 'html']],
-    ['m' => 'POST', 'p' => '/admin/equipo/reasignar', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion'], 'orden' => 'auth', 'csrf' => 'exigir', 'ok' => [302, 'redir', '/admin/equipo']],
+    ['m' => 'POST', 'p' => '/admin/equipo/reasignar', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion'], 'orden' => 'auth', 'csrf' => 'exigir', 'ok' => [302, 'redir', '@inicio']], // fase 2 (R2B-11): el error de validación vuelve al inicio del portal del actor (inicio_portal()): /admin para propietario, gerente y recepción
     ['m' => 'GET',  'p' => '/admin/finanzas',        'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'ok' => [200, 'html']],
     ['m' => 'POST', 'p' => '/admin/finanzas',        'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'orden' => 'auth', 'csrf' => 'exigir', 'ok' => [303, 'redir', '/admin/finanzas']],
     ['m' => 'GET',  'p' => '/admin/inventario',      'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'ok' => [200, 'html']],

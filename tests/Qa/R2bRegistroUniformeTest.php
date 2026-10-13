@@ -34,10 +34,17 @@ final class R2bRegistroUniformeTest extends R2bCase
         self::detenerSmtpFallo(self::SMTP);
     }
 
+    private static bool $smtpLento = false;
+
+    protected function tearDown(): void
+    {
+        if (self::$smtpLento) { self::$smtpLento = false; self::detenerSmtpFallo(self::SMTP); self::iniciarSmtpFallo(self::SMTP, 'ok'); }
+    }
+
     protected function setUp(): void
     {
         self::q('TRUNCATE intentos_login');
-        self::q("DELETE FROM correos_salida WHERE tipo IN ('aviso_cuenta_existente','confirmacion_cuenta')");
+        self::q('DELETE FROM correos_salida'); // el worker real procesa TODA la cola: cada prueba parte de una cola vacía
         self::modoSmtp(self::SMTP, 'ok');
         self::vaciarBuzonFallo(self::SMTP);
     }
@@ -69,6 +76,8 @@ final class R2bRegistroUniformeTest extends R2bCase
         // Invitación pendiente (sin aceptar).
         $pend = $repo->crearInvitacion(self::$dueno['id'], ['nombre' => 'Pe', 'apellido' => 'Nd', 'email' => self::correo('pend'), 'telefono' => null, 'puesto' => '', 'rol' => 'gerente', 'fecha_ingreso' => null, 'servicios' => [], 'nombre_profesional' => '', 'profesional_id' => null]);
         $r['invitado_pendiente'] = self::escalar('SELECT email_norm FROM colaboradores WHERE id=?', [$pend['colaborador_id']]);
+        // Las invitaciones de arriba encolan su correo; aquí no se prueban (R2bAgendaTest/CorreoTest las cubren) y el worker real las enviaría.
+        self::q("DELETE FROM correos_salida WHERE tipo='invitacion_colaborador'");
         return $r;
     }
 
@@ -200,12 +209,17 @@ final class R2bRegistroUniformeTest extends R2bCase
         $email = self::correo('reconf');
         $primero = self::registrarHttp(new Navegador(self::$base), $email);
         $this->assertSame(302, $primero['status']);
+        // CAMBIO DE CONTRATO (fase 2): el registro solo encola; el correo lo entrega el worker real. Antes del worker el buzón está vacío.
+        $this->assertSame([], self::buzonFallo(self::SMTP), 'la petición no debe enviar correo');
+        self::entregarCola(self::SMTP);
         $msgs = self::buzonFallo(self::SMTP);
         $this->assertCount(1, $msgs);
         $t1 = self::tokenEnCorreo($msgs[0], '/confirmar-cuenta');
         $this->assertNotNull($t1);
         $hashPass = self::escalar('SELECT password FROM usuarios WHERE email=?', [$email]);
         self::registrarHttp(new Navegador(self::$base), $email, ['password' => 'Otra-Clave-Atacante-1']);
+        $this->assertCount(1, self::buzonFallo(self::SMTP), 'la segunda petición tampoco envía en línea');
+        self::entregarCola(self::SMTP);
         $msgs = self::buzonFallo(self::SMTP);
         $this->assertCount(2, $msgs, 'el titular debe recibir un segundo enlace');
         $t2 = self::tokenEnCorreo($msgs[1], '/confirmar-cuenta');
@@ -228,6 +242,8 @@ final class R2bRegistroUniformeTest extends R2bCase
             self::q('TRUNCATE intentos_login');
             self::vaciarBuzonFallo(self::SMTP);
             self::registrarHttp(new Navegador(self::$base), $r[$rama]);
+            $this->assertSame([], self::buzonFallo(self::SMTP), "$rama: la petición no debe enviar el aviso en línea (fase 2)");
+            self::entregarCola(self::SMTP);
             $m = self::buzonFallo(self::SMTP);
             $this->assertCount(1, $m, "$rama: se esperaba exactamente 1 aviso al titular");
             $this->assertSame([$r[$rama]], $m[0]['to'], "$rama: el aviso debe ir SOLO al titular del correo");
@@ -247,6 +263,8 @@ final class R2bRegistroUniformeTest extends R2bCase
             $resp = self::registrarHttp(new Navegador(self::$base), $email);
             $this->assertSame(302, $resp['status'], "solicitud $i");
         }
+        $this->assertSame([], self::buzonFallo(self::SMTP), 'las peticiones no envían en línea (fase 2)');
+        self::entregarCola(self::SMTP);
         $this->assertCount(1, self::buzonFallo(self::SMTP), 'más de un aviso por hora para el mismo titular permite inundar su bandeja');
         $this->assertSame(1, (int)self::escalar("SELECT COUNT(*) FROM correos_salida WHERE tipo='aviso_cuenta_existente' AND destinatario_email=?", [$email]));
         // Con otra hora (misma clave que usaría el siguiente periodo) el aviso sí vuelve a emitirse: se simula adelantando el reloj de la clave.
@@ -367,7 +385,11 @@ final class R2bRegistroUniformeTest extends R2bCase
             $n++;
         }
         $this->assertSame($antes + $n, (int)self::escalar('SELECT COUNT(*) FROM correos_salida'), 'exactamente un evento por solicitud admitida');
-        $this->assertSame(0, (int)self::escalar("SELECT COUNT(*) FROM correos_salida WHERE estado IN ('pendiente','enviando') AND tipo IN ('confirmacion_cuenta','aviso_cuenta_existente')"), 'con SMTP sano no debe quedar nada pendiente');
+        // CAMBIO DE CONTRATO (fase 2): tras las peticiones TODO sigue pendiente y el buzón vacío; solo el worker real entrega.
+        $this->assertSame($n, (int)self::escalar("SELECT COUNT(*) FROM correos_salida WHERE estado='pendiente' AND tipo IN ('confirmacion_cuenta','aviso_cuenta_existente')"), 'las peticiones solo encolan');
+        $this->assertSame(0, count(self::buzonFallo(self::SMTP)), 'ninguna petición debe enviar correo');
+        self::entregarCola(self::SMTP);
+        $this->assertSame(0, (int)self::escalar("SELECT COUNT(*) FROM correos_salida WHERE estado IN ('pendiente','enviando') AND tipo IN ('confirmacion_cuenta','aviso_cuenta_existente')"), 'con SMTP sano y el worker ejecutado no debe quedar nada pendiente');
         $this->assertSame($n, count(self::buzonFallo(self::SMTP)), 'un correo por solicitud (sin duplicados)');
         $this->assertSame(0, (int)self::escalar("SELECT COUNT(*) FROM correos_salida WHERE estado='enviado' AND carga_cifrada IS NOT NULL"), 'la carga (token) debe borrarse al enviar');
     }
@@ -388,22 +410,22 @@ final class R2bRegistroUniformeTest extends R2bCase
         $this->assertSame(1, (int)self::escalar('SELECT COUNT(*) FROM clientes c JOIN usuarios u ON u.id=c.usuario_id WHERE u.email=?', [$email]));
         $this->assertTrue(password_verify('Original-Pass-123', (string)self::escalar('SELECT password FROM usuarios WHERE email=?', [$email])), 'la contraseña debe ser la del primer alta');
         $uid = (int)self::escalar('SELECT id FROM usuarios WHERE email=?', [$email]);
-        // Eventos de confirmación: a lo sumo UNO activo (pendiente/enviando/enviado vigente), el resto cancelados o enviados y reemplazados.
         $porEstado = self::q("SELECT estado, COUNT(*) n FROM correos_salida WHERE usuario_id=? AND tipo='confirmacion_cuenta' GROUP BY estado", [$uid]);
         $mapa = array_column($porEstado, 'n', 'estado');
-        $this->assertLessThanOrEqual(1, (int)($mapa['pendiente'] ?? 0) + (int)($mapa['enviando'] ?? 0), 'más de un evento activo: ' . json_encode($mapa));
-        $this->assertSame(0, (int)self::escalar("SELECT COUNT(*) FROM correos_salida WHERE usuario_id=? AND tipo<>'confirmacion_cuenta'", [$uid]), 'ninguna carrera debe degradar a aviso la cuenta recién creada de otro');
-        // Tokens: exactamente UNO vigente (el hash guardado), y es el del último evento no cancelado.
-        $filas = array_sum($mapa);
-        $this->assertGreaterThanOrEqual(1, $filas);
-        $tokensEnviados = array_values(array_filter(array_map(static fn($x) => $x['resultado']['token_enviado'] ?? null, $res)));
-        $vigentes = 0;
-        foreach (array_unique($tokensEnviados) as $tok) {
-            if ((int)self::escalar("SELECT COUNT(*) FROM usuarios WHERE id=? AND token_hash=? AND token_tipo='confirmacion' AND token_expira>NOW()", [$uid, hash('sha256', $tok)]) === 1) { $vigentes++; }
-        }
-        $this->assertLessThanOrEqual(1, $vigentes, 'más de un token válido al mismo tiempo');
-        // Una fila de idempotencia por solicitud aceptada (las 429 no reservan).
         $aceptadas = count(array_filter($estados, static fn($e) => $e === 'ok'));
+        $this->assertSame(0, (int)self::escalar("SELECT COUNT(*) FROM correos_salida WHERE usuario_id=? AND tipo<>'confirmacion_cuenta'", [$uid]), 'ninguna carrera debe degradar a aviso la cuenta recién creada de otro');
+        // CAMBIO DE CONTRATO (fase 2): una fila pendiente por solicitud admitida y NINGÚN envío en línea; el invariante se comprueba tras el
+        // worker real: un único correo, con el único token vigente; los eventos de enlaces reemplazados se cancelan sin enviarse.
+        $this->assertSame($aceptadas, array_sum($mapa), 'un evento por solicitud admitida: ' . json_encode($mapa));
+        $this->assertSame([], self::buzonFallo(self::SMTP), 'las peticiones no envían correo');
+        $hashVigente = (string)self::escalar('SELECT token_hash FROM usuarios WHERE id=?', [$uid]);
+        $this->assertSame(1, (int)self::escalar("SELECT COUNT(*) FROM usuarios WHERE id=? AND token_tipo='confirmacion' AND token_expira>NOW()", [$uid]), 'exactamente UN token vigente');
+        self::entregarCola(self::SMTP);
+        $this->assertSame(0, (int)self::escalar("SELECT COUNT(*) FROM correos_salida WHERE usuario_id=? AND estado IN ('pendiente','enviando')", [$uid]), 'tras el worker no queda ningún evento activo');
+        $msgs = array_values(array_filter(self::buzonFallo(self::SMTP), static fn($m) => in_array($email, $m['to'], true)));
+        $this->assertCount(1, $msgs, 'un único correo de confirmación');
+        $this->assertSame($hashVigente, hash('sha256', (string)self::tokenEnCorreo($msgs[0], '/confirmar-cuenta')), 'el enlace entregado es el vigente');
+        // Una fila de idempotencia por solicitud aceptada (las 429 no reservan).
         $this->assertSame($aceptadas, (int)self::escalar("SELECT COUNT(*) FROM operaciones_idempotentes WHERE scope='cliente.registro'") - $idemAntes, 'filas de idempotencia vs solicitudes aceptadas');
     }
 
@@ -476,14 +498,16 @@ final class R2bRegistroUniformeTest extends R2bCase
     }
 
     /**
-     * Mide (SMTP simulado con 300 ms de latencia) lo que tarda una SEGUNDA solicitud sobre cada rama.
-     * Hallazgo: una cuenta confirmada ya avisada en la hora NO vuelve a enviar (rápido) mientras que un correo nuevo o sin
-     * confirmar sí envía otra vez (lento): el tiempo distingue ramas con solo dos solicitudes. Ver DEF-R2B-02.
+     * R2B-02 REVERIFICADO (antes `test_Defecto_R2B_02_…`, rojo). DISEÑO NUEVO: ninguna petición envía correo (solo encola), así que el tiempo
+     * de la 1.ª ni de la 2.ª solicitud puede depender de la rama. Se mide con un SMTP de 300 ms y SIN `CORREOS_ENVIO_INMEDIATO`: la
+     * precondición ahora es que el SMTP lento SÍ está activo (lo demuestra el worker, que tarda ≥ 250 ms por correo) mientras las
+     * peticiones tardan mucho menos que esa latencia y son comparables entre ramas.
      */
-    public function test_Defecto_R2B_02_el_tiempo_de_la_segunda_solicitud_distingue_cuentas_confirmadas_de_nuevas(): void
+    public function test_R2B_02_el_tiempo_de_la_solicitud_no_distingue_cuentas_confirmadas_de_nuevas(): void
     {
         self::detenerSmtpFallo(self::SMTP);
         self::iniciarSmtpFallo(self::SMTP, 'lento', 0.3);
+        self::$smtpLento = true;
         $medir = function (string $email): array {
             self::q('TRUNCATE intentos_login');
             $t = [];
@@ -496,35 +520,60 @@ final class R2bRegistroUniformeTest extends R2bCase
         };
         $nuevo = $medir(self::correo('tn'));
         $confirmado = $medir(self::cliente(['email' => self::correo('tc')])['email']);
-        $this->assertGreaterThan(250, $nuevo[0], 'precondición: el SMTP simulado debe añadir latencia');
-        $this->assertGreaterThan(250, $confirmado[0], 'la primera solicitud sobre una cuenta confirmada envía el aviso');
-        $this->assertLessThan(2.0, $nuevo[1] / max(1.0, $confirmado[1]),
-            sprintf('2.ª solicitud: correo nuevo/sin confirmar %.0f ms vs cuenta confirmada %.0f ms: con dos solicitudes se distingue si el correo ya tiene cuenta confirmada', $nuevo[1], $confirmado[1]));
+        $sinConfirmar = $medir(self::cliente(['email' => self::correo('ts'), 'confirmado' => false])['email']);
+        $staff = $medir(self::miembro(self::$dueno['id'], 'recepcion')['email']);
+        $this->assertSame([], self::buzonFallo(self::SMTP), 'ninguna petición debe haber enviado correo');
+        foreach (['nuevo' => $nuevo, 'confirmado' => $confirmado, 'sin_confirmar' => $sinConfirmar, 'staff' => $staff] as $rama => $t) {
+            foreach ($t as $i => $ms) { $this->assertLessThan(250, $ms, sprintf('%s, solicitud %d: %.0f ms; con envío en línea superaría los 300 ms del SMTP', $rama, $i + 1, $ms)); }
+        }
+        for ($i = 0; $i < 2; $i++) {
+            $todas = [$nuevo[$i], $confirmado[$i], $sinConfirmar[$i], $staff[$i]];
+            $this->assertLessThan(3.0, max($todas) / max(1.0, min($todas)), sprintf('solicitud %d: tiempos por rama %s ms', $i + 1, json_encode(array_map('round', $todas))));
+        }
+        // Precondición real: el SMTP lento está activo y el trabajo lo hace el worker.
+        $w = self::entregarCola(self::SMTP);
+        $this->assertGreaterThan(0.25 * 4, $w['seg'], 'el worker debe tardar la latencia del SMTP por cada correo (≥ 4 correos × 250 ms)');
+        $this->assertGreaterThanOrEqual(4, count(self::buzonFallo(self::SMTP)));
     }
 
     /**
-     * El aviso para el titular de un correo con cuenta de CLIENTE enlaza a `/login`; esa ruta no existe (404). El enlace del único
-     * correo que recibe el titular legítimo debería llevar a un sitio funcional.
+     * R2B-01 REVERIFICADO (antes `test_Defecto_R2B_01_…`, rojo): el aviso de cuenta existente enlaza ahora a `/cliente/login` (cuentas de
+     * cliente) o `/equipo/login` (personal). Se comprueba en TODAS las ramas con cuenta, tanto en el HTML como en la parte de texto
+     * plano, que cada URL propia del correo responde 200/302 (nunca 404) y que el portal del enlace es el de la cuenta.
      */
-    public function test_Defecto_R2B_01_el_aviso_de_cuenta_existente_enlaza_a_una_ruta_inexistente(): void
+    public function test_R2B_01_los_enlaces_del_aviso_de_cuenta_existente_funcionan_en_todas_las_ramas(): void
     {
-        $email = self::cliente(['email' => self::correo('lnk')])['email'];
-        self::registrarHttp(new Navegador(self::$base), $email);
-        $m = self::buzonFallo(self::SMTP);
-        $this->assertCount(1, $m);
-        preg_match_all('~href=["\']?(https?://[^"\'\s>]+)~i', $m[0]['cuerpo'], $h);
-        $enlaces = array_values(array_unique(array_map('html_entity_decode', $h[1])));
-        $boton = array_values(array_filter($enlaces, static fn(string $u): bool => !preg_match('~^https?://[^/]+/?$~', $u)));
-        $this->assertNotEmpty($boton, 'el aviso no trae enlace de acción: ' . json_encode($enlaces));
-        $ruta = parse_url($boton[0], PHP_URL_PATH);
-        $r = (new Navegador(self::$base))->get($ruta);
-        $this->assertContains($r['status'], [200, 302], "El botón «Ir a iniciar sesión» del aviso apunta a $ruta y devuelve {$r['status']}");
+        $r = $this->ramas();
+        $comprobadas = 0;
+        foreach (['confirmado' => 'cliente', 'staff' => 'equipo', 'propietario' => 'equipo', 'cliente_suspendido' => 'cliente', 'staff_suspendido' => 'equipo', 'dual' => 'cliente'] as $rama => $portal) {
+            self::q('TRUNCATE intentos_login');
+            self::vaciarBuzonFallo(self::SMTP);
+            self::registrarHttp(new Navegador(self::$base), $r[$rama]);
+            $this->assertSame([], self::buzonFallo(self::SMTP), "$rama: la petición no debe enviar");
+            self::entregarCola(self::SMTP);
+            $m = self::buzonFallo(self::SMTP);
+            $this->assertCount(1, $m, $rama);
+            preg_match_all('~https?://[^\s"\'<>)]+~i', html_entity_decode($m[0]['cuerpo']), $h);
+            $urls = array_values(array_unique($h[0]));
+            $propias = array_values(array_filter($urls, static fn(string $u): bool => (bool)preg_match('~^https?://(localhost|127\.0\.0\.1)(:\d+)?/~i', $u) && !preg_match('~^https?://[^/]+/?$~', $u)));
+            $this->assertNotEmpty($propias, "$rama: el aviso no trae enlace de acción: " . json_encode($urls));
+            foreach ($propias as $u) {
+                $ruta = parse_url($u, PHP_URL_PATH);
+                $resp = (new Navegador(self::$base))->get($ruta);
+                $this->assertContains($resp['status'], [200, 302], "$rama: el enlace $u del aviso devuelve {$resp['status']}");
+                $comprobadas++;
+            }
+            $esperado = $portal === 'equipo' ? '/equipo/login' : '/cliente/login';
+            $this->assertNotEmpty(array_filter($propias, static fn(string $u): bool => str_ends_with(parse_url($u, PHP_URL_PATH), $esperado)), "$rama: el enlace debe ir a $esperado: " . json_encode($propias));
+        }
+        $this->assertGreaterThanOrEqual(6, $comprobadas);
     }
 
     private function tiempoPorExistencia(string $ruta, bool $pendiente): array
     {
         self::detenerSmtpFallo(self::SMTP);
         self::iniciarSmtpFallo(self::SMTP, 'lento', 0.4);
+        self::$smtpLento = true;
         $medir = function (string $email) use ($ruta): float {
             self::q('TRUNCATE intentos_login');
             $n = new Navegador(self::$base);
@@ -542,20 +591,24 @@ final class R2bRegistroUniformeTest extends R2bCase
     }
 
     /**
-     * DEF-R2B-08: `/olvide` envía el correo DENTRO de la petición solo cuando la cuenta existe y está confirmada: con un SMTP que tarda, el
-     * tiempo de respuesta distingue una cuenta existente de un correo inexistente en UNA sola petición (la documentación lo reconoce como
-     * residuo, pero no estaba aceptado: el registro público sí se corrigió).
+     * R2B-08 REVERIFICADO (antes rojo). DISEÑO NUEVO: `/olvide` solo encola (tipo `recuperacion_cuenta`); con un SMTP de 400 ms y SIN
+     * `CORREOS_ENVIO_INMEDIATO`, la respuesta de una cuenta existente tarda lo mismo que la de un correo inexistente y ninguna envía.
      */
-    public function test_Defecto_R2B_08_olvide_revela_si_la_cuenta_existe_por_el_tiempo_de_respuesta(): void
+    public function test_R2B_08_olvide_no_revela_si_la_cuenta_existe_por_el_tiempo_de_respuesta(): void
     {
         [$existe, $noExiste] = $this->tiempoPorExistencia('/olvide', false);
-        $this->assertLessThan(2.0, $existe / max(1.0, $noExiste), sprintf('/olvide: cuenta existente %.0f ms vs inexistente %.0f ms (SMTP con 400 ms)', $existe, $noExiste));
+        $this->assertLessThan(2.0, max($existe, $noExiste) / max(1.0, min($existe, $noExiste)), sprintf('/olvide: cuenta existente %.0f ms vs inexistente %.0f ms (SMTP con 400 ms)', $existe, $noExiste));
+        $this->assertLessThan(250, $existe, sprintf('/olvide con cuenta existente tardó %.0f ms: parece enviar en línea', $existe));
+        $this->assertSame([], self::buzonFallo(self::SMTP), 'ninguna petición debe enviar correo');
+        $this->assertSame(3, (int)self::escalar("SELECT COUNT(*) FROM correos_salida WHERE tipo='recuperacion_cuenta'"), 'las 3 cuentas existentes dejan su evento; las inexistentes ninguno');
     }
 
-    /** DEF-R2B-09: ídem para `/reenviar-confirmacion` (cola persistente, pero el intento inmediato sigue en línea solo si la cuenta existe y está pendiente). */
-    public function test_Defecto_R2B_09_reenviar_confirmacion_revela_si_la_cuenta_pendiente_existe_por_el_tiempo_de_respuesta(): void
+    /** R2B-09 REVERIFICADO (antes rojo): ídem para `/reenviar-confirmacion` (cuenta pendiente frente a inexistente). */
+    public function test_R2B_09_reenviar_confirmacion_no_revela_si_existe_una_cuenta_pendiente_por_el_tiempo(): void
     {
         [$existe, $noExiste] = $this->tiempoPorExistencia('/reenviar-confirmacion', true);
-        $this->assertLessThan(2.0, $existe / max(1.0, $noExiste), sprintf('/reenviar-confirmacion: cuenta pendiente %.0f ms vs inexistente %.0f ms (SMTP con 400 ms)', $existe, $noExiste));
+        $this->assertLessThan(2.0, max($existe, $noExiste) / max(1.0, min($existe, $noExiste)), sprintf('/reenviar-confirmacion: cuenta pendiente %.0f ms vs inexistente %.0f ms (SMTP con 400 ms)', $existe, $noExiste));
+        $this->assertLessThan(250, $existe, sprintf('/reenviar-confirmacion con cuenta pendiente tardó %.0f ms: parece enviar en línea', $existe));
+        $this->assertSame([], self::buzonFallo(self::SMTP), 'ninguna petición debe enviar correo');
     }
 }

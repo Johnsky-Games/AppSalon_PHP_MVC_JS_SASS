@@ -420,13 +420,14 @@ final class R2bAgendaTest extends R2bCase
     }
 
     /**
-     * DEF-R2B-10 (Media): `ProfesionalRepository` calcula «hoy» con `date('Y-m-d')` (zona PHP, UTC en el contenedor: no hay `date_default_timezone_set`
+     * R2B-10 REVERIFICADO (antes `test_Defecto_R2B_10_…`, rojo): `ProfesionalRepository::fechaHoyAgenda()` usa America/Guayaquil. Texto original del
+     * hallazgo: `ProfesionalRepository` calculaba «hoy» con `date('Y-m-d')` (zona PHP, UTC en el contenedor: no hay `date_default_timezone_set`
      * ni `date.timezone`), mientras el salón opera en America/Guayaquil (UTC-5). Entre las 19:00 y las 23:59 locales «hoy» de PHP ya es MAÑANA:
      * las citas de HOY dejan de contar como futuras y se puede retirar un servicio o poner un descanso sobre una cita confirmada de esta
      * misma noche. (`ColaboradorRepository::citasFuturasDeProfesional` sí convierte a -05:00.) Se simula el desfase con un reloj PHP adelantado
      * en el proceso que ejecuta la operación (Pacific/Kiritimati, UTC+14: su fecha es la de mañana en Guayaquil).
      */
-    public function test_Defecto_R2B_10_retirar_un_servicio_o_poner_un_descanso_ignora_las_citas_de_hoy_en_la_franja_horaria_nocturna(): void
+    public function test_R2B_10_retirar_un_servicio_o_poner_un_descanso_respeta_las_citas_de_hoy_aunque_el_reloj_de_php_este_en_otra_zona(): void
     {
         $hoyLocal = self::fecha(0);
         $dow = (int)date('N', strtotime($hoyLocal));
@@ -447,12 +448,16 @@ final class R2bAgendaTest extends R2bCase
                 $ctl2 = self::concurrente([['accion' => 'configurarAgenda', 'args' => ['actor' => self::$dueno['id'], 'colaborador' => $prof['colaborador_id'], 'post' => $carga($prof), 'clave' => Idem::clave()]]], 1.0);
                 putenv('QA_PHP_TZ');
                 $this->assertSame('invalid', $ctl2[0]['resultado']['status'], "control «{$caso}»: con el reloj en Guayaquil debe rechazarse");
-                putenv('QA_PHP_TZ=Pacific/Kiritimati');
-                $res = self::concurrente([['accion' => 'configurarAgenda', 'args' => ['actor' => self::$dueno['id'], 'colaborador' => $prof['colaborador_id'], 'post' => $carga($prof), 'clave' => Idem::clave()]]], 1.0);
-                putenv('QA_PHP_TZ');
-                $this->assertTrue($res[0]['ok'] ?? false, json_encode($res));
-                $this->assertSame('invalid', $res[0]['resultado']['status'], "«{$caso}»: con la hora nocturna de Guayaquil se aceptó cambiar la agenda sobre una cita confirmada de HOY: " . json_encode($res[0]['resultado']));
-                $this->assertSame($antes, $this->agendaHuella($prof['pid']), "«{$caso}» modificó la agenda");
+                // El desfase se simula con un reloj PHP en una zona cuyo «hoy» es el de MAÑANA en Guayaquil (Kiritimati UTC+14, Auckland UTC+13)
+                // y con zonas atrasadas respecto de Guayaquil (Honolulu UTC-10, Los Ángeles): en todas el resultado debe ser el mismo.
+                foreach (['Pacific/Kiritimati', 'Pacific/Auckland', 'UTC', 'Pacific/Honolulu', 'America/Los_Angeles'] as $zona) {
+                    putenv('QA_PHP_TZ=' . $zona);
+                    $res = self::concurrente([['accion' => 'configurarAgenda', 'args' => ['actor' => self::$dueno['id'], 'colaborador' => $prof['colaborador_id'], 'post' => $carga($prof), 'clave' => Idem::clave()]]], 1.0);
+                    putenv('QA_PHP_TZ');
+                    $this->assertTrue($res[0]['ok'] ?? false, json_encode($res));
+                    $this->assertSame('invalid', $res[0]['resultado']['status'], "«{$caso}»: con el reloj de PHP en $zona se aceptó cambiar la agenda sobre una cita confirmada de HOY: " . json_encode($res[0]['resultado']));
+                    $this->assertSame($antes, $this->agendaHuella($prof['pid']), "«{$caso}» ($zona) modificó la agenda");
+                }
             }
         } finally { putenv('QA_PHP_TZ'); putenv('EMAIL_PORT=2599'); }
     }
@@ -780,22 +785,94 @@ final class R2bAgendaTest extends R2bCase
     }
 
     /**
-     * DEF-R2B-11 (rojo): un formulario de reasignación manipulado o caducado (sin `id`) hace que la gerencia y la recepción -que tienen
-     * `agenda.gestionar` y SÍ ven esta pantalla- sean redirigidas a /admin/equipo, que exige `equipo.gestionar` (solo propietario):
-     * terminan en un 403. El destino de error debe ser una pantalla accesible para quien la recibe (p. ej. la propia revisión o el
-     * inicio de su portal).
+     * R2B-11 REVERIFICADO (antes `test_Defecto_R2B_11_…`, rojo). Cada ruta de error de validación de `POST /admin/equipo/reasignar` (id ausente o
+     * inválido, `decision` que no es arreglo, `motivo` que no es cadena) redirige a `inicio_portal()`: `/admin` para propietario, gerente y
+     * recepción (los tres tienen `agenda.gestionar`, requisito de `/admin`), accesible (200) para quien lo recibe. Se verifica por el
+     * código (`includes/funciones.php::inicio_portal`: profesional → /agenda, finanzas → /admin/finanzas, resto del equipo → /admin).
      */
-    public function test_Defecto_R2B_11_el_error_de_validacion_de_la_reasignacion_deja_a_gerencia_y_recepcion_en_un_403(): void
+    public function test_R2B_11_el_error_de_validacion_de_la_reasignacion_vuelve_al_inicio_accesible_de_cada_rol(): void
     {
         $e = $this->escenario();
         $colId = (int)$e['origen']['colaborador_id'];
-        foreach (['gerente', 'recepcion'] as $quien) {
+        $casos = [
+            'sin id' => ['motivo' => 'Baja'],
+            'id no numerico' => ['id' => 'abc', 'motivo' => 'Baja'],
+            'id cero' => ['id' => '0', 'motivo' => 'Baja'],
+            'id arreglo' => ['id' => ['1'], 'motivo' => 'Baja'],
+            'decision escalar' => ['id' => (string)$colId, 'decision' => 'x', 'motivo' => 'Baja'],
+            'motivo arreglo' => ['id' => (string)$colId, 'decision' => [], 'motivo' => ['x']],
+        ];
+        foreach (['dueno', 'gerente', 'recepcion'] as $quien) {
             $n = $this->nav($quien);
             $csrf = Navegador::csrfDe($n->get('/admin/equipo/reasignar?id=' . $colId)['body']);
-            $r = $n->post('/admin/equipo/reasignar', http_build_query(['csrf_token' => $csrf, 'motivo' => 'Baja', 'idem_key' => Idem::clave()]), ['Accept: text/html']);
-            $this->assertSame(302, $r['status'], $quien);
-            $destino = $n->get((string)$r['location'], ['Accept: text/html']);
-            $this->assertSame(200, $destino['status'], "$quien: POST sin id redirige a {$r['location']} que responde {$destino['status']} (callejón sin salida para un rol con agenda.gestionar)");
+            foreach ($casos as $nombre => $campos) {
+                $r = $n->post('/admin/equipo/reasignar', http_build_query(['csrf_token' => $csrf, 'idem_key' => Idem::clave()] + $campos), ['Accept: text/html']);
+                $this->assertSame(302, $r['status'], "$quien / $nombre");
+                $this->assertSame('/admin', $r['location'], "$quien / $nombre: destino");
+                $destino = $n->get((string)$r['location'], ['Accept: text/html']);
+                $this->assertSame(200, $destino['status'], "$quien / $nombre: {$r['location']} responde {$destino['status']} (callejón sin salida)");
+            }
+        }
+        // Quien NO tiene agenda.gestionar sigue recibiendo 403 en la propia ruta (el cambio no abre acceso).
+        foreach (['finanzas', 'cliente'] as $quien) {
+            $n = $this->nav($quien);
+            $r = $n->post('/admin/equipo/reasignar', http_build_query(['csrf_token' => 'x', 'motivo' => 'Baja']), ['Accept: text/html']);
+            $this->assertContains($r['status'], [302, 403], $quien);
+            $this->assertNotSame('/admin', $r['location'] ?? null, "$quien no debe ser enviado a /admin");
+        }
+    }
+
+    /**
+     * R2B-04 REVERIFICADO: `s()` devuelve '' ante arreglos/objetos sin __toString y el asistente filtra los no escalares. Se ataca la salida de
+     * `s()` directamente y las rutas con formas hostiles (arreglos anidados en todos los campos del alta y de la ficha); el log del servidor
+     * no debe recibir ni una advertencia, aviso o error de tipo.
+     */
+    public function test_R2B_04_los_campos_con_formas_hostiles_no_producen_advertencias_ni_reflejan_basura(): void
+    {
+        if (!function_exists('s')) { require_once self::RAIZ . '/includes/funciones.php'; }
+        $obj = new class { public function __toString(): string { return 'es-texto'; } };
+        $this->assertSame('', \s([1, 2]));
+        $this->assertSame('', \s([]));
+        $this->assertSame('', \s(new \stdClass()));
+        $this->assertSame('es-texto', \s($obj));
+        $this->assertSame('', \s(null));
+        $this->assertSame('1', \s(1));
+        $this->assertSame('&lt;b&gt;&quot;&#039;', \s('<b>"\''));
+        $n = $this->nav('dueno');
+        $log0 = strlen(self::logServidor('r2b_agenda'));
+        $campos = ['nombre', 'apellido', 'email', 'telefono', 'puesto', 'fecha_ingreso', 'nombre_profesional', 'rol', 'ajustar_agenda', 'servicios', 'franjas', 'descansos'];
+        $this->recorrerFormasHostiles($n, $campos);
+        $this->assertDoesNotMatchRegularExpression('/Warning|Notice|Deprecated|Array to string|TypeError|Fatal/i', substr(self::logServidor('r2b_agenda'), $log0), 'advertencias PHP con formas hostiles');
+    }
+
+    /**
+     * R2B-04b (RESIDUO, rojo): la corrección de `s()` no cubre `views/equipo/index.php:39`, que compara `(string)($previo['profesional_id'] ?? '')`
+     * con un cast explícito. Con `profesional_id[]=x` (o cualquier forma de arreglo) y al menos una ficha sin cuenta, cada reproducción
+     * de `GET /admin/equipo` emite `PHP Warning: Array to string conversion` por cada ficha del selector.
+     */
+    public function test_Defecto_R2B_04b_profesional_id_con_forma_de_arreglo_sigue_emitiendo_advertencias_en_la_pantalla_de_equipo(): void
+    {
+        $this->prof('Ficha sin cuenta R2B04', [self::$s1]);
+        $n = $this->nav('dueno');
+        $log0 = strlen(self::logServidor('r2b_agenda'));
+        $this->recorrerFormasHostiles($n, ['profesional_id']);
+        $this->assertDoesNotMatchRegularExpression('/Warning|Notice|Deprecated|Array to string|TypeError|Fatal/i', substr(self::logServidor('r2b_agenda'), $log0), 'profesional_id[]=x deja «Array to string conversion» en views/equipo/index.php:39');
+    }
+
+    private function recorrerFormasHostiles(Navegador $n, array $campos): void
+    {
+        $formas = ['[]=x', '[a]=x', '[][]=x', '[a][b][c]=x', '[0][inicio][]=x'];
+        $csrf = Navegador::csrfDe($n->get('/admin/equipo')['body']);
+        foreach ($campos as $campo) {
+            foreach ($formas as $forma) {
+                $crudo = http_build_query(['csrf_token' => $csrf, 'idem_key' => Idem::clave(), 'nombre' => 'Ana', 'apellido' => 'Prueba', 'email' => self::correo('hostil'), 'rol' => 'profesional']) . '&' . $campo . $forma;
+                $r = $n->post('/admin/equipo/crear', $crudo);
+                $this->assertContains($r['status'], [302, 303, 422], "$campo$forma");
+                $pagina = $n->get('/admin/equipo');
+                $this->assertSame(200, $pagina['status'], "$campo$forma: la pantalla no se reproduce");
+                $this->assertStringNotContainsString('Array', strip_tags($pagina['body']), "$campo$forma: se refleja «Array»");
+                $csrf = Navegador::csrfDe($pagina['body']) ?? $csrf;
+            }
         }
     }
 

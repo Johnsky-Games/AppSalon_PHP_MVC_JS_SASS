@@ -83,6 +83,19 @@ abstract class R2bCase extends QaCase
     }
 
     /**
+     * Contrato nuevo de la fase 2: NINGÚN correo de cuenta sale dentro de la petición HTTP; solo lo entrega el worker. Este método es
+     * ese worker: adelanta los reintentos vencidos, ejecuta `scripts/procesar_correos.php` como proceso y exige código 0.
+     * @return array{exit:int,out:string,err:string,seg:float}
+     */
+    protected static function entregarCola(int $smtpPuerto, array $args = []): array
+    {
+        self::adelantarEventos();
+        $w = self::worker($args, ['EMAIL_PORT' => (string)$smtpPuerto]);
+        \PHPUnit\Framework\Assert::assertSame(0, $w['exit'], 'el worker de correos terminó con error: ' . $w['out'] . $w['err']);
+        return $w;
+    }
+
+    /**
      * Envía el formulario de registro público como lo haría un navegador (CSRF y clave de operación reales de la página).
      * @param array<string,string> $campos sobrescribe/añade campos
      * @return array{status:int,headers:array,body:string,location:?string}

@@ -2,13 +2,13 @@
 
 namespace Tests\Qa;
 
-require_once __DIR__ . '/QaCase.php';
+require_once __DIR__ . '/R2bCase.php';
 
 /**
  * F. Regresión de negocio de extremo a extremo para un cliente nacido por registro público y para una persona con ambos perfiles.
  * Usa HTTP real, SMTP simulado propio y los servicios de producción (sin mocks que se salten el control).
  */
-final class RegresionNegocioTest extends QaCase
+final class RegresionNegocioTest extends R2bCase
 {
     private static string $base;
     private static array $dueno;
@@ -56,10 +56,12 @@ final class RegresionNegocioTest extends QaCase
         $this->assertSame('activo', self::escalar('SELECT estado FROM clientes WHERE usuario_id=?', [$u['id']]));
         $this->assertSame(0, (int)self::escalar('SELECT COUNT(*) FROM usuario_accesos WHERE usuario_id=?', [$u['id']]));
         $this->assertSame(0, (int)$u['admin']);
-        // El correo llegó y el enlace confirma la cuenta.
-        usleep(300000);
-        $buzon = self::buzon(2598);
-        $this->assertCount($antes + 1, $buzon, 'debe llegar exactamente UN correo de confirmación');
+        // CAMBIO DE CONTRATO (fase 2): el registro solo ENCOLA; el correo no sale dentro de la petición. Antes del worker el buzón no cambia
+        // (garantía nueva); el worker real (`scripts/procesar_correos.php`) lo entrega y llega exactamente UN correo de confirmación.
+        $this->assertCount($antes, self::buzon(2598), 'el registro no debe enviar correo dentro de la petición');
+        self::entregarCola(2598); // el worker procesa TODA la cola (incluye invitaciones sembradas por el arnés): se filtra por destinatario
+        $buzon = array_values(array_filter(self::buzon(2598), fn($m) => in_array($email, $m['to'], true)));
+        $this->assertCount(1, $buzon, 'debe llegar exactamente UN correo de confirmación');
         $tok = self::tokenEnCorreo(end($buzon), '/confirmar-cuenta');
         $this->assertNotNull($tok, substr(end($buzon)['cuerpo'], 0, 400));
         $this->assertSame(200, $n->get('/confirmar-cuenta?token=' . $tok)['status']);
@@ -109,12 +111,12 @@ final class RegresionNegocioTest extends QaCase
         $this->assertSame(200, $crm['status']);
         $this->assertStringContainsString('Pública', $crm['body']);
         // La confirmación de cita llegó por correo y el worker procesa sin errores.
-        $w = $this->worker();
+        $w = $this->workerNotificaciones();
         $this->assertSame(0, $w['exit'], $w['err']);
     }
 
     /** @return array{exit:int,out:string,err:string} */
-    private function worker(): array
+    private function workerNotificaciones(): array
     {
         $p = proc_open([PHP_BINARY, '-d', 'variables_order=EGPCS', self::RAIZ . '/scripts/procesar_notificaciones.php', '--json'], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, self::RAIZ,
             array_merge(getenv(), ['DB_NAME' => self::nombreBd(), 'EMAIL_PORT' => '2598', 'EMAIL_FORCE_SMTP' => '1']));
@@ -129,13 +131,38 @@ final class RegresionNegocioTest extends QaCase
         $this->assertSame(302, $n->login('cliente', $c['email'], $c['password'])['status']);
         $rv = $this->reservar($n, $n->csrf('/cliente/login'), $this->dia(4), '12:00');
         $this->assertSame(200, $rv['status'], $rv['body']);
-        $w = $this->worker();
+        $w = $this->workerNotificaciones();
         $this->assertSame(0, $w['exit'], $w['err'] . $w['out']);
         usleep(300000);
         $para = array_filter(self::buzon(2598), fn($m) => in_array($c['email'], $m['to'], true));
         $this->assertNotEmpty($para, 'ningún correo de confirmación de cita llegó al cliente. Salida del worker: ' . $w['out'] . $w['err']);
         $pend = (int)self::escalar("SELECT COUNT(*) FROM notificaciones_citas WHERE estado NOT IN ('enviada','enviado','descartada','descartado')");
         $this->assertSame(0, $pend, 'notificaciones sin entregar');
+    }
+
+    /**
+     * INVENTARIO (fase 2) de envíos de correo DENTRO de una petición AUTENTICADA que no pasan por la cola de cuentas. El contrato nuevo
+     * («ningún correo de cuenta dentro de la petición») cubre registro, reenvío de confirmación y recuperación (rutas públicas). Los avisos
+     * de CITA siguen saliendo en línea (mejor esfuerzo, reintento por `procesar_notificaciones.php`): se caracteriza aquí para que un cambio
+     * futuro sea deliberado. No hay oráculo de enumeración: el destinatario es el propio titular de la sesión que reserva o cancela.
+     */
+    public function test_inventario_la_confirmacion_y_la_cancelacion_de_cita_salen_en_la_propia_peticion(): void
+    {
+        $c = self::cliente(['email' => 'inline.' . bin2hex(random_bytes(2)) . '@example.test']);
+        $n = new Navegador(self::$base);
+        $this->assertSame(302, $n->login('cliente', $c['email'], $c['password'])['status']);
+        $csrf = $n->csrf('/cliente/login');
+        $antes = count(array_filter(self::buzon(2598), fn($m) => in_array($c['email'], $m['to'], true)));
+        $rv = $this->reservar($n, $csrf, $this->dia(8), '09:00');
+        $this->assertSame(200, $rv['status'], $rv['body']);
+        $trasReservar = count(array_filter(self::buzon(2598), fn($m) => in_array($c['email'], $m['to'], true)));
+        $this->assertSame($antes + 1, $trasReservar, 'INVENTARIO: la confirmación de cita sale dentro de POST /api/citas (antes de cualquier worker)');
+        $x = $n->post('/api/eliminar', ['id' => (int)$rv['json']['id'], 'motivo' => 'Cambio'], ['X-CSRF-Token: ' . $csrf, 'Accept: application/json']);
+        $this->assertContains($x['status'], [200, 302], $x['body']);
+        $trasCancelar = count(array_filter(self::buzon(2598), fn($m) => in_array($c['email'], $m['to'], true)));
+        $this->assertSame($trasReservar + 1, $trasCancelar, 'INVENTARIO: el aviso de cancelación sale dentro de POST /api/eliminar');
+        // Y NO hay evento en la cola de cuentas: son otro canal (notificaciones_citas) con su propio worker.
+        $this->assertSame(0, (int)self::escalar("SELECT COUNT(*) FROM correos_salida WHERE destinatario_email=?", [$c['email']]));
     }
 
     public function test_persona_con_ambos_perfiles_reserva_y_cancela_como_cliente_y_gestiona_como_equipo(): void

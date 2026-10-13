@@ -298,7 +298,8 @@ final class R2bCrmAuditoriaTest extends R2bCase
         }
     }
 
-    public function test_Defecto_R2B_07_campana_de_clientes_y_fidelidad_no_neutraliza_tabulador_y_retorno_de_carro_iniciales(): void
+    /** R2B-07 REVERIFICADO (antes rojo): el CSV de campañas usa `ReporteService::sanearCeldaCsv` (tabulador y retorno iniciales incluidos). */
+    public function test_R2B_07_campana_de_clientes_y_fidelidad_neutraliza_tabulador_y_retorno_de_carro_iniciales(): void
     {
         $n = $this->nav('dueno');
         foreach (self::$clientes as $c) { self::q("INSERT INTO perfiles_usuario(usuarioId,marketing_email,consentimiento_marketing_at,consentimiento_marketing_version_id) VALUES (?,1,NOW(),NULL) ON DUPLICATE KEY UPDATE marketing_email=1, consentimiento_marketing_at=NOW()", [$c['id']]); }
@@ -372,16 +373,117 @@ final class R2bCrmAuditoriaTest extends R2bCase
     }
 
     /**
-     * DEF-R2B-06 (Baja/Media): cualquier persona que se registre (el alta pública es abierta) puede insertar filas sin límite en una
-     * tabla que NO se puede depurar, repitiendo `GET /admin/clientes/exportar` con una sesión de cliente. La propia documentación
-     * descarta registrar al anónimo «porque sería una vía de inundación»; un cliente registrado es un anónimo con un paso más.
+     * R2B-06 REVERIFICADO (antes `test_Defecto_R2B_06_…`, rojo). Las denegaciones idénticas (mismo actor, tipo y motivo) dentro de 10 minutos
+     * se agrupan en UNA fila; la PRIMERA sí se registra y conserva su evidencia (id, marca de tiempo, IP hash) aunque se repita 60 veces.
      */
-    public function test_Defecto_R2B_06_un_cliente_registrado_puede_inundar_la_auditoria_de_solo_anexado_con_intentos_denegados(): void
+    public function test_R2B_06_las_denegaciones_repetidas_del_mismo_actor_se_agrupan_y_la_primera_evidencia_se_conserva(): void
     {
         self::q('TRUNCATE crm_exportaciones_auditoria');
         $n = $this->nav('cliente');
-        for ($i = 0; $i < 60; $i++) { $n->get('/admin/clientes/exportar?tipo=clientes&i=' . $i); }
-        $this->assertLessThan(60, (int)self::escalar('SELECT COUNT(*) FROM crm_exportaciones_auditoria'), 'cada petición denegada de un cliente añade una fila permanente (60 peticiones, 60 filas): sin límite ni agrupación');
+        $n->get('/admin/clientes/exportar?tipo=clientes&i=0');
+        $primera = $this->filas();
+        $this->assertCount(1, $primera, 'la primera denegación SÍ debe registrarse');
+        $this->assertSame('denegada', $primera[0]['resultado']);
+        $this->assertSame('sin_permiso', $primera[0]['motivo']);
+        $this->assertSame((int)self::$p['cliente']['id'], (int)$primera[0]['actor_usuario_id']);
+        for ($i = 1; $i < 60; $i++) { $n->get('/admin/clientes/exportar?tipo=clientes&i=' . $i); }
+        $despues = $this->filas();
+        $this->assertCount(1, $despues, '60 peticiones denegadas idénticas deben dejar UNA sola fila');
+        $this->assertSame($primera[0], $despues[0], 'la primera evidencia no debe alterarse ni reemplazarse');
+        // Variantes que NO deben burlar la agrupación para inflar la tabla: parámetros distintos, método HEAD, mayúsculas en tipo, tipo repetido.
+        foreach (['/admin/clientes/exportar', '/admin/clientes/exportar?tipo=clientes&q=' . str_repeat('x', 50), '/admin/clientes/exportar?tipo=clientes&desde=2020-01-01&hasta=2020-02-01', '/admin/clientes/exportar?tipo=clientes&tipo=clientes', '/admin/clientes/exportar?TIPO=clientes'] as $u) { $n->get($u); }
+        $this->assertCount(1, $this->filas(), 'variaciones de la URL con el mismo actor/tipo/motivo siguen agrupadas');
+    }
+
+    public function test_R2B_06_un_actor_distinto_o_un_tipo_distinto_si_registran_su_propia_fila(): void
+    {
+        self::q('TRUNCATE crm_exportaciones_auditoria');
+        foreach (['cliente', 'recepcion', 'finanzas', 'profesional'] as $quien) {
+            $n = $this->nav($quien);
+            $n->get('/admin/clientes/exportar?tipo=clientes');
+            $n->get('/admin/clientes/exportar?tipo=clientes');
+        }
+        $f = $this->filas();
+        $this->assertCount(4, $f, 'una fila por actor distinto (4 actores × 2 peticiones)');
+        $this->assertCount(4, array_unique(array_column($f, 'actor_usuario_id')));
+        // El mismo actor con otro TIPO de exportación (comercial / no válido) es otra denegación distinta.
+        $n = $this->nav('cliente');
+        $n->get('/admin/clientes/exportar?tipo=comercial');
+        $n->get('/admin/clientes/exportar?tipo=comercial');
+        $n->get('/admin/clientes/exportar?tipo=otra-cosa');
+        $n->get('/admin/clientes/exportar?tipo[]=x');
+        $n->get('/admin/clientes/exportar?tipo=otra-cosa');
+        $porTipo = array_column(self::q("SELECT tipo, COUNT(*) n FROM crm_exportaciones_auditoria WHERE actor_usuario_id=? GROUP BY tipo", [self::$p['cliente']['id']]), 'n', 'tipo');
+        ksort($porTipo);
+        $this->assertSame(['clientes' => 1, 'comercial' => 1, 'invalido' => 1], array_map('intval', $porTipo), 'una fila por (actor, tipo, motivo): ' . json_encode($porTipo));
+    }
+
+    public function test_R2B_06_la_ventana_de_agrupacion_es_de_diez_minutos_exactos_y_el_exito_nunca_se_agrupa(): void
+    {
+        self::q('TRUNCATE crm_exportaciones_auditoria');
+        $uid = (int)self::$p['cliente']['id'];
+        $insertar = function (int $minAtras) use ($uid): void {
+            self::q("INSERT INTO crm_exportaciones_auditoria(actor_usuario_id,actor_rol,formato,tipo,resultado,motivo,ocurrido_en) VALUES (?,?, 'csv','clientes','denegada','sin_permiso', DATE_SUB(UTC_TIMESTAMP(), INTERVAL ? SECOND))", [$uid, 'cliente', $minAtras]);
+        };
+        $n = $this->nav('cliente');
+        // Una denegación previa de hace 11 minutos queda FUERA de la ventana: la nueva se registra.
+        $insertar(11 * 60);
+        $n->get('/admin/clientes/exportar?tipo=clientes');
+        $this->assertCount(2, $this->filas(), 'fuera de la ventana (11 min) debe registrarse otra');
+        // Con una de hace 9 minutos y 30 s dentro de la ventana, no se añade (la recién creada ya cubre, así que se limpia antes).
+        self::q('TRUNCATE crm_exportaciones_auditoria');
+        $insertar(9 * 60 + 30);
+        $n->get('/admin/clientes/exportar?tipo=clientes');
+        $this->assertCount(1, $this->filas(), 'dentro de la ventana (9 min 30 s) no debe añadirse fila');
+        // Una denegación previa de OTRO motivo o de otro resultado (fallida) no agrupa a la nueva.
+        self::q('TRUNCATE crm_exportaciones_auditoria');
+        self::q("INSERT INTO crm_exportaciones_auditoria(actor_usuario_id,actor_rol,formato,tipo,resultado,motivo,ocurrido_en) VALUES (?, 'cliente','csv','clientes','denegada','sin_permiso_ver', UTC_TIMESTAMP())", [$uid]);
+        self::q("INSERT INTO crm_exportaciones_auditoria(actor_usuario_id,actor_rol,formato,tipo,resultado,motivo,ocurrido_en) VALUES (?, 'cliente','csv','clientes','fallida','sin_permiso', UTC_TIMESTAMP())", [$uid]);
+        $n->get('/admin/clientes/exportar?tipo=clientes');
+        $this->assertCount(3, $this->filas(), 'otro motivo u otro resultado no agrupan');
+        // Un éxito del propietario NUNCA se agrupa: cada exportación entregada deja su fila.
+        self::q('TRUNCATE crm_exportaciones_auditoria');
+        $d = $this->nav('dueno');
+        for ($i = 0; $i < 5; $i++) { $this->assertSame(200, $d->get('/admin/clientes/exportar?tipo=clientes')['status']); }
+        $this->assertSame(5, (int)self::escalar("SELECT COUNT(*) FROM crm_exportaciones_auditoria WHERE resultado='exitosa'"), 'cada exportación entregada debe auditarse');
+    }
+
+    /**
+     * R2B-06b (RESIDUO, rojo). La comprobación «¿ya hay una denegación reciente?» (`hayDenegadaReciente`) y la inserción NO son atómicas. Con ráfagas SIMULTÁNEAS del mismo actor (sesiones
+     * distintas para no serializar por el bloqueo de sesión) puede entrar más de una fila antes de que la primera sea visible. Se mide el
+     * tamaño de la ráfaga que se cuela y se acota: aunque no sea exactamente 1, no debe crecer con la repetición (la ráfaga siguiente,
+     * ya dentro de la ventana, no añade nada).
+     */
+    public function test_Defecto_R2B_06b_una_rafaga_simultanea_del_mismo_actor_deja_varias_filas_pese_a_la_agrupacion(): void
+    {
+        if (!function_exists('curl_multi_init')) { $this->fail('curl_multi no disponible'); }
+        $url = self::servidor(['PHP_CLI_SERVER_WORKERS' => '12'], 'r2b_crm_conc');
+        self::q('TRUNCATE crm_exportaciones_auditoria');
+        $cookies = [];
+        for ($i = 0; $i < 16; $i++) {
+            self::q('TRUNCATE intentos_login');
+            $n = new Navegador($url);
+            $this->assertSame(302, $n->login('cliente', self::$p['cliente']['email'], self::$p['cliente']['password'])['status']);
+            $cookies[] = $n->cookieSesion();
+        }
+        $rafaga = function () use ($cookies, $url): void {
+            $mh = curl_multi_init(); $hs = [];
+            foreach ($cookies as $i => $c) {
+                $h = curl_init($url . '/admin/clientes/exportar?tipo=clientes&r=' . $i);
+                curl_setopt_array($h, [CURLOPT_RETURNTRANSFER => true, CURLOPT_COOKIE => 'PHPSESSID=' . $c, CURLOPT_TIMEOUT => 30]);
+                curl_multi_add_handle($mh, $h); $hs[] = $h;
+            }
+            do { curl_multi_exec($mh, $act); curl_multi_select($mh, 0.1); } while ($act > 0);
+            foreach ($hs as $h) { curl_multi_remove_handle($mh, $h); curl_close($h); }
+            curl_multi_close($mh);
+        };
+        $rafaga();
+        $primera = (int)self::escalar("SELECT COUNT(*) FROM crm_exportaciones_auditoria WHERE actor_usuario_id=?", [self::$p['cliente']['id']]);
+        $rafaga();
+        $segunda = (int)self::escalar("SELECT COUNT(*) FROM crm_exportaciones_auditoria WHERE actor_usuario_id=?", [self::$p['cliente']['id']]);
+        $this->assertSame($primera, $segunda, 'la segunda ráfaga, dentro de la ventana, no debe añadir filas');
+        $this->assertLessThan(16, $primera, "una ráfaga de 16 peticiones simultáneas dejó $primera filas: la agrupación no resiste la concurrencia");
+        $this->assertSame(1, $primera, "ráfaga simultánea de 16 denegaciones idénticas: $primera filas (la comprobación y la inserción no son atómicas)");
     }
 
     // ------------------------------------------------------------------ volumen

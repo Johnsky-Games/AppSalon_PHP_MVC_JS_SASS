@@ -177,7 +177,9 @@ final class AutorizacionMatrizTest extends QaCase
         $tablasEfecto = $x['tablas'];
         if ($r !== null && !empty($r['efecto_auditoria']) && isset($x['dif'])) {
             // Única excepción de contrato: la auditoría append-only de exportaciones registra el intento (éxito 200 o denegación 403).
-            $esperadas = in_array($resp['status'], [200, 403], true) ? 1 : 0;
+            // CAMBIO DE CONTRATO (fase 2, R2B-06): la denegación REPETIDA (mismo actor, tipo y motivo) dentro de 10 minutos se agrupa:
+            // la primera deja 1 fila; una repetición dentro de la ventana, 0. Las exportaciones exitosas siguen dejando siempre 1.
+            $esperadas = $resp['status'] === 200 ? 1 : ($resp['status'] === 403 ? (($x['aud_previas'] ?? 0) > 0 ? 0 : 1) : 0);
             $reales = 0;
             $tablasEfecto = [];
             foreach ($x['tablas'] as $t) {
@@ -767,11 +769,9 @@ final class AutorizacionMatrizTest extends QaCase
     {
         $fallos = [];
         // DEF-R2-02 corregido: POST /api/eliminar ya redirige al inicio de su portal y entra en la comprobación.
-        // POST /admin/equipo/reasignar con roles que no son propietario se comprueba aparte en test_Defecto_R2B_11_… (defecto nuevo
-        // de la ronda 2B): se excluye de ESTA prueba solo para que un único defecto no oculte el resto de la matriz; la exclusión
-        // es solo por (ruta, persona) y el defecto sigue en rojo en su propia prueba.
+        // R2B-11 corregido (fase 2): POST /admin/equipo/reasignar con error de validación redirige a inicio_portal() y entra en la comprobación.
         $excluidas = [];
-        $exclPersona = ['POST /admin/equipo/reasignar' => ['gerente', 'recepcion', 'portal_inexistente_cuenta_equipo']];
+        $exclPersona = [];
         foreach (self::$rutas as $r0) {
             $r = $r0; $r['p'] = $this->resolver($r0['p']);
             if (in_array(self::etiqueta($r0), $excluidas, true) || $r0['g'] === 'especial') { continue; }

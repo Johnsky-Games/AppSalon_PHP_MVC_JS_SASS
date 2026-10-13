@@ -78,13 +78,24 @@ final class R2bColaCorreosTest extends R2bCase
         $seg = microtime(true) - $t0;
         $this->assertSame(302, $r['status'], "SMTP $modo: el alta no debe fallar: " . substr(strip_tags($r['body']), 0, 200));
         $this->assertSame('/mensaje', $r['location']);
-        $this->assertLessThan(30.0, $seg, "SMTP $modo: la petición web no puede quedar colgada (tardó $seg s)");
+        // CAMBIO DE CONTRATO (fase 2): la petición NO intenta el envío, así que ni siquiera un SMTP colgado puede retrasarla (antes: 10,11 s
+        // con `cuelga`). El evento nace `pendiente` con 0 intentos y sin error; el primer intento lo hace el worker.
+        $this->assertLessThan(2.0, $seg, "SMTP $modo: la petición no debe esperar al SMTP (tardó $seg s)");
         $ev = $this->evento($email);
         $this->assertNotNull($ev, 'el correo debe quedar en la cola');
         $this->assertSame('pendiente', $ev['estado']);
-        $this->assertSame(1, (int)$ev['intentos'], 'el intento inmediato debe contarse');
+        $this->assertSame(0, (int)$ev['intentos'], 'la petición no debe contar ningún intento');
+        $this->assertEmpty($ev['ultimo_error']);
         $this->assertNotNull($ev['carga_cifrada']);
+        // Primer intento a cargo del worker real, con el SMTP roto: se cuenta y se reprograma.
+        $w1 = self::worker([], $this->envW());
+        $this->assertSame(0, $w1['exit'], $w1['out'] . $w1['err']);
+        $ev = $this->evento($email);
+        $this->assertSame('pendiente', $ev['estado']);
+        $this->assertSame(1, (int)$ev['intentos'], 'el intento del worker debe contarse');
         $this->assertNotEmpty($ev['ultimo_error']);
+        $this->assertStringNotContainsString($email, (string)$ev['ultimo_error']);
+        if ($modo !== 'cerrado') { $this->assertSame([], self::buzonFallo(self::SMTP), "SMTP $modo: no debe haberse entregado nada"); }
         // El token jamás en claro en la cola ni en el error.
         $hash = self::escalar('SELECT token_hash FROM usuarios WHERE email=?', [$email]);
         $this->assertNotEmpty($hash);
@@ -122,10 +133,11 @@ final class R2bColaCorreosTest extends R2bCase
         $r2 = $inex->post('/reenviar-confirmacion', ['csrf_token' => $inex->csrf('/reenviar-confirmacion'), 'email' => self::correo('nadie')]);
         $this->assertSame(200, $r['status'], "SMTP $modo");
         $this->assertSame(self::firma($r2)['body'] === self::firma($r)['body'], true, 'misma pantalla para existente e inexistente');
-        $this->assertLessThan(30.0, $seg);
+        $this->assertLessThan(2.0, $seg, "SMTP $modo: el reenvío no debe esperar al SMTP (fase 2: solo encola)");
         $ev = $this->evento($email);
         $this->assertNotNull($ev);
         $this->assertSame('pendiente', $ev['estado']);
+        $this->assertSame(0, (int)$ev['intentos']);
         $hash = self::escalar('SELECT token_hash FROM usuarios WHERE email=?', [$email]);
         $this->smtp('ok');
         self::adelantarEventos();
@@ -144,7 +156,11 @@ final class R2bColaCorreosTest extends R2bCase
         self::registrarHttp(new Navegador(self::$base), $email);
         $id = (int)$this->evento($email)['id'];
         $esperas = [60, 120, 240, 480, 960];
-        // Intento inmediato (nº 1) ya ocurrió: espera 60 s.
+        // CAMBIO DE CONTRATO (fase 2): la petición ya no intenta el envío (0 intentos). El intento nº 1 lo hace el worker y programa 60 s.
+        $this->assertSame(0, (int)$this->evento($email)['intentos']);
+        $w0 = self::worker([], $this->envW());
+        $this->assertSame(0, $w0['exit'], $w0['out'] . $w0['err']);
+        $this->assertSame(1, (int)$this->evento($email)['intentos']);
         $this->assertEqualsWithDelta(60, (int)self::escalar('SELECT TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), proximo_intento) FROM correos_salida WHERE id=?', [$id]), 4);
         for ($n = 2; $n <= 6; $n++) {
             self::adelantarEventos();
@@ -191,19 +207,74 @@ final class R2bColaCorreosTest extends R2bCase
         $this->assertCount(1, self::buzonFallo(self::SMTP));
     }
 
-    public function test_Defecto_R2B_03_el_error_guardado_y_el_diagnostico_estado_contienen_el_correo_del_destinatario(): void
+    /**
+     * Registra `$prefijo.<aleatorio>@example.test` con el SMTP en `rcpt5xx` (que repite la dirección en su rechazo), lleva el evento
+     * hasta `fallido` con el worker real y devuelve dónde aparece la dirección o un fragmento de ella. null = la aplicación no admite
+     * esa dirección. Busca en TODAS las columnas de correos_salida (salvo el destinatario), en `--estado` (texto y JSON), en la salida
+     * de error del worker, en el log del servidor web y en el motivo de un evento cancelado.
+     * @return string[]|null
+     */
+    private function fugasDeDireccion(string $prefijo): ?array
     {
         $this->smtp('rcpt5xx');
-        $email = self::correo('pii-err');
-        self::registrarHttp(new Navegador(self::$base), $email);
-        $ev = $this->evento($email);
-        $this->assertSame('pendiente', $ev['estado']);
-        $this->assertStringNotContainsString($email, (string)$ev['ultimo_error'], 'ultimo_error guarda la dirección del destinatario tal como la repite el servidor SMTP');
-        // Llevar el evento a `fallido` y comprobar lo que imprime el diagnóstico, que la documentación declara «sin datos personales».
-        for ($i = 0; $i < 5; $i++) { self::adelantarEventos(); self::worker([], $this->envW()); }
+        self::q('DELETE FROM correos_salida');
+        $email = self::correo($prefijo);
+        self::q('TRUNCATE intentos_login');
+        $r = self::registrarHttp(new Navegador(self::$base), $email);
+        if ($r['status'] !== 302) { return null; }
+        $stderr = self::worker([], $this->envW())['err'];
+        $this->assertSame(1, (int)$this->evento($email)['intentos']);
+        for ($i = 0; $i < 5; $i++) { self::adelantarEventos(); $stderr .= self::worker([], $this->envW())['err']; }
         $this->assertSame('fallido', $this->evento($email)['estado']);
+        $local = strstr($email, '@', true);
+        $buscar = [$email, $local, strstr($email, '@'), substr($local, 0, 3), $prefijo]; // fragmentos: un saneador parcial deja el comienzo
         $est = self::worker(['--estado'], $this->envW());
-        $this->assertStringNotContainsString($email, $est['out'] . $est['err'], '--estado imprime PII (docs/NOTIFICACIONES_WORKER.md §5.4 dice «sin datos personales»)');
+        $estJ = self::worker(['--estado', '--json'], $this->envW());
+        $n = new Navegador(self::$base);
+        self::q('TRUNCATE intentos_login');
+        $n->post('/reenviar-confirmacion', ['csrf_token' => $n->csrf('/reenviar-confirmacion'), 'email' => $email]);
+        $sitios = [];
+        foreach (self::q('SELECT * FROM correos_salida') as $fila) {
+            foreach ($fila as $col => $val) { $sitios["correos_salida.$col (estado {$fila['estado']})"] = (string)$val; }
+        }
+        unset($sitios['correos_salida.destinatario_email (estado fallido)'], $sitios['correos_salida.destinatario_nombre (estado fallido)']);
+        foreach (array_keys($sitios) as $k) { if (str_contains($k, '.destinatario_email') || str_contains($k, '.destinatario_nombre')) { unset($sitios[$k]); } }
+        $sitios['--estado'] = $est['out'] . $est['err']; $sitios['--estado --json'] = $estJ['out'] . $estJ['err'];
+        $sitios['stderr del worker'] = $stderr; $sitios['log del servidor web'] = self::logServidor('r2b_cola');
+        $fugas = [];
+        foreach ($sitios as $donde => $texto) {
+            foreach ($buscar as $b) { if ($b !== '' && stripos($texto, $b) !== false) { $fugas[] = "«{$b}» en $donde: " . substr($texto, 0, 300); break; } }
+        }
+        return $fugas;
+    }
+
+    /** R2B-03 REVERIFICADO (antes `test_Defecto_R2B_03_…`): direcciones corrientes no se guardan ni se imprimen en ningún sitio. */
+    public function test_R2B_03_la_direccion_del_destinatario_no_se_guarda_en_errores_ni_se_imprime(): void
+    {
+        foreach (['pii-err', 'pii+etiqueta', 'PII-Mayus', 'pii_guion.bajo'] as $prefijo) {
+            $fugas = $this->fugasDeDireccion($prefijo);
+            $this->assertNotNull($fugas, "la aplicación debería admitir la dirección «{$prefijo}…»");
+            $this->assertSame([], $fugas, "dirección «{$prefijo}…»");
+        }
+    }
+
+    /**
+     * R2B-03b (RESIDUO, rojo): el saneador de `Email::sanearMensajeError` usa `[A-Za-z0-9._%+\-]+@…`; las direcciones válidas con otros
+     * caracteres RFC 5322 en la parte local que la aplicación SÍ admite (`'`, `&`, `=`, `!`, `#`, `$`, `*`, `/`, `?`, `^`, `` ` ``, `{`,
+     * `|`, `}`, `~`) quedan a medias: p. ej. `pii'ap.1.2.abc@example.test` se guarda como `pii'[correo]`, es decir el comienzo de la
+     * dirección sigue en `ultimo_error` y se imprime en `--estado`.
+     */
+    public function test_Defecto_R2B_03b_el_saneador_deja_el_comienzo_de_las_direcciones_con_caracteres_especiales(): void
+    {
+        $admitidas = 0; $fugas = [];
+        foreach (["pii'ap", 'pii&a=b', 'pii!x', 'pii#x', 'pii$x', 'pii*x', 'pii/x', 'pii?x', 'pii^x', 'pii`x', 'pii{x', 'pii|x', 'pii}x', 'pii~x'] as $prefijo) {
+            $f = $this->fugasDeDireccion($prefijo);
+            if ($f === null) { continue; }
+            $admitidas++;
+            if ($f) { $fugas[$prefijo] = $f[0]; }
+        }
+        $this->assertGreaterThan(0, $admitidas, 'la aplicación no admite ninguna dirección con caracteres especiales; la prueba no aplica');
+        $this->assertSame([], $fugas, "$admitidas direcciones admitidas; el saneador deja fragmentos de: " . implode(', ', array_keys($fugas)));
     }
 
     public function test_el_worker_corta_la_tanda_tras_tres_fallos_seguidos_y_deja_intactos_los_demas(): void
@@ -235,8 +306,8 @@ final class R2bColaCorreosTest extends R2bCase
             $res = self::concurrente($t, 1.5);
         } finally { putenv('EMAIL_PORT=2599'); }
         foreach ($res as $i => $x) { $this->assertTrue($x['ok'] ?? false, "proceso $i: " . json_encode($x)); $this->assertSame('ok', $x['resultado']['status']); }
-        $activos = (int)self::escalar("SELECT COUNT(*) FROM correos_salida WHERE usuario_id=? AND tipo='confirmacion_cuenta' AND estado IN ('pendiente','enviando')", [$uid]);
-        $this->assertLessThanOrEqual(1, $activos, 'a lo sumo un evento activo');
+        // Fase 2: hasta 8 eventos pendientes (uno por reenvío) antes del worker; los de enlaces reemplazados se cancelan al despachar.
+        $this->assertSame([], self::buzonFallo(self::SMTP), 'las peticiones no envían correo');
         $hashVigente = (string)self::escalar('SELECT token_hash FROM usuarios WHERE id=?', [$uid]);
         $this->assertSame(1, (int)self::escalar("SELECT COUNT(*) FROM usuarios WHERE id=? AND token_tipo='confirmacion' AND token_expira>NOW()", [$uid]), 'exactamente un token válido');
         // Cierra la cola con el worker real y revisa lo realmente entregado.
@@ -246,14 +317,11 @@ final class R2bColaCorreosTest extends R2bCase
         foreach (self::buzonFallo(self::SMTP) as $m) { if (in_array($email, $m['to'], true)) { $entregados[] = self::tokenEnCorreo($m, '/confirmar-cuenta'); } }
         $validos = array_filter($entregados, static fn($tk) => $tk !== null && hash('sha256', $tk) === $hashVigente);
         $obsoletos = count($entregados) - count($validos);
-        $this->assertGreaterThanOrEqual(1, count($validos), 'el titular DEBE recibir el enlace vigente: ' . json_encode(['entregados' => count($entregados)]));
-        $this->assertLessThanOrEqual(1, count($validos) , 'el enlace vigente solo debe entregarse una vez');
-        // Ventana de carrera documentada (docs §5.7): se cuantifica y se acota por el número de reenvíos simultáneos.
-        $this->assertLessThan(8, $obsoletos, 'más correos con enlace inválido que reenvíos concurrentes');
-        // Los obsoletos entregados llevan enlaces que ya no sirven: confirmar con uno debe fallar.
-        foreach ($entregados as $tk) {
-            if ($tk !== null && hash('sha256', $tk) !== $hashVigente) { $this->assertSame(410, (new Navegador(self::$base))->get('/confirmar-cuenta?token=' . $tk)['status']); }
-        }
+        $this->assertCount(1, $validos, 'el titular DEBE recibir el enlace vigente, una sola vez: ' . json_encode(['entregados' => count($entregados)]));
+        // CAMBIO DE CONTRATO (fase 2): antes los reenvíos concurrentes entregaban hasta 7 enlaces ya invalidados (cada petición enviaba
+        // el suyo en línea). Ahora solo se encola y el worker comprueba la vigencia al despachar: NUNCA se entrega un enlace obsoleto.
+        $this->assertSame(0, $obsoletos, 'se entregaron enlaces ya invalidados: ' . count($entregados) . ' correos');
+        $this->assertSame(0, (int)self::escalar("SELECT COUNT(*) FROM correos_salida WHERE usuario_id=? AND tipo='confirmacion_cuenta' AND estado IN ('pendiente','enviando')", [$uid]), 'tras el worker no queda ningún evento activo');
         $this->assertSame(200, (new Navegador(self::$base))->get('/confirmar-cuenta?token=' . reset($validos))['status']);
     }
 
