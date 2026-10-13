@@ -426,18 +426,23 @@ final class R2bColaRecuperacionTest extends R2bCase
 
     // ------------------------------------------------------------------ inventario de envíos en línea que persisten
 
+    private static function docWorker(): string { return (string)file_get_contents(self::RAIZ . '/docs/NOTIFICACIONES_WORKER.md'); }
+
     /**
-     * R2B-12 (rojo, documentación frente a comportamiento). `docs/NOTIFICACIONES_WORKER.md` (apartado inicial de la cola) afirma que los
-     * correos de CUENTA y las INVITACIONES DE COLABORADORES «no se envían dentro de la petición HTTP». Para las invitaciones es falso:
-     * `ColaboradorService` llama a `despachar()` justo después del commit (alta y reenvío). Con un SMTP de 400 ms la petición del propietario
-     * tarda más que la latencia y el correo ya está en el buzón antes de cualquier worker. (Es una ruta autenticada del propietario y el
-     * destinatario lo elige él: no abre un canal de enumeración; el defecto es la afirmación del documento o, si se prefiere, el envío en línea.)
+     * R2B-12 REVERIFICADO (antes `test_Defecto_R2B_12_…`, rojo). Se corrigió el TEXTO de `docs/NOTIFICACIONES_WORKER.md`: solo los correos de rutas
+     * públicas quedan fuera de la petición; las invitaciones de colaboradores y los avisos de cita/reasignación intentan el envío tras el COMMIT.
+     * La prueba exige (1) que el documento declare esa excepción y NO afirme que las invitaciones salen solo por worker, y (2) que la medición
+     * (SMTP lento, ruta del propietario) coincida con lo documentado: sale en la petición, y si el SMTP falla queda en cola para el worker.
      */
-    public function test_Defecto_R2B_12_las_invitaciones_de_colaborador_se_envian_dentro_de_la_peticion_aunque_la_documentacion_dice_que_no(): void
+    public function test_R2B_12_la_documentacion_declara_la_excepcion_de_las_invitaciones_y_la_medicion_coincide(): void
     {
-        $doc = (string)file_get_contents(self::RAIZ . '/docs/NOTIFICACIONES_WORKER.md');
-        $this->assertMatchesRegularExpression('/invitaciones de colaboradores[^.]*no se env[ií]an de forma s[ií]ncrona/iu', $doc, 'el documento ya no hace la afirmación: actualizar esta prueba');
-        $this->assertStringContainsString('No se envían dentro de la petición HTTP', $doc);
+        $doc = self::docWorker();
+        $intro = substr($doc, (int)strpos($doc, '## 5. Cola de correos de cuenta'), 3500);
+        $this->assertMatchesRegularExpression('/Los correos de rutas públicas \(registro, recuperación, reenvío\) no se envían dentro de la petición HTTP/u', $intro, 'la afirmación debe limitarse a las rutas públicas');
+        $this->assertMatchesRegularExpression('/Excepción documentada[^.]*invitaciones de colaboradores[^.]*avisos de cita\/reasignación[^.]*intentan el envío tras el `COMMIT`/su', $intro);
+        $this->assertDoesNotMatchRegularExpression('/invitaciones de colaboradores[^.]{0,80}(solo|únicamente) (se envían )?(por|mediante|con) (el )?worker/iu', $doc, 'el documento no debe decir que las invitaciones salen solo por worker');
+        $this->assertDoesNotMatchRegularExpression('/(?<!públicas \(registro, recuperación, reenvío\) )(?<!rutas públicas )No se envían dentro de la petición HTTP\*\* \(salvo/u', $doc);
+        // Medición con un SMTP de 400 ms: la invitación sale en la petición del propietario.
         $this->lento(0.4);
         $n = new Navegador(self::$base);
         self::q('TRUNCATE intentos_login');
@@ -448,8 +453,38 @@ final class R2bColaRecuperacionTest extends R2bCase
         $r = $n->post('/admin/equipo/crear', ['csrf_token' => $csrf, 'idem_key' => Idem::clave(), 'nombre' => 'Ana', 'apellido' => 'Lopez', 'email' => $email, 'telefono' => '', 'puesto' => '', 'rol' => 'recepcion', 'fecha_ingreso' => '']);
         $ms = (microtime(true) - $t0) * 1000;
         $this->assertSame(302, $r['status']);
-        $enLinea = count($this->mailsPara($email)) === 1;
-        $this->assertFalse($enLinea, sprintf('la invitación salió DENTRO de la petición (%.0f ms con un SMTP de 400 ms; correo ya en el buzón) y el documento dice lo contrario', $ms));
+        $this->assertCount(1, $this->mailsPara($email), sprintf('la invitación debía salir dentro de la petición (%.0f ms) como declara la excepción', $ms));
+        $this->assertGreaterThan(300, $ms, 'la petición del propietario debía pagar la latencia del SMTP (400 ms)');
+        // Y si el SMTP falla, «quedan en cola para el worker»: evento pendiente con el intento inmediato contado, que el worker entrega después.
+        self::detenerSmtpFallo(self::SMTP);
+        $e2 = self::correo('inv-cae');
+        $csrf = Navegador::csrfDe($n->get('/admin/equipo')['body']);
+        $r = $n->post('/admin/equipo/crear', ['csrf_token' => $csrf, 'idem_key' => Idem::clave(), 'nombre' => 'Eva', 'apellido' => 'Perez', 'email' => $e2, 'telefono' => '', 'puesto' => '', 'rol' => 'recepcion', 'fecha_ingreso' => '']);
+        $this->assertSame(302, $r['status']);
+        $ev = $this->eventos($e2, 'invitacion_colaborador');
+        $this->assertCount(1, $ev);
+        $this->assertSame('pendiente', $ev[0]['estado']);
+        $this->assertSame(1, (int)$ev[0]['intentos'], '§5.3: en las invitaciones el intento nº 1 es el inmediato posterior al commit');
+        $this->assertStringNotContainsString($e2, (string)$ev[0]['ultimo_error']);
+        self::iniciarSmtpFallo(self::SMTP, 'ok');
+        self::entregarCola(self::SMTP);
+        $this->assertCount(1, $this->mailsPara($e2), 'el worker debía entregar la invitación que quedó en cola');
+    }
+
+    /**
+     * R2B-13 (rojo, documentación frente a comportamiento). El diagrama de flujo de `docs/NOTIFICACIONES_WORKER.md` §5.1 sigue diciendo que
+     * `registrar / reenviarConfirmacion` terminan en «despacharTrasCommit(): intento inmediato (PHPMailer…)» y que `procesar_correos.php` corre
+     * «cada NOTIFICACIONES_INTERVALO_SEGUNDOS, 60 s por defecto». Medido: por defecto NO hay intento inmediato (R2B-02: 0 intentos y buzón
+     * vacío tras la petición) y el supervisor atiende la cola de correos cada CORREOS_INTERVALO_SEGUNDOS (5 s; comprobado con 2 s).
+     */
+    public function test_Defecto_R2B_13_el_diagrama_de_flujo_de_la_documentacion_describe_un_intento_inmediato_y_un_intervalo_que_ya_no_existen(): void
+    {
+        $doc = self::docWorker();
+        $ini = (int)strpos($doc, '### 5.1 Flujo');
+        $flujo = substr($doc, $ini, (int)strpos($doc, '### 5.2', $ini) - $ini);
+        $this->assertNotSame('', $flujo);
+        $this->assertDoesNotMatchRegularExpression('/despacharTrasCommit\(\): intento inmediato/u', $flujo, 'el diagrama presenta el intento inmediato como paso por defecto de registrar/reenviarConfirmacion; medido: no existe sin CORREOS_ENVIO_INMEDIATO=1');
+        $this->assertDoesNotMatchRegularExpression('/procesar_correos\.php \(cada NOTIFICACIONES_INTERVALO_SEGUNDOS, 60 s/u', $flujo, 'el diagrama atribuye a la cola de correos el intervalo de 60 s de las notificaciones de cita; medido: CORREOS_INTERVALO_SEGUNDOS (5 s)');
     }
 
     // ------------------------------------------------------------------ 6. supervisor notificaciones_worker.php

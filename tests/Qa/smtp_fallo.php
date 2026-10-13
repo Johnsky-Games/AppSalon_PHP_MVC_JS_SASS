@@ -9,6 +9,8 @@
  *   cuelga        acepta la conexión y no responde nunca (el cliente debe agotar su tiempo de espera).
  *   rcpt4xx       responde 451 al RCPT (fallo temporal).
  *   rcpt5xx       responde 550 al RCPT incluyendo la dirección del destinatario en el texto (riesgo de PII en ultimo_error).
+ *   rcptmulti     como rcpt5xx pero el texto repite el destinatario (también en mayúsculas) y añade OTRAS direcciones (postmaster, una con parte local
+ *                 entre comillas y el remitente), como hacen algunos servidores reales.
  *   data5xx       acepta hasta DATA y responde 554 tras el cuerpo.
  *   acepta_y_corta  guarda el mensaje pero corta la conexión SIN responder 250 (el remitente cree que falló: duplicado posible).
  *   lento         responde bien pero espera `retardo` segundos antes del 250 final del DATA.
@@ -66,6 +68,7 @@ while ($c = @stream_socket_accept($srv, -1)) {
         elseif (str_starts_with($u, 'RCPT TO:')) {
             $dir = trim(substr($t, 8), '<> ');
             if ($modo === 'rcpt4xx') { fwrite($c, "451 4.3.0 intente mas tarde\r\n"); continue; }
+            if ($modo === 'rcptmulti') { fwrite($c, "550-5.1.1 <{$dir}> Recipient address rejected: User unknown (" . strtoupper($dir) . ")\r\n550-5.1.1 Contact postmaster@mail.example.test or \"Soporte Local\"@mail.example.test, Admin <admin@example.test>\r\n550 5.1.1 forwarded to {$dir}; sender <cuentas@appsalon.com>\r\n"); continue; }
             if ($modo === 'rcpt5xx') { fwrite($c, "550 5.1.1 <{$dir}> Recipient address rejected: User unknown in virtual mailbox table\r\n"); continue; }
             $msg['to'][] = $dir; fwrite($c, "250 ok\r\n");
         }

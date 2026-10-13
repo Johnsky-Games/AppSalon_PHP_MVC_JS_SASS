@@ -214,11 +214,19 @@ final class R2bColaCorreosTest extends R2bCase
      * de error del worker, en el log del servidor web y en el motivo de un evento cancelado.
      * @return string[]|null
      */
-    private function fugasDeDireccion(string $prefijo): ?array
+    private function fugasDeDireccion(string $prefijo, string $modo = 'rcpt5xx'): ?array
     {
-        $this->smtp('rcpt5xx');
+        return $this->fugasDeEmail(self::correo($prefijo), [$prefijo], $modo);
+    }
+
+    /**
+     * @param string[] $fragmentos textos que NO deben aparecer en ningún sitio (además de la dirección completa y su parte local)
+     * @return string[]|null null si la aplicación no admite la dirección
+     */
+    private function fugasDeEmail(string $email, array $fragmentos, string $modo = 'rcpt5xx'): ?array
+    {
+        $this->smtp($modo);
         self::q('DELETE FROM correos_salida');
-        $email = self::correo($prefijo);
         self::q('TRUNCATE intentos_login');
         $r = self::registrarHttp(new Navegador(self::$base), $email);
         if ($r['status'] !== 302) { return null; }
@@ -226,8 +234,8 @@ final class R2bColaCorreosTest extends R2bCase
         $this->assertSame(1, (int)$this->evento($email)['intentos']);
         for ($i = 0; $i < 5; $i++) { self::adelantarEventos(); $stderr .= self::worker([], $this->envW())['err']; }
         $this->assertSame('fallido', $this->evento($email)['estado']);
-        $local = strstr($email, '@', true);
-        $buscar = [$email, $local, strstr($email, '@'), substr($local, 0, 3), $prefijo]; // fragmentos: un saneador parcial deja el comienzo
+        $local = (string)strstr($email, '@', true);
+        $buscar = array_merge([$email, $local, (string)strstr($email, '@'), substr(trim($local, '"'), 0, 3)], $fragmentos); // fragmentos: un saneador parcial deja el comienzo
         $est = self::worker(['--estado'], $this->envW());
         $estJ = self::worker(['--estado', '--json'], $this->envW());
         $n = new Navegador(self::$base);
@@ -259,12 +267,12 @@ final class R2bColaCorreosTest extends R2bCase
     }
 
     /**
-     * R2B-03b (RESIDUO, rojo): el saneador de `Email::sanearMensajeError` usa `[A-Za-z0-9._%+\-]+@…`; las direcciones válidas con otros
+     * R2B-03b REVERIFICADO (antes `test_Defecto_R2B_03b_…`, rojo). Texto original del hallazgo: el saneador de `Email::sanearMensajeError` usaba `[A-Za-z0-9._%+\-]+@…`; las direcciones válidas con otros
      * caracteres RFC 5322 en la parte local que la aplicación SÍ admite (`'`, `&`, `=`, `!`, `#`, `$`, `*`, `/`, `?`, `^`, `` ` ``, `{`,
      * `|`, `}`, `~`) quedan a medias: p. ej. `pii'ap.1.2.abc@example.test` se guarda como `pii'[correo]`, es decir el comienzo de la
      * dirección sigue en `ultimo_error` y se imprime en `--estado`.
      */
-    public function test_Defecto_R2B_03b_el_saneador_deja_el_comienzo_de_las_direcciones_con_caracteres_especiales(): void
+    public function test_R2B_03b_el_saneador_oculta_toda_la_parte_local_con_caracteres_especiales(): void
     {
         $admitidas = 0; $fugas = [];
         foreach (["pii'ap", 'pii&a=b', 'pii!x', 'pii#x', 'pii$x', 'pii*x', 'pii/x', 'pii?x', 'pii^x', 'pii`x', 'pii{x', 'pii|x', 'pii}x', 'pii~x'] as $prefijo) {
@@ -275,6 +283,42 @@ final class R2bColaCorreosTest extends R2bCase
         }
         $this->assertGreaterThan(0, $admitidas, 'la aplicación no admite ninguna dirección con caracteres especiales; la prueba no aplica');
         $this->assertSame([], $fugas, "$admitidas direcciones admitidas; el saneador deja fragmentos de: " . implode(', ', array_keys($fugas)));
+    }
+
+    /**
+     * R2B-03c (RESIDUO, rojo): formas extremas de dirección con un SMTP que repite el destinatario (también en mayúsculas), añade otras direcciones
+     * (postmaster, una con parte local entre comillas, el remitente) y rechaza con varias líneas. Cada forma lleva un marcador único que NO debe
+     * aparecer en `correos_salida` (todas las columnas salvo el destinatario), `--estado`, `--estado --json`, la salida de error del worker ni el
+     * log del servidor web, ni siquiera como fragmento. Las formas que la aplicación no admite al registrar se cuentan aparte.
+     */
+    public function test_Defecto_R2B_03c_formas_extremas_de_direccion_y_varias_direcciones_en_el_rechazo_dejan_la_direccion_completa(): void
+    {
+        $m = 'zq' . bin2hex(random_bytes(4));
+        $formas = [
+            'plano' => "{$m}@example.test",
+            'mayusculas' => strtoupper($m) . '@EXAMPLE.TEST',
+            'con etiqueta +' => "{$m}+etiqueta@example.test",
+            'puntos y subdominios' => "{$m}.a.b@sub.dom.example.co.uk",
+            'dominio con guion' => "{$m}@a-b.example.test",
+            'comillas con espacio' => "\"{$m} x\"@example.test",
+            'comillas con arroba' => "\"{$m}@x\"@example.test",
+            'literal de IP' => "{$m}@[127.0.0.1]",
+            'unicode en la parte local' => "{$m}ñandú@example.test",
+            'unicode en el dominio' => "{$m}@exämple.test",
+            'local de 64 caracteres' => substr($m . str_repeat('a', 64), 0, 64) . '@example.test',
+            'dominio muy largo' => "{$m}@" . str_repeat('d', 55) . '.' . str_repeat('e', 40) . '.example.test',
+            'sin punto en el dominio' => "{$m}@localhost",
+            'apostrofo y llaves' => "o'{$m}{x}@example.test",
+        ];
+        $admitidas = []; $rechazadas = []; $fugas = [];
+        foreach ($formas as $nombre => $email) {
+            $f = $this->fugasDeEmail($email, [$m, 'postmaster', 'admin@example'], 'rcptmulti');
+            if ($f === null) { $rechazadas[] = $nombre; continue; }
+            $admitidas[] = $nombre;
+            if ($f) { $fugas[$nombre] = $f[0]; }
+        }
+        $this->assertGreaterThanOrEqual(8, count($admitidas), 'la aplicación admitió pocas formas; rechazadas: ' . implode(', ', $rechazadas));
+        $this->assertSame([], $fugas, count($admitidas) . ' formas admitidas (' . implode(', ', $admitidas) . '); fugas en: ' . implode(', ', array_keys($fugas)));
     }
 
     public function test_el_worker_corta_la_tanda_tras_tres_fallos_seguidos_y_deja_intactos_los_demas(): void
@@ -306,7 +350,9 @@ final class R2bColaCorreosTest extends R2bCase
             $res = self::concurrente($t, 1.5);
         } finally { putenv('EMAIL_PORT=2599'); }
         foreach ($res as $i => $x) { $this->assertTrue($x['ok'] ?? false, "proceso $i: " . json_encode($x)); $this->assertSame('ok', $x['resultado']['status']); }
-        // Fase 2: hasta 8 eventos pendientes (uno por reenvío) antes del worker; los de enlaces reemplazados se cancelan al despachar.
+        // docs/NOTIFICACIONES_WORKER.md §5.1 afirma: «un reenvío concurrente del mismo usuario … como máximo un evento activo (pendiente/enviando)».
+        $activos = (int)self::escalar("SELECT COUNT(*) FROM correos_salida WHERE usuario_id=? AND tipo='confirmacion_cuenta' AND estado IN ('pendiente','enviando')", [$uid]);
+        $this->assertLessThanOrEqual(1, $activos, 'a lo sumo un evento activo tras reenvíos concurrentes (afirmación de la documentación)');
         $this->assertSame([], self::buzonFallo(self::SMTP), 'las peticiones no envían correo');
         $hashVigente = (string)self::escalar('SELECT token_hash FROM usuarios WHERE id=?', [$uid]);
         $this->assertSame(1, (int)self::escalar("SELECT COUNT(*) FROM usuarios WHERE id=? AND token_tipo='confirmacion' AND token_expira>NOW()", [$uid]), 'exactamente un token válido');
@@ -412,8 +458,7 @@ final class R2bColaCorreosTest extends R2bCase
         $t0 = microtime(true);
         while (count(self::buzonFallo(self::SMTP)) < 1 && microtime(true) - $t0 < 20) { usleep(100000); }
         $this->assertCount(1, self::buzonFallo(self::SMTP), 'el SMTP debe haber recibido el mensaje antes de matar al worker');
-        $st = proc_get_status($p);
-        posix_kill($st['pid'], 9);
+        proc_terminate($p, 9); // SIGKILL sin depender de la extensión posix
         proc_close($p);
         $e = $this->evento($email);
         $this->assertSame('enviando', $e['estado'], 'el worker murió: el evento queda con lease, sin marcarse enviado');

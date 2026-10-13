@@ -63,16 +63,18 @@ abstract class R2bCase extends QaCase
             array_merge(getenv(), ['DB_NAME' => self::nombreBd(), 'APP_ENV' => 'testing', 'EMAIL_HOST' => '127.0.0.1', 'EMAIL_USER' => 't', 'EMAIL_PASSWORD' => 't', 'EMAIL_FORCE_SMTP' => '1'], $env));
         stream_set_blocking($pipes[1], false); stream_set_blocking($pipes[2], false);
         $out = $err = '';
+        $salida = null; // PHP informa el `exitcode` UNA sola vez (en la primera proc_get_status tras terminar); proc_close() devuelve entonces -1
         while (true) {
             $out .= (string)stream_get_contents($pipes[1]); $err .= (string)stream_get_contents($pipes[2]);
             $st = proc_get_status($p);
-            if (!$st['running']) { break; }
+            if (!$st['running']) { $salida = (int)$st['exitcode']; break; }
             if (microtime(true) - $t0 > $limiteSeg) { proc_terminate($p, 9); $err .= "\n[QA] worker terminado por exceder $limiteSeg s"; break; }
             usleep(20000);
         }
         $out .= (string)stream_get_contents($pipes[1]); $err .= (string)stream_get_contents($pipes[2]);
         fclose($pipes[1]); fclose($pipes[2]);
         $codigo = proc_close($p);
+        if ($codigo === -1 && $salida !== null && $salida !== -1) { $codigo = $salida; }
         return ['exit' => $codigo, 'out' => $out, 'err' => $err, 'seg' => microtime(true) - $t0];
     }
 
