@@ -9,13 +9,15 @@ use mysqli;
 class AuthorizationService
 {
     public const PERMISOS = ['equipo.gestionar','servicios.gestionar','profesionales.gestionar','perfiles.gestionar','agenda.gestionar','agenda.ver_propia',
-        'finanzas.gestionar','inventario.gestionar','marketing.gestionar','ajustes.gestionar','reportes.ver'];
+        'finanzas.gestionar','inventario.gestionar','marketing.gestionar','ajustes.gestionar','reportes.ver',
+        // Fase identidades/CRM: alcance de datos de clientes y gestión de personal (RR. HH.).
+        'clientes.ver','clientes.ver_propios','clientes.analitica','clientes.exportar','rh.gestionar'];
     public const ROLES = [
         'propietario' => self::PERMISOS,
-        'gerente' => ['servicios.gestionar','profesionales.gestionar','perfiles.gestionar','agenda.gestionar','finanzas.gestionar','inventario.gestionar','marketing.gestionar','ajustes.gestionar','reportes.ver'],
-        'recepcion' => ['perfiles.gestionar','agenda.gestionar'],
-        'profesional' => ['agenda.ver_propia'],
-        'finanzas' => ['finanzas.gestionar','inventario.gestionar','reportes.ver'],
+        'gerente' => ['servicios.gestionar','profesionales.gestionar','perfiles.gestionar','agenda.gestionar','finanzas.gestionar','inventario.gestionar','marketing.gestionar','ajustes.gestionar','reportes.ver','clientes.ver','clientes.analitica','clientes.exportar'],
+        'recepcion' => ['perfiles.gestionar','agenda.gestionar','clientes.ver'],
+        'profesional' => ['agenda.ver_propia','clientes.ver_propios'],
+        'finanzas' => ['finanzas.gestionar','inventario.gestionar','reportes.ver','clientes.analitica'],
         'cliente' => [],
     ];
     private ?mysqli $db;
