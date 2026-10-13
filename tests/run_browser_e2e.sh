@@ -139,7 +139,8 @@ echo 'E2E_STAGE: responsividad de vistas'
 TEST_RESPONSIVE_OUTPUT_DIR="$artifacts/responsive" timeout --kill-after=10s 420s node tests/responsive_views_test.js 2>&1 | tee "$artifacts/responsive.log"
 
 # Previsualizaciones exclusivamente ficticias: renderizado real sin enviar correos.
-docker run --rm --network "$net" -v "$repo_dir:/var/www/html:ro" -w /var/www/html \
+# Conservar la propiedad del runner para que pueda guardar capturas e informes.
+docker run --rm --user "$(id -u):$(id -g)" --network "$net" -v "$repo_dir:/var/www/html:ro" -w /var/www/html \
     -v "$artifacts:/e2e-artifacts" "${common_env[@]}" -e APP_URL="$app_url" "$image" \
     php tests/fixtures/email_previews.php /e2e-artifacts/email-previews
 echo 'E2E_STAGE: diseño de correos'

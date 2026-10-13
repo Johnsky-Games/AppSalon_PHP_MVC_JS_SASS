@@ -81,8 +81,11 @@ async function main() {
         assert.deepEqual(externalRequests, [], 'Los correos necesitan recursos externos para leerse.');
         console.log(JSON.stringify({ success: true, renders: report.length, widths, horizontalOverflow: 0, unsafeLinks: 0, minimumButtonHeight: Math.min(...report.map(item => item.cta.height)) }));
     } finally {
-        fs.writeFileSync(path.join(directory, 'email_visual_report.json'), JSON.stringify(report, null, 2));
-        if (browser) await browser.close();
+        try {
+            fs.writeFileSync(path.join(directory, 'email_visual_report.json'), JSON.stringify(report, null, 2));
+        } finally {
+            if (browser) await browser.close();
+        }
     }
 }
 
