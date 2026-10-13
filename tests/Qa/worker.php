@@ -18,6 +18,8 @@ use Services\AuthService;
 use Services\ColaboradorService;
 use Services\CorreoSalidaService;
 
+// Arnés: permite simular un reloj PHP en otra zona (el contenedor corre en UTC mientras el salón opera en America/Guayaquil, UTC-5).
+if (getenv('QA_PHP_TZ')) { date_default_timezone_set((string)getenv('QA_PHP_TZ')); }
 [, $accion, $json, $inicio] = $argv + [null, '', '{}', '0'];
 $a = json_decode($json, true) ?: [];
 $db = ActiveRecord::getDB();

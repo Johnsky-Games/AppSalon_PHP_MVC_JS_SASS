@@ -255,6 +255,24 @@ final class R2bRegistroUniformeTest extends R2bCase
 
     private static function crearConfirmado(): string { return self::cliente(['email' => self::correo('cf')])['email']; }
 
+    public function test_variantes_de_mayusculas_y_espacios_de_un_correo_existente_no_crean_otra_cuenta_y_responden_igual(): void
+    {
+        $base = self::correo('VarIaNte');
+        $existente = self::cliente(['email' => $base])['email'];
+        $nuevo = self::firma(self::registrarHttp(new Navegador(self::$base), self::correo('nuevo-var')));
+        $usuarios = (int)self::escalar('SELECT COUNT(*) FROM usuarios');
+        foreach ([strtoupper($existente), strtolower($existente), ' ' . $existente . ' ', ucfirst(strtolower($existente))] as $variante) {
+            self::q('TRUNCATE intentos_login');
+            self::vaciarBuzonFallo(self::SMTP);
+            $r = self::registrarHttp(new Navegador(self::$base), $variante);
+            $this->assertSame($nuevo['status'], $r['status'], json_encode($variante));
+            $this->assertSame($nuevo['location'], $r['location']);
+            $this->assertSame($usuarios, (int)self::escalar('SELECT COUNT(*) FROM usuarios'), 'la variante «' . $variante . '» creó otra cuenta');
+        }
+        // El aviso (uno solo por hora) llegó al titular real.
+        $this->assertCount(0, self::q("SELECT 1 FROM usuarios WHERE LOWER(TRIM(email))=? HAVING COUNT(*)>1", [strtolower(trim($existente))]));
+    }
+
     // ------------------------------------------------------------------ 4. límite de intentos
 
     public function test_el_limite_de_intentos_por_correo_es_identico_en_todas_las_ramas(): void
@@ -501,5 +519,43 @@ final class R2bRegistroUniformeTest extends R2bCase
         $ruta = parse_url($boton[0], PHP_URL_PATH);
         $r = (new Navegador(self::$base))->get($ruta);
         $this->assertContains($r['status'], [200, 302], "El botón «Ir a iniciar sesión» del aviso apunta a $ruta y devuelve {$r['status']}");
+    }
+
+    private function tiempoPorExistencia(string $ruta, bool $pendiente): array
+    {
+        self::detenerSmtpFallo(self::SMTP);
+        self::iniciarSmtpFallo(self::SMTP, 'lento', 0.4);
+        $medir = function (string $email) use ($ruta): float {
+            self::q('TRUNCATE intentos_login');
+            $n = new Navegador(self::$base);
+            $csrf = $n->csrf($ruta);
+            $t0 = microtime(true);
+            $n->post($ruta, ['csrf_token' => $csrf, 'email' => $email]);
+            return (microtime(true) - $t0) * 1000;
+        };
+        $a = []; $b = [];
+        for ($i = 0; $i < 3; $i++) {
+            $a[] = $medir(self::cliente(['email' => self::correo('to-e' . $i), 'confirmado' => !$pendiente])['email']);
+            $b[] = $medir(self::correo('to-nadie'));
+        }
+        return [self::mediana($a), self::mediana($b)];
+    }
+
+    /**
+     * DEF-R2B-08: `/olvide` envía el correo DENTRO de la petición solo cuando la cuenta existe y está confirmada: con un SMTP que tarda, el
+     * tiempo de respuesta distingue una cuenta existente de un correo inexistente en UNA sola petición (la documentación lo reconoce como
+     * residuo, pero no estaba aceptado: el registro público sí se corrigió).
+     */
+    public function test_Defecto_R2B_08_olvide_revela_si_la_cuenta_existe_por_el_tiempo_de_respuesta(): void
+    {
+        [$existe, $noExiste] = $this->tiempoPorExistencia('/olvide', false);
+        $this->assertLessThan(2.0, $existe / max(1.0, $noExiste), sprintf('/olvide: cuenta existente %.0f ms vs inexistente %.0f ms (SMTP con 400 ms)', $existe, $noExiste));
+    }
+
+    /** DEF-R2B-09: ídem para `/reenviar-confirmacion` (cola persistente, pero el intento inmediato sigue en línea solo si la cuenta existe y está pendiente). */
+    public function test_Defecto_R2B_09_reenviar_confirmacion_revela_si_la_cuenta_pendiente_existe_por_el_tiempo_de_respuesta(): void
+    {
+        [$existe, $noExiste] = $this->tiempoPorExistencia('/reenviar-confirmacion', true);
+        $this->assertLessThan(2.0, $existe / max(1.0, $noExiste), sprintf('/reenviar-confirmacion: cuenta pendiente %.0f ms vs inexistente %.0f ms (SMTP con 400 ms)', $existe, $noExiste));
     }
 }

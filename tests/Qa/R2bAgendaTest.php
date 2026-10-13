@@ -419,6 +419,44 @@ final class R2bAgendaTest extends R2bCase
         $this->assertSame(1, (int)self::escalar('SELECT COUNT(*) FROM profesionales_servicios WHERE profesionalId=?', [$pid]));
     }
 
+    /**
+     * DEF-R2B-10 (Media): `ProfesionalRepository` calcula «hoy» con `date('Y-m-d')` (zona PHP, UTC en el contenedor: no hay `date_default_timezone_set`
+     * ni `date.timezone`), mientras el salón opera en America/Guayaquil (UTC-5). Entre las 19:00 y las 23:59 locales «hoy» de PHP ya es MAÑANA:
+     * las citas de HOY dejan de contar como futuras y se puede retirar un servicio o poner un descanso sobre una cita confirmada de esta
+     * misma noche. (`ColaboradorRepository::citasFuturasDeProfesional` sí convierte a -05:00.) Se simula el desfase con un reloj PHP adelantado
+     * en el proceso que ejecuta la operación (Pacific/Kiritimati, UTC+14: su fecha es la de mañana en Guayaquil).
+     */
+    public function test_Defecto_R2B_10_retirar_un_servicio_o_poner_un_descanso_ignora_las_citas_de_hoy_en_la_franja_horaria_nocturna(): void
+    {
+        $hoyLocal = self::fecha(0);
+        $dow = (int)date('N', strtotime($hoyLocal));
+        $completo = []; for ($d = 1; $d <= 7; $d++) { $completo[$d] = [['inicio' => '00:00', 'fin' => '23:55']]; }
+        putenv('EMAIL_PORT=' . self::SMTP);
+        try {
+            foreach (['servicio' => fn(array $p) => ['servicios' => [(string)self::$s1], 'franjas' => $completo],
+                      'descanso' => fn(array $p) => ['servicios' => [(string)self::$s1, (string)self::$s2], 'franjas' => $completo, 'descansos' => [$dow => [['inicio' => '23:00', 'fin' => '23:55', 'motivo' => 'Cena']]]]] as $caso => $carga) {
+                $prof = $this->profColab([self::$s1, self::$s2]);
+                self::q('DELETE FROM horarios_profesionales WHERE profesionalId=?', [$prof['pid']]);
+                for ($d = 1; $d <= 7; $d++) { self::q('INSERT INTO horarios_profesionales(profesionalId,dia_semana,hora_inicio,hora_fin) VALUES (?,?,?,?)', [$prof['pid'], $d, '00:00:00', '23:55:00']); }
+                $this->cita($prof['pid'], $hoyLocal, '23:00:00', 55, [self::$s2]);
+                $antes = $this->agendaHuella($prof['pid']);
+                // Control: con el reloj PHP en la zona del salón la misma operación SÍ se rechaza.
+                $ctl = self::concurrente([['accion' => 'configurarAgenda', 'args' => ['actor' => self::$dueno['id'], 'colaborador' => $prof['colaborador_id'], 'post' => $carga($prof), 'clave' => Idem::clave()]]], 1.0);
+                $this->assertSame('invalid', $ctl[0]['resultado']['status'], "control «{$caso}»: sin desfase horario debe rechazarse");
+                putenv('QA_PHP_TZ=America/Guayaquil');
+                $ctl2 = self::concurrente([['accion' => 'configurarAgenda', 'args' => ['actor' => self::$dueno['id'], 'colaborador' => $prof['colaborador_id'], 'post' => $carga($prof), 'clave' => Idem::clave()]]], 1.0);
+                putenv('QA_PHP_TZ');
+                $this->assertSame('invalid', $ctl2[0]['resultado']['status'], "control «{$caso}»: con el reloj en Guayaquil debe rechazarse");
+                putenv('QA_PHP_TZ=Pacific/Kiritimati');
+                $res = self::concurrente([['accion' => 'configurarAgenda', 'args' => ['actor' => self::$dueno['id'], 'colaborador' => $prof['colaborador_id'], 'post' => $carga($prof), 'clave' => Idem::clave()]]], 1.0);
+                putenv('QA_PHP_TZ');
+                $this->assertTrue($res[0]['ok'] ?? false, json_encode($res));
+                $this->assertSame('invalid', $res[0]['resultado']['status'], "«{$caso}»: con la hora nocturna de Guayaquil se aceptó cambiar la agenda sobre una cita confirmada de HOY: " . json_encode($res[0]['resultado']));
+                $this->assertSame($antes, $this->agendaHuella($prof['pid']), "«{$caso}» modificó la agenda");
+            }
+        } finally { putenv('QA_PHP_TZ'); putenv('EMAIL_PORT=2599'); }
+    }
+
     // ------------------------------------------------------------------ ficha heredada y roles que no son profesional
 
     public function test_vincular_una_ficha_heredada_no_toca_su_configuracion_salvo_la_casilla_y_nunca_pisa_citas_futuras(): void

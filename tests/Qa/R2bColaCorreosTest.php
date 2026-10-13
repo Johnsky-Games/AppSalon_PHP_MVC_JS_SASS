@@ -428,4 +428,36 @@ final class R2bColaCorreosTest extends R2bCase
         }
         $this->assertTrue(true);
     }
+
+    public function test_la_linea_de_comandos_del_worker_resiste_argumentos_hostiles(): void
+    {
+        $email = self::correo('cli-cmd');
+        $this->smtp('cerrado');
+        self::registrarHttp(new Navegador(self::$base), $email);
+        $this->smtp('ok');
+        $antes = self::q('SELECT id, estado, intentos FROM correos_salida ORDER BY id');
+        foreach ([['--nope'], ['basura'], ['--reintentar=0'], ['--reintentar=-3'], ['--reintentar=1e3'], ['--reintentar=todos'], ['--reintentar=9999999999999999999999'], ['--limite=1', '--zzz'], ["--arg\x01rojo"], ['--' . str_repeat('a', 5000)]] as $args) {
+            $w = self::worker($args, $this->envW());
+            $this->assertSame(2, $w['exit'], json_encode($args) . ' => ' . $w['out'] . $w['err']);
+            $this->assertDoesNotMatchRegularExpression('/[\x00-\x08\x0B-\x1F]/', $w['err'], 'el mensaje de error refleja caracteres de control del argumento');
+            $this->assertLessThan(400, strlen($w['err']), 'el mensaje de error refleja el argumento completo');
+        }
+        $this->assertSame($antes, self::q('SELECT id, estado, intentos FROM correos_salida ORDER BY id'), 'un argumento inválido modificó la cola');
+        // Límites numéricos: se acotan, no fallan.
+        foreach (['--limite=-5', '--limite=abc', '--limite=0', '--limite=99999999999999999999'] as $lim) {
+            $w = self::worker([$lim], $this->envW());
+            $this->assertSame(0, $w['exit'], "$lim => " . $w['out'] . $w['err']);
+        }
+        // --estado manda sobre --reintentar y no reactiva nada.
+        self::q("UPDATE correos_salida SET estado='fallido', intentos=6 WHERE destinatario_email=?", [$email]);
+        $w = self::worker(['--estado', '--reintentar=todos-fallidos'], $this->envW());
+        $this->assertSame(3, $w['exit']);
+        $this->assertSame('fallido', self::escalar('SELECT estado FROM correos_salida WHERE destinatario_email=?', [$email]));
+        // Un id inexistente o ya entregado no reactiva nada (exit 1) y 'todos-fallidos' solo toca fallidos con carga.
+        self::q("UPDATE correos_salida SET carga_cifrada=NULL WHERE destinatario_email=?", [$email]);
+        $w = self::worker(['--reintentar=todos-fallidos'], $this->envW());
+        $this->assertSame(0, $w['exit']);
+        $this->assertStringContainsString('reactivados: 0', $w['out']);
+        $this->assertSame('fallido', self::escalar('SELECT estado FROM correos_salida WHERE destinatario_email=?', [$email]));
+    }
 }
