@@ -128,6 +128,20 @@ try {
             $r = $svc->reservarConProfesional((int)$a['usuario'], ['profesionalId' => $a['profesional'], 'fecha' => $a['fecha'], 'hora' => $a['hora'], 'servicios' => (string)$a['servicio']]);
             $res = ['status' => $r['status'], 'codigo' => $r['codigo'] ?? null, 'id' => $r['id'] ?? null];
             break;
+        case 'configurarAgenda':
+            $svc = $servicioColab();
+            $espera();
+            $t0 = microtime(true);
+            $r = $svc->configurarAgenda((int)$a['actor'], (int)$a['colaborador'], $a['post'], $a['clave']);
+            $res = array_intersect_key($r, array_flip(['status', 'repetida', 'errores', 'estado']));
+            break;
+        case 'reasignar':
+            $svc = new Services\ReasignacionCitasService();
+            $espera();
+            $t0 = microtime(true);
+            $r = $svc->aplicar((int)$a['actor'], (int)$a['colaborador'], $a['decisiones'], $a['motivo'] ?? 'Baja programada', $a['clave']);
+            $res = array_intersect_key($r, array_flip(['status', 'repetida', 'errores', 'reasignadas', 'canceladas', 'pendientes', 'codigo']));
+            break;
         case 'propietarioInicial':
             $repo = new ColaboradorRepository($db);
             $espera();
