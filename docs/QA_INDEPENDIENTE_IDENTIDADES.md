@@ -824,3 +824,74 @@ Tests: 588, Assertions: 5225, Failures: 4.        (DURACION_SEG=741, es decir 12
 - Con **varias cuentas de cliente** (el registro es abierto) la auditoría de solo anexado sigue pudiendo crecer: no se midió a escala.
 - Sigue sin cubrirse Docker/Apache, SMTP real, IPv6/proxy, navegadores distintos de Chromium y horario real (el desfase horario se simula).
 - El supervisor se probó en una máquina con `pcntl`; no se probó su comportamiento ante una base caída durante horas.
+
+## R2B.11 Fase 3 – Residuos, documentación y portabilidad del CI
+
+Se integró `f118591` (avance rápido sobre `82f8fcc`). Solo se tocó `tests/Qa/**`, `.github/qa_omitidas_permitidas.txt` y este documento.
+
+### R2B.11.1 Estado final de CADA hallazgo R2B
+
+| Hallazgo | Estado final | Prueba |
+|---|---|---|
+| R2B-01 enlace del aviso | **Corregido y reverificado** | `R2bRegistroUniformeTest::test_R2B_01_…` |
+| R2B-02 tiempo 2.ª solicitud | **Corregido y reverificado** | `test_R2B_02_…` |
+| R2B-03 PII en `ultimo_error`/`--estado` (direcciones corrientes) | **Corregido y reverificado** | `R2bColaCorreosTest::test_R2B_03_…` |
+| R2B-03b parte local con caracteres especiales | **Corregido y reverificado** (14 caracteres + comillas y llaves; salida del saneador comprobada con 30 formas) | `test_R2B_03b_…` |
+| **R2B-03c** (nuevo) dirección completa en `ultimo_error` y `--estado` | **ABIERTO (Baja)**: el saneador exige un dominio con punto y TLD alfabético y excluye las comillas de la parte local, así que las direcciones que la aplicación SÍ admite como `"zq@x"@example.test` (parte local entre comillas con `@`) y `zq@[127.0.0.1]` (literal de IP) quedan **completas** en `correos_salida.ultimo_error` y en `--estado`/`--estado --json`. Reproducción mínima: registrar `"zq@x"@example.test` con el SMTP en `rcptmulti`/`rcpt5xx`, ejecutar el worker y leer `ultimo_error`. De las 14 formas probadas, la aplicación admitió 8: las otras 6 (plano, mayúsculas, `+`, subdominios, guion, apóstrofo y llaves) se redactan por completo; rechaza al registrar el espacio entre comillas, el unicode (parte local y dominio), la parte local de 64 caracteres, el dominio muy largo y `@localhost`. | `test_Defecto_R2B_03c_…` |
+| R2B-04 / R2B-04b arreglos | **Corregidos y reverificados** | `R2bAgendaTest::test_R2B_04_…`, `test_R2B_04b_…` y la batería `test_R2B_04c_…` (24 claves × 7 formas, incluidas anidación de 40 niveles, contra 7 rutas POST y 3 pantallas GET: cero advertencias, cero «Array» reflejado, cero 5xx) |
+| R2B-05 pista del migrador | **Corregido y reverificado** | `R2bReversionTest::test_R2B_05_…` |
+| R2B-06 / R2B-06b agrupación de denegaciones | **Corregidos y reverificados**: ráfagas de 16 y 32 peticiones simultáneas del mismo actor (3 rondas cada una) dejan **exactamente 1 fila**; una ráfaga de 36 peticiones de 6 actores mezclados deja **1 fila por actor**; 16 éxitos simultáneos del propietario dejan 16 filas; ningún candado queda colgado (`performance_schema.metadata_locks`), ni tras una excepción dentro de la sección crítica; con el candado retenido por otra conexión la auditoría espera ≈ 3 s y registra igualmente (falla abierta, nunca omite la fila; el candado es por actor, un actor no frena a otro). | `R2bCrmAuditoriaTest::test_R2B_06_…` (3) y `test_R2B_06b_…` (5) |
+| R2B-07 CSV | **Corregido y reverificado**, incluidos `\f` y `\v` iniciales (nuevas celdas hostiles) | `test_R2B_07_…` |
+| R2B-08, R2B-09 | **Corregidos y reverificados** | `test_R2B_08_…`, `test_R2B_09_…` |
+| R2B-10 zona horaria | **Corregido y reverificado** | `R2bAgendaTest::test_R2B_10_…` |
+| R2B-11 error de reasignación | **Corregido y reverificado** | `test_R2B_11_…` |
+| R2B-12 texto de las invitaciones | **Corregido y reverificado** (se corrigió el texto; el comportamiento no cambió): el documento limita la afirmación a las rutas públicas y declara la excepción de invitaciones y avisos de cita/reasignación; la medición coincide (invitación en la petición con un SMTP de 400 ms; con el SMTP caído queda `pendiente` con 1 intento y el worker la entrega). | `R2bColaRecuperacionTest::test_R2B_12_…` |
+| **R2B-13** (nuevo) diagrama de §5.1 obsoleto | **ABIERTO (Baja, documentación)**: el diagrama de flujo de `docs/NOTIFICACIONES_WORKER.md` §5.1 aún dice `despacharTrasCommit(): intento inmediato (PHPMailer…)` para `registrar / reenviarConfirmacion` y `scripts/procesar_correos.php (cada NOTIFICACIONES_INTERVALO_SEGUNDOS, 60 s por defecto)`. Medido: sin `CORREOS_ENVIO_INMEDIATO=1` no hay intento inmediato (0 intentos y buzón vacío tras la petición) y el supervisor atiende la cola cada `CORREOS_INTERVALO_SEGUNDOS` (5 s por defecto, comprobado con 2 s). | `test_Defecto_R2B_13_…` |
+
+Revisión del resto de `NOTIFICACIONES_WORKER.md` (§5.x) contra lo medido: §5 (introducción), §5.3 (el intento nº 1 es la primera pasada del worker en rutas públicas y el inmediato en invitaciones; backoff 60/120/240/480/960 s), §5.7 (rutas públicas no esperan al SMTP; invitaciones hasta ≈ 10 s con SMTP colgado), y la afirmación de §5.1 «un reenvío concurrente … como máximo un evento activo» (8 reenvíos simultáneos: ≤ 1 pendiente, comprobado ahora con una aserción propia) coinciden con las mediciones. Único desajuste: R2B-13.
+
+### R2B.11.2 CI: los 41 fallos del run 38481255271 (SHA f118591, PHP 8.2, 588 pruebas)
+
+Obtenidos con `get_job_logs` (1833 líneas del job; sección «There were 41 failures»). **Causa de 40 de los 41: portabilidad del arnés (a).** `R2bCase::worker()` esperaba al proceso con `proc_get_status()` hasta que `running` fuera falso y después llamaba a `proc_close()`. PHP solo informa el `exitcode` una vez, en la primera `proc_get_status` posterior a la terminación; en PHP 8.2 `proc_close()` devuelve entonces `-1` (en 8.3 devuelve el código real, por eso en local todo pasaba). Todas las aserciones `assertSame(0, $w['exit'])` fallaban con «Failed asserting that -1 is identical to 0» (y `-1` frente a `2` en la prueba de argumentos hostiles). No es un defecto de la aplicación ni de tiempo.
+
+| # | Prueba | Causa |
+|---|---|---|
+| 1 | `ConcurrenciaTest::test_registro_claves_distintas_mismo_correo_una_sola_identidad` | (a) exit -1 en `entregarCola` |
+| 2 | `CorreoTest::test_registro_con_smtp_caido_informa_la_via_de_recuperacion_y_no_pierde_la_cuenta` | (a) |
+| 3–7 | `R2bColaCorreosTest::test_el_alta_con_smtp_roto_…` (cerrado, cuelga, rcpt4xx, rcpt5xx, data5xx) | (a) |
+| 8–12 | `R2bColaCorreosTest::test_el_reenvio_con_smtp_roto_…` (5 modos) | (a) |
+| 13 | `R2bColaCorreosTest::test_backoff_exacto_agotamiento_…` | (a) |
+| 14 | `…::test_el_worker_corta_la_tanda_tras_tres_fallos_seguidos_…` | (a) |
+| 15 | `…::test_reenvios_concurrentes_ocho_procesos_…` | (a) |
+| 16 | `…::test_reenviar_sucesivo_cancela_el_evento_anterior_…` | (a) |
+| 17 | `…::test_cuenta_confirmada_por_otra_via_cancela_el_evento_pendiente_…` | (a) |
+| 18 | `…::test_evento_vencido_24h_se_cancela_y_no_se_envia` | (a) |
+| 19 | `…::test_lease_vencido_lo_retoma_otro_worker_…` | (a) |
+| 20 | `…::test_worker_matado_a_mitad_del_envio_…` | (a); además usaba `posix_kill` (extensión posix): ahora `proc_terminate($p, 9)` |
+| 21 | `…::test_la_linea_de_comandos_del_worker_resiste_argumentos_hostiles` | (a) `-1` frente a `2` |
+| 22–32 | `R2bColaRecuperacionTest` (11 pruebas: ruta pública sin envío, olvide encola, personal, dos olvide, enlace entregado, token vencido, confirmación frente a recuperación, ocho olvide, envío en vuelo, falla de la cola, SMTP roto) | (a) |
+| 33 | `R2bColaRecuperacionTest::test_Defecto_R2B_12_…` | (d) consecuencia del cambio de contrato: la precondición exigía que el documento siguiera afirmando lo antiguo; reescrita (arriba) |
+| 34–40 | `R2bRegistroUniformeTest` (sin confirmar, aviso titular, 1/h, cola una vez, concurrencia, R2B_02, R2B_01) | (a) |
+| 41 | `RegresionNegocioTest::test_cliente_de_registro_publico_recorre_el_negocio_completo` | (a) |
+
+Sin fallos de las categorías (b) defectos de la aplicación visibles solo en 8.2, ni (c) umbrales de tiempo: las pruebas de temporización (R2B-02/08/09, supervisor, 3 s del candado, ráfagas) **pasaron** en el runner compartido. Cambios: `R2bCase::worker()` guarda el `exitcode` cuando `running` es falso y lo usa si `proc_close()` devuelve `-1`; `posix_kill` sustituido por `proc_terminate`. Se revisaron todos los `proc_close`/`proc_get_status` de `tests/Qa`: los demás llaman a `proc_close` sin `proc_get_status` previo (correctos en 8.2) o leen `$st['exitcode']` directamente (supervisor). Se buscó sin resultado en `tests/Qa` cualquier función o sintaxis exclusiva de PHP 8.3+ y el uso de extensiones no declaradas en el workflow.
+
+### R2B.11.3 Sensibilidad (mutaciones sobre una copia)
+
+| # | Mutación (archivo) | Resultado | Prueba que la detecta |
+|---|---|---|---|
+| P01 | `profesional_id` vuelve al cast sin comprobar escalar (`views/equipo/index.php`) | ROJO | `R2bAgendaTest::test_R2B_04b_…` (y `test_R2B_04c_…`) |
+| P02 | la auditoría no toma el candado (`services/CrmAuditoriaService.php`) | ROJO | `R2bCrmAuditoriaTest::test_R2B_06b_una_rafaga_simultanea_del_mismo_actor_deja_una_sola_fila` |
+| P03 | el candado no se libera tras una excepción (`CrmAuditoriaService`) | ROJO | `R2bCrmAuditoriaTest::test_R2B_06b_un_fallo_dentro_de_la_seccion_critica_libera_el_candado` |
+| P04 | el nombre del candado ignora al actor (`CrmAuditoriaService`) | **SOBREVIVIÓ (equivalente)** | la agrupación la decide `hayDenegadaReciente` (por actor); un candado global solo serializa más, no cambia el resultado |
+| P05 | el saneador vuelve a la clase de caracteres anterior (`classes/Email.php`) | ROJO | `R2bColaCorreosTest::test_R2B_03b_…` |
+| P06 | el CSV deja pasar `\f`/`\v` iniciales (`services/ReporteService.php`) | ROJO | `R2bCrmAuditoriaTest::test_R2B_07_…` |
+
+### R2B.11.4 Resultado de lo ejecutado (clases afectadas)
+
+```
+php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --colors=never --filter '/R2bColaCorreosTest|R2bColaRecuperacionTest|R2bCrmAuditoriaTest|R2bAgendaTest|CorreoTest|ConcurrenciaTest|RegresionNegocioTest|R2bRegistroUniformeTest|R2bReversionTest|FallosTest/' tests/Qa
+Tests: 229, Assertions: 3667, Failures: 2.     (DURACION_SEG=349)
+```
+
+Los 2 fallos son las pruebas rojas de los dos hallazgos abiertos: R2B-03c y R2B-13. Omitidas: 0 (`ci_verificar_omitidas.php`: «Pruebas en el informe: 229; omitidas: 0», código 0); la lista permitida sigue vacía. No se ejecutó PHP 8.2 localmente (solo 8.3.6): la corrección del `exitcode` se razona a partir del comportamiento documentado de `proc_get_status`/`proc_close`.

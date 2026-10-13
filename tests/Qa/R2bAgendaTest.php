@@ -858,17 +858,58 @@ final class R2bAgendaTest extends R2bCase
     }
 
     /**
-     * R2B-04b (RESIDUO, rojo): la corrección de `s()` no cubre `views/equipo/index.php:39`, que compara `(string)($previo['profesional_id'] ?? '')`
+     * R2B-04b REVERIFICADO (antes `test_Defecto_R2B_04b_…`, rojo). Texto original: la corrección de `s()` no cubría `views/equipo/index.php:39`, que compara `(string)($previo['profesional_id'] ?? '')`
      * con un cast explícito. Con `profesional_id[]=x` (o cualquier forma de arreglo) y al menos una ficha sin cuenta, cada reproducción
      * de `GET /admin/equipo` emite `PHP Warning: Array to string conversion` por cada ficha del selector.
      */
-    public function test_Defecto_R2B_04b_profesional_id_con_forma_de_arreglo_sigue_emitiendo_advertencias_en_la_pantalla_de_equipo(): void
+    public function test_R2B_04b_profesional_id_con_forma_de_arreglo_no_emite_advertencias_en_la_pantalla_de_equipo(): void
     {
         $this->prof('Ficha sin cuenta R2B04', [self::$s1]);
         $n = $this->nav('dueno');
         $log0 = strlen(self::logServidor('r2b_agenda'));
         $this->recorrerFormasHostiles($n, ['profesional_id']);
-        $this->assertDoesNotMatchRegularExpression('/Warning|Notice|Deprecated|Array to string|TypeError|Fatal/i', substr(self::logServidor('r2b_agenda'), $log0), 'profesional_id[]=x deja «Array to string conversion» en views/equipo/index.php:39');
+        $this->assertDoesNotMatchRegularExpression('/Warning|Notice|Deprecated|Array to string|TypeError|Fatal/i', substr(self::logServidor('r2b_agenda'), $log0), 'profesional_id con forma de arreglo deja advertencias PHP');
+    }
+
+    /**
+     * R2B-04c: batería exhaustiva. TODAS las claves de los formularios de equipo (más claves desconocidas) con formas de arreglo/objeto anidados
+     * (incluida una anidación de 40 niveles y 300 elementos) enviadas a cada POST de /admin/equipo/*, y después se reproducen las pantallas
+     * `GET /admin/equipo`, `GET /admin/equipo/ficha?id=` y `GET /admin/equipo/reasignar?id=`. Cero advertencias, avisos, errores de tipo ni
+     * «Array» reflejado en el cuerpo, y cero 500.
+     */
+    public function test_R2B_04c_todas_las_claves_de_equipo_con_arreglos_y_objetos_anidados_no_dejan_advertencias_ni_500(): void
+    {
+        $prof = $this->profColab([self::$s1]);
+        $colId = (int)$prof['colaborador_id'];
+        $this->prof('Ficha sin cuenta R2B04c', [self::$s1]);
+        $n = $this->nav('dueno');
+        $csrf = Navegador::csrfDe($n->get('/admin/equipo')['body']);
+        $claves = ['nombre', 'apellido', 'email', 'telefono', 'puesto', 'fecha_ingreso', 'rol', 'profesional_id', 'nombre_profesional', 'ajustar_agenda', 'servicios',
+                   'franjas', 'descansos', 'decision', 'token_confirmacion', 'motivo', 'id', 'notas_rh', 'estado', 'acceso', 'colaborador_id', 'invitacion_id', 'clave_desconocida', 'idem_key'];
+        $profundo = str_repeat('[a]', 40);
+        $formas = ['[]=x', '[a]=x', '[][]=x', '[a][b][c]=x', '[0][inicio][]=x', $profundo . '=x', '[0]=1&%1$s[1]=2&%1$s[2][]=3'];
+        $rutas = ['/admin/equipo/crear', '/admin/equipo/actualizar', '/admin/equipo/invitar', '/admin/equipo/revocar', '/admin/equipo/ficha?id=' . $colId, '/admin/equipo/ficha/agenda?id=' . $colId, '/admin/equipo/reasignar'];
+        $log0 = strlen(self::logServidor('r2b_agenda'));
+        $cinco = [];
+        foreach ($rutas as $ruta) {
+            foreach ($claves as $k) {
+                foreach ($formas as $f) {
+                    $frag = str_contains($f, '%1$s') ? sprintf($f, $k) : $k . $f;
+                    $base = ['csrf_token' => $csrf, 'idem_key' => Idem::clave(), 'nombre' => 'Ana', 'apellido' => 'Prueba', 'email' => self::correo('hostil'), 'rol' => 'profesional', 'id' => (string)$colId];
+                    unset($base[$k]);
+                    $r = $n->post($ruta, http_build_query($base) . '&' . $frag);
+                    if ($r['status'] >= 500) { $cinco[] = "$ruta $frag => {$r['status']}"; }
+                }
+                foreach (['/admin/equipo', '/admin/equipo/ficha?id=' . $colId, '/admin/equipo/reasignar?id=' . $colId] as $pantalla) {
+                    $g = $n->get($pantalla);
+                    if ($g['status'] >= 500) { $cinco[] = "GET $pantalla tras $ruta $k => {$g['status']}"; }
+                    $this->assertStringNotContainsString('Array', strip_tags($g['body']), "GET $pantalla tras $ruta / $k refleja «Array»");
+                }
+                $csrf = Navegador::csrfDe($n->get('/admin/equipo')['body']) ?? $csrf;
+            }
+        }
+        $this->assertSame([], array_slice($cinco, 0, 5), 'respuestas 5xx');
+        $this->assertDoesNotMatchRegularExpression('/Warning|Notice|Deprecated|Array to string|TypeError|Fatal|Undefined/i', substr(self::logServidor('r2b_agenda'), $log0), 'advertencias PHP con claves de equipo hostiles');
     }
 
     private function recorrerFormasHostiles(Navegador $n, array $campos): void

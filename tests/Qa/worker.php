@@ -90,6 +90,32 @@ try {
             }
             $res = ['status' => $r['status']];
             break;
+        case 'auditoriaFalla':
+            // La inserción de la auditoría FALLA dentro de la sección crítica (trigger): el candado debe liberarse y no quedar ninguno colgado.
+            $svc = new Services\CrmAuditoriaService(new Repositories\CrmAuditoriaRepository($db));
+            $db->query('DROP TRIGGER IF EXISTS trg_qa_audit_falla2');
+            $db->query("CREATE TRIGGER trg_qa_audit_falla2 BEFORE INSERT ON crm_exportaciones_auditoria FOR EACH ROW SIGNAL SQLSTATE '45001' SET MESSAGE_TEXT='auditoria rota a proposito'");
+            $lanzo = false;
+            try { $svc->registrar('clientes', 'denegada', 'sin_permiso', ['id' => (int)$a['actor'], 'rol' => 'cliente'], null); } catch (\Throwable $e) { $lanzo = true; }
+            $db->query('DROP TRIGGER IF EXISTS trg_qa_audit_falla2');
+            $otro = new mysqli(getenv('DB_HOST') ?: '127.0.0.1', getenv('DB_USER') ?: 'root', getenv('DB_PASS') ?: '', getenv('DB_NAME'), (int)(getenv('DB_PORT') ?: 3306));
+            $colgados = (int)$otro->query("SELECT COUNT(*) n FROM performance_schema.metadata_locks WHERE OBJECT_TYPE='USER LEVEL LOCK'")->fetch_assoc()['n'];
+            $otro->close();
+            $t0 = microtime(true);
+            $id = $svc->registrar('clientes', 'denegada', 'sin_permiso', ['id' => (int)$a['actor'], 'rol' => 'cliente'], null);
+            $res = ['lanzo' => $lanzo, 'candados_colgados' => $colgados, 'segunda_id' => $id, 'segunda_seg' => round(microtime(true) - $t0, 3)];
+            break;
+        case 'auditoriaCandadoOcupado':
+            // Otra conexión retiene el candado del actor (nombre de la aplicación: crm_aud_den:<sha256(actor|tipo|motivo)[0..32]>).
+            $nombreCandado = 'crm_aud_den:' . substr(hash('sha256', $a['actor'] . '|clientes|sin_permiso'), 0, 32);
+            $otro = new mysqli(getenv('DB_HOST') ?: '127.0.0.1', getenv('DB_USER') ?: 'root', getenv('DB_PASS') ?: '', getenv('DB_NAME'), (int)(getenv('DB_PORT') ?: 3306));
+            $got = (int)$otro->query("SELECT GET_LOCK('" . $otro->real_escape_string($nombreCandado) . "', 0) g")->fetch_assoc()['g'];
+            $svc = new Services\CrmAuditoriaService(new Repositories\CrmAuditoriaRepository($db));
+            $t0 = microtime(true);
+            $id = $svc->registrar('clientes', 'denegada', 'sin_permiso', ['id' => (int)$a['actor'], 'rol' => 'cliente'], null);
+            $res = ['otro_obtuvo' => $got, 'id' => $id, 'seg' => round(microtime(true) - $t0, 3)];
+            $otro->close();
+            break;
         case 'invitar':
             $svc = $servicioColab();
             $espera();

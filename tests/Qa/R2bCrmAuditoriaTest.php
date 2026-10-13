@@ -27,7 +27,7 @@ final class R2bCrmAuditoriaTest extends R2bCase
         self::$p['cliente'] = self::cliente(['email' => self::correo('cli-sesion')]) + ['portal' => 'cliente'];
         // Clientes con datos reconocibles (PII) y nombres hostiles para el CSV.
         self::$clientes['normal'] = self::cliente(['email' => 'privado.uno@pii-r2b.test', 'nombre' => 'Privada', 'apellido' => 'Uno', 'telefono' => '0987654321']);
-        foreach (['=HYPERLINK("http://evil/x","clic")', '+1+1', '-2+3', '@SUM(A1:A9)', "\t=cmd", "\r=cmd", "\tsolotab", "\rsolocr", ' =espacio', "=1\n+2"] as $i => $nom) {
+        foreach (['=HYPERLINK("http://evil/x","clic")', '+1+1', '-2+3', '@SUM(A1:A9)', "\t=cmd", "\r=cmd", "\tsolotab", "\rsolocr", ' =espacio', "=1\n+2", "\fsolof", "\vsolov", "\f=cmd"] as $i => $nom) {
             self::$clientes["f$i"] = self::cliente(['email' => "formula$i@pii-r2b.test", 'nombre' => $nom, 'apellido' => 'Apellido' . $i, 'telefono' => '09' . str_pad((string)$i, 8, '1')]);
             // El alta recorta los espacios iniciales: el valor hostil (tabulador/retorno al inicio) se fija por SQL, como lo dejaría un dato heredado o importado.
             self::q('UPDATE usuarios SET nombre=? WHERE id=?', [$nom, self::$clientes["f$i"]['id']]);
@@ -290,7 +290,7 @@ final class R2bCrmAuditoriaTest extends R2bCase
             $malas = [];
             foreach (self::csv($r['body']) as $i => $fila) {
                 foreach ($fila as $celda) {
-                    if ($celda !== '' && preg_match('/^[=+\-@\t\r]/', $celda) && !preg_match('/^[+\-]?\d+([.,]\d+)?$/', $celda)) { $malas[] = "fila $i: " . json_encode($celda, JSON_UNESCAPED_UNICODE); }
+                    if ($celda !== '' && preg_match('/^[=+\-@\t\r\f\v]/', $celda) && !preg_match('/^[+\-]?\d+([.,]\d+)?$/', $celda)) { $malas[] = "fila $i: " . json_encode($celda, JSON_UNESCAPED_UNICODE); }
                 }
             }
             $this->assertSame([], $malas, "$tipo: celdas que Excel/Calc ejecutarían como fórmula");
@@ -311,7 +311,7 @@ final class R2bCrmAuditoriaTest extends R2bCase
         $this->assertGreaterThanOrEqual(count(self::$clientes), count($csvC) - 1, 'la campaña no incluyó a los clientes con consentimiento: ' . substr($r['body'], 0, 300));
         foreach ($csvC as $i => $fila) {
             foreach ($fila as $celda) {
-                if ($celda !== '' && preg_match('/^[=+\-@\t\r]/', $celda) && !preg_match('/^[+\-]?\d+([.,]\d+)?$/', $celda)) { $malas[] = "fila $i: " . json_encode($celda, JSON_UNESCAPED_UNICODE); }
+                if ($celda !== '' && preg_match('/^[=+\-@\t\r\f\v]/', $celda) && !preg_match('/^[+\-]?\d+([.,]\d+)?$/', $celda)) { $malas[] = "fila $i: " . json_encode($celda, JSON_UNESCAPED_UNICODE); }
             }
         }
         $this->assertSame([], $malas, 'la exportación de campañas deja celdas que empiezan por tabulador/retorno/fórmula sin neutralizar (OWASP CSV injection): ' . implode('; ', $malas));
@@ -448,42 +448,122 @@ final class R2bCrmAuditoriaTest extends R2bCase
         $this->assertSame(5, (int)self::escalar("SELECT COUNT(*) FROM crm_exportaciones_auditoria WHERE resultado='exitosa'"), 'cada exportación entregada debe auditarse');
     }
 
-    /**
-     * R2B-06b (RESIDUO, rojo). La comprobación «¿ya hay una denegación reciente?» (`hayDenegadaReciente`) y la inserción NO son atómicas. Con ráfagas SIMULTÁNEAS del mismo actor (sesiones
-     * distintas para no serializar por el bloqueo de sesión) puede entrar más de una fila antes de que la primera sea visible. Se mide el
-     * tamaño de la ráfaga que se cuela y se acota: aunque no sea exactamente 1, no debe crecer con la repetición (la ráfaga siguiente,
-     * ya dentro de la ventana, no añade nada).
-     */
-    public function test_Defecto_R2B_06b_una_rafaga_simultanea_del_mismo_actor_deja_varias_filas_pese_a_la_agrupacion(): void
+    /** @return string[] cookies de sesión PHPSESSID de $n sesiones distintas de la misma persona (para no serializar por el bloqueo de sesión) */
+    private function sesiones(string $url, array $persona, int $n): array
     {
-        if (!function_exists('curl_multi_init')) { $this->fail('curl_multi no disponible'); }
+        $c = [];
+        for ($i = 0; $i < $n; $i++) {
+            self::q('TRUNCATE intentos_login');
+            $nav = new Navegador($url);
+            $this->assertSame(302, $nav->login($persona['portal'], $persona['email'], $persona['password'])['status']);
+            $c[] = $nav->cookieSesion();
+        }
+        return $c;
+    }
+
+    /** Lanza TODAS las peticiones a la vez con curl_multi. @param array<int,array{0:string,1:string}> $peticiones [cookie, ruta] @return int[] estados */
+    private function rafaga(string $url, array $peticiones): array
+    {
+        $mh = curl_multi_init(); $hs = [];
+        foreach ($peticiones as $i => [$cookie, $ruta]) {
+            $h = curl_init($url . $ruta);
+            curl_setopt_array($h, [CURLOPT_RETURNTRANSFER => true, CURLOPT_COOKIE => 'PHPSESSID=' . $cookie, CURLOPT_TIMEOUT => 60]);
+            curl_multi_add_handle($mh, $h); $hs[$i] = $h;
+        }
+        do { curl_multi_exec($mh, $act); curl_multi_select($mh, 0.1); } while ($act > 0);
+        $est = [];
+        foreach ($hs as $i => $h) { $est[$i] = (int)curl_getinfo($h, CURLINFO_HTTP_CODE); curl_multi_remove_handle($mh, $h); curl_close($h); }
+        curl_multi_close($mh);
+        return $est;
+    }
+
+    private function candadosColgados(): int
+    {
+        return (int)self::escalar("SELECT COUNT(*) FROM performance_schema.metadata_locks WHERE OBJECT_TYPE='USER LEVEL LOCK'");
+    }
+
+    /**
+     * R2B-06b REVERIFICADO (antes `test_Defecto_R2B_06b_…`, rojo): el candado GET_LOCK por actor|tipo|motivo hace atómicos «comprobar» e
+     * «insertar». Ráfagas de 16 y 32 peticiones SIMULTÁNEAS (sesiones distintas, servidor con 12 procesos) del mismo actor dejan exactamente
+     * UNA fila, repetidas veces y sin candados colgados.
+     */
+    public function test_R2B_06b_una_rafaga_simultanea_del_mismo_actor_deja_una_sola_fila(): void
+    {
+        $url = self::servidor(['PHP_CLI_SERVER_WORKERS' => '12'], 'r2b_crm_conc');
+        foreach ([16, 32] as $n) {
+            for ($ronda = 1; $ronda <= 3; $ronda++) {
+                self::q('TRUNCATE crm_exportaciones_auditoria');
+                $cookies = $this->sesiones($url, self::$p['cliente'], $n);
+                $est = $this->rafaga($url, array_map(fn($c, $i) => [$c, '/admin/clientes/exportar?tipo=clientes&r=' . $i], $cookies, array_keys($cookies)));
+                $this->assertSame([403], array_values(array_unique($est)), "ráfaga de $n: estados " . json_encode(array_count_values($est)));
+                $this->assertSame(1, (int)self::escalar('SELECT COUNT(*) FROM crm_exportaciones_auditoria WHERE actor_usuario_id=?', [self::$p['cliente']['id']]), "ráfaga de $n (ronda $ronda): se esperaba UNA fila");
+                $this->assertSame(0, $this->candadosColgados(), 'quedaron candados de usuario sin liberar');
+            }
+        }
+    }
+
+    /** Varios actores a la vez: cada uno deja exactamente 1 fila y los actores distintos no se agrupan entre sí. */
+    public function test_R2B_06b_rafaga_de_varios_actores_deja_exactamente_una_fila_por_actor(): void
+    {
+        $url = self::servidor(['PHP_CLI_SERVER_WORKERS' => '12'], 'r2b_crm_conc');
+        $actores = [self::$p['cliente']];
+        for ($i = 0; $i < 3; $i++) { $actores[] = self::cliente(['email' => self::correo('multi' . $i)]) + ['portal' => 'cliente']; }
+        $actores[] = self::$p['recepcion']; $actores[] = self::$p['finanzas']; // roles del equipo sin clientes.exportar también se auditan
+        self::q('TRUNCATE crm_exportaciones_auditoria');
+        $peticiones = [];
+        foreach ($actores as $a) { foreach ($this->sesiones($url, $a, 6) as $c) { $peticiones[] = [$c, '/admin/clientes/exportar?tipo=clientes']; } }
+        shuffle($peticiones); // mezcla los actores dentro de la ráfaga (36 peticiones)
+        $est = $this->rafaga($url, $peticiones);
+        $this->assertSame([403], array_values(array_unique($est)), json_encode(array_count_values($est)));
+        $porActor = array_column(self::q('SELECT actor_usuario_id, COUNT(*) n FROM crm_exportaciones_auditoria GROUP BY actor_usuario_id'), 'n', 'actor_usuario_id');
+        $this->assertCount(count($actores), $porActor, 'cada actor debe tener su fila: ' . json_encode($porActor));
+        foreach ($actores as $a) { $this->assertSame(1, (int)($porActor[$a['id']] ?? 0), "actor {$a['id']}: " . json_encode($porActor)); }
+        $this->assertSame(0, $this->candadosColgados());
+    }
+
+    /** Ráfagas de ÉXITOS del propietario: nunca se agrupan (una fila por exportación entregada), sin degradación apreciable ni candados. */
+    public function test_R2B_06b_una_rafaga_de_exitos_del_propietario_audita_cada_exportacion_sin_candados(): void
+    {
         $url = self::servidor(['PHP_CLI_SERVER_WORKERS' => '12'], 'r2b_crm_conc');
         self::q('TRUNCATE crm_exportaciones_auditoria');
-        $cookies = [];
-        for ($i = 0; $i < 16; $i++) {
-            self::q('TRUNCATE intentos_login');
-            $n = new Navegador($url);
-            $this->assertSame(302, $n->login('cliente', self::$p['cliente']['email'], self::$p['cliente']['password'])['status']);
-            $cookies[] = $n->cookieSesion();
-        }
-        $rafaga = function () use ($cookies, $url): void {
-            $mh = curl_multi_init(); $hs = [];
-            foreach ($cookies as $i => $c) {
-                $h = curl_init($url . '/admin/clientes/exportar?tipo=clientes&r=' . $i);
-                curl_setopt_array($h, [CURLOPT_RETURNTRANSFER => true, CURLOPT_COOKIE => 'PHPSESSID=' . $c, CURLOPT_TIMEOUT => 30]);
-                curl_multi_add_handle($mh, $h); $hs[] = $h;
-            }
-            do { curl_multi_exec($mh, $act); curl_multi_select($mh, 0.1); } while ($act > 0);
-            foreach ($hs as $h) { curl_multi_remove_handle($mh, $h); curl_close($h); }
-            curl_multi_close($mh);
-        };
-        $rafaga();
-        $primera = (int)self::escalar("SELECT COUNT(*) FROM crm_exportaciones_auditoria WHERE actor_usuario_id=?", [self::$p['cliente']['id']]);
-        $rafaga();
-        $segunda = (int)self::escalar("SELECT COUNT(*) FROM crm_exportaciones_auditoria WHERE actor_usuario_id=?", [self::$p['cliente']['id']]);
-        $this->assertSame($primera, $segunda, 'la segunda ráfaga, dentro de la ventana, no debe añadir filas');
-        $this->assertLessThan(16, $primera, "una ráfaga de 16 peticiones simultáneas dejó $primera filas: la agrupación no resiste la concurrencia");
-        $this->assertSame(1, $primera, "ráfaga simultánea de 16 denegaciones idénticas: $primera filas (la comprobación y la inserción no son atómicas)");
+        $cookies = $this->sesiones($url, self::$p['dueno'], 16);
+        $t0 = microtime(true);
+        $est = $this->rafaga($url, array_map(fn($c, $i) => [$c, '/admin/clientes/exportar?tipo=clientes&r=' . $i], $cookies, array_keys($cookies)));
+        $seg = microtime(true) - $t0;
+        $this->assertSame([200], array_values(array_unique($est)), json_encode(array_count_values($est)));
+        $this->assertSame(16, (int)self::escalar("SELECT COUNT(*) FROM crm_exportaciones_auditoria WHERE resultado='exitosa'"), 'cada exportación entregada debe auditarse (no se agrupan los éxitos)');
+        $this->assertSame(0, $this->candadosColgados());
+        $this->assertLessThan(20.0, $seg, 'la ráfaga de éxitos tardó demasiado (' . round($seg, 1) . ' s)');
+    }
+
+    /** Si la inserción FALLA dentro de la sección crítica el candado se libera (finally); nada queda colgado y la siguiente llamada no espera. */
+    public function test_R2B_06b_un_fallo_dentro_de_la_seccion_critica_libera_el_candado(): void
+    {
+        self::q('TRUNCATE crm_exportaciones_auditoria');
+        $r = self::concurrente([['accion' => 'auditoriaFalla', 'args' => ['actor' => self::$p['cliente']['id']]]], 0.5)[0];
+        $this->assertTrue($r['ok'] ?? false, json_encode($r));
+        $x = $r['resultado'];
+        $this->assertTrue($x['lanzo'], 'la inserción rota debía lanzar');
+        $this->assertSame(0, $x['candados_colgados'], 'el candado quedó retenido tras la excepción (otra conexión lo ve en performance_schema)');
+        $this->assertGreaterThan(0, $x['segunda_id']);
+        $this->assertLessThan(1.0, $x['segunda_seg']);
+        $this->assertSame(1, (int)self::escalar('SELECT COUNT(*) FROM crm_exportaciones_auditoria WHERE actor_usuario_id=?', [self::$p['cliente']['id']]));
+    }
+
+    /**
+     * Si otra conexión retiene el candado más de 3 s la sección crítica continúa SIN él (falla abierto: la auditoría nunca se omite). Se mide la
+     * espera: ≈ 3 s, acotada y por actor (el candado depende de actor|tipo|motivo, un actor no frena a otro).
+     */
+    public function test_R2B_06b_con_el_candado_retenido_la_auditoria_espera_unos_3_s_y_registra_igualmente(): void
+    {
+        self::q('TRUNCATE crm_exportaciones_auditoria');
+        $r = self::concurrente([['accion' => 'auditoriaCandadoOcupado', 'args' => ['actor' => self::$p['cliente']['id']]]], 0.5)[0];
+        $this->assertTrue($r['ok'] ?? false, json_encode($r));
+        $x = $r['resultado'];
+        $this->assertSame(1, $x['otro_obtuvo'], 'la prueba no pudo retener el candado: cambió su nombre');
+        $this->assertGreaterThan(0, $x['id'], 'la denegación debía registrarse aunque el candado esté ocupado');
+        $this->assertGreaterThan(2.5, $x['seg']);
+        $this->assertLessThan(8.0, $x['seg']);
     }
 
     // ------------------------------------------------------------------ volumen
