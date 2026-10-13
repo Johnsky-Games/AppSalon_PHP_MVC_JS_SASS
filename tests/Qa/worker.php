@@ -142,6 +142,19 @@ try {
             $r = $svc->aplicar((int)$a['actor'], (int)$a['colaborador'], $a['decisiones'], $a['motivo'] ?? 'Baja programada', $a['clave']);
             $res = array_intersect_key($r, array_flip(['status', 'repetida', 'errores', 'reasignadas', 'canceladas', 'pendientes', 'codigo']));
             break;
+        case 'consentimiento':
+            $repoC = new Repositories\ConsentimientoRepository($db);
+            $espera();
+            $t0 = microtime(true);
+            $res = ['cambio' => $repoC->aplicarDecision((int)$a['usuario'], (bool)$a['acepta'], $a['version'] ?? null, ['origen' => 'perfil', 'canal' => 'portal_cliente', 'actor_id' => (int)$a['usuario'], 'reconfirma' => (bool)($a['reconfirma'] ?? false)])];
+            break;
+        case 'altaCliente':
+            $svcA = new Services\AltaClienteService(new Repositories\UsuarioRepository($db), new Repositories\AltaClienteRepository($db));
+            $espera();
+            $t0 = microtime(true);
+            $r = $svcA->registrar((int)$a['actor'], $a['rol'] ?? 'recepcion', $a['post'], $a['clave'], null);
+            $res = array_intersect_key($r, array_flip(['status', 'id', 'repetida', 'errores']));
+            break;
         case 'propietarioInicial':
             $repo = new ColaboradorRepository($db);
             $espera();

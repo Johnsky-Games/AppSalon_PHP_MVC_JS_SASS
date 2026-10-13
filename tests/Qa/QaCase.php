@@ -74,19 +74,21 @@ abstract class QaCase extends TestCase
     }
 
     /**
-     * Vacía todas las tablas excepto las de CONTROL/SEMILLA: `migraciones`, `equipo_mutex` y `consentimiento_versiones`
-     * (migración 022: la versión 1 del texto de consentimiento es un dato semilla; sin ella el CRM y «Mi perfil» responden 503).
-     * CAMBIO DE CONTRATO (ronda 2B): antes la tabla no existía; vaciarla con TRUNCATE (que no activa sus triggers de inmutabilidad)
-     * dejaba la base sin versión vigente y rompía 50 pruebas por un artefacto del arnés, no por la aplicación.
+     * Vacía todas las tablas excepto `migraciones` y `equipo_mutex` (semilla) y RESTABLECE la semilla de `consentimiento_versiones`.
+     * CAMBIO DE CONTRATO (ronda 2B, migración 022): la versión 1 del texto de consentimiento es un dato semilla; sin ella el CRM y «Mi perfil»
+     * responden 503. Vaciar la tabla con TRUNCATE (que no activa sus triggers de inmutabilidad) dejaba la base sin versión vigente y rompía
+     * ~50 pruebas por un artefacto del arnés, no por la aplicación; y no vaciarla acumulaba versiones publicadas por otras clases.
+     * Por eso se vacía y se vuelve a sembrar exactamente la fila de la migración.
      */
     protected static function limpiar(): void
     {
         $db = self::db();
         $db->query('SET FOREIGN_KEY_CHECKS=0');
         foreach (self::q("SELECT table_name t FROM information_schema.tables WHERE table_schema=DATABASE() AND table_type='BASE TABLE'") as $r) {
-            if (in_array($r['t'], ['migraciones', 'equipo_mutex', 'consentimiento_versiones'], true)) { continue; }
+            if (in_array($r['t'], ['migraciones', 'equipo_mutex'], true)) { continue; }
             $db->query('TRUNCATE TABLE `' . $r['t'] . '`');
         }
+        $db->query("INSERT INTO consentimiento_versiones (proposito, version, texto, texto_hash, vigente_desde, es_historica, creado_en) SELECT 'marketing_email', 1, 'Acepto recibir promociones por correo (opcional)', SHA2('Acepto recibir promociones por correo (opcional)', 256), NULL, 1, UTC_TIMESTAMP() FROM DUAL");
         $db->query('SET FOREIGN_KEY_CHECKS=1');
     }
 
