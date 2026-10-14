@@ -30,10 +30,12 @@ git log --oneline --decorate -3 origin/$RAMA               # debe mostrar el SHA
 docker compose ls                                           # nombre real del proyecto Compose
 docker ps -a --format "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"
 docker volume ls
-ls -la includes/.env storage 2>&1 | head -5                # solo comprueba que existen; NO los muestres
+ls -l includes/.env; ls -d storage 2>&1 | head -2           # solo comprueba que existen (storage puede no existir aún); NO muestres el contenido de .env
 $COMPOSE ps -a
-$COMPOSE exec web php database/migrador.php status          # qué migraciones están APLICADAS / PENDIENTES
+$COMPOSE exec web php database/migrador.php status          # lo que tu código ACTUAL conoce como APLICADA / PENDIENTE
 ```
+
+Nota: con el código **anterior** a esta actualización, `status` solo lista las migraciones que ese código conoce (p. ej. hasta la 018) y no marcará 019/021/022 como pendientes; esas aparecen **después** de actualizar el código (paso 4).
 
 Anota: rama actual, SHA, si hay cambios locales, nombre de proyecto Compose (`docker compose ls`) y qué migraciones aparecen **PENDIENTE**.
 Si `ahead` es mayor que 0 (commits locales no publicados) o hay cambios sin confirmar en archivos que esta rama también cambia, **detente** y consúltalo: no resuelvas conflictos a ciegas.
@@ -64,6 +66,8 @@ git merge --ff-only origin/$RAMA              # solo avance rápido; si no es po
 git rev-parse HEAD                            # debe coincidir con el SHA a validar
 git status --short --branch
 ```
+
+Si `git merge --ff-only` se **niega** («local changes … would be overwritten»), `HEAD` no cambió y no se perdió nada. Camino probado, sin `reset --hard`: guarda tus cambios (ya tienes el parche del paso 2), aparta **solo** los archivos que choquen (`git diff > storage/respaldos/choque-$TS.patch && git checkout -- <archivo que choca>`), repite `git merge --ff-only origin/$RAMA` y reaplica tu parche con `git apply --3way storage/respaldos/choque-$TS.patch`; revisa los conflictos a mano. Alternativa: `git stash push -u -m "antes-ronda3"` → merge → `git stash pop`.
 
 Dependencias y frontend: **no cambiaron** `composer.json`, `composer.lock`, `package.json` ni `Dockerfile` desde la entrega anterior, y `public/build/*` viene ya compilado en el repositorio.
 Compilar de nuevo es opcional: `npm ci && npm run build` (en Windows con ruta con espacios o `&`, ver `GUIA_ACTUALIZACION_IDENTIDADES.md` §8) y `git status` no debería mostrar cambios en `public/build`.
@@ -122,11 +126,11 @@ Consulta rápida: `sql(){ $COMPOSE exec -T -e MYSQL_PWD="$DB_PASS" db mysql -uro
 | 6.5 | **Enlace usado** | Abre otra vez el mismo enlace | Pantalla genérica «no válido o ya utilizado», sin formulario |
 | 6.6 | **Pre-registro ajeno (ataque)** | Registra `CLIENTE_B` con contraseña `A…`; vuelve a registrarlo con `B…`; activa desde el buzón con `C…` | Solo `C…` entra; `A…` y `B…` no |
 | 6.7 | **Login de equipo** | `$WEB/equipo/login` con el propietario; intenta entrar con `CLIENTE_A` | Propietario entra a `/admin`; el cliente es rechazado en el portal de equipo (y viceversa) |
-| 6.8 | **Invitación** | `/admin/equipo` → invitar a `EQUIPO_RECEPCION` (rol Recepción); abre el enlace de `/equipo/aceptar` (`curl -sI` no debe consumirlo); acepta con contraseña | Correo recibido; el GET solo muestra la ficha; tras aceptar entra por `/equipo/login` |
+| 6.8 | **Invitación** | `/admin/equipo` → invitar a `EQUIPO_RECEPCION` (rol Recepción); abre el enlace de `/equipo/aceptar` (`curl -sI` no debe consumirlo); en el formulario elige contraseña y **marca «Acepto unirme al equipo…»** (sin la casilla responde 422) | Correo recibido; el GET solo muestra la ficha; tras aceptar entra por `/equipo/login`. Si el nombre se parece al de otra ficha, la invitación se detiene en el **aviso de homónimos**: confirma «Es una persona distinta» (es el comportamiento esperado) |
 | 6.9 | **Permisos** | Con Recepción: abre `/admin/finanzas` y `/admin/equipo` (y cualquier ruta que su rol no tenga en la matriz de permisos de `GUIA_INTERFAZ.md`/`AuthorizationService::ROLES`) | 403 en las que su rol no permite; `/admin` (agenda) sí |
-| 6.10 | **Profesional** | Propietario invita a `EQUIPO_PROFESIONAL` con rol Profesional, eligiendo servicios, franjas semanales y descansos | La ficha nace **inactiva** (no sale en `/cita`) hasta que acepte; después aparece con su horario |
+| 6.10 | **Profesional** | Propietario invita a `EQUIPO_PROFESIONAL` con rol Profesional (el formulario de `/admin/equipo` publica en `/admin/equipo/crear`), eligiendo servicios, franjas semanales y descansos; quien acepta marca la casilla de aceptación | La ficha nace **inactiva** (no sale en `/cita`) hasta que acepte; después aparece con su horario |
 | 6.11 | **Reserva** | Como `CLIENTE_A`: `/cita` → servicio → profesional → horario | Cita creada; correo de confirmación; visible en `/admin?fecha=…` |
-| 6.12 | **Reasignación** | Crea un 2.º profesional con el mismo servicio. Con el propietario: `$WEB/admin/equipo/reasignar?id=<id del colaborador 1>` | Lista la cita futura, propone al sustituto disponible; al reasignar: `sql "SELECT accion,profesional_origen,profesional_destino FROM citas_reasignaciones"` → 1 fila; el cliente recibe 1 correo «cambió de profesional»; la baja solo se confirma sin citas sin resolver |
+| 6.12 | **Reasignación** | Crea un 2.º profesional con el mismo servicio. Con el propietario abre `$WEB/admin/equipo/reasignar?id=<id del COLABORADOR del profesional que tiene la cita>` (no el del propietario; el id sale del enlace «Revisar citas futuras» de su fila en `/admin/equipo`), elige el sustituto, escribe el **motivo** (obligatorio) y envía. La baja es un **segundo formulario** en la ficha | Lista la cita futura y propone al sustituto disponible; al reasignar: `sql "SELECT accion,profesional_origen_nombre,profesional_destino_nombre FROM citas_reasignaciones"` → 1 fila; el cliente recibe 1 correo «cambió de profesional»; la baja solo se confirma sin citas sin resolver |
 | 6.13 | **CRM** | `/admin/clientes` (listado), «Exportar», luego `/admin/clientes/auditoria` | La exportación genera 1 fila de auditoría (sin datos personales); un rol sin permiso recibe 403 |
 | 6.14 | **Worker detenido** | `$COMPOSE stop notificaciones`; registra otro alias; `…procesar_correos.php --estado`; `$COMPOSE start notificaciones` | Con el worker parado el correo queda `pendiente`; al arrancar llega solo |
 | 6.15 | **Entorno** | `grep CORREOS_ENVIO_INMEDIATO includes/.env` | Ausente o `0`; con `APP_ENV=production` se ignora aunque valga 1 |
@@ -146,4 +150,8 @@ Si algo falla: **no repitas comandos destructivos**. Guarda `$COMPOSE logs --tai
 
 ## 8. Ensayo realizado en la nube (NO es tu instalación)
 
-`__ENSAYO__`
+Un agente de QA independiente ejecutó el procedimiento **en la VM** (sin Docker: ejecución nativa con `php -S`, SMTP simulado y el worker real; base temporal `appsalon_qa_ensayo_test` sembrada con el código de `ddade89` y datos ficticios `@ensayo.test`). **No es tu instalación**:
+
+* **Comprobado en el ensayo:** respaldo con hash y restauración en una base nueva; cambios locales (sin preparar, preparados y sin seguimiento) respetados por `git switch`/`git merge --ff-only`; un cambio solapado hizo que el merge se **negara** sin tocar `HEAD` (se resolvió sin `reset --hard`); `.env` con hash idéntico antes y después; `migrador status` con PENDIENTE 019/021/022 tras actualizar el código y `instalar.php --migrar` + `--comprobar` («Esquema al día.»); datos sembrados intactos (huella por tabla) y cliente suspendido sigue suspendido; recorrido 6.1–6.15 con HTTP real y un recorrido con Chromium.
+* **No ejecutable en la VM:** `docker compose build/up/exec/stop/start`, volúmenes, `mysqladmin` dentro del contenedor, tu `.env`, tus buzones y tu Docker Desktop. Solo se validó `docker compose config --services` (db, instalador, notificaciones, web).
+* **Correcciones a esta guía que salieron del ensayo:** nombres de columnas del paso 6.12, id del colaborador, motivo y baja como segundo formulario; casilla de aceptación y aviso de homónimos en 6.8/6.10; `status` antes de actualizar; camino cuando `--ff-only` se niega; `ls storage` en un clon limpio.

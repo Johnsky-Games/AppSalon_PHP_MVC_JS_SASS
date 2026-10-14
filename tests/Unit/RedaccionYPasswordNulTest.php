@@ -44,4 +44,17 @@ final class RedaccionYPasswordNulTest extends TestCase
         $ok = new Usuario(['password' => 'Clave-Valida-123']);
         $this->assertSame([], $ok->validarPassword());
     }
+
+    /** QA R4-1: el registro público ya no admite bytes de control ni UTF-8 inválido en los datos de contacto. */
+    public function testElRegistroRechazaBytesDeControlYUtf8InvalidoEnLosDatosDeContacto(): void
+    {
+        $base = ['nombre' => 'Ana', 'apellido' => 'Pérez', 'telefono' => '0991234567', 'email' => 'ana@example.test', 'password' => 'Clave-Valida-123'];
+        $this->assertSame([], (new Usuario($base))->validarNuevaCuenta(), 'datos normales (con tilde)');
+        foreach (["Ana\0X", "Ana\x1bX", "Ana\x07X", "Ana\x7fX", "Ana\nX", "Ana\xC3\x28"] as $nombre) {
+            $alertas = (new Usuario(['nombre' => $nombre] + $base))->validarNuevaCuenta();
+            $this->assertContains('Los datos contienen caracteres no válidos', $alertas['error'] ?? [], 'nombre ' . bin2hex($nombre));
+        }
+        $alertas = (new Usuario(['apellido' => "Pé\0rez"] + $base))->validarNuevaCuenta();
+        $this->assertContains('Los datos contienen caracteres no válidos', $alertas['error'] ?? []);
+    }
 }

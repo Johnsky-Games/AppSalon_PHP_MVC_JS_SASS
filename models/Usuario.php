@@ -123,6 +123,12 @@ class Usuario
         if (strlen($this->nombre) > 60 || strlen($this->apellido) > 60) { self::$alertas['error'][] = 'Nombre y apellido admiten hasta 60 bytes'; }
         if ($this->email && (!filter_var($this->email, FILTER_VALIDATE_EMAIL) || strlen($this->email) > 60)) { self::$alertas['error'][] = 'Introduce un email válido de hasta 60 caracteres'; }
         if ($this->telefono && !preg_match('/^[0-9]{7,10}$/', $this->telefono)) { self::$alertas['error'][] = 'El teléfono debe contener entre 7 y 10 dígitos'; }
+        // Bytes de control (NUL, ESC, BEL, DEL…) y UTF-8 inválido en los datos de contacto: se devolverían crudos al precargar el
+        // formulario de activación (QA R4-1). Los demás caracteres (<, >, comillas) se escapan al pintar.
+        if (preg_match('/[\x00-\x1F\x7F]/', (string)$this->nombre . (string)$this->apellido . (string)$this->telefono)
+            || !mb_check_encoding((string)$this->nombre . (string)$this->apellido, 'UTF-8')) {
+            self::$alertas['error'][] = 'Los datos contienen caracteres no válidos';
+        }
         if (strlen((string)$this->password) > 72) { self::$alertas['error'][] = 'El password admite hasta 72 bytes'; }
         // password_hash() lanza ValueError con bytes NUL: se rechaza con 422 en lugar de provocar un 500 (QA R3b-19).
         if (is_string($this->password) && str_contains($this->password, "\0")) { self::$alertas['error'][] = 'El password contiene caracteres no válidos'; }
