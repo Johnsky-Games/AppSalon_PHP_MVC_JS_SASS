@@ -607,7 +607,9 @@ final class R2bRegistroUniformeTest extends R2bCase
     public function test_R2B_08_olvide_no_revela_si_la_cuenta_existe_por_el_tiempo_de_respuesta(): void
     {
         [$existe, $noExiste] = $this->tiempoPorExistencia('/olvide', false);
-        $this->assertLessThan(2.0, max($existe, $noExiste) / max(1.0, min($existe, $noExiste)), sprintf('/olvide: cuenta existente %.0f ms vs inexistente %.0f ms (SMTP con 400 ms)', $existe, $noExiste));
+        // RONDA 4: con tiempos de ~10-25 ms una razón < 2 es ruido (23 ms frente a 11 ms dio 2,07 una vez); la cuenta existente hace escrituras que la inexistente no
+        // hace (≈ 10 ms). Lo que esta prueba protege es el envío en línea (≥ 400 ms de diferencia): se exige que la diferencia absoluta sea < 120 ms (< 30 % de la latencia del SMTP).
+        $this->assertLessThan(120.0, abs($existe - $noExiste), sprintf('/olvide: cuenta existente %.0f ms vs inexistente %.0f ms (SMTP con 400 ms)', $existe, $noExiste));
         $this->assertLessThan(250, $existe, sprintf('/olvide con cuenta existente tardó %.0f ms: parece enviar en línea', $existe));
         $this->assertSame([], self::buzonFallo(self::SMTP), 'ninguna petición debe enviar correo');
         $this->assertSame(3, (int)self::escalar("SELECT COUNT(*) FROM correos_salida WHERE tipo='recuperacion_cuenta'"), 'las 3 cuentas existentes dejan su evento; las inexistentes ninguno');
@@ -617,7 +619,8 @@ final class R2bRegistroUniformeTest extends R2bCase
     public function test_R2B_09_reenviar_confirmacion_no_revela_si_existe_una_cuenta_pendiente_por_el_tiempo(): void
     {
         [$existe, $noExiste] = $this->tiempoPorExistencia('/reenviar-confirmacion', true);
-        $this->assertLessThan(2.0, max($existe, $noExiste) / max(1.0, min($existe, $noExiste)), sprintf('/reenviar-confirmacion: cuenta pendiente %.0f ms vs inexistente %.0f ms (SMTP con 400 ms)', $existe, $noExiste));
+        // RONDA 4: ver el comentario de R2B-08 (diferencia absoluta < 120 ms en lugar de una razón sobre tiempos de ~10-25 ms).
+        $this->assertLessThan(120.0, abs($existe - $noExiste), sprintf('/reenviar-confirmacion: cuenta pendiente %.0f ms vs inexistente %.0f ms (SMTP con 400 ms)', $existe, $noExiste));
         $this->assertLessThan(250, $existe, sprintf('/reenviar-confirmacion con cuenta pendiente tardó %.0f ms: parece enviar en línea', $existe));
         $this->assertSame([], self::buzonFallo(self::SMTP), 'ninguna petición debe enviar correo');
     }

@@ -72,7 +72,7 @@ abstract class R3Case extends R2bCase
 
     protected function fila(string $email): array
     {
-        return self::q('SELECT id, password, confirmado, token_hash, token_tipo, token_expira, version_sesion FROM usuarios WHERE email=?', [$email])[0];
+        return self::q('SELECT id, nombre, apellido, telefono, password, confirmado, token_hash, token_tipo, token_expira, version_sesion FROM usuarios WHERE email=?', [$email])[0];
     }
 
     /** Activación genérica con la base de este servidor (ver R2bCase::activarEnlace). */

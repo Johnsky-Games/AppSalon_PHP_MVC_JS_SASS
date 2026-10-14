@@ -643,8 +643,11 @@ final class R3bTest extends R3Case
             $n = new Navegador(self::$base);
             $csrf = $n->csrf('/olvide');
             self::q('TRUNCATE intentos_login');
-            $r = $n->post('/confirmar-cuenta', ['csrf_token' => $csrf, 'idem_key' => Idem::clave(), 'token' => $token, 'password' => self::C, 'password2' => self::C]);
+            // RONDA 4: el POST de activación exige además nombre, apellido y teléfono (si faltan es 422 sin tocar nada); aquí se envían válidos para llegar al token.
+            $r = $n->post('/confirmar-cuenta', ['csrf_token' => $csrf, 'idem_key' => Idem::clave(), 'token' => $token, 'password' => self::C, 'password2' => self::C,
+                'nombre' => 'Intruso', 'apellido' => 'Residual', 'telefono' => '0990001111']);
             $this->assertSame(410, $r['status'], "$caso: el token residual de una cuenta confirmada debe dar el 410 genérico");
+            $this->assertSame($antes['nombre'], $this->fila($c['email'])['nombre'], "$caso: el POST con token residual cambió el nombre");
             $d = $this->fila($c['email']);
             $this->assertSame($antes['password'], $d['password'], "$caso: el POST con token residual cambió la contraseña");
             $this->assertSame($antes['version_sesion'], $d['version_sesion'], "$caso: subió version_sesion");
