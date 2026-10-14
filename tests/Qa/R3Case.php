@@ -182,4 +182,45 @@ abstract class R3Case extends R2bCase
         return $res;
     }
 
+    /**
+     * Lanza todas las peticiones A LA VEZ (curl_multi). @param array<int,array{cookie?:?string,ruta:string,body?:?array,cab?:string[]}> $reqs
+     * @return array<int,array{status:int,body:string}>
+     */
+    protected function rafagaHttp(array $reqs): array
+    {
+        $mh = curl_multi_init(); $hs = [];
+        foreach ($reqs as $i => $r) {
+            $h = curl_init(self::$base . $r['ruta']);
+            $o = [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 90, CURLOPT_HTTPHEADER => $r['cab'] ?? []];
+            if (!empty($r['cookie'])) { $o[CURLOPT_COOKIE] = 'PHPSESSID=' . $r['cookie']; }
+            if (($r['body'] ?? null) !== null) { $o[CURLOPT_POST] = true; $o[CURLOPT_POSTFIELDS] = http_build_query($r['body']); }
+            curl_setopt_array($h, $o);
+            curl_multi_add_handle($mh, $h); $hs[$i] = $h;
+        }
+        do { curl_multi_exec($mh, $act); curl_multi_select($mh, 0.05); } while ($act > 0);
+        $res = [];
+        foreach ($hs as $i => $h) { $res[$i] = ['status' => (int)curl_getinfo($h, CURLINFO_HTTP_CODE), 'body' => (string)curl_multi_getcontent($h)]; curl_multi_remove_handle($mh, $h); curl_close($h); }
+        curl_multi_close($mh);
+        return $res;
+    }
+
+    /** GET del formulario de activación con un navegador nuevo: devuelve [navegador, formulario|null]. */
+    protected function abrirFormulario(string $token): array
+    {
+        $n = new Navegador(self::$base);
+        $url = '/confirmar-cuenta?token=' . $token;
+        return [$n, $this->formulario($n->get($url)['body'], $url)];
+    }
+
+    /** Cuerpo POST de un formulario de activación con la contraseña `$clave` (y las sustituciones `$cambios`). */
+    protected function cuerpo(array $f, string $clave, array $cambios = []): array
+    {
+        return array_merge($f['campos'], array_fill_keys($f['password'], $clave), $cambios);
+    }
+
+    /** ¿Responde 200 a una sesión con ese PHPSESSID (acceso real a /cita)? */
+    protected function accesoConSesion(string $sid): int
+    {
+        return (new Navegador(self::$base))->get('/cita', ['Cookie: PHPSESSID=' . $sid, 'Accept: text/html'])['status'];
+    }
 }
