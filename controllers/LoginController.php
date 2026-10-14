@@ -423,7 +423,7 @@ class LoginController
         $datos = [];
         if ($estado === AuthService::STATUS_OK && $validacion['usuario'] instanceof Usuario) {
             $u = $validacion['usuario'];
-            $datos = ['nombre' => (string)$u->nombre, 'apellido' => (string)$u->apellido, 'telefono' => (string)$u->telefono];
+            $datos = ['nombre' => self::limpiarParaMostrar((string)$u->nombre), 'apellido' => self::limpiarParaMostrar((string)$u->apellido), 'telefono' => self::limpiarParaMostrar((string)$u->telefono)];
         }
         self::renderActivacion($router, $estado === AuthService::STATUS_OK ? 'formulario' : ($estado === AuthService::STATUS_ERROR ? 'error' : 'invalido'),
             $validacion['alertas'], $token, $datos);
@@ -493,9 +493,15 @@ class LoginController
         // Se conserva lo escrito en los datos de contacto (nunca la contraseña) y solo si son texto.
         $escrito = [];
         foreach (['nombre', 'apellido', 'telefono'] as $campo) {
-            $escrito[$campo] = is_string($_POST[$campo] ?? null) ? $_POST[$campo] : '';
+            $escrito[$campo] = is_string($_POST[$campo] ?? null) ? self::limpiarParaMostrar($_POST[$campo]) : '';
         }
         self::renderActivacion($router, 'formulario', $resultado['alertas'], $token, $escrito);
+    }
+
+    /** Quita bytes de control y UTF-8 inválido antes de volver a escribir un dato en el formulario (higiene de salida, QA R4-1/R4-12b). */
+    private static function limpiarParaMostrar(string $valor): string
+    {
+        return preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', '', mb_scrub($valor, 'UTF-8')) ?? '';
     }
 
     private static function renderActivacion(Router $router, string $modo, array $alertas, string $token, array $datos = []): void
