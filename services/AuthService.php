@@ -479,9 +479,20 @@ class AuthService
                 }
                 return ['recurso_tipo' => 'usuario', 'recurso_id' => (int)$cuenta['id'], 'datos' => []];
             };
-            $op = $usaIdempotencia
-                ? Idempotencia::ejecutar($this->repository->getDb(), 'cliente.activacion', $actor, $claveOperacion, $contenido, $alta)
-                : ['repetida' => false] + $this->repository->enTransaccion($alta);
+            // Dos activaciones simultáneas compiten por la misma fila: InnoDB puede abortar a una con interbloqueo (1213) o espera
+            // agotada (1205). Es un fallo transitorio de concurrencia, no un error de negocio: se reintenta y la perdedora termina
+            // viendo «enlace no válido o ya utilizado» (CI: test_seis_activaciones_simultaneas…).
+            for ($intento = 1; ; $intento++) {
+                try {
+                    $op = $usaIdempotencia
+                        ? Idempotencia::ejecutar($this->repository->getDb(), 'cliente.activacion', $actor, $claveOperacion, $contenido, $alta)
+                        : ['repetida' => false] + $this->repository->enTransaccion($alta);
+                    break;
+                } catch (PersistenceException $e) {
+                    if ($intento >= 5 || !self::esFalloTransitorioDeConcurrencia($e)) { throw $e; }
+                    usleep(random_int(15000, 60000) * $intento);
+                }
+            }
         } catch (EnlaceActivacionNoValidoException $e) {
             return $this->construirRespuesta(self::STATUS_INVALID, false, null, ['error' => [self::MENSAJE_ENLACE_NO_VALIDO]], ['repetida' => false, 'enlace' => false]);
         } catch (ConflictoIdempotenciaException $e) {
@@ -508,6 +519,17 @@ class AuthService
             }
         }
         return $this->respuestaActivacionOk($op['repetida']);
+    }
+
+    /** ¿La excepción (o su causa) es un interbloqueo o una espera de bloqueo agotada de MySQL (1213 / 1205)? */
+    private static function esFalloTransitorioDeConcurrencia(\Throwable $e): bool
+    {
+        for ($x = $e; $x !== null; $x = $x->getPrevious()) {
+            if (in_array((int)$x->getCode(), [1213, 1205], true) || preg_match('/deadlock|lock wait timeout|\b(1213|1205)\b/i', $x->getMessage())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private function respuestaActivacionOk(bool $repetida): array

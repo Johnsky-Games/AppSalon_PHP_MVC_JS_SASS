@@ -252,6 +252,37 @@ class AuthServiceTest extends TestCase
         $this->assertStringNotContainsString('SQLSTATE', json_encode($resultado['alertas']));
     }
 
+    public function testLaActivacionReintentaInterbloqueosTransitoriosYLaPerdedoraVeEnlaceNoValido(): void
+    {
+        // Doble que simula N interbloqueos de InnoDB (1213) antes de ver el token ya consumido por la ganadora.
+        $repo = new class extends InMemoryUsuarioRepositoryStub {
+            public int $llamadas = 0;
+            public int $interbloqueos = 0;
+            public string $mensaje = 'Deadlock found when trying to get lock; try restarting transaction';
+            public function activateAccountByToken(string $tokenRaw, string $nuevoPasswordHash): ?array
+            {
+                $this->llamadas++;
+                if ($this->llamadas <= $this->interbloqueos) { throw new \Repositories\PersistenceException($this->mensaje); }
+                return null;   // la ganadora ya consumió el token
+            }
+        };
+        $service = new AuthService($repo, static fn() => true);
+        $datos = ['token' => 'abc', 'password' => 'ClaveDefinitiva9', 'password2' => 'ClaveDefinitiva9'];
+
+        $repo->interbloqueos = 2;
+        $r = $service->activarCuenta($datos);
+        $this->assertSame(AuthService::STATUS_INVALID, $r['status'], 'tras reintentar, la perdedora ve «enlace no válido o ya utilizado», no un error técnico');
+        $this->assertSame(3, $repo->llamadas);
+
+        $repo->llamadas = 0; $repo->interbloqueos = 99;
+        $this->assertSame(AuthService::STATUS_ERROR, $service->activarCuenta($datos)['status'], 'un interbloqueo persistente sí es error técnico');
+        $this->assertSame(5, $repo->llamadas, 'máximo 5 intentos');
+
+        $repo->llamadas = 0; $repo->interbloqueos = 99; $repo->mensaje = 'Duplicate entry for key PRIMARY';
+        $this->assertSame(AuthService::STATUS_ERROR, $service->activarCuenta($datos)['status']);
+        $this->assertSame(1, $repo->llamadas, 'un error que no es de concurrencia no se reintenta');
+    }
+
     public function testConfirmarCuentaYRestablecerPasswordDistinguenEstadosYErroresSql(): void
     {
         $repo = new InMemoryUsuarioRepositoryStub();
