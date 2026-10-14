@@ -948,3 +948,96 @@ Servidores `php -S` reales con cada `APP_ENV` (en producción con `APP_KEY` de 4
 - `ColaboradorRepository` (arranque del propietario con `password`): solo con el secreto de instalación y, si la cuenta existe, exige que la contraseña coincida; `scripts/instalar.php` entrega un enlace de activación de invitación (mismo patrón seguro).
 - `UsuarioRepository::resetPasswordByToken` (recuperación) no exige `confirmado=1` en el `WHERE` (la emisión sí lo exige); no es explotable hoy porque el token solo se emite para cuentas confirmadas, pero convendría añadir la condición como defensa en profundidad.
 - No se encontró ningún otro `UPDATE usuarios SET confirmado=1` ni cambio de correo en `PerfilService`/`ProfileService` (no hay edición de `email` en usuarios).
+
+## Ronda 3 – Fase B (reverificación de la corrección)
+
+Se integró la corrección del agente de identidad (`f4ba701`/`a1c2e27`, avance sobre `2240371`) y se reverificó contra HTTP real, SMTP simulado y el worker real. Solo se tocó `tests/Qa/**` y este documento. Arnés nuevo: `R3Case` (compartido por `R3Test` y `R3bTest`); la activación genérica (`formulario()` / `activarEnlace()`) pasó a `R2bCase` para que la usen las pruebas antiguas.
+
+### R3B.1 Estado de cada hallazgo
+
+| Hallazgo | Estado final | Pruebas |
+|---|---|---|
+| **R3-1** toma de cuenta por pre-registro (también con re-registros, reenvíos, cuenta de recepción, 6 activaciones simultáneas, sesión previa, doble clic) | **Corregido y reverificado**: la contraseña del atacante A y la del segundo registro B no entran jamás; solo la elegida en el buzón (C). | `R3Test::test_R3_01…06` (antes `test_Defecto_R3_…`, rojas en la fase A, ahora verdes) |
+| **R3-2** confirmación por GET | **Corregido y reverificado**: GET/HEAD/prefetch/escáneres (20 GET repetidos, 5 User-Agent, 4 cabeceras de prefetch) no activan ni consumen el token; la activación exige POST con CSRF y tiene límite (429 con `Retry-After`). | `R3_10`, `R3_11`, `R3_12`, `R3b_04`, `R3b_05`, `R3b_20` |
+| **R3-3** `CORREOS_ENVIO_INMEDIATO` | **Corregido y reverificado** con servidores reales: 13 valores de `APP_ENV` sin efecto y 7 variantes de mayúsculas/espacios sin efecto en registro, `/olvide` y `/reenviar-confirmacion`; los 5 entornos explícitos sí envían en línea (control positivo). El criterio estricto coincide con la decisión del QA de la fase A. | `R3_20`, `R3_21`, `R3b_15` |
+| R2B-03c (direcciones entre comillas, literal de IP, mayúsculas, varias direcciones) | **Corregido y reverificado** (19 formas, SMTP `rcptmulti`; ver R2B-03d para el residuo). | `R2bColaCorreosTest::test_R2B_03c_…` |
+| R2B-13 (diagrama de §5.1) | **Corregido y reverificado**: el diagrama ya no describe el intento inmediato por defecto ni el intervalo de 60 s. | `R2bColaRecuperacionTest::test_R2B_13_…` |
+| **R2B-03d (nuevo)** literal de IPv6 | **ABIERTO (Baja)** | `test_Defecto_R2B_03d_…` |
+| **R3b-19 (nuevo)** byte NUL en la contraseña | **ABIERTO (Baja)** | `R3bTest::test_Defecto_R3b_19_…` |
+
+### R3B.2 Defectos abiertos (reproducción mínima)
+
+**R3b-19 (Baja, robustez).** Una contraseña con un byte NUL (`%00`) da **500** en el registro, en la activación y en la recuperación: `password_hash()` lanza `ValueError: must not contain any null bytes` (PHP 8.3.6; la traza es `AuthService.php:473` en la activación) y no hay validación previa. Reproducción: `POST /cliente/registro` con `password=Clave%00Nula1` (idéntico en `POST /confirmar-cuenta` y `POST /recuperar`). Salida literal: `una contraseña con byte NUL provoca 500 en: registro => 500, activación => 500, recuperación => 500`. No escribe datos; debía responder 422 como con cualquier contraseña inválida. El login con NUL responde 200 (sin error).
+
+**R2B-03d (Baja, PII).** El saneador de `Email::sanearMensajeError` ya redacta comillas, IPv4, subdominios, mayúsculas, varias direcciones y caracteres especiales, pero un literal de IPv6 (`zq@[IPv6:2001:db8::1]`, que la aplicación admite) deja la dirección COMPLETA en `--estado`, `--estado --json`, el error de la cola y el log del worker. Salida: `la dirección con literal IPv6 queda en claro: «zq…@[IPv6:2001:db8::1]» en --estado: …`. (Barrido directo del saneador con 30 cadenas: además quedan restos con direcciones que la aplicación rechaza al registrar —`x"y@e.test` → `x"[correo]`, `pii\@x@e.test`— y el dominio IDN de `bob@exämple.com`, que no es dato personal.)
+
+### R3B.3 Ataques nuevos contra la corrección (todos superados salvo lo anotado)
+
+| Ataque | Resultado |
+|---|---|
+| Carrera: re-registro y reenvío del titular a la vez que el POST de activación (8 rondas × 3 peticiones simultáneas) | Estados siempre coherentes: activa (sin token vivo, solo la contraseña C) o reemitida (token vigente, sin C); en 2 rondas ganó la activación y en 6 la reemisión; el titular siempre pudo terminar; A y B nunca entran. |
+| Token de un reenvío posterior | El enlace viejo da 410 también por POST (sin volver a ofrecer el formulario); el token nuevo enviado dentro del formulario viejo (misma sesión y CSRF) activa; ambos quedan invalidados después. |
+| Activación y recuperación simultáneas (8 rondas) | Sin token de confirmación vivo en cuentas activas; la contraseña es C; 0 de 8 rondas con un token de recuperación vivo y su correo cancelado por la activación. |
+| Errores de contraseña (vacía, 3 y 7 caracteres, discordante; 40 intentos) | Siempre 422, el token no se consume ni cuenta contra el límite, el formulario se vuelve a mostrar y la activación válida posterior funciona. |
+| Abuso con tokens inventados | 429 con `Retry-After` numérico en ≤ 20 intentos (límite por IP 15); el mismo token repetido se limita en ≤ 7 (límite por huella, 5) sin afectar al enlace real. **Observación medida:** con la IP agotada la activación legítima de otro usuario de esa IP también recibe 429 (presupuesto por IP compartido, p. ej. detrás de NAT). |
+| Cabeceras y cookies | GET del formulario, HEAD y 410: `Cache-Control: no-store` y `Referrer-Policy: no-referrer`; sin recursos externos; POST exitoso: identificador de sesión NUEVO (HttpOnly, SameSite=Lax), sin `Location` (sin auto-login), el identificador anterior y el nuevo no dan acceso, la pantalla de éxito no refleja ni la contraseña ni el token. |
+| Reflejo del token (4 cargas XSS/atributos/plantillas) | GET: 410 sin reflejar; POST 422/410: el valor del campo oculto es el texto exacto, sin atributos inyectados ni `<script>`/`<img>` crudos. |
+| `idem_key` hostil (vacía, SQL, 10 000 caracteres, NUL, ruta, unicode, saltos, corta, JSON, arreglo, ausente) | Sin 500 ni activación con clave inválida; la misma clave de operación usada en OTRA cuenta no interfiere (ambas activan con su contraseña). |
+| Fijación de sesión | Un identificador impuesto cambia al activar y al iniciar sesión; el impuesto no da acceso. |
+| Sesiones legadas sin versión | Cuenta de versión 1: la sesión sin marca sigue siendo válida (compatibilidad); tras activar, recuperar o cambiar de rol (versión > 1) deja de valer. Único punto que crea sesiones es `LoginController.php:147` y fija la versión: ningún flujo legítimo (login de cliente, `/cita`, `/perfil`, `/mis-citas`, panel de recepción, finanzas tras el cambio de rol) se rompe. |
+| Entradas deformes (token/contraseñas como arreglo, cuerpo vacío, 100 y 10 000 caracteres) | Sin 500 ni activación; una contraseña de más de 72 bytes se rechaza (`validarPassword`: no hay truncado silencioso de bcrypt). |
+| Cuenta suspendida | Activar el correo no la reactiva ni le da acceso. |
+| POST directo con token residual (cuenta confirmada y suspendida) | 410 genérico, contraseña y `version_sesion` intactas. |
+| Tiempo de la activación (válido frente a inexistente) | Razón de medianas < 2,5 (el coste de bcrypt se paga siempre). |
+| El correo de activación | Dice que la contraseña del registro es provisional, botón «Elegir mi contraseña y activar», no contiene la contraseña enviada. |
+| Contadores de la cuenta bloqueada por intentos de login ajenos | La activación funciona y el titular entra de inmediato con C. |
+| Advertencia de envío inmediato ignorado | Sin la variable: 0 líneas; en pruebas: 0; en producción: una línea **por petición** (4 para 4 peticiones), no «una por proceso»: el indicador estático no persiste entre peticiones PHP (php -S/FPM/Apache). Observación de ruido de log, no de seguridad. |
+
+### R3B.4 Otros caminos que fijan contraseñas o confirman cuentas (lectura + intentos de explotación)
+- `UsuarioRepository::activateAccountByToken` es ahora el único `UPDATE … confirmado=1` por correo (UN UPDATE atómico con `confirmado='0'`, `affected_rows===1`).
+- Invitaciones del equipo (`ColaboradorRepository::aceptar`): una cuenta sin confirmar pre-registrada por un tercero queda con la contraseña elegida al aceptar y la provisional descartada (`R3b_14`, explotación intentada: A no entra). Si la cuenta está confirmada exige la contraseña actual.
+- Recepción (`AltaClienteService`): cuenta sin confirmar con contraseña aleatoria y sin correo; quien activa elige la suya (`R3_03`).
+- Recuperación: no se emite para cuentas sin confirmar y `resetPasswordByToken` exige ahora `confirmado=1`; un token de recuperación residual sobre una cuenta sin confirmar ya no fija contraseña (`R3b_13`).
+- Instalador/propietario: el arranque con contraseña exige el secreto de instalación y que coincida si la cuenta existe; la vía por defecto es una invitación (mismo patrón seguro).
+- `ProfileService`: no hay cambio de contraseña ni de correo.
+- **Observación:** quien pre-registra un correo ajeno fija el nombre, apellido y teléfono de la cuenta; tras la activación del titular esos datos siguen siendo los del atacante hasta que el titular los edite (no hay nada que lo evite en la activación). No concede acceso.
+- **Documentación desfasada:** `GUIA_ENTREGA_1.md` (fila 2 de la tabla de ejecución) aún describe `GET /confirmar-cuenta?token=…` → «Cuenta confirmada correctamente», `confirmado=1`; es un registro histórico de la entrega 1, pero contradice el contrato actual. La sección 5.1 de `NOTIFICACIONES_WORKER.md` afirma que `ultimo_error` pasa por el saneador sin mencionar direcciones (incompleto, no falso).
+
+### R3B.5 Expectativas modificadas por el cambio de contrato (sin relajar el poder de detección)
+
+| Prueba | Antes | Ahora | Justificación |
+|---|---|---|---|
+| `R2bColaCorreosTest::test_el_alta_con_smtp_roto…` | `GET /confirmar-cuenta?token=` esperaba 200 y `confirmado=1`; login con la contraseña del registro | el GET responde 200 pero **no** activa (se afirma `confirmado=0`); la activación genérica (POST con contraseña elegida) activa y se entra con ella | el GET ya no activa; la contraseña del registro es provisional. Se añaden aserciones nuevas, no se quitan. |
+| `R2bRegistroUniformeTest::test_cliente_sin_confirmar_recibe_token_nuevo…` | entrar con la contraseña ORIGINAL tras confirmar por GET | el GET no activa; se activa eligiendo `Elegida-Titular-77x`; entra la elegida y **no** entran la original ni la del atacante (200 en el login) | cambio deliberado: contraseña provisional. La parte «la contraseña original no cambia hasta activar» se conserva. |
+| `RegresionNegocioTest::test_cliente_de_registro_publico…` | GET activaba | GET no activa (`confirmado=0`) y la activación POST elige `Clave-Publica-123` | idem. |
+| `AutorizacionMatrizTest` (A, C, G) | `Referrer-Policy: strict-origin-when-cross-origin` en toda respuesta | `no-referrer` en GET/HEAD/POST de `/confirmar-cuenta` salvo el 403 de CSRF (página genérica, que conserva la política general) | la pantalla lleva un token; endurecer la política es deliberado (R3b_06 lo exige). La excepción es solo por ruta. |
+| `matriz_rutas.php` | sin `POST /confirmar-cuenta` | fila `POST /confirmar-cuenta` (pública, solo CSRF, 410 genérico sin token) | la ruta existe ahora; `test_D` (Allow `GET, HEAD, POST`) y `test_H` (inventario de rutas) vuelven a cubrir exactamente `public/index.php`. |
+| `test_Defecto_R3_01…21` | rojas (fase A) | `test_R3_…` verdes | corrección integrada. |
+| `R2bColaCorreosTest::test_Defecto_R2B_03c` | roja | `test_R2B_03c_…` verde y ampliada; `carga_cifrada` excluida de la búsqueda de fragmentos (texto cifrado aleatorio: un fragmento de 3 caracteres coincidía por azar) | corrección integrada. |
+
+### R3B.6 Sensibilidad de las pruebas (mutaciones sobre una COPIA)
+
+| # | Mutación | Resultado | Prueba que la detecta |
+|---|---|---|---|
+| Q01 | la activación no reemplaza la contraseña provisional (`repositories/UsuarioRepository.php`) | ROJO | `R3Test::test_R3_01_la_contrasena_del_atacante_no_inicia_sesion_tras_activar_el_titular` |
+| Q02 | la activación no exige confirmado=0 (`repositories/UsuarioRepository.php`) | ROJO | `R3bTest::test_R3b_22_un_post_directo_con_un_token_residual_de_una_cuenta_ya_confirmada_no_cambia_su_c` |
+| Q03 | isAuth vuelve a adoptar sesiones sin versión (`includes/funciones.php`) | ROJO | `R3Test::test_R3_05_una_sesion_previa_de_la_cuenta_no_da_acceso_sin_confirmar_ni_sobrevive_a_la_activa` |
+| Q04 | Entorno acepta mayúsculas y espacios (`classes/Entorno.php`) | ROJO | `R3Test::test_R3_21_las_variantes_de_mayusculas_y_espacios_de_los_entornos_de_pruebas_no_habilitan_el_` |
+| Q05 | la activación no exige CSRF (`controllers/LoginController.php`) | ROJO | `R3Test::test_R3_11_la_activacion_exige_post_con_csrf_y_los_demas_casos_no_tienen_efectos` |
+| Q06 | la activación no regenera el identificador de sesión (`controllers/LoginController.php`) | ROJO | `R3bTest::test_R3b_06_el_formulario_no_se_cachea_no_filtra_referer_y_la_activacion_regenera_la_sesion_` |
+| Q07 | la activación no limita intentos (`services/AuthService.php`) | ROJO | `R3Test::test_R3_12_la_activacion_tiene_limite_de_intentos` |
+| Q08 | el GET del enlace no fija Referrer-Policy no-referrer (`controllers/LoginController.php`) | ROJO | `R3bTest::test_R3b_06_el_formulario_no_se_cachea_no_filtra_referer_y_la_activacion_regenera_la_sesion_` |
+| Q09 | la activación no sube version_sesion (`repositories/UsuarioRepository.php`) | ROJO | `R3Test::test_R3_05_una_sesion_previa_de_la_cuenta_no_da_acceso_sin_confirmar_ni_sobrevive_a_la_activa` |
+| Q10 | resetPasswordByToken no exige confirmado=1 (`repositories/UsuarioRepository.php`) | ROJO | `R3bTest::test_R3b_13_un_token_de_recuperacion_residual_en_una_cuenta_sin_confirmar_no_fija_contrasena` |
+| Q11 | los errores de contraseña se cuentan contra el límite (`services/AuthService.php`) | ROJO | `R3bTest::test_R3b_04_los_errores_de_contrasena_no_consumen_el_token_ni_cuentan_para_el_limite` |
+
+Las 11 mutaciones fueron detectadas (0 supervivientes).
+
+### R3B.7 Resultado de la suite Qa completa
+
+```
+php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --colors=never --log-junit <junit.xml> tests/Qa
+Tests: 636, Assertions: 6866, Failures: 2.     (DURACION_SEG=848)
+```
+Fallos: R2bColaCorreosTest::test_Defecto_R2B_03d_un_literal_de_ipv6_deja_la_direccion_completa_en_el_error_y_en_el_estado, R3bTest::test_Defecto_R3b_19_una_contrasena_con_byte_nulo_da_500_en_registro_activacion_y_recuperacion.
+Omitidas: 0 (`php scripts/ci_verificar_omitidas.php <junit.xml> .github/qa_omitidas_permitidas.txt` → «Pruebas en el informe: 636; omitidas: 0»). La lista permitida sigue vacía. No se ejecutó PHP 8.2 localmente (8.3.6); las diferencias tenidas en cuenta: `proc_get_status`/`exitcode` (ya corregido en `R2bCase::worker`), sin funciones exclusivas de 8.3 y sin `posix_*`.
