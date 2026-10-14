@@ -631,4 +631,24 @@ final class R3bTest extends R3Case
         $n2 = new Navegador(self::$base);
         $this->assertSame(302, $n2->login('cliente', $email, self::C)['status'], 'tras activar, los contadores de la cuenta se reinician y el titular puede entrar sin esperar el bloqueo');
     }
+
+    public function test_R3b_22_un_post_directo_con_un_token_residual_de_una_cuenta_ya_confirmada_no_cambia_su_contrasena(): void
+    {
+        // Se salta el GET (que ya no ofrece formulario para esa cuenta) y se fabrica el POST con un CSRF y una clave de operación válidos.
+        foreach (['activa' => [], 'suspendida' => ['estado' => 'suspendido']] as $caso => $extra) {
+            $c = self::cliente(['email' => self::correo('res-' . $caso)] + $extra);
+            $token = bin2hex(random_bytes(32));
+            self::q("UPDATE usuarios SET token_hash=?, token_tipo='confirmacion', token_expira=DATE_ADD(UTC_TIMESTAMP(), INTERVAL 1 HOUR) WHERE id=?", [hash('sha256', $token), $c['id']]);
+            $antes = $this->fila($c['email']);
+            $n = new Navegador(self::$base);
+            $csrf = $n->csrf('/olvide');
+            self::q('TRUNCATE intentos_login');
+            $r = $n->post('/confirmar-cuenta', ['csrf_token' => $csrf, 'idem_key' => Idem::clave(), 'token' => $token, 'password' => self::C, 'password2' => self::C]);
+            $this->assertSame(410, $r['status'], "$caso: el token residual de una cuenta confirmada debe dar el 410 genérico");
+            $d = $this->fila($c['email']);
+            $this->assertSame($antes['password'], $d['password'], "$caso: el POST con token residual cambió la contraseña");
+            $this->assertSame($antes['version_sesion'], $d['version_sesion'], "$caso: subió version_sesion");
+            $this->assertNoEntra($c['email'], self::C, "C ($caso)");
+        }
+    }
 }
