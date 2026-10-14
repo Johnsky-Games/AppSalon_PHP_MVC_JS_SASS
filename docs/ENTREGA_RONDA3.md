@@ -1,7 +1,7 @@
 # Entrega ronda 3 — activación segura de cuentas
 
 Rama `claude/blissful-hopper-f5k7a0` (sin merge a `main`, sin despliegue). Parte de `2240371` (dos CI verificados).
-El SHA final se informa en el mensaje de entrega; un commit de documentación no puede citar su propio SHA. Los resultados de §3 son del código de `496b596`.
+El SHA final se informa en el mensaje de entrega; un commit de documentación no puede citar su propio SHA. Los resultados de §3 son del código de `9983a1a`.
 Guía de actualización (Windows/Docker/Linux): `docs/GUIA_ACTUALIZACION_RONDA3.md`.
 
 ## 1. Hallazgos, causa raíz y corrección
@@ -34,17 +34,20 @@ Guía de actualización (Windows/Docker/Linux): `docs/GUIA_ACTUALIZACION_RONDA3.
 | R2B-03c | Redacción de direcciones entre comillas / literal IP en `ultimo_error` | Corregido y reverificado |
 | R2B-13 | Diagrama §5.1 de `NOTIFICACIONES_WORKER.md` | Corregido y reverificado |
 | R2B-03d | Literal `[IPv6:…]` no se redactaba | Corregido (`tests/Unit/RedaccionYPasswordNulTest.php`) |
+| Interbloqueo en activaciones simultáneas | Un CI previo (run 38511682212) falló una vez: con dos activaciones simultáneas InnoDB abortó a la perdedora con 1213 y vio un error técnico en lugar de «enlace no válido o ya utilizado» (la contraseña ganadora nunca estuvo en riesgo) | Corregido: `AuthService::activarCuenta` reintenta hasta 5 veces los fallos 1213/1205 (prueba unitaria `testLaActivacionReintentaInterbloqueos…`) |
 | R3b-19 | Contraseña con byte NUL → `ValueError` de `password_hash()` → 500 en registro, activación y recuperación | Corregido: 422 (`Usuario::validarPassword`, `ColaboradorService`) |
 
 ## 2. Documentación corregida
 El riesgo «inherente / residuo honesto» del pre-registro ya no figura como tal en `GUIA_ACTUALIZACION_IDENTIDADES.md` §10, `GUIA_ACTUALIZACION_RONDA2.md` §6, `ENTREGA_RONDA2.md` §5 ni en la matriz (R2 y fila R13 nueva de `MATRIZ_ACEPTACION_NEGOCIO.md`).
 
 ## 3. Resultados (suites separadas, sin sumar)
-* **PHPUnit por defecto** (`tests/Unit` + `tests/Integration`), local (PHP 8.3.6, MySQL 8.0.46, orden aleatorio): `OK (755 tests, 10720 assertions)` (semilla 1791950735). En el CI (PHP 8.2, orden aleatorio) el paso pasó en 178 s.
-* **QA independiente** (`tests/Qa`), local: `OK (636 tests, 6862 assertions)`, 887 s, `QA_EXIGIR_NAVEGADOR=1`; en el CI el paso pasó en 670 s.
-* **CI del mismo código:** [run 38509954530](https://github.com/Johnsky-Games/AppSalon_PHP_MVC_JS_SASS/actions/runs/38509954530) sobre `496b596`: **success** (migraciones, instalador del propietario, PHPUnit, QA, imagen Docker, E2E en Apache —217 s—, respaldo/restauración con SHA-256).
+* **PHPUnit por defecto** (`tests/Unit` + `tests/Integration`), local (PHP 8.3.6, MySQL 8.0.46, orden aleatorio): `OK (756 tests, 10725 assertions)` (semilla 1791952572). En el CI (PHP 8.2, orden aleatorio) el paso pasó.
+* **QA independiente** (`tests/Qa`), local: `OK (636 tests, 6870 assertions)`, 937 s, `QA_EXIGIR_NAVEGADOR=1`; en el CI el paso pasó.
+* **CI del mismo código:** [run 38512598534](https://github.com/Johnsky-Games/AppSalon_PHP_MVC_JS_SASS/actions/runs/38512598534) sobre `9983a1a`: **success** (migraciones, instalador del propietario, PHPUnit, QA, imagen Docker, E2E en Apache, respaldo/restauración con SHA-256).
 * **Pruebas omitidas:** 0 en `tests/Qa` (`ci_verificar_omitidas.php`: «Pruebas en el informe: 636; omitidas: 0») y 0 en la suite por defecto; la lista permitida `.github/qa_omitidas_permitidas.txt` sigue vacía.
 * **E2E de navegador:** el paso «Recorrido E2E aislado» del CI (Apache real + MySQL + SMTP simulado) forma parte del mismo run. En local no se repitió (no hay Docker).
+
+Historial del CI de esta ronda: un run falló por el interbloqueo descrito arriba (corregido) y el siguiente, sobre el código final, pasó; no se relajó ninguna prueba.
 
 Pruebas nuevas o reescritas: `ActivacionCuentaIntegrationTest` (23), `EnvioInmediatoEntornoTest` (≈56 casos), `RedaccionYPasswordNulTest`, y del QA `R3Test`, `R3bTest`, más la adaptación (con justificación escrita, sin relajar) de las pruebas Qa que activaban por GET o iniciaban sesión con la contraseña del registro. Mutaciones sobre copia: 9 del agente de identidad y 11 del QA (Q01–Q11), todas detectadas.
 
