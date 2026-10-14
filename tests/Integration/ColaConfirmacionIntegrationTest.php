@@ -517,10 +517,11 @@ final class ColaConfirmacionIntegrationTest extends TestCase
         $this->assertStringContainsString('Subject: Confirma tu cuenta', $m[0]['cabeceras']);
 
         // De punta a punta: el enlace del correo capturado confirma la cuenta, una sola vez.
-        $r = $this->auth()->confirmarCuenta($token);
+        $activar = fn() => $this->auth()->activarCuenta(['token' => $token, 'password' => 'Definitiva-Pass-9', 'password2' => 'Definitiva-Pass-9']);
+        $r = $activar();
         $this->assertSame(AuthService::STATUS_OK, $r['status']);
         $this->assertSame(1, (int)$this->fila("SELECT confirmado c FROM usuarios WHERE id={$id}")['c']);
-        $this->assertNotSame(AuthService::STATUS_OK, $this->auth()->confirmarCuenta($token)['status'], 'el enlace es de un solo uso');
+        $this->assertNotSame(AuthService::STATUS_OK, $activar()['status'], 'el enlace es de un solo uso');
         // Con la cuenta confirmada, un nuevo reenvío no genera nada.
         $this->reenviar($email, '198.51.100.51');
         $this->assertCount(1, $this->eventosDe($email));

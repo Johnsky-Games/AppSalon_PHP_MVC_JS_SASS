@@ -45,7 +45,6 @@ Conserva tu archivo. Comprueba que existan (solo **añade** las que falten):
 
 ```ini
 CORREOS_INTERVALO_SEGUNDOS=5                 # pasada del worker de correo (2-600)
-CORREOS_ENVIO_INMEDIATO=0                   # 0 = solo cola + worker (recomendado)
 APP_KEY="<64 caracteres hexadecimales>"      # php -r "echo bin2hex(random_bytes(32)), PHP_EOL;"  — OBLIGATORIA fuera de desarrollo
 EMAIL_HOST=...  EMAIL_PORT=...  EMAIL_USER=...  EMAIL_PASS=...    # SMTP real solo en producción; en pruebas usa un buzón simulado
 ```
@@ -69,7 +68,7 @@ Si compilas estilos en tu equipo: `npm ci && npm run build` (Windows con ruta co
 ## 5. Cola de correos de cuenta (confirmaciones y avisos)
 
 Los correos de confirmación de cuenta, de recuperación de contraseña y los avisos de «ya tienes una cuenta» pasan por la cola persistente `correos_salida`:
-se escriben en la misma transacción que el alta y los entrega el **worker** (`CORREOS_INTERVALO_SEGUNDOS`, 5 s por defecto), **no la petición HTTP**: así el tiempo de respuesta no delata si una cuenta existe. Si el SMTP falla, reintenta con espera creciente (60 s, 120 s, 240 s, 480 s, 960 s; 6 intentos ≈ 31 min). Con el worker detenido los correos no salen. `CORREOS_ENVIO_INMEDIATO=1` reactiva el intento en línea (solo pruebas).
+se escriben en la misma transacción que el alta y los entrega el **worker** (`CORREOS_INTERVALO_SEGUNDOS`, 5 s por defecto), **no la petición HTTP**: así el tiempo de respuesta no delata si una cuenta existe. Si el SMTP falla, reintenta con espera creciente (60 s, 120 s, 240 s, 480 s, 960 s; 6 intentos ≈ 31 min). Con el worker detenido los correos no salen. `CORREOS_ENVIO_INMEDIATO=1` reactiva el intento en línea **solo si `APP_ENV` es `development|dev|local|testing|test`** (variable de pruebas; en `production`, `staging`, vacío o desconocido se ignora y queda una advertencia en el registro; ya no figura en `docker-compose.yml` ni en el `.env` recomendado).
 **Garantía: «al menos una vez».** Si el servidor SMTP acepta el mensaje y la conexión se corta antes de la confirmación, se reintenta y el cliente puede recibir un duplicado.
 No se promete entrega «exactamente una vez».
 
@@ -89,7 +88,8 @@ Lo que cambia para el operador:
 
 * El titular real de un correo ya registrado recibe un aviso (máximo uno por hora y correo). Ya no se ve «El usuario ya está registrado».
 * Si quien registra el correo es otra persona, no obtiene ninguna señal de que la cuenta exista. Límite de intentos: 3 por correo y 10 por IP cada 15 minutos, igual en todas las ramas.
-* Residuo conocido: un registro sobre un correo ajeno sin confirmar deja una cuenta sin confirmar con la contraseña de quien la creó; el titular la activa al confirmar. Es inherente a cualquier alta con confirmación por correo.
+* **Corregido en la ronda 3 (toma de cuenta por pre-registro):** la contraseña del formulario de registro es **provisional**. El enlace del correo (`/confirmar-cuenta?token=…`) abre un formulario donde quien controla el buzón **elige la contraseña definitiva** (dos campos); esa contraseña reemplaza a la provisional en la misma operación atómica que consume el token, así que quien pre-registró el correo de otra persona jamás puede entrar. Abrir el enlace (GET/HEAD) **ya no activa nada**; la activación es `POST /confirmar-cuenta` con CSRF, límite de intentos por IP y por token, y clave de operación contra el doble clic. Las cuentas creadas por recepción pasan por el mismo formulario. El correo de confirmación lo explica («la que escribiste al registrarte era provisional y se descarta»).
+* `CORREOS_ENVIO_INMEDIATO` (solo pruebas) se ignora salvo que `APP_ENV` sea exactamente `development`, `dev`, `local`, `testing` o `test` (minúsculas, sin espacios; `TESTING`, ` testing `, `production`, `staging`, `qa` o vacío no cuentan). Ver `Classes\Entorno`.
 
 ## 7. Revertir con seguridad (procedimiento probado)
 

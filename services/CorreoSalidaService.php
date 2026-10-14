@@ -2,6 +2,7 @@
 namespace Services;
 
 use Classes\Email;
+use Classes\Entorno;
 use Repositories\CorreoSalidaRepository;
 use Repositories\PersistenceException;
 use Repositories\UsuarioRepository;
@@ -25,6 +26,7 @@ final class CorreoSalidaService
     public const TIPO_AVISO_EXISTENTE = 'aviso_cuenta_existente';
     public const TIPO_RECUPERACION = 'recuperacion_cuenta';
 
+    private static bool $advertidoEnvioInmediato = false;
     private const R_ENVIADO = 'enviado';
     private const R_FALLO = 'fallo';
     private const R_CANCELADO = 'cancelado';
@@ -84,13 +86,27 @@ final class CorreoSalidaService
     /**
      * ¿Se intenta el envío en la propia petición HTTP? Por defecto NO (QA R2B-02/08/09): enviar en línea haría que el
      * tiempo de respuesta delate si la cuenta existe (con SMTP lento, 0,4 s frente a 0,01 s). Los correos de cuenta salen
-     * siempre por la cola y el worker (intervalo CORREOS_INTERVALO_SEGUNDOS, 5 s por defecto). Solo CORREOS_ENVIO_INMEDIATO=1
-     * (pruebas o instalaciones pequeñas que aceptan ese canal lateral) lo activa.
+     * siempre por la cola y el worker (intervalo CORREOS_INTERVALO_SEGUNDOS, 5 s por defecto).
+     *
+     * CORREOS_ENVIO_INMEDIATO=1 es SOLO una variable de pruebas: únicamente se respeta si APP_ENV es explícitamente de
+     * desarrollo o pruebas (valor EXACTO development|dev|local|testing|test, en minúsculas y sin espacios; ver Classes\Entorno). En
+     * production, staging, vacío o cualquier valor desconocido se ignora aunque valga 1, para que una variable accidental
+     * no reabra el canal de enumeración por tiempo; se deja una advertencia en el registro, una vez por proceso.
      */
     public static function envioInmediatoHabilitado(): bool
     {
         $v = $_ENV['CORREOS_ENVIO_INMEDIATO'] ?? getenv('CORREOS_ENVIO_INMEDIATO');
-        return is_string($v) && in_array(strtolower(trim($v)), ['1', 'true', 'si', 'sí', 'on'], true);
+        if (!is_string($v) || !in_array(strtolower(trim($v)), ['1', 'true', 'si', 'sí', 'on'], true)) {
+            return false;
+        }
+        if (!Entorno::esPruebasODesarrollo()) {
+            if (!self::$advertidoEnvioInmediato) {
+                self::$advertidoEnvioInmediato = true;
+                error_log('[correos] CORREOS_ENVIO_INMEDIATO ignorado: APP_ENV no es de pruebas/desarrollo');
+            }
+            return false;
+        }
+        return true;
     }
 
     /** CONTRATO. Intento inmediato posterior al commit (solo si está habilitado); nunca lanza (un fallo deja el evento reintentable). */

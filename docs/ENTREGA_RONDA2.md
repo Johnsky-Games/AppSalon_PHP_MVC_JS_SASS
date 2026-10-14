@@ -43,6 +43,8 @@ Ninguna. Las dos omisiones de la ronda 1 (`TokensTest` DEF-13 y `EsquemaTest` DE
 
 ## 5. Pendientes y riesgos que siguen abiertos (sin ocultar)
 
+* **Toma de cuenta por pre-registro (corregido en la ronda 3; ya no figura como riesgo abierto).** Antes se describía como «inherente al alta con confirmación por correo»; no lo era: la cuenta sin confirmar conservaba la contraseña de quien la pre-registró y el titular, al activar, la dejaba utilizable por el atacante. Ahora la activación (`POST /confirmar-cuenta`) exige elegir una contraseña definitiva que reemplaza a la provisional de forma atómica, y `GET`/`HEAD` solo validan el enlace. Cubierto por `ActivacionCuentaIntegrationTest` (suite por defecto) y reproducido por el QA independiente (R3).
+
 Ver la matriz (columnas *Pendiente* y *Riesgo abierto*). Lo más relevante:
 
 * **Hallazgos abiertos del QA al cierre:** ninguno de la lista R2B-01…13 (los últimos, R2B-03c y R2B-13, se corrigieron en `a72a041` y los cubre la suite que pasó). El QA no volvió a revisar esas dos últimas correcciones más allá de sus propias pruebas.

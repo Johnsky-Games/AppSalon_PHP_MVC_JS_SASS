@@ -7,7 +7,7 @@
     <h2 id="confirmacion-pendiente-titulo">Tu próximo momento empieza aquí</h2>
     <ol class="ui-state-steps">
         <li>Busca el mensaje en tu bandeja de entrada.</li>
-        <li>Si es tu primera vez, abre el enlace del correo para activar tu cuenta; si ya tenías cuenta, el correo te indica cómo entrar.</li>
+        <li>Si es tu primera vez, abre el enlace del correo y elige tu contraseña definitiva para activar tu cuenta; si ya tenías cuenta, el correo te indica cómo entrar.</li>
         <li>Inicia sesión y elige el servicio que quieres reservar.</li>
     </ol>
     <p>Si no encuentras el mensaje, revisa la carpeta de correo no deseado o solicita otro enlace.</p>

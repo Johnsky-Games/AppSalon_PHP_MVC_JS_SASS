@@ -35,7 +35,7 @@ $salir = static function (string $mensaje, int $codigo = 1): never {
 };
 
 // 0) En producción APP_KEY es obligatoria: sin ella las altas idempotentes y el cifrado de correos fallan cerrado.
-if (!in_array(strtolower(trim($env('APP_ENV'))), ['development', 'dev', 'local', 'testing', 'test'], true) && strlen($env('APP_KEY')) < 32) {
+if (!\Classes\Entorno::esPruebasODesarrollo() && strlen($env('APP_KEY')) < 32) {
     $salir("APP_KEY (mínimo 32 caracteres aleatorios) es obligatoria salvo APP_ENV=development|local|testing.\nGenera una con: php -r \"echo bin2hex(random_bytes(32)), PHP_EOL;\" y defínela en includes/.env. No la publiques.");
 }
 

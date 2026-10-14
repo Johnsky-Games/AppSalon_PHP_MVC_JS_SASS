@@ -89,7 +89,8 @@ class InMemoryUsuarioRepositoryStub extends UsuarioRepository
         return null;
     }
 
-    public function confirmAccountByToken(string $tokenRaw): bool
+    /** Doble en memoria de la activación atómica: consume el token y reemplaza la contraseña provisional. */
+    public function activateAccountByToken(string $tokenRaw, string $nuevoPasswordHash): ?array
     {
         $this->checkFallo();
         $hash = hash('sha256', trim($tokenRaw));
@@ -97,19 +98,21 @@ class InMemoryUsuarioRepositoryStub extends UsuarioRepository
             if (
                 $u->token_hash === $hash &&
                 $u->token_tipo === 'confirmacion' &&
+                (string)$u->confirmado === '0' &&
                 $u->token_expira !== null &&
                 strtotime($u->token_expira . ' UTC') >= time()
             ) {
+                $u->password = $nuevoPasswordHash;
                 $u->confirmado = '1';
                 $u->token = null;
                 $u->token_hash = null;
                 $u->token_tipo = null;
                 $u->token_expira = null;
                 $this->usuarios[$id] = $u;
-                return true;
+                return ['id' => $id, 'email' => (string)$u->email];
             }
         }
-        return false;
+        return null;
     }
 
     public function resetPasswordByToken(string $tokenRaw, string $nuevoPasswordHash): bool
@@ -266,21 +269,24 @@ class AuthServiceTest extends TestCase
             'password' => 'inicial123'
         ]);
 
-        // 1. Token vacío o inexistente -> STATUS_INVALID
-        $invalido = $service->confirmarCuenta('token_inexistente');
+        // 1. Token vacío o inexistente -> STATUS_INVALID (la activación exige elegir contraseña: reemplaza la provisional)
+        $activar = static fn(string $t) => $service->activarCuenta(['token' => $t, 'password' => 'ClaveDefinitiva9', 'password2' => 'ClaveDefinitiva9']);
+        $invalido = $activar('token_inexistente');
         $this->assertSame(AuthService::STATUS_INVALID, $invalido['status']);
 
         // 2. Fallo SQL durante confirmación -> STATUS_ERROR sin detalles SQL
         $repo->forzarFalloSql = true;
-        $errorSql = $service->confirmarCuenta($tokenConfirmacion);
+        $errorSql = $activar($tokenConfirmacion);
         $this->assertSame(AuthService::STATUS_ERROR, $errorSql['status']);
         $this->assertStringNotContainsString('SQLSTATE', json_encode($errorSql['alertas']));
         $repo->forzarFalloSql = false;
 
         // 3. Consumo exitoso de un solo uso -> STATUS_OK y segundo intento rechazado
-        $ok = $service->confirmarCuenta($tokenConfirmacion);
+        $ok = $activar($tokenConfirmacion);
         $this->assertSame(AuthService::STATUS_OK, $ok['status']);
-        $reuso = $service->confirmarCuenta($tokenConfirmacion);
+        $this->assertTrue(password_verify('ClaveDefinitiva9', $repo->findByEmail('sofia@correo.com')->password), 'la contraseña elegida al activar reemplaza a la provisional');
+        $this->assertFalse(password_verify('inicial123', $repo->findByEmail('sofia@correo.com')->password));
+        $reuso = $activar($tokenConfirmacion);
         $this->assertSame(AuthService::STATUS_INVALID, $reuso['status']);
 
         // 4. Emitir token de recuperación y validar/restablecer contraseña

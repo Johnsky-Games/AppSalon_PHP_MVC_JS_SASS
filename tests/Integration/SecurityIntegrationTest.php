@@ -151,16 +151,20 @@ class SecurityIntegrationTest extends TestCase
         $idUsuario = $repo->create($usuario);
 
         // 1. Primer intento de consumo atómico (Solicitud 1) -> Debe ser exitoso
-        $exito1 = $repo->confirmAccountByToken($tokenRaw);
-        $this->assertTrue($exito1, 'El primer consumo del token de confirmación debe ser exitoso');
+        $exito1 = $repo->activateAccountByToken($tokenRaw, password_hash('Elegida-Por-El-Titular-1', PASSWORD_BCRYPT));
+        $this->assertNotNull($exito1, 'El primer consumo del token de confirmación debe ser exitoso');
+        $this->assertSame($idUsuario, $exito1['id']);
 
         $usuarioActualizado = $repo->findById($idUsuario);
         $this->assertSame('1', (string)$usuarioActualizado->confirmado);
         $this->assertNull($usuarioActualizado->token_hash, 'El token_hash debe ser null tras consumirse');
+        $this->assertTrue(password_verify('Elegida-Por-El-Titular-1', $usuarioActualizado->password), 'la activación reemplaza la contraseña provisional en la misma sentencia');
+        $this->assertFalse(password_verify('clave123', $usuarioActualizado->password));
 
         // 2. Intento concurrente o secundario con el mismo token (Solicitud 2) -> Debe fallar
-        $exito2 = $repo->confirmAccountByToken($tokenRaw);
-        $this->assertFalse($exito2, 'El segundo intento de consumo debe fallar (0 filas afectadas)');
+        $exito2 = $repo->activateAccountByToken($tokenRaw, password_hash('Otra-Pass-Del-Perdedor-2', PASSWORD_BCRYPT));
+        $this->assertNull($exito2, 'El segundo intento de consumo debe fallar (0 filas afectadas)');
+        $this->assertTrue(password_verify('Elegida-Por-El-Titular-1', $repo->findById($idUsuario)->password), 'el perdedor no cambia la contraseña del ganador');
     }
 
     public function testTokenPropositoIncorrectoEsRechazado(): void

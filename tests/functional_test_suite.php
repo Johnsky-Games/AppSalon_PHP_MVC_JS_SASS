@@ -246,24 +246,35 @@ $reporte['registro'] = [
 // ESCENARIO 2: CONFIRMACIÓN DE CUENTA
 // ====================================================================
 echo ">>> Ejecutando Escenario 2: Confirmación de Cuenta...\n";
+// Contrato nuevo: GET solo VALIDA (no activa ni consume); la ACTIVACIÓN es POST con CSRF y contraseña definitiva.
 $getConfirmar = request('GET', "/confirmar-cuenta?token={$tokenConfirmacion}", [], $cookieAnon);
+$sinActivarTrasGet = $db->query("SELECT confirmado, token_hash FROM usuarios WHERE email = 'carlos.mendoza@ejemplo.com'")->fetch_assoc();
+$csrfActivar = extractCsrf($getConfirmar['body']);
+$claveActivar = preg_match('/name="idem_key" value="([A-Za-z0-9_-]+)"/', $getConfirmar['body'], $mClaveAct) ? $mClaveAct[1] : '';
+$postActivar = request('POST', '/confirmar-cuenta', [
+    'csrf_token' => $csrfActivar, 'idem_key' => $claveActivar, 'token' => $tokenConfirmacion,
+    'password' => 'PasswordDefinitiva456', 'password2' => 'PasswordDefinitiva456',
+], $cookieAnon);
 $resConfirmado = $db->query("SELECT id, confirmado, token, token_hash, token_tipo, token_expira FROM usuarios WHERE email = 'carlos.mendoza@ejemplo.com'");
 $usuarioConfirmado = $resConfirmado->fetch_assoc();
 
-// Reintento de consumo con el mismo token ya consumido
+// Reintento de consumo con el mismo token ya consumido (formulario nuevo: otra clave de operación)
 $getReintento = request('GET', "/confirmar-cuenta?token={$tokenConfirmacion}", [], $cookieAnon);
 
 $ok2 = ($getConfirmar['code'] === 200) &&
-       str_contains($getConfirmar['body'], 'Cuenta confirmada correctamente') &&
+       ($sinActivarTrasGet['confirmado'] === '0') && ($sinActivarTrasGet['token_hash'] !== null) &&
+       ($postActivar['code'] === 200) &&
+       str_contains($postActivar['body'], 'Tu cuenta quedó activada') &&
        ($usuarioConfirmado['confirmado'] === '1') &&
        ($usuarioConfirmado['token_hash'] === null) &&
        ($usuarioConfirmado['token_tipo'] === null) &&
        ($usuarioConfirmado['token_expira'] === null) &&
-       str_contains($getReintento['body'], 'Token no válido, ya utilizado o expirado');
+       ($getReintento['code'] === 410) &&
+       str_contains($getReintento['body'], 'El enlace no es válido, ya fue utilizado o venció');
 
-echo "   Status: {$getConfirmar['code']} | Mensaje: Cuenta confirmada correctamente\n";
+echo "   GET {$getConfirmar['code']} (solo valida) | POST {$postActivar['code']} | Mensaje: Tu cuenta quedó activada\n";
 echo "   BD confirmado: {$usuarioConfirmado['confirmado']} | Token consumido y anulado en BD: " . ($usuarioConfirmado['token_hash'] === null ? "SÍ" : "NO") . "\n";
-echo "   Reintento con token ya usado: " . (str_contains($getReintento['body'], 'Token no válido') ? "Rechazado correctamente" : "Fallo") . "\n";
+echo "   Reintento con token ya usado: " . ($getReintento['code'] === 410 ? "Rechazado correctamente" : "Fallo") . "\n";
 echo "   Resultado: " . ($ok2 ? "EJECUTADO [EXITOSO]" : "FALLIDO") . "\n\n";
 
 $reporte['confirmacion'] = [
@@ -271,7 +282,7 @@ $reporte['confirmacion'] = [
     'http_code' => $getConfirmar['code'],
     'cuenta_confirmada' => ((int)$usuarioConfirmado['confirmado'] === 1),
     'consumo_correcto' => ($usuarioConfirmado['token_hash'] === null && $usuarioConfirmado['token_tipo'] === null),
-    'reintento_rechazado' => str_contains($getReintento['body'], 'Token no válido, ya utilizado o expirado')
+    'reintento_rechazado' => ($getReintento['code'] === 410)
 ];
 
 // ====================================================================
@@ -311,7 +322,7 @@ $csrfLoginCarlos = extractCsrf($getLoginCarlos['body']);
 
 $postLoginExito = request('POST', '/', [
     'email' => 'carlos.mendoza@ejemplo.com',
-    'password' => 'PasswordSeguro123',
+    'password' => 'PasswordDefinitiva456',
     'csrf_token' => $csrfLoginCarlos
 ], $cookieCarlos);
 
@@ -398,7 +409,7 @@ $csrfCheckOld = extractCsrf($getCheckOld['body']);
 
 $postLoginViejo = request('POST', '/', [
     'email' => 'carlos.mendoza@ejemplo.com',
-    'password' => 'PasswordSeguro123',
+    'password' => 'PasswordDefinitiva456',
     'csrf_token' => $csrfCheckOld
 ], $cookieCheckOld);
 

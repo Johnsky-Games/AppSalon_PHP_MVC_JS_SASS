@@ -36,6 +36,8 @@ class AuthService
     /** Hash bcrypt (coste 10) de una cadena descartable; solo sirve para igualar el tiempo de login de correos inexistentes. */
     private const HASH_SENUELO = '$2y$10$luI5hG7XjLbS/l2OEYcLrONW5Bg4fFubWgfSB2maV/17K7KCR774m';
 
+    private const MENSAJE_ENLACE_NO_VALIDO = 'El enlace no es válido, ya fue utilizado o venció.';
+
     private UsuarioRepository $repository;
     /** @var callable|null */
     private $emailDispatcher;
@@ -172,7 +174,8 @@ class AuthService
      *
      * Efectos en el servidor (no visibles para quien solicita), todos en UNA transacción con la reserva de idempotencia:
      *  - correo nuevo ........................ alta de identidad + membresía cliente + evento «confirmación» en la cola;
-     *  - cliente sin confirmar ............... NO crea otra cuenta, NO toca su contraseña, emite token nuevo y encola confirmación;
+     *  - cliente sin confirmar ............... NO crea otra cuenta, NO toca su contraseña PROVISIONAL (la definitiva la elige quien activa
+     *                                          con el enlace del correo, que la reemplaza; ver activarCuenta), emite token nuevo y encola confirmación;
      *  - cliente confirmado / personal / suspendida: NO modifica nada y encola un «aviso de cuenta existente» al titular
      *    (portal 'equipo' si la cuenta es laboral sin membresía cliente), máximo uno por hora y correo (clave única de la cola).
      *
@@ -405,51 +408,112 @@ class AuthService
     }
 
     /**
-     * Confirma una cuenta consumiendo atómicamente un token de confirmación de un solo uso.
+     * ACTIVA una cuenta (única vía de confirmación, `POST /confirmar-cuenta`): quien demuestra controlar el buzón elige la
+     * contraseña DEFINITIVA, que reemplaza a la provisional del registro en la misma sentencia atómica que consume el token
+     * (ver UsuarioRepository::activateAccountByToken). Un GET/HEAD jamás activa: solo `validarTokenConfirmacion`.
      *
-     * @param mixed $tokenRaw Token recibido por query string.
-     * @return array Resultado estructurado con `status`, `resultado` y `alertas`.
+     * Garantías: el token es de un solo uso, vence a las 24 h y solo sirve a cuentas sin confirmar (un token residual no toca
+     * una cuenta ya confirmada); de dos activaciones simultáneas gana una y la perdedora recibe «enlace no válido o ya
+     * utilizado» sin cambiar la contraseña del ganador. Con `$claveOperacion`+`$actor` es idempotente (Idempotencia::ejecutar):
+     * un doble clic devuelve el mismo resultado sin repetir efectos y la misma clave con otra contraseña/enlace es un conflicto.
+     * Límite de intentos por IP y por huella del token. Los mensajes no distinguen vencido / usado / inexistente.
+     * No inicia sesión: la persona entra después con la contraseña elegida por /cliente/login.
+     *
+     * @param array $datos `token`, `password`, `password2`.
+     * @return array `status`, `resultado`, `alertas`, `repetida` (y `segundos_restantes` si hay bloqueo).
      */
-    public function confirmarCuenta($tokenRaw): array
+    public function activarCuenta(array $datos, ?string $ip = null, ?string $claveOperacion = null, ?string $actor = null): array
     {
         Usuario::limpiarAlertas();
-
-        $token = is_string($tokenRaw) ? trim($tokenRaw) : '';
+        $token = $datos['token'] ?? null;
+        $password = $datos['password'] ?? null;
+        $password2 = $datos['password2'] ?? null;
+        if (!is_string($token) || !is_string($password) || !is_string($password2)) {
+            return $this->construirRespuesta(self::STATUS_INVALID_TYPE, false, null,
+                ['error' => ['Los datos enviados no son válidos.']], ['repetida' => false]);
+        }
+        $token = trim($token);
         if ($token === '') {
-            return $this->construirRespuesta(
-                self::STATUS_INVALID,
-                false,
-                null,
-                ['error' => ['Token no válido, ya utilizado o expirado']]
-            );
+            return $this->construirRespuesta(self::STATUS_INVALID, false, null, ['error' => [self::MENSAJE_ENLACE_NO_VALIDO]], ['repetida' => false, 'enlace' => false]);
         }
 
+        // Misma política de contraseña que el registro; no depende de que el token exista.
+        $nueva = new Usuario(['password' => $password]);
+        $alertas = $nueva->validarPassword();
+        if ($password !== $password2) {
+            $alertas['error'][] = 'Las contraseñas no coinciden';
+        }
+        if (!empty($alertas)) {
+            return $this->construirRespuesta(self::STATUS_INVALID, false, null, $alertas, ['repetida' => false, 'enlace' => true]);
+        }
+
+        $usaIdempotencia = $claveOperacion !== null && $actor !== null;
+        $huellaToken = hash('sha256', $token);
+        $contenido = ['token' => $huellaToken, 'password' => $password];
         try {
-            $confirmado = $this->repository->confirmAccountByToken($token);
+            if ($usaIdempotencia) {
+                if (!Idempotencia::claveValida($claveOperacion)) {
+                    return $this->construirRespuesta(self::STATUS_INVALID, false, null,
+                        ['error' => ['El formulario venció. Recarga el enlace del correo para continuar.']], ['repetida' => false, 'enlace' => true]);
+                }
+                if (Idempotencia::buscar($this->repository->getDb(), 'cliente.activacion', $actor, $claveOperacion, $contenido) !== null) {
+                    return $this->respuestaActivacionOk(true);
+                }
+            }
+            if ($ip !== null) {
+                $admision = RateLimiter::admitirDosVectores($this->repository->getDb(), 'ip_activate', $ip, 'token_activate', substr($huellaToken, 0, 40), RateLimiter::MAX_INTENTOS_IP, RateLimiter::MAX_INTENTOS_EMAIL);
+                if (!$admision['admitido']) {
+                    return $this->construirRespuesta(self::STATUS_RATE_LIMITED, false, null,
+                        ['error' => ['Demasiados intentos de activación. Intenta de nuevo más tarde.']],
+                        ['segundos_restantes' => max(1, (int)$admision['segundos_restantes']), 'repetida' => false, 'enlace' => true]);
+                }
+            }
+
+            // El coste de bcrypt se paga aunque el enlace no sea válido: el tiempo no distingue enlaces vigentes de inexistentes.
+            $hash = password_hash($password, PASSWORD_BCRYPT);
+            $alta = function () use ($token, $hash): array {
+                $cuenta = $this->repository->activateAccountByToken($token, $hash);
+                if ($cuenta === null) {
+                    // Revierte la reserva de idempotencia: un enlace inválido no deja rastro de «éxito».
+                    throw new EnlaceActivacionNoValidoException();
+                }
+                return ['recurso_tipo' => 'usuario', 'recurso_id' => (int)$cuenta['id'], 'datos' => []];
+            };
+            $op = $usaIdempotencia
+                ? Idempotencia::ejecutar($this->repository->getDb(), 'cliente.activacion', $actor, $claveOperacion, $contenido, $alta)
+                : ['repetida' => false] + $this->repository->enTransaccion($alta);
+        } catch (EnlaceActivacionNoValidoException $e) {
+            return $this->construirRespuesta(self::STATUS_INVALID, false, null, ['error' => [self::MENSAJE_ENLACE_NO_VALIDO]], ['repetida' => false, 'enlace' => false]);
+        } catch (ConflictoIdempotenciaException $e) {
+            return $this->construirRespuesta(self::STATUS_CONFLICT_CLAVE, false, null,
+                ['error' => ['Esta solicitud ya se procesó con otros datos. Abre de nuevo el enlace de tu correo.']], ['repetida' => false, 'enlace' => true]);
+        } catch (OperacionEnCursoException $e) {
+            return $this->construirRespuesta(self::STATUS_EN_CURSO, false, null,
+                ['error' => ['Tu solicitud anterior sigue procesándose. Espera unos segundos.']], ['repetida' => false, 'enlace' => true, 'segundos_restantes' => 3]);
         } catch (PersistenceException $e) {
-            return $this->construirRespuesta(
-                self::STATUS_ERROR,
-                false,
-                null,
-                ['error' => ['No fue posible procesar la confirmación en este momento. Intenta nuevamente.']]
-            );
+            return $this->construirRespuesta(self::STATUS_ERROR, false, null,
+                ['error' => ['No fue posible activar la cuenta en este momento. Intenta nuevamente.']], ['repetida' => false, 'enlace' => true]);
         }
 
-        if (!$confirmado) {
-            return $this->construirRespuesta(
-                self::STATUS_INVALID,
-                false,
-                null,
-                ['error' => ['Token no válido, ya utilizado o expirado']]
-            );
+        if (!$op['repetida']) {
+            // Los correos de confirmación o recuperación aún en cola ya no sirven (su enlace desapareció con la activación).
+            try {
+                if ($this->emailDispatcher === null) {
+                    $cola = $this->colaCorreos();
+                    $cola->cancelarConfirmacionesAnteriores((int)$op['recurso_id'], 0);
+                    $cola->cancelarRecuperacionesAnteriores((int)$op['recurso_id'], 0);
+                }
+            } catch (\Throwable $e) {
+                error_log('AuthService::activarCuenta: no se pudieron cancelar los correos pendientes del usuario ' . (int)$op['recurso_id']);
+            }
         }
+        return $this->respuestaActivacionOk($op['repetida']);
+    }
 
-        return $this->construirRespuesta(
-            self::STATUS_OK,
-            true,
-            null,
-            ['exito' => ['Cuenta confirmada correctamente']]
-        );
+    private function respuestaActivacionOk(bool $repetida): array
+    {
+        return $this->construirRespuesta(self::STATUS_OK, true, null,
+            ['exito' => ['Tu cuenta quedó activada. Inicia sesión con la contraseña que acabas de elegir.']], ['repetida' => $repetida]);
     }
 
     /**
@@ -754,7 +818,7 @@ class AuthService
     }
 
     /**
-     * Verifica un enlace de confirmación sin consumirlo, para solicitudes HEAD.
+     * Verifica un enlace de confirmación SIN consumirlo ni activar nada (GET que muestra el formulario y HEAD).
      *
      * @param mixed $tokenRaw Token recibido por query string.
      * @return array Resultado estructurado con `status`, `resultado`, `usuario` y `alertas`.
@@ -768,10 +832,11 @@ class AuthService
             return $this->construirRespuesta(self::STATUS_ERROR, false, null,
                 ['error' => ['No fue posible verificar el enlace en este momento.']]);
         }
-        return $usuario !== null
+        // Un token residual de una cuenta ya confirmada no es un enlace de activación válido.
+        return $usuario !== null && (string)$usuario->confirmado === '0'
             ? $this->construirRespuesta(self::STATUS_OK, true, $usuario, [])
             : $this->construirRespuesta(self::STATUS_INVALID, false, null,
-                ['error' => ['El enlace no es válido, ya fue utilizado o venció.']]);
+                ['error' => [self::MENSAJE_ENLACE_NO_VALIDO]]);
     }
 
     /** Verifica la vigencia del enlace antes de mostrar el formulario de recuperación. */
@@ -956,4 +1021,9 @@ class AuthService
             'alertas' => $alertas
         ], $extra);
     }
+}
+
+/** Interno de AuthService::activarCuenta: el enlace no activó ninguna cuenta (revierte la reserva de idempotencia). */
+final class EnlaceActivacionNoValidoException extends \RuntimeException
+{
 }

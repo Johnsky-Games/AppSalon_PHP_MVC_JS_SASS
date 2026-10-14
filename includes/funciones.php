@@ -66,7 +66,8 @@ function emitir_cabeceras_seguridad(): array
     $headers = [
         'X-Content-Type-Options' => 'nosniff',
         'X-Frame-Options' => 'SAMEORIGIN',
-        'Referrer-Policy' => 'strict-origin-when-cross-origin',
+        // Una pantalla puede endurecerla (p. ej. el enlace de activación, que contiene un token) con $GLOBALS['__appsalon_referrer_policy'].
+        'Referrer-Policy' => $GLOBALS['__appsalon_referrer_policy'] ?? 'strict-origin-when-cross-origin',
     ];
 
     $GLOBALS['__appsalon_security_headers'] = $headers;
@@ -106,6 +107,19 @@ function es_peticion_json(): bool
 }
 
 /**
+ * ¿La versión de la sesión coincide con la de la cuenta? Una sesión SIN versión solo se adopta si la cuenta nunca invalidó
+ * sesiones (versión inicial 1, instalaciones anteriores a esta marca). Activar una cuenta, cambiar su contraseña o su rol suben la
+ * versión: una sesión sin marca no puede «adoptar» una cuenta que antes estaba sin confirmar.
+ */
+function version_sesion_vigente(array $contexto): bool
+{
+    if (!isset($_SESSION['version_sesion'])) {
+        return (int)$contexto['version_sesion'] === 1;   // 1 = valor inicial (migración 010): la cuenta nunca invalidó sesiones
+    }
+    return (int)$contexto['version_sesion'] === (int)$_SESSION['version_sesion'];
+}
+
+/**
  * Detiene la ejecución si el usuario no está autenticado.
  */
 function isAuth(): void
@@ -118,7 +132,7 @@ function isAuth(): void
         // La membresía del portal debe seguir vigente: una sesión de equipo exige rol laboral activo.
         $portalSesion = $contexto ? portal_sesion($contexto) : 'cliente';
         if (!$contexto || !\Services\AuthorizationService::sesionVigente($contexto, $portalSesion) || (int)$contexto['confirmado'] !== 1 ||
-            (isset($_SESSION['version_sesion']) && (int)$contexto['version_sesion'] !== (int)$_SESSION['version_sesion'])) {
+            !version_sesion_vigente($contexto)) {
             $_SESSION = ['aviso_sesion_expirada' => true, 'portal_aviso' => $loginDestino];
         } else {
             // Una sola adopción para cuentas activas tras actualizar una instalación anterior.
@@ -237,7 +251,7 @@ function puede(string $permiso): bool
     $service = new \Services\AuthorizationService();
     $c = $service->contexto((int)($_SESSION['id'] ?? 0));
     if (!$c || (int)$c['confirmado'] !== 1) { return false; }
-    if (isset($_SESSION['version_sesion']) && (int)$c['version_sesion'] !== (int)$_SESSION['version_sesion']) { return false; }
+    if (!version_sesion_vigente($c)) { return false; }
     // Una sesión abierta en el portal de clientes nunca porta privilegios laborales, aunque la misma
     // persona también sea colaboradora: los contextos están separados en sesión y en autorización.
     if (portal_sesion($c) !== 'equipo' || !\Services\AuthorizationService::sesionVigente($c, 'equipo')) { return false; }
