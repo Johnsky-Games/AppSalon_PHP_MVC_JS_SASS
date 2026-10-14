@@ -248,7 +248,7 @@ final class ColaboradorService
             if ($actual === '' || strlen($actual) > 72) { return ['status' => self::INVALID, 'errores' => ['Ingresa la contraseña actual de tu cuenta para vincular tu acceso al equipo.']]; }
         } else {
             $confirm = is_string($post['password_confirmacion'] ?? null) ? $post['password_confirmacion'] : '';
-            if (strlen($nueva) < 8 || strlen($nueva) > 72) { return ['status' => self::INVALID, 'errores' => ['La contraseña debe tener entre 8 y 72 caracteres.']]; }
+            if (strlen($nueva) < 8 || strlen($nueva) > 72 || str_contains($nueva, "\0")) { return ['status' => self::INVALID, 'errores' => ['La contraseña debe tener entre 8 y 72 caracteres.']]; }
             if (!hash_equals($nueva, $confirm)) { return ['status' => self::INVALID, 'errores' => ['Las contraseñas no coinciden.']]; }
         }
         try {
