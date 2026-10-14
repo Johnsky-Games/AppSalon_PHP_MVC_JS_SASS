@@ -250,8 +250,8 @@ final class R2bColaCorreosTest extends R2bCase
         foreach (self::q('SELECT * FROM correos_salida') as $fila) {
             foreach ($fila as $col => $val) { $sitios["correos_salida.$col (estado {$fila['estado']})"] = (string)$val; }
         }
-        unset($sitios['correos_salida.destinatario_email (estado fallido)'], $sitios['correos_salida.destinatario_nombre (estado fallido)']);
-        foreach (array_keys($sitios) as $k) { if (str_contains($k, '.destinatario_email') || str_contains($k, '.destinatario_nombre')) { unset($sitios[$k]); } }
+        // `carga_cifrada` es texto cifrado aleatorio (base64): un fragmento de 3 caracteres puede coincidir por azar; que no lleve el token en claro se prueba aparte.
+        foreach (array_keys($sitios) as $k) { if (str_contains($k, '.destinatario_email') || str_contains($k, '.destinatario_nombre') || str_contains($k, '.carga_cifrada')) { unset($sitios[$k]); } }
         $sitios['--estado'] = $est['out'] . $est['err']; $sitios['--estado --json'] = $estJ['out'] . $estJ['err'];
         $sitios['stderr del worker'] = $stderr; $sitios['log del servidor web'] = self::logServidor('r2b_cola');
         $fugas = [];
@@ -291,12 +291,12 @@ final class R2bColaCorreosTest extends R2bCase
     }
 
     /**
-     * R2B-03c (RESIDUO, rojo): formas extremas de dirección con un SMTP que repite el destinatario (también en mayúsculas), añade otras direcciones
+     * R2B-03c REVERIFICADO (antes `test_Defecto_R2B_03c_…`, rojo): formas extremas de dirección con un SMTP que repite el destinatario (también en mayúsculas), añade otras direcciones
      * (postmaster, una con parte local entre comillas, el remitente) y rechaza con varias líneas. Cada forma lleva un marcador único que NO debe
      * aparecer en `correos_salida` (todas las columnas salvo el destinatario), `--estado`, `--estado --json`, la salida de error del worker ni el
      * log del servidor web, ni siquiera como fragmento. Las formas que la aplicación no admite al registrar se cuentan aparte.
      */
-    public function test_Defecto_R2B_03c_formas_extremas_de_direccion_y_varias_direcciones_en_el_rechazo_dejan_la_direccion_completa(): void
+    public function test_R2B_03c_formas_extremas_de_direccion_y_varias_direcciones_en_el_rechazo_no_dejan_ni_un_fragmento(): void
     {
         $m = 'zq' . bin2hex(random_bytes(4));
         $formas = [
@@ -314,6 +314,11 @@ final class R2bColaCorreosTest extends R2bCase
             'dominio muy largo' => "{$m}@" . str_repeat('d', 55) . '.' . str_repeat('e', 40) . '.example.test',
             'sin punto en el dominio' => "{$m}@localhost",
             'apostrofo y llaves' => "o'{$m}{x}@example.test",
+            'comillas con escape' => "\"{$m}\\\"x\"@example.test",
+            'comillas con coma y punto y coma' => "\"{$m},a;b\"@example.test",
+            'dominio numérico' => "{$m}@192.168.1.5",
+            'subdominio con guiones bajos y números' => "{$m}@a1-b2.c3.example.test",
+            'parte local con barra y porcentaje' => "{$m}/a%b@example.test",
         ];
         $admitidas = []; $rechazadas = []; $fugas = [];
         foreach ($formas as $nombre => $email) {
@@ -324,6 +329,20 @@ final class R2bColaCorreosTest extends R2bCase
         }
         $this->assertGreaterThanOrEqual(8, count($admitidas), 'la aplicación admitió pocas formas; rechazadas: ' . implode(', ', $rechazadas));
         $this->assertSame([], $fugas, count($admitidas) . ' formas admitidas (' . implode(', ', $admitidas) . '); fugas en: ' . implode(', ', array_keys($fugas)));
+    }
+
+    /**
+     * R2B-03d (RESIDUO, rojo, Baja): el saneador exige que el dominio sea `[A-Za-z0-9.-]+\.[A-Za-z]{2,}`; un literal de IPv6 (`usuario@[IPv6:2001:db8::1]`,
+     * que la aplicación admite al registrar) contiene `[`, `:` y no cumple, así que la dirección COMPLETA queda en `ultimo_error` y en
+     * `--estado`/`--estado --json`. (El literal IPv4 sí se redacta.) Reproducción: registrar `zq@[IPv6:2001:db8::1]` con el SMTP en `rcptmulti`, ejecutar el
+     * worker y leer `ultimo_error` o `procesar_correos.php --estado`.
+     */
+    public function test_Defecto_R2B_03d_un_literal_de_ipv6_deja_la_direccion_completa_en_el_error_y_en_el_estado(): void
+    {
+        $m = 'zq' . bin2hex(random_bytes(4));
+        $f = $this->fugasDeEmail("{$m}@[IPv6:2001:db8::1]", [$m], 'rcptmulti');
+        $this->assertNotNull($f, 'la aplicación no admite el literal IPv6; la prueba no aplica');
+        $this->assertSame([], $f, 'la dirección con literal IPv6 queda en claro: ' . implode(' | ', $f));
     }
 
     public function test_el_worker_corta_la_tanda_tras_tres_fallos_seguidos_y_deja_intactos_los_demas(): void
