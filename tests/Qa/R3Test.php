@@ -5,7 +5,7 @@ namespace Tests\Qa;
 require_once __DIR__ . '/R2bCase.php';
 
 /**
- * Ronda 3, fase A: tres hallazgos del usuario reproducidos de forma independiente contra el código actual. Las pruebas `test_Defecto_R3_*` están
+ * Ronda 3, fases A y B: tres hallazgos del usuario reproducidos de forma independiente contra el código actual. Las pruebas `test_R3_*` están
  * ROJAS hasta que se integre la corrección y quedarán verdes con ella; las `test_R3_*` (sin «Defecto») son controles que ya pasan y deben seguir
  * pasando.
  *
@@ -163,7 +163,7 @@ final class R3Test extends R2bCase
 
     // ================================================================== (1) toma de cuenta por registro previo
 
-    public function test_Defecto_R3_01_la_contrasena_del_atacante_no_inicia_sesion_tras_activar_el_titular(): void
+    public function test_R3_01_la_contrasena_del_atacante_no_inicia_sesion_tras_activar_el_titular(): void
     {
         $email = self::correo('titular');
         $this->registrar($email, self::A);          // el atacante registra el correo ajeno con la contraseña A
@@ -180,7 +180,7 @@ final class R3Test extends R2bCase
         $this->assertNotNull($act['form'], 'DISEÑO NUEVO: abrir el enlace debe mostrar un formulario para ELEGIR la contraseña (el GET del diseño antiguo activa con la contraseña del registro previo). Respuesta GET: ' . $act['get']['status']);
     }
 
-    public function test_Defecto_R3_02_reregistro_y_reenvio_antes_y_despues_no_dejan_entrar_a_la_contrasena_del_atacante(): void
+    public function test_R3_02_reregistro_y_reenvio_antes_y_despues_no_dejan_entrar_a_la_contrasena_del_atacante(): void
     {
         $email = self::correo('titular2');
         $this->registrar($email, self::A);
@@ -205,7 +205,7 @@ final class R3Test extends R2bCase
         $this->assertNotNull($act['form'], 'el enlace vigente debe ofrecer elegir la contraseña');
     }
 
-    public function test_Defecto_R3_03_la_cuenta_de_recepcion_la_activa_quien_demuestra_el_buzon_eligiendo_la_contrasena(): void
+    public function test_R3_03_la_cuenta_de_recepcion_la_activa_quien_demuestra_el_buzon_eligiendo_la_contrasena(): void
     {
         $email = self::correo('recep');
         $cuenta = self::cliente(['email' => $email, 'confirmado' => false]);
@@ -221,7 +221,7 @@ final class R3Test extends R2bCase
         $this->assertNotNull($act['form'], 'quien activa debe poder ELEGIR la contraseña en el formulario');
     }
 
-    public function test_Defecto_R3_04_dos_activaciones_simultaneas_con_contrasenas_distintas_gana_una_y_solo_su_contrasena_vale(): void
+    public function test_R3_04_dos_activaciones_simultaneas_con_contrasenas_distintas_gana_una_y_solo_su_contrasena_vale(): void
     {
         $email = self::correo('carrera');
         $this->registrar($email, self::A);
@@ -258,7 +258,7 @@ final class R3Test extends R2bCase
         $this->assertNotEmpty($exitos);
     }
 
-    public function test_Defecto_R3_05_una_sesion_previa_de_la_cuenta_no_da_acceso_sin_confirmar_ni_sobrevive_a_la_activacion(): void
+    public function test_R3_05_una_sesion_previa_de_la_cuenta_no_da_acceso_sin_confirmar_ni_sobrevive_a_la_activacion(): void
     {
         $email = self::correo('sesion');
         $this->registrar($email, self::A);
@@ -283,7 +283,7 @@ final class R3Test extends R2bCase
         $this->assertNotSame(200, $acceso($usadaCon));
     }
 
-    public function test_Defecto_R3_06_el_doble_clic_de_la_activacion_con_la_misma_clave_activa_una_sola_vez_y_no_cambia_la_contrasena(): void
+    public function test_R3_06_el_doble_clic_de_la_activacion_con_la_misma_clave_activa_una_sola_vez_y_no_cambia_la_contrasena(): void
     {
         $email = self::correo('doble');
         $this->registrar($email, self::A);
@@ -429,7 +429,7 @@ final class R3Test extends R2bCase
 
     // ================================================================== (2) confirmación por GET
 
-    public function test_Defecto_R3_10_get_head_y_prefetch_no_activan_la_cuenta_ni_consumen_el_token(): void
+    public function test_R3_10_get_head_y_prefetch_no_activan_la_cuenta_ni_consumen_el_token(): void
     {
         $email = self::correo('get');
         $this->registrar($email, self::A);
@@ -456,7 +456,7 @@ final class R3Test extends R2bCase
         $this->assertNotNull($act['form'], 'tras los GET de los escáneres el enlace debe seguir mostrando el formulario');
     }
 
-    public function test_Defecto_R3_11_la_activacion_exige_post_con_csrf_y_los_demas_casos_no_tienen_efectos(): void
+    public function test_R3_11_la_activacion_exige_post_con_csrf_y_los_demas_casos_no_tienen_efectos(): void
     {
         $email = self::correo('post');
         $this->registrar($email, self::A);
@@ -507,7 +507,7 @@ final class R3Test extends R2bCase
         $this->assertEntra($email, self::C, 'C');
     }
 
-    public function test_Defecto_R3_12_la_activacion_tiene_limite_de_intentos(): void
+    public function test_R3_12_la_activacion_tiene_limite_de_intentos(): void
     {
         $email = self::correo('limite');
         $this->registrar($email, self::A);
@@ -564,7 +564,7 @@ final class R3Test extends R2bCase
         return $res;
     }
 
-    public function test_Defecto_R3_20_el_envio_inmediato_no_tiene_efecto_fuera_de_desarrollo_y_pruebas_y_si_lo_tiene_en_ellos(): void
+    public function test_R3_20_el_envio_inmediato_no_tiene_efecto_fuera_de_desarrollo_y_pruebas_y_si_lo_tiene_en_ellos(): void
     {
         $sinEfecto = ['production' => 'production', 'Production' => 'Production', ' production ' => ' production ', 'PRODUCTION' => 'PRODUCTION', 'prod' => 'prod',
                       'produccion' => 'produccion', 'staging' => 'staging', 'stage' => 'stage', 'qa' => 'qa', 'live' => 'live', 'preprod' => 'preprod', 'vacío' => '', 'no definido' => null];
@@ -592,7 +592,7 @@ final class R3Test extends R2bCase
      * de los cinco permitidos habilita el envío en línea; «TESTING», « testing » o «Development» no. (`Secretos::clave` es más permisiva: recorta y
      * pasa a minúsculas; si el líder decide igualarla, esta prueba debe revisarse de forma explícita, no relajarse en silencio.)
      */
-    public function test_Defecto_R3_21_las_variantes_de_mayusculas_y_espacios_de_los_entornos_de_pruebas_no_habilitan_el_envio_inmediato(): void
+    public function test_R3_21_las_variantes_de_mayusculas_y_espacios_de_los_entornos_de_pruebas_no_habilitan_el_envio_inmediato(): void
     {
         $fallos = [];
         foreach (['TESTING', ' testing ', 'Development', 'DEV', 'Local', 'Test ', "testing\n"] as $valor) {
