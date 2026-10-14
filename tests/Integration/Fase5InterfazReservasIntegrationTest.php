@@ -75,6 +75,11 @@ class Fase5InterfazReservasIntegrationTest extends TestCase
         self::$db->query('TRUNCATE TABLE profesionales');
         self::$db->query('TRUNCATE TABLE servicios');
         self::$db->query('TRUNCATE TABLE usuarios');
+        // Con las claves foráneas desactivadas el TRUNCATE no se propaga: las filas huérfanas de otras pruebas (accesos,
+        // membresías, colaboradores) se reasignarían a los nuevos usuarios que reutilizan los ids 1, 2, 3…
+        foreach (['usuario_accesos', 'clientes', 'colaborador_invitaciones', 'colaboradores'] as $huerfana) {
+            self::$db->query("DELETE FROM {$huerfana}");
+        }
         self::$db->query('SET FOREIGN_KEY_CHECKS = 1');
 
         // Otra prueba puede haber destruido la sesión. Iniciarla antes de
@@ -176,9 +181,12 @@ class Fase5InterfazReservasIntegrationTest extends TestCase
     private function autenticarUsuario(int $usuarioId, string $admin = '0', string $nombre = 'Cliente', string $apellido = 'Prueba'): string
     {
         $csrf = bin2hex(random_bytes(32));
+        // Como en un inicio de sesión real, la sesión lleva la versión vigente de la cuenta (otras pruebas pueden haberla subido).
+        $version = (int)(self::$db->query("SELECT version_sesion v FROM usuarios WHERE id = {$usuarioId}")->fetch_assoc()['v'] ?? 1);
         $_SESSION = [
             'login' => true,
             'id' => $usuarioId,
+            'version_sesion' => $version,
             'admin' => $admin,
             'nombre' => $nombre,
             'apellido' => $apellido,
