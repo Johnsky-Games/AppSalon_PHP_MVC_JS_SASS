@@ -1072,7 +1072,7 @@ Las pruebas que enviaban el POST de activación ya leían el formulario real con
 
 ## R4.2 Reverificación independiente (tarea B) — `tests/Qa/R4Test.php`
 
-62 casos (dataProviders incluidos) con HTTP real (`php -S`, 8 procesos), SMTP simulado y el worker real como proceso aparte. No se reutilizó ninguna prueba del agente de identidad.
+64 casos (17 métodos; dataProviders incluidos) con HTTP real (`php -S`, 8 procesos), SMTP simulado y el worker real como proceso aparte. No se reutilizó ninguna prueba del agente de identidad.
 
 | Prueba | Qué ataca | Resultado |
 |---|---|---|
@@ -1131,7 +1131,7 @@ No cubierto: renderizado en un navegador real de las 13 entradas hostiles (se ve
 | P10 | se elimina la guarda de «no es texto» en `AuthService::activarCuenta` | **VERDE (equivalente)** | Es un **mutante equivalente**: `Usuario::sincronizarRegistro()` ignora lo que no es `string`, por lo que el campo queda vacío y la validación posterior responde igualmente 422 (cambia solo el mensaje). No es un hueco de la prueba (`R4_14` comprueba el comportamiento externo). |
 | P11 | se acepta UTF-8 inválido | ROJO | `R4_08` |
 | P12 | los errores de datos cuentan contra el límite | ROJO | `R4_07` |
-| N12 | `/olvide` vuelve a enviar en línea (con el criterio nuevo de R2B-08) | __N12__ | `R2B_08` |
+| N12 | `/olvide` vuelve a enviar en línea (con el criterio nuevo de R2B-08) | ROJO (`Failures: 1`) | `R2B_08` |
 
 11 de 12 detectadas; la restante es un mutante equivalente (razonado).
 
@@ -1186,4 +1186,16 @@ Lo que **sí** funcionó tal cual está escrito: pasos 2 (respaldo, hash y resta
 
 ## R4.7 Resultado de la suite Qa completa (tarea D)
 
-__SUITE__
+```
+cd /tmp/wt/qa2 && . /tmp/wt/qa2.env.sh        # QA_EXIGIR_NAVEGADOR=1, Chromium real, SMTP simulado, BD aislada recreada con el migrador
+php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --colors=never --log-junit <junit.xml> tests/Qa
+Tests: 700, Assertions: 8499, Failures: 5.     (DURACION_SEG=1167, PHP 8.3.6)
+
+php scripts/ci_verificar_omitidas.php <junit.xml> .github/qa_omitidas_permitidas.txt
+Pruebas en el informe: 700; omitidas: 0       (exit 0)
+```
+Los **5 fallos son todos el hallazgo abierto R4-1** (rojos a propósito, sin relajar): `test_Defecto_R4_13b_…` con los 4 conjuntos de datos (NUL, ESC, BEL, DEL) y `test_Defecto_R4_12b_…`. Las otras 695 pruebas pasan (incluidas las 2 que dejaron de ser «defecto», las adaptadas de R4.1 y las 59 verdes de `R4Test`). La lista permitida de omitidas sigue **vacía**.
+Con la aplicación corregida para R4-1 los 5 pasarían a verde sin tocar la prueba; si se prefiere que el CI no se ponga en rojo hasta entonces, el criterio del equipo decide (el QA no los ha marcado como omitidos ni esperados).
+
+Resumen de la sensibilidad: 11 mutaciones sobre el código de la funcionalidad nueva detectadas, 1 mutante equivalente razonado (P10); N12 (inyección de envío en línea) sigue detectada con el criterio nuevo de R2B-08.
+Rama `wt/qa2`, commits locales (sin `push`, sin PR, sin tocar `main` ni el árbol principal). No se ejecutó PHP 8.2 localmente; el CI es el definitivo.
