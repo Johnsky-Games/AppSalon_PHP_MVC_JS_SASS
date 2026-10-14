@@ -513,6 +513,58 @@ final class R4Test extends R3Case
         $this->assertSame(0, preg_match('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', $g['body']), 'el formulario precargado contiene un byte de control crudo (' . bin2hex($valor) . ')');
     }
 
+    /** Tipos inesperados: arreglos, objetos JSON, cuerpos enormes y cabeceras de contenido raras no producen 500 ni cambian nada. */
+    public function test_R4_14_tipos_inesperados_arreglos_json_y_cuerpos_enormes_no_producen_500_ni_cambian_nada(): void
+    {
+        $email = self::correo('tipos');
+        $this->registrarCon($email, 'Orig', 'Inal', '0991234567', self::A);
+        [$n, $f] = $this->form($this->ultimoToken($email));
+        $antes = $this->usuario($email);
+        $base = $this->cuerpo($f, self::C, ['nombre' => 'Bien', 'apellido' => 'Hecho', 'telefono' => self::TEL]);
+        $casos = [
+            'nombre como arreglo' => http_build_query(array_diff_key($base, ['nombre' => 1])) . '&nombre%5B%5D=x&nombre%5B%5D=y',
+            'nombre como mapa' => http_build_query(array_diff_key($base, ['nombre' => 1])) . '&nombre%5Ba%5D=x',
+            'telefono como arreglo' => http_build_query(array_diff_key($base, ['telefono' => 1])) . '&telefono%5B%5D=0987654321',
+            'apellido como arreglo anidado' => http_build_query(array_diff_key($base, ['apellido' => 1])) . '&apellido%5B0%5D%5B1%5D=x',
+            'password como arreglo' => http_build_query(array_diff_key($base, ['password' => 1])) . '&password%5B%5D=Abcdef123456-x',
+            'token como arreglo' => http_build_query(array_diff_key($base, ['token' => 1])) . '&token%5B%5D=' . $f['campos']['token'],
+            'nombre de 1 MB' => http_build_query(array_merge($base, ['nombre' => str_repeat('a', 1048576)])),
+            'nombre con 5 000 emojis' => http_build_query(array_merge($base, ['nombre' => str_repeat('😀', 5000)])),
+        ];
+        foreach ($casos as $nombre => $cuerpo) {
+            self::q('TRUNCATE intentos_login');
+            $r = $n->post($f['accion'], $cuerpo, ['Content-Type: application/x-www-form-urlencoded']);
+            $this->assertLessThan(500, $r['status'], "«{$nombre}» provocó {$r['status']}");
+            $d = $this->usuario($email);
+            $this->assertSame([$antes['nombre'], $antes['apellido'], $antes['telefono'], $antes['password'], '0'], [$d['nombre'], $d['apellido'], $d['telefono'], $d['password'], (string)$d['confirmado']], "«{$nombre}» cambió datos");
+        }
+        // JSON con tipo de contenido JSON: el endpoint solo entiende formularios; nada cambia.
+        self::q('TRUNCATE intentos_login');
+        $r = $n->post($f['accion'], json_encode($base), ['Content-Type: application/json']);
+        $this->assertLessThan(500, $r['status'], 'JSON provocó ' . $r['status']);
+        $this->assertSame('0', (string)$this->usuario($email)['confirmado'], 'un cuerpo JSON activó la cuenta');
+        // La operación honesta sigue funcionando después de todo el abuso (el token no se gastó).
+        $ok = $this->post($n, $f, self::C, ['nombre' => 'Bien', 'apellido' => 'Hecho', 'telefono' => self::TEL]);
+        $this->assertSame(200, $ok['status'], substr(strip_tags($ok['body']), 0, 200));
+    }
+
+    /** Un token residual en una cuenta YA confirmada (por ejemplo, de un envío anterior) no sirve para cambiar nombre ni teléfono por POST. */
+    public function test_R4_15_token_residual_de_cuenta_confirmada_no_cambia_nombre_ni_telefono_por_post(): void
+    {
+        $c = self::cliente(['email' => self::correo('resid2'), 'nombre' => 'Real', 'apellido' => 'Cuenta', 'telefono' => '0991234567']);
+        $tok = bin2hex(random_bytes(32));
+        self::q("UPDATE usuarios SET token_hash=?, token_tipo='confirmacion', token_expira=DATE_ADD(UTC_TIMESTAMP(), INTERVAL 1 HOUR) WHERE id=?", [hash('sha256', $tok), $c['id']]);
+        $antes = $this->usuario($c['email']);
+        $n = new Navegador(self::$base); $csrf = $n->csrf('/olvide');
+        self::q('TRUNCATE intentos_login');
+        $r = $n->post('/confirmar-cuenta', ['csrf_token' => $csrf, 'idem_key' => Idem::clave(), 'token' => $tok, 'password' => 'Robada-Clave-9999', 'password2' => 'Robada-Clave-9999', 'nombre' => 'Robado', 'apellido' => 'Total', 'telefono' => '0990000000']);
+        $this->assertSame(410, $r['status'], 'el token residual de una cuenta confirmada no debe servir');
+        $d = $this->usuario($c['email']);
+        $this->assertSame([$antes['nombre'], $antes['apellido'], $antes['telefono'], $antes['password'], $antes['version_sesion']], [$d['nombre'], $d['apellido'], $d['telefono'], $d['password'], $d['version_sesion']], 'se modificó una cuenta ya confirmada');
+        $this->assertNoEntra($c['email'], 'Robada-Clave-9999', 'clave robada');
+        $this->assertEntra($c['email'], $c['password'], 'clave original');
+    }
+
     public function test_R4_10_precarga_get_head_y_privacidad_de_los_datos(): void
     {
         $email = self::correo('priv');
