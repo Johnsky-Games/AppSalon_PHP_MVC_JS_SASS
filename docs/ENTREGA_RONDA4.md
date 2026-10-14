@@ -1,6 +1,6 @@
 # Entrega ronda 4 — revisión de datos personales en la activación y validación de la instalación local
 
-Rama `claude/blissful-hopper-f5k7a0` (sin merge a `main`, sin despliegue). Parte de `eea5012`. Resultados de §3 del código `__SHA_CODIGO__`; el SHA final se informa en el mensaje de entrega.
+Rama `claude/blissful-hopper-f5k7a0` (sin merge a `main`, sin despliegue). Parte de `eea5012`. Resultados de §3 del código `2219faf`; el SHA final se informa en el mensaje de entrega.
 
 ## 1. Estado de la validación local — leer primero
 
@@ -27,10 +27,10 @@ Rama `claude/blissful-hopper-f5k7a0` (sin merge a `main`, sin despliegue). Parte
 
 ## 3. Resultados (suites separadas, sin sumar)
 
-* **PHPUnit por defecto**, local (PHP 8.3.6, MySQL 8.0.46, orden aleatorio): `__PHPUNIT__`
-* **QA independiente (`tests/Qa`)**, local: `__QA__`
-* **CI del mismo código:** `__CI__`
-* **Pruebas omitidas:** `__OMITIDAS__`
+* **PHPUnit por defecto**, local (PHP 8.3.6, MySQL 8.0.46, orden aleatorio): `OK (782 tests, 11000 assertions)` (semilla 1791993125); en el CI (PHP 8.2) el paso pasó en 185 s.
+* **QA independiente (`tests/Qa`)**, local: `OK (700 tests, 8436 assertions)`, 1060 s, `QA_EXIGIR_NAVEGADOR=1`; en el CI el paso pasó en 724 s.
+* **CI del mismo código:** [run 38597485563](https://github.com/Johnsky-Games/AppSalon_PHP_MVC_JS_SASS/actions/runs/38597485563) sobre `23cecba` (mismo código que `2219faf`; solo difiere la documentación): **success** (migraciones, instalador del propietario, PHPUnit, QA, imagen Docker, E2E en Apache —220 s—, respaldo/restauración con SHA-256).
+* **Pruebas omitidas:** 0 en `tests/Qa` («Pruebas en el informe: 700; omitidas: 0») y 0 en la suite por defecto; la lista permitida sigue vacía.
 * **E2E de navegador:** el paso «Recorrido E2E aislado» del CI (Apache real); en local no se repitió (sin Docker). El QA hizo además un recorrido con Chromium sobre `php -S` en la VM (registro → correo → formulario precargado → corregir y activar → login).
 
 ## 4. Comprobado / fallido / pendiente
