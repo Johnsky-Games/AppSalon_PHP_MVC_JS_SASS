@@ -593,4 +593,42 @@ final class R3bTest extends R3Case
         if ($rr['status'] >= 500) { $fallos[] = "recuperación => {$rr['status']}"; }
         $this->assertSame([], $fallos, 'una contraseña con byte NUL provoca 500 en: ' . implode(', ', $fallos));
     }
+
+    public function test_R3b_20_el_limite_por_huella_de_token_salta_antes_que_el_de_ip_y_no_afecta_a_otros_enlaces(): void
+    {
+        $email = self::correo('lt');
+        $this->registrar($email, self::A);
+        $t = $this->ultimoToken($email);
+        [$n, $f] = $this->abrirFormulario($t);
+        $claveToken = array_search($t, $f['campos'], true);
+        self::q('TRUNCATE intentos_login');
+        $inventado = bin2hex(random_bytes(32));
+        $estados = [];
+        for ($i = 0; $i < 10; $i++) { $estados[] = $n->post($f['accion'], $this->cuerpo($f, self::C, [$claveToken => $inventado]))['status']; }
+        $primero = array_search(429, $estados, true);
+        $this->assertNotFalse($primero, 'el mismo token inventado repetido 10 veces debe limitarse: ' . json_encode($estados));
+        $this->assertLessThanOrEqual(7, $primero, 'el límite por huella de token debe saltar antes que el de IP (documentado: 5 por token)');
+        // Otro token distinto (el real) sigue sirviendo: el límite por huella no es un bloqueo global.
+        $this->assertSame(200, $n->post($f['accion'], $this->cuerpo($f, self::C))['status'], 'el enlace real no debe verse afectado por el abuso de OTRO token: ' . json_encode($estados));
+        $this->assertEntra($email, self::C, 'C');
+    }
+
+    public function test_R3b_21_la_activacion_reinicia_los_contadores_de_la_cuenta_bloqueada_por_intentos_de_login_ajenos(): void
+    {
+        $email = self::correo('bloq');
+        $this->registrar($email, self::A);
+        // Un tercero agota los intentos de inicio de sesión sobre el correo del titular (bloqueo por correo).
+        $bloqueado = false;
+        for ($i = 0; $i < 12 && !$bloqueado; $i++) {
+            $n = new Navegador(self::$base);
+            $r = $n->login('cliente', $email, 'Incorrecta-' . $i);
+            $bloqueado = $r['status'] === 429 || stripos($r['body'], 'demasiados') !== false;
+        }
+        $this->assertTrue($bloqueado, 'la cuenta debía quedar bloqueada por intentos de login (precondición)');
+        // El titular activa (la activación usa sus propios contadores, no los de login) y debe poder entrar de inmediato con su contraseña.
+        $act = $this->activar($this->ultimoToken($email), self::C);
+        $this->assertSame(200, $act['post']['status'] ?? 0, 'la activación no debe estar bloqueada por el límite de login de la cuenta');
+        $n2 = new Navegador(self::$base);
+        $this->assertSame(302, $n2->login('cliente', $email, self::C)['status'], 'tras activar, los contadores de la cuenta se reinician y el titular puede entrar sin esperar el bloqueo');
+    }
 }

@@ -162,7 +162,11 @@ final class AutorizacionMatrizTest extends QaCase
         }
         if ($head && $cuerpo !== '') { $f[] = 'HEAD no debe devolver cuerpo (' . strlen($cuerpo) . ' bytes)'; }
         // Cabeceras de seguridad en TODA respuesta.
-        foreach (['x-content-type-options' => 'nosniff', 'x-frame-options' => 'SAMEORIGIN', 'referrer-policy' => 'strict-origin-when-cross-origin'] as $k => $val) {
+        // CAMBIO DE CONTRATO (ronda 3): la pantalla del enlace de activación contiene un token, así que fija `Referrer-Policy: no-referrer` (más estricta); el resto conserva
+        // `strict-origin-when-cross-origin`. La excepción es solo por ruta (GET/HEAD/POST /confirmar-cuenta), nunca una relajación.
+        // Un POST rechazado por CSRF (403) responde con la página de error genérica, que no contiene el token ni lo lleva en la URL: conserva la política general.
+        $politicaReferrer = ($r !== null && self::base($r['p']) === '/confirmar-cuenta' && $resp['status'] !== 403) ? 'no-referrer' : 'strict-origin-when-cross-origin';
+        foreach (['x-content-type-options' => 'nosniff', 'x-frame-options' => 'SAMEORIGIN', 'referrer-policy' => $politicaReferrer] as $k => $val) {
             if (($h[$k][0] ?? null) !== $val) { $f[] = "cabecera $k esperada '$val'; obtenida " . var_export($h[$k][0] ?? null, true); }
         }
         // Nada autenticado o denegado se cachea (las dos únicas respuestas sin sesión son el catálogo público y el webhook firmado).

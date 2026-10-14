@@ -229,8 +229,18 @@ final class R2bRegistroUniformeTest extends R2bCase
         $n = new Navegador(self::$base);
         $this->assertSame(410, $n->get('/confirmar-cuenta?token=' . $t1)['status'], 'el enlace anterior debe quedar invalidado');
         $this->assertSame(200, $n->get('/confirmar-cuenta?token=' . $t2)['status']);
+        $this->assertSame(0, (int)self::escalar('SELECT confirmado FROM usuarios WHERE email=?', [$email]), 'el GET del enlace vigente no debe activar la cuenta');
+        // CAMBIO DE CONTRATO (ronda 3): la contraseña del registro es PROVISIONAL (y la de un segundo registro, la del atacante, tampoco cuenta);
+        // al activar, quien controla el buzón elige la definitiva. Antes se esperaba entrar con la contraseña ORIGINAL del registro.
+        $act = $this->activarEnlace(self::$base, $t2, 'Elegida-Titular-77x');
+        $this->assertNotNull($act['form'], 'el enlace vigente debe ofrecer elegir la contraseña');
+        $this->assertSame(1, (int)self::escalar('SELECT confirmado FROM usuarios WHERE email=?', [$email]));
         self::q('TRUNCATE intentos_login');
-        $this->assertSame(302, (new Navegador(self::$base))->login('cliente', $email, 'Abcdef123456-x')['status'], 'inicia sesión con la contraseña ORIGINAL');
+        $this->assertSame(302, (new Navegador(self::$base))->login('cliente', $email, 'Elegida-Titular-77x')['status'], 'inicia sesión con la contraseña ELEGIDA al activar');
+        self::q('TRUNCATE intentos_login');
+        $this->assertSame(200, (new Navegador(self::$base))->login('cliente', $email, 'Abcdef123456-x')['status'], 'la contraseña provisional del registro ya no sirve');
+        self::q('TRUNCATE intentos_login');
+        $this->assertSame(200, (new Navegador(self::$base))->login('cliente', $email, 'Otra-Clave-Atacante-1')['status'], 'la contraseña del atacante nunca sirve');
     }
 
     // ------------------------------------------------------------------ 3. el correo que recibe el titular

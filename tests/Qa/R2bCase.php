@@ -85,6 +85,54 @@ abstract class R2bCase extends QaCase
     }
 
     /**
+     * Localiza en el HTML el formulario que contiene campos de contraseña y lo devuelve con todos sus campos (ocultos incluidos).
+     * @return array{accion:string,metodo:string,campos:array<string,string>,password:string[]}|null
+     */
+    protected function formulario(string $html, string $urlActual): ?array
+    {
+        $dom = new \DOMDocument();
+        @$dom->loadHTML('<?xml encoding="UTF-8">' . $html);
+        foreach ($dom->getElementsByTagName('form') as $f) {
+            $campos = []; $pass = [];
+            foreach ($f->getElementsByTagName('input') as $in) {
+                $nombre = $in->getAttribute('name');
+                $tipo = strtolower($in->getAttribute('type') ?: 'text');
+                if ($nombre === '' || in_array($tipo, ['submit', 'button', 'image', 'reset', 'file'], true)) { continue; }
+                if ($tipo === 'password') { $pass[] = $nombre; $campos[$nombre] = ''; continue; }
+                if (in_array($tipo, ['checkbox', 'radio'], true) && !$in->hasAttribute('checked')) { continue; }
+                $campos[$nombre] = $in->getAttribute('value');
+            }
+            if (!$pass) { continue; }
+            $accion = trim($f->getAttribute('action'));
+            if ($accion === '') { $accion = $urlActual; }
+            elseif (preg_match('~^https?://[^/]+(/.*)?$~i', $accion, $m)) { $accion = ($m[1] ?? '') ?: '/'; }
+            elseif ($accion[0] !== '/') { $accion = rtrim(dirname(parse_url($urlActual, PHP_URL_PATH)), '/') . '/' . $accion; }
+            return ['accion' => $accion, 'metodo' => strtoupper($f->getAttribute('method') ?: 'GET'), 'campos' => $campos, 'password' => $pass];
+        }
+        return null;
+    }
+
+    /**
+     * Activación genérica del enlace de confirmación (contrato de la ronda 3): GET del enlace; si trae un formulario con campos de contraseña se
+     * rellena con `$clave` (la contraseña DEFINITIVA elegida en el buzón) y se envía por POST a su `action`. Sin formulario (diseño antiguo, el
+     * GET activaba) no se envía nada.
+     * @return array{nav:Navegador,get:array,form:?array,post:?array}
+     */
+    protected function activarEnlace(string $base, string $token, string $clave, ?Navegador $n = null): array
+    {
+        $n ??= new Navegador($base);
+        $url = '/confirmar-cuenta?token=' . $token;
+        $g = $n->get($url);
+        $f = $this->formulario($g['body'], $url);
+        if ($f === null) { return ['nav' => $n, 'get' => $g, 'form' => null, 'post' => null]; }
+        $campos = $f['campos'];
+        foreach ($f['password'] as $nombre) { $campos[$nombre] = $clave; }
+        self::q('TRUNCATE intentos_login');
+        $p = $f['metodo'] === 'POST' ? $n->post($f['accion'], $campos) : $n->get($f['accion'] . (str_contains($f['accion'], '?') ? '&' : '?') . http_build_query($campos));
+        return ['nav' => $n, 'get' => $g, 'form' => $f, 'post' => $p];
+    }
+
+    /**
      * Contrato nuevo de la fase 2: NINGÚN correo de cuenta sale dentro de la petición HTTP; solo lo entrega el worker. Este método es
      * ese worker: adelanta los reintentos vencidos, ejecuta `scripts/procesar_correos.php` como proceso y exige código 0.
      * @return array{exit:int,out:string,err:string,seg:float}

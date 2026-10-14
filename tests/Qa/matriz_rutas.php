@@ -42,6 +42,8 @@ return [
     ['m' => 'GET',  'p' => '/recuperar',             'g' => 'publica', 'ok' => [410, 'html']],
     ['m' => 'POST', 'p' => '/recuperar',             'g' => 'publica', 'orden' => 'solo_csrf', 'csrf' => 'exigir', 'ok' => [422, 'html']],
     ['m' => 'GET',  'p' => '/confirmar-cuenta',      'g' => 'publica', 'ok' => [410, 'html']],
+    // Ronda 3: la activación es un POST (CSRF obligatorio; sin token en el cuerpo es el 410 genérico). El GET solo valida el enlace.
+    ['m' => 'POST', 'p' => '/confirmar-cuenta',      'g' => 'publica', 'orden' => 'solo_csrf', 'csrf' => 'exigir', 'ok' => [410, 'html']],
     ['m' => 'GET',  'p' => '/mensaje',               'g' => 'publica', 'ok' => [200, 'html']],
     ['m' => 'GET',  'p' => '/reenviar-confirmacion', 'g' => 'publica', 'ok' => [200, 'html']],
     ['m' => 'POST', 'p' => '/reenviar-confirmacion', 'g' => 'publica', 'orden' => 'solo_csrf', 'csrf' => 'exigir', 'ok' => [422, 'html']],

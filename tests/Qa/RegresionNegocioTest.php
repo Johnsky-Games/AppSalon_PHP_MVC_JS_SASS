@@ -64,7 +64,13 @@ final class RegresionNegocioTest extends R2bCase
         $this->assertCount(1, $buzon, 'debe llegar exactamente UN correo de confirmación');
         $tok = self::tokenEnCorreo(end($buzon), '/confirmar-cuenta');
         $this->assertNotNull($tok, substr(end($buzon)['cuerpo'], 0, 400));
+        // CAMBIO DE CONTRATO (ronda 3): el GET del enlace solo muestra el formulario; la activación es un POST donde se elige la contraseña definitiva
+        // (aquí 'Clave-Publica-123', la misma que el resto del recorrido usa para entrar).
         $this->assertSame(200, $n->get('/confirmar-cuenta?token=' . $tok)['status']);
+        $this->assertSame(0, (int)self::escalar('SELECT confirmado FROM usuarios WHERE email=?', [$email]), 'el GET no debe activar');
+        $act = $this->activarEnlace(self::$base, $tok, 'Clave-Publica-123', $n);
+        $this->assertNotNull($act['form'], 'el enlace debe ofrecer elegir la contraseña');
+        $this->assertSame(1, (int)self::escalar('SELECT confirmado FROM usuarios WHERE email=?', [$email]));
         $this->assertSame(302, $n->login('cliente', $email, 'Clave-Publica-123')['status']);
         $csrf = $n->csrf('/cliente/login');
 

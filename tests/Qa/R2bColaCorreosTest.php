@@ -111,9 +111,14 @@ final class R2bColaCorreosTest extends R2bCase
         $tok = $this->tokenDelBuzon($email);
         $this->assertNotNull($tok, 'el correo recuperado debe contener el enlace');
         $this->assertSame($hash, hash('sha256', $tok), 'el enlace entregado debe ser el vigente');
-        // La cuenta se confirma con el enlace del correo capturado y se puede entrar con la contraseña original.
+        // CAMBIO DE CONTRATO (ronda 3, toma de cuenta por pre-registro): abrir el enlace con GET ya NO activa la cuenta; la activación es un POST en el que quien
+        // controla el buzón ELIGE la contraseña definitiva (la del registro es provisional). Se conserva todo el poder de detección: el GET no confirma, el
+        // POST sí, y se entra con la contraseña elegida (aquí el mismo valor 'Abcdef123456-x' para no alterar el resto de la prueba).
         $n = new Navegador(self::$base);
         $this->assertSame(200, $n->get('/confirmar-cuenta?token=' . $tok)['status']);
+        $this->assertSame(0, (int)self::escalar('SELECT confirmado FROM usuarios WHERE email=?', [$email]), 'el GET del enlace no debe activar la cuenta');
+        $act = $this->activarEnlace(self::$base, $tok, 'Abcdef123456-x');
+        $this->assertNotNull($act['form'], 'el enlace debe ofrecer elegir la contraseña');
         $this->assertSame(1, (int)self::escalar('SELECT confirmado FROM usuarios WHERE email=?', [$email]));
         self::q('TRUNCATE intentos_login');
         $this->assertSame(302, (new Navegador(self::$base))->login('cliente', $email, 'Abcdef123456-x')['status']);
