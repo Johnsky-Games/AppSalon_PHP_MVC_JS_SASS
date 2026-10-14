@@ -281,6 +281,8 @@ abstract class QaCase extends TestCase
         foreach (glob($sess . '/sess_*') ?: [] as $viejo) { @unlink($viejo); }
         @mkdir($sess, 0777, true);
         $envp = array_merge(getenv(), ['DB_NAME' => self::nombreBd(), 'APP_ENV' => 'testing', 'EMAIL_HOST' => '127.0.0.1', 'EMAIL_PORT' => '2599', 'EMAIL_USER' => 't', 'EMAIL_PASSWORD' => 't', 'EMAIL_FORCE_SMTP' => '1'], $env);
+        // Un valor null QUITA la variable del entorno del servidor (p. ej. APP_ENV «no definido»).
+        foreach ($env as $k => $v) { if ($v === null) { unset($envp[$k]); } }
         $p = proc_open([PHP_BINARY, '-d', 'variables_order=EGPCS', '-d', 'error_log=' . $log, '-d', 'session.save_path=' . $sess, '-S', "127.0.0.1:$port", '-t', self::RAIZ . '/public', __DIR__ . '/router.php'],
             [1 => ['file', $log . '.out', 'a'], 2 => ['file', $log . '.err', 'a']], $pipes, self::RAIZ, $envp);
         for ($i = 0; $i < 50; $i++) {

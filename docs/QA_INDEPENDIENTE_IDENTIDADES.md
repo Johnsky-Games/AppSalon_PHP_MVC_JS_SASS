@@ -895,3 +895,56 @@ Tests: 229, Assertions: 3667, Failures: 2.     (DURACION_SEG=349)
 ```
 
 Los 2 fallos son las pruebas rojas de los dos hallazgos abiertos: R2B-03c y R2B-13. Omitidas: 0 (`ci_verificar_omitidas.php`: «Pruebas en el informe: 229; omitidas: 0», código 0); la lista permitida sigue vacía. No se ejecutó PHP 8.2 localmente (solo 8.3.6): la corrección del `exitcode` se razona a partir del comportamiento documentado de `proc_get_status`/`proc_close`.
+
+## Ronda 3 – Fase A (reproducción independiente de tres hallazgos del usuario)
+
+Base: `2240371` (integrada en `wt/qa2`). Clase nueva `tests/Qa/R3Test.php` (SMTP simulado 2593, servidor HTTP real con 8 procesos, worker real `scripts/procesar_correos.php`; el arnés `QaCase::servidor()` admite ahora un valor `null` para quitar una variable del entorno). Las pruebas `test_Defecto_R3_*` están **rojas contra el código actual** y quedarán verdes con la corrección; las `test_R3_*` son controles que ya pasan. No se modificó código de la aplicación.
+
+**Activación genérica (válida antes y después de la corrección).** Se abre el enlace con GET; si la respuesta contiene un `<form>` con campos de contraseña, se parsean sus `input` (nombre, valor, CSRF, clave de operación y token ocultos), se rellenan los campos de contraseña con una contraseña nueva C y se envía por POST a su `action`; si no hay formulario (diseño antiguo, el GET activa) se continúa con lo que haya. Las aserciones comparan después qué contraseñas inician sesión (`/cliente/login`, `/`, `/equipo/login` y `/login`, que no existe).
+
+Ejecución: `Tests: 17, Assertions: 133, Failures: 11.` (6 controles verdes, 11 rojas).
+
+### R3-1 Toma de cuenta por registro previo (Alta, CWE-287/640)
+Reproducción mínima, ejecutada contra HTTP real: (1) el atacante hace `POST /cliente/registro` con el correo del titular y la contraseña A; (2) el titular se registra con B (respuesta uniforme, no pisa A); (3) el worker entrega el enlace al buzón del titular, que lo abre con GET; (4) **la cuenta queda confirmada con la contraseña A del atacante**.
+
+```
+test_Defecto_R3_01  la contraseña A del atacante, DESPUÉS de que el titular activó su cuenta (Atacante-Clave-111) no debe iniciar sesión por ningún acceso:
+                    {"/cliente/login":true,"/":true,"/equipo/login":false,"/login":false}
+```
+Antes de activar, A no entra (la cuenta no está confirmada); después de que el titular abre su enlace, A entra por `/cliente/login` y por `/`. El mismo resultado tras re-registros y reenvíos intercalados (`test_Defecto_R3_02`: `{"/cliente/login":true,"/":true,…}`).
+
+| Prueba | Salida literal en el código actual |
+|---|---|
+| `R3_03` cuenta de recepción (sin confirmar, contraseña aleatoria) | `la contraseña C elegida por quien activa … debe iniciar sesión en /cliente/login: {"/cliente/login":false,"/":false,"/equipo/login":false,"/login":false}` (la cuenta se activa por GET con una contraseña que nadie conoce; defecto de usabilidad, no toma de cuenta: A sí queda bloqueada) |
+| `R3_04` 6 activaciones simultáneas | `cada uno de los 6 contendientes debe recibir su formulario de activación — Failed asserting that actual size 0 matches expected size 6.` |
+| `R3_05` sesión previa | `una sesión previa guardada (sin versión) se «adopta» al quedar confirmada la cuenta: da acceso con la identidad del usuario sin conocer ninguna contraseña — Failed asserting that 200 is not identical to 200.` |
+| `R3_06` doble clic | `DISEÑO NUEVO: el enlace debe mostrar el formulario de activación — Failed asserting that null is not null.` |
+
+Detalles de R3-05 (verificados): `confirmAccountByToken` no incrementa `version_sesion` (a diferencia de `resetPasswordByToken`) y `isAuth()` «adopta» una sesión sin `version_sesion` al quedar la cuenta confirmada. Una sesión forjada o capturada para un usuario sin confirmar es inofensiva mientras la cuenta no está confirmada (el servidor la vacía al verla), **pero si se conserva sin usar, sobrevive a la activación y da acceso** (y la que lleva la versión actual también). Es un escenario de laboratorio (requiere tener una sesión para esa identidad); se reporta porque el contrato pedido exige invalidar las sesiones previas al activar.
+
+Controles verdes (el contrato ya se cumple): `R3_07` el reenvío invalida el enlace viejo (410, sin formulario); `R3_08` registrar sobre una cuenta confirmada no cambia la contraseña, no confirma ni deja token; `R3_09` token vencido no activa (410); `R3_13` tokens cruzados de confirmación y recuperación no sirven (ni consumen el token); `R3_14` un token de confirmación residual sobre una cuenta ya confirmada y **suspendida** no cambia su contraseña ni la reactiva; `R3_15` token inexistente, vencido o de otro tipo responden idéntico y no consumen el token real.
+
+### R3-2 Confirmación por GET (Alta)
+```
+test_Defecto_R3_10  un GET/HEAD/prefetch activó la cuenta (confirmado=1) — Failed asserting that 1 is identical to 0.
+```
+Reproducción: tras el registro, `GET /confirmar-cuenta?token=<token del buzón>` con cualquier cliente (curl, Googlebot, Outlook SafeLinks, `Purpose: prefetch`, `Sec-Purpose`) confirma la cuenta y consume el token. `HEAD` no la activa (el controlador lo trata aparte), pero el GET sí. Las pruebas `R3_11` (POST con CSRF: sin CSRF, vacío, de otra sesión, inventado, método GET/PUT, sin sesión, token en la URL, token distinto, contraseña vacía/corta/discordante: ningún efecto) y `R3_12` (≥ 1 respuesta 429 en 40 POST con tokens inventados) fallan hoy en su precondición: `DISEÑO NUEVO: el enlace debe mostrar un formulario de activación (POST) — Failed asserting that null is not null.` (no existe endpoint POST de activación ni límite de intentos).
+
+### R3-3 `CORREOS_ENVIO_INMEDIATO=1` sin comprobar el entorno (Media)
+```
+test_Defecto_R3_20  con APP_ENV fuera de desarrollo/pruebas CORREOS_ENVIO_INMEDIATO=1 NO debe enviar dentro de la petición (SMTP de 400 ms):
+APP_ENV=«production» registro: 1 correo(s) en la petición y 569 ms
+APP_ENV=«production» olvide: 1 correo(s) en la petición y 468 ms
+APP_ENV=«production» reenviar: 1 correo(s) en la petición y 471 ms
+… igual para «Production», « production », «PRODUCTION», «prod», «produccion», «staging», «stage», «qa», «live», «preprod», vacío y no definido
+```
+Servidores `php -S` reales con cada `APP_ENV` (en producción con `APP_KEY` de 40 caracteres), `CORREOS_ENVIO_INMEDIATO=1` y un SMTP de 400 ms: **los 13 valores envían en línea** y la petición paga la latencia del SMTP, reabriendo el canal de enumeración de R2B-02/08/09 si una instalación deja la variable activa por error. Control positivo (la prueba detecta el canal): con `testing`, `test`, `development`, `dev` y `local` se espera envío en línea (≈ 470–600 ms).
+
+**Decisión sobre mayúsculas (criterio de seguridad, «ante la duda, NO habilitar»).** Solo el valor **exacto en minúsculas y sin espacios** de `development`, `dev`, `local`, `testing`, `test` habilita el envío en línea; `TESTING`, ` testing `, `Development`, `DEV`, `Local`, `Test ` o `testing\n` no. `Secretos::clave()` es más permisiva (recorta y pasa a minúsculas) y existe un riesgo de deriva entre ambos criterios; si el líder decide igualarlos debe hacerlo de forma explícita y revisar `test_Defecto_R3_21`, que hoy falla con 21 líneas «APP_ENV=«TESTING» registro envió en línea…».
+
+### Otros caminos que activan o confirman una cuenta (revisión por lectura)
+- `UsuarioRepository::confirmAccountByToken` (GET) es el único camino que confirma una cuenta de cliente por correo. Fija `confirmado=1` sin elegir contraseña, sin comprobar CSRF y sin incrementar `version_sesion`.
+- `ColaboradorRepository::aceptar` (invitación del equipo): si el correo ya tiene una cuenta **sin confirmar** (p. ej. pre-registrada por un atacante), la invitación **sustituye la contraseña** por la que elige el invitado y la confirma, e incrementa `version_sesion`: es seguro y es el patrón que la corrección debe imitar. Si la cuenta ya está confirmada exige la contraseña actual. La vista previa (`vistaInvitacion`, GET) no consume el token.
+- `ColaboradorRepository` (arranque del propietario con `password`): solo con el secreto de instalación y, si la cuenta existe, exige que la contraseña coincida; `scripts/instalar.php` entrega un enlace de activación de invitación (mismo patrón seguro).
+- `UsuarioRepository::resetPasswordByToken` (recuperación) no exige `confirmado=1` en el `WHERE` (la emisión sí lo exige); no es explotable hoy porque el token solo se emite para cuentas confirmadas, pero convendría añadir la condición como defensa en profundidad.
+- No se encontró ningún otro `UPDATE usuarios SET confirmado=1` ni cambio de correo en `PerfilService`/`ProfileService` (no hay edición de `email` en usuarios).
