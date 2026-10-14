@@ -1041,3 +1041,15 @@ Tests: 636, Assertions: 6866, Failures: 2.     (DURACION_SEG=848)
 ```
 Fallos: R2bColaCorreosTest::test_Defecto_R2B_03d_un_literal_de_ipv6_deja_la_direccion_completa_en_el_error_y_en_el_estado, R3bTest::test_Defecto_R3b_19_una_contrasena_con_byte_nulo_da_500_en_registro_activacion_y_recuperacion.
 Omitidas: 0 (`php scripts/ci_verificar_omitidas.php <junit.xml> .github/qa_omitidas_permitidas.txt` → «Pruebas en el informe: 636; omitidas: 0»). La lista permitida sigue vacía. No se ejecutó PHP 8.2 localmente (8.3.6); las diferencias tenidas en cuenta: `proc_get_status`/`exitcode` (ya corregido en `R2bCase::worker`), sin funciones exclusivas de 8.3 y sin `posix_*`.
+
+
+## Ronda 3 – Cierre del líder sobre los dos defectos que dejó abiertos la Fase B
+
+Los dos hallazgos que el informe de la Fase B dejó como **abiertos (Baja)** se corrigieron en la aplicación y sus pruebas rojas (`R3bTest::test_Defecto_R3b_19_…` y `R2bColaCorreosTest::test_Defecto_R2B_03d_…`, no modificadas ni relajadas) pasan en la suite completa:
+
+| Hallazgo | Corrección | Evidencia |
+|---|---|---|
+| **R3b-19** contraseña con byte NUL → 500 | `Usuario::validarPassword()` y la validación de `ColaboradorService` la rechazan con 422 (`password_hash()` ya no recibe NUL) | `tests/Unit/RedaccionYPasswordNulTest.php`; suite Qa completa |
+| **R2B-03d** literal `[IPv6:…]` sin redactar | `Email::sanearMensajeError()` redacta cualquier literal de dominio entre corchetes (`\[[^\]\s]{1,64}\]`) | Mismo archivo unitario (6 formas de dirección); suite Qa completa |
+
+Resultado literal de la suite Qa completa tras ambas correcciones (local, PHP 8.3.6, `QA_EXIGIR_NAVEGADOR=1`): `OK (636 tests, 6862 assertions)`, 887 s, 0 omitidas. El CI (PHP 8.2) del mismo código pasó el paso de QA (670 s). Este cierre lo verificó la propia suite del QA; no hubo una tercera revisión adversarial manual de estas dos correcciones.
