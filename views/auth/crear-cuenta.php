@@ -26,7 +26,8 @@
     </div>
     <div class="campo">
         <label for="password">Contraseña</label>
-        <input type="password" autocomplete="new-password" id="password" name="password" placeholder="Tu contraseña">
+        <input type="password" autocomplete="new-password" id="password" name="password" placeholder="Tu contraseña" aria-describedby="registro-password-ayuda">
+        <p class="ui-form-help" id="registro-password-ayuda">Es provisional: al abrir el enlace de tu correo elegirás tu contraseña definitiva y la de este formulario se descarta.</p>
     </div>
 
     <input type="submit" value="Crear Cuenta" class="boton">

@@ -415,18 +415,25 @@ class UsuarioRepository
     }
 
     /**
-     * Consume atómicamente un token de confirmación válido y vigente, marcando la cuenta como confirmada
-     * e invalidando el token en una única sentencia UPDATE con verificación de `affected_rows === 1`.
+     * ACTIVACIÓN de una cuenta (única vía de confirmación): en UNA sola sentencia UPDATE atómica consume el token de
+     * confirmación Y reemplaza la contraseña por la elegida por quien demostró controlar el buzón. La contraseña del
+     * registro es provisional y se descarta aquí. Condiciones (todas en el WHERE): hash del token, propósito 'confirmacion',
+     * vigencia y cuenta aún sin confirmar; solo `affected_rows === 1` cuenta como éxito, de modo que el perdedor de dos
+     * activaciones simultáneas no cambia la contraseña del ganador y un token residual nunca toca una cuenta confirmada.
+     * También sube `version_sesion` (invalida sesiones previas) y deja sin token vigente a la cuenta (la columna es única:
+     * cualquier token de recuperación o confirmación anterior desaparece). Dentro de la misma transacción del llamador
+     * reinicia los contadores de intentos de esa cuenta (login, recuperación, reenvío).
      *
      * @param string $tokenRaw Token en texto plano.
-     * @return bool True si el token era válido y fue consumido; false si no existía, expiró o ya fue usado.
+     * @param string $nuevoPasswordHash Hash bcrypt de la contraseña elegida.
+     * @return array{id:int,email:string}|null Cuenta activada, o null si el token no era válido, venció, ya se usó o la cuenta ya estaba confirmada.
      * @throws PersistenceException Si ocurre un fallo SQL.
      */
-    public function confirmAccountByToken(string $tokenRaw): bool
+    public function activateAccountByToken(string $tokenRaw, string $nuevoPasswordHash): ?array
     {
         $tokenTrimmed = trim($tokenRaw);
-        if ($tokenTrimmed === '') {
-            return false;
+        if ($tokenTrimmed === '' || $nuevoPasswordHash === '') {
+            return null;
         }
 
         $db = $this->resolveDb();
@@ -434,32 +441,53 @@ class UsuarioRepository
         $tipo = 'confirmacion';
 
         try {
+            // `id = LAST_INSERT_ID(id)` deja disponible el id de la fila actualizada sin una lectura posterior.
             $sql = "UPDATE usuarios
-                    SET confirmado = '1', token = NULL, token_hash = NULL, token_tipo = NULL, token_expira = NULL
-                    WHERE token_hash = ? AND token_tipo = ? AND token_expira >= UTC_TIMESTAMP()
+                    SET password = ?, confirmado = '1', version_sesion = version_sesion + 1, id = LAST_INSERT_ID(id),
+                        token = NULL, token_hash = NULL, token_tipo = NULL, token_expira = NULL
+                    WHERE token_hash = ? AND token_tipo = ? AND token_expira >= UTC_TIMESTAMP() AND confirmado = '0'
                     LIMIT 1";
             $stmt = $db->prepare($sql);
             if (!$stmt) {
-                throw new PersistenceException("Error al preparar confirmación por token: " . $db->error);
+                throw new PersistenceException("Error al preparar activación por token: " . $db->error);
             }
-
-            $stmt->bind_param('ss', $hash, $tipo);
+            $stmt->bind_param('sss', $nuevoPasswordHash, $hash, $tipo);
             if (!$stmt->execute()) {
                 $err = $stmt->error;
                 $stmt->close();
-                throw new PersistenceException("Error al ejecutar confirmación por token: " . $err);
+                throw new PersistenceException("Error al ejecutar activación por token: " . $err);
             }
-
             $afectadas = $stmt->affected_rows;
             $stmt->close();
+            if ($afectadas !== 1) {
+                return null;
+            }
 
-            return $afectadas === 1;
+            $id = (int)$db->insert_id;
+            $sel = $db->prepare('SELECT email FROM usuarios WHERE id = ?');
+            if (!$sel) {
+                throw new PersistenceException("Error al preparar lectura tras la activación: " . $db->error);
+            }
+            $sel->bind_param('i', $id);
+            $sel->execute();
+            $fila = $sel->get_result()->fetch_assoc();
+            $sel->close();
+            $email = (string)($fila['email'] ?? '');
+
+            // Contadores de la cuenta recién activada (no los de IP, que son presupuesto compartido).
+            $del = $db->prepare("DELETE FROM intentos_login WHERE tipo IN ('email_login','email_recovery','email_reconfirm') AND LOWER(identificador) = LOWER(?)");
+            if ($del) {
+                $del->bind_param('s', $email);
+                $del->execute();
+                $del->close();
+            }
+            return ['id' => $id, 'email' => $email];
         } catch (PersistenceException $e) {
-            error_log("[UsuarioRepository::confirmAccountByToken] " . $e->getMessage());
+            error_log("[UsuarioRepository::activateAccountByToken] " . $e->getMessage());
             throw $e;
         } catch (\Throwable $e) {
-            error_log("[UsuarioRepository::confirmAccountByToken] Excepción inesperada: " . $e->getMessage());
-            throw new PersistenceException("Fallo en la capa de persistencia al confirmar cuenta.", 0, $e);
+            error_log("[UsuarioRepository::activateAccountByToken] Excepción inesperada: " . $e->getMessage());
+            throw new PersistenceException("Fallo en la capa de persistencia al activar cuenta.", 0, $e);
         }
     }
 
@@ -486,7 +514,7 @@ class UsuarioRepository
         try {
             $sql = "UPDATE usuarios
                     SET password = ?, version_sesion = version_sesion + 1, token = NULL, token_hash = NULL, token_tipo = NULL, token_expira = NULL
-                    WHERE token_hash = ? AND token_tipo = ? AND token_expira >= UTC_TIMESTAMP()
+                    WHERE token_hash = ? AND token_tipo = ? AND token_expira >= UTC_TIMESTAMP() AND confirmado = '1'
                     LIMIT 1";
             $stmt = $db->prepare($sql);
             if (!$stmt) {

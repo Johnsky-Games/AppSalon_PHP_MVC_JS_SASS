@@ -125,7 +125,7 @@ El protocolo SMTP no proporciona una garantía de entrega atómica de dos fases 
 
 ## 5. Cola de correos de cuenta (`correos_salida`)
 
-Los correos de **confirmación de cuenta**, de **recuperación de contraseña**, el **aviso de cuenta existente** y las **invitaciones de colaboradores** no se envían de forma síncrona y "a ver si sale": se escriben en una cola persistente (outbox) dentro de la misma transacción que el hecho de negocio, los envía un worker (cada `CORREOS_INTERVALO_SEGUNDOS`, 5 s por defecto) y, si el SMTP falla, los reintenta con espera creciente. **Los correos de rutas públicas (registro, recuperación, reenvío) no se envían dentro de la petición HTTP** (salvo `CORREOS_ENVIO_INMEDIATO=1`): si lo hicieran, el tiempo de respuesta delataría si una cuenta existe. **Excepción documentada:** las invitaciones de colaboradores (ruta autenticada del propietario, sin oráculo de enumeración) y los avisos de cita/reasignación sí intentan el envío tras el `COMMIT` en la propia petición; si falla, quedan en cola para el worker. Un SMTP caído **no hace fallar** el registro, la recuperación ni el reenvío; el correo queda en cola y se reintenta hasta 6 veces (≈31 min acumulados). Pasado ese punto el evento queda `fallido` y **requiere** `--reintentar`: la cola no entrega «para siempre».
+Los correos de **confirmación de cuenta**, de **recuperación de contraseña**, el **aviso de cuenta existente** y las **invitaciones de colaboradores** no se envían de forma síncrona y "a ver si sale": se escriben en una cola persistente (outbox) dentro de la misma transacción que el hecho de negocio, los envía un worker (cada `CORREOS_INTERVALO_SEGUNDOS`, 5 s por defecto) y, si el SMTP falla, los reintenta con espera creciente. **Los correos de rutas públicas (registro, recuperación, reenvío) no se envían dentro de la petición HTTP** (salvo `CORREOS_ENVIO_INMEDIATO=1`, variable **solo de pruebas** que se ignora si `APP_ENV` no es `development|dev|local|testing|test`): si lo hicieran, el tiempo de respuesta delataría si una cuenta existe. **Excepción documentada:** las invitaciones de colaboradores (ruta autenticada del propietario, sin oráculo de enumeración) y los avisos de cita/reasignación sí intentan el envío tras el `COMMIT` en la propia petición; si falla, quedan en cola para el worker. Un SMTP caído **no hace fallar** el registro, la recuperación ni el reenvío; el correo queda en cola y se reintenta hasta 6 veces (≈31 min acumulados). Pasado ese punto el evento queda `fallido` y **requiere** `--reintentar`: la cola no entrega «para siempre».
 
 ### 5.1 Flujo
 
@@ -137,7 +137,7 @@ registrar / reenviarConfirmacion / solicitarRecuperacion        (rutas públicas
         └─ scripts/procesar_correos.php (worker; cada CORREOS_INTERVALO_SEGUNDOS, 5 s por defecto)
               ├─ éxito  → estado `enviado`, la carga (con el token) se BORRA
               └─ fallo  → estado `pendiente`, intentos+1, proximo_intento = ahora + espera (tabla 5.3)
-        (solo con CORREOS_ENVIO_INMEDIATO=1 —pruebas— hay además un intento en línea tras el COMMIT con PHPMailer, Timeout 5 s / Timelimit 10 s)
+        (solo con CORREOS_ENVIO_INMEDIATO=1 —pruebas, y solo si APP_ENV es de pruebas/desarrollo— hay además un intento en línea tras el COMMIT con PHPMailer, Timeout 5 s / Timelimit 10 s)
 ```
 
 * `usuarios.token_hash` guarda un único hash vigente: emitir un token nuevo **invalida el anterior** (el enlace viejo da "no válido").

@@ -17,9 +17,8 @@ final class Secretos
         $maestro = is_string($maestro) ? trim($maestro) : '';
         if (strlen($maestro) < 32) {
             // Falla cerrado: solo un entorno EXPLÍCITAMENTE de desarrollo o pruebas puede derivar la clave.
-            // Un valor vacío, desconocido o con variaciones («staging», «Production ») se trata como producción.
-            $entorno = strtolower(trim((string)($_ENV['APP_ENV'] ?? getenv('APP_ENV') ?: '')));
-            if (!in_array($entorno, ['development', 'dev', 'local', 'testing', 'test'], true)) {
+            // Un valor vacío, desconocido o con variaciones («staging», «Production », «TESTING», «testing\n») se trata como producción (Classes\Entorno, criterio estricto).
+            if (!Entorno::esPruebasODesarrollo()) {
                 throw new ServiceUnavailableException('APP_KEY (mínimo 32 caracteres) es obligatoria fuera de desarrollo y pruebas.');
             }
             // Solo desarrollo/pruebas: clave derivada de la configuración local, nunca de un valor publicado.

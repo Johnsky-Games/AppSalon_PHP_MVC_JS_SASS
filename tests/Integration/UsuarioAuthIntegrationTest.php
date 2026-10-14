@@ -118,8 +118,9 @@ class UsuarioAuthIntegrationTest extends TestCase
         ], '198.51.100.25');
         $this->assertSame(AuthService::STATUS_UNAUTHORIZED, $loginAntes['status']);
 
-        // 3. Confirmar cuenta con el token emitido
-        $conf = $service->confirmarCuenta($tokenConfirmacion);
+        // 3. Activar la cuenta con el token emitido: la contraseña del registro era provisional; aquí se elige la definitiva
+        //    (se reutiliza la misma para conservar el resto del ciclo).
+        $conf = $service->activarCuenta(['token' => $tokenConfirmacion, 'password' => 'claveSegura123', 'password2' => 'claveSegura123']);
         $this->assertSame(AuthService::STATUS_OK, $conf['status']);
 
         // 4. Login exitoso tras confirmar
@@ -251,7 +252,7 @@ class UsuarioAuthIntegrationTest extends TestCase
         $this->assertStringNotContainsString('SQLSTATE', $htmlLoginError);
     }
 
-    public function testHeadConfirmacionNoConsumeTokenYGetLoConsumeUnaSolaVez(): void
+    public function testHeadYGetDeConfirmacionSoloValidanYElPostActivaUnaSolaVez(): void
     {
         $serverBackup = $_SERVER;
         try {
@@ -279,15 +280,37 @@ class UsuarioAuthIntegrationTest extends TestCase
             $this->assertSame('0', (string)$sinConsumir->confirmado);
             $this->assertNotNull($sinConsumir->token_hash);
 
+            // Contrato nuevo: GET solo VALIDA y muestra el formulario; no activa ni consume.
             $_SERVER['REQUEST_METHOD'] = 'GET';
+            for ($i = 0; $i < 3; $i++) {
+                ob_start();
+                $router->comprobarRutas();
+                $formulario = ob_get_clean();
+                $this->assertSame(200, http_response_code());
+                $this->assertStringContainsString('Elige tu contraseña definitiva', $formulario);
+                $this->assertStringContainsString('name="password2"', $formulario);
+            }
+            $this->assertSame('0', (string)$repo->findById($id)->confirmado, 'GET repetido no activa');
+            $this->assertNotNull($repo->findById($id)->token_hash, 'GET repetido no consume el token');
+
+            // La activación es POST con CSRF y contraseña definitiva.
+            $router->post('/confirmar-cuenta', [LoginController::class, 'activar']);
+            $_SERVER['REQUEST_METHOD'] = 'POST';
+            $_SESSION['csrf_token'] = 'csrf-activar';
+            $_POST = ['csrf_token' => 'csrf-activar', 'idem_key' => \Classes\Idempotencia::nuevaClave(), 'token' => $token, 'password' => 'Definitiva-Pass-1', 'password2' => 'Definitiva-Pass-1'];
+            $_GET = [];
             ob_start();
-            $router->comprobarRutas();
+            try { $router->comprobarRutas(); } catch (\AppTerminationException) {}
             $confirmado = ob_get_clean();
             $this->assertSame(200, http_response_code());
-            $this->assertStringContainsString('Tu cuenta está lista', $confirmado);
+            $this->assertStringContainsString('Tu cuenta está activada', $confirmado);
             $this->assertSame('1', (string)$repo->findById($id)->confirmado);
             $this->assertNull($repo->findById($id)->token_hash);
+            $this->assertTrue(password_verify('Definitiva-Pass-1', $repo->findById($id)->password));
 
+            // Reutilizar el enlace (GET) ya no es válido.
+            $_SERVER['REQUEST_METHOD'] = 'GET';
+            $_GET = ['token' => $token];
             ob_start();
             $router->comprobarRutas();
             $reutilizado = ob_get_clean();

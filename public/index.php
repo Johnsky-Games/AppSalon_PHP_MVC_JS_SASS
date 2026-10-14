@@ -50,6 +50,7 @@ $router->post('/crear-cuenta', [LoginController::class, 'crear']);
 
 //Confirmar cuenta
 $router->get('/confirmar-cuenta', [LoginController::class, 'confirmar']);
+$router->post('/confirmar-cuenta', [LoginController::class, 'activar']);
 $router->get('/mensaje', [LoginController::class, 'mensaje']);
 $router->get('/reenviar-confirmacion', [LoginController::class, 'reenviarConfirmacion']);
 $router->post('/reenviar-confirmacion', [LoginController::class, 'reenviarConfirmacion']);

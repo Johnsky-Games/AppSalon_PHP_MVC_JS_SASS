@@ -222,12 +222,13 @@ final class CorreccionesQaIntegrationTest extends TestCase
         $previo = [$_ENV['APP_ENV'] ?? null, $_ENV['APP_KEY'] ?? null];
         try {
             unset($_ENV['APP_KEY']); putenv('APP_KEY');
-            foreach (['', 'staging', 'Production ', 'prod-eu', 'live'] as $entorno) {
+            // Criterio ESTRICTO (Classes\Entorno): solo el valor exacto, en minúsculas y sin espacios, es de desarrollo/pruebas.
+            foreach (['', 'staging', 'Production ', 'prod-eu', 'live', ' Local ', 'TESTING', 'Development', 'DEV', "testing\n", 'Test '] as $entorno) {
                 $_ENV['APP_ENV'] = $entorno; putenv('APP_ENV=' . $entorno);
                 try { Secretos::clave('prueba'); $this->fail("APP_ENV='{$entorno}' no debe derivar la clave"); }
                 catch (ServiceUnavailableException) { $this->addToAssertionCount(1); }
             }
-            foreach (['development', 'testing', ' Local '] as $entorno) {
+            foreach (['development', 'dev', 'local', 'testing', 'test'] as $entorno) {
                 $_ENV['APP_ENV'] = $entorno; putenv('APP_ENV=' . $entorno);
                 $this->assertSame(32, strlen(Secretos::clave('prueba')));
             }

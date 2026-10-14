@@ -387,35 +387,111 @@ class LoginController
         $router->render('auth/mensaje', []);
     }
 
+    /** Cabeceras del enlace de activación: la página contiene el token, no debe cachearse ni filtrarse por Referer. */
+    private static function cabecerasActivacion(): void
+    {
+        if (!headers_sent()) {
+            header('Cache-Control: no-store');
+        }
+        if (!headers_sent()) {
+            header('Referrer-Policy: no-referrer');
+            header('Content-Type: text/html; charset=utf-8');
+        }
+    }
+
     /**
-     * Confirmación de cuenta atómica condicionada por hash, tipo y vencimiento.
+     * `GET`/`HEAD /confirmar-cuenta?token=…`: SOLO VALIDAN el enlace. Nunca activan ni consumen el token (los escáneres de
+     * enlaces, vistas previas y reintentos del navegador hacen GET). GET muestra el formulario de activación; HEAD
+     * devuelve únicamente el estado (200 válido, 410 inválido/vencido/usado, 500 fallo técnico) sin cuerpo.
      */
     public static function confirmar(Router $router)
     {
         iniciar_sesion_segura();
         Usuario::limpiarAlertas();
+        self::cabecerasActivacion();
 
         $token = is_string($_GET['token'] ?? null) ? trim($_GET['token']) : '';
+        $validacion = self::obtenerAuthService()->validarTokenConfirmacion($token);
+        $estado = $validacion['status'];
+        http_response_code($estado === AuthService::STATUS_ERROR ? 500 : ($estado === AuthService::STATUS_OK ? 200 : 410));
         if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'HEAD') {
-            // Los verificadores de enlaces no deben activar cuentas ni consumir tokens.
-            $validacion = self::obtenerAuthService()->validarTokenConfirmacion($token);
-            http_response_code($validacion['status'] === AuthService::STATUS_ERROR ? 500 :
-                ($validacion['status'] === AuthService::STATUS_OK ? 200 : 410));
-            header('Content-Type: text/html; charset=utf-8');
             return;
         }
-        $resultado = self::obtenerAuthService()->confirmarCuenta($token);
-        $alertas = $resultado['alertas'];
+        self::renderActivacion($router, $estado === AuthService::STATUS_OK ? 'formulario' : ($estado === AuthService::STATUS_ERROR ? 'error' : 'invalido'),
+            $validacion['alertas'], $token);
+    }
 
-        if ($resultado['status'] === AuthService::STATUS_ERROR) {
-            http_response_code(500);
-        } elseif ($resultado['status'] !== AuthService::STATUS_OK) {
-            http_response_code(410);
+    /**
+     * `POST /confirmar-cuenta`: ACTIVA la cuenta. CSRF obligatorio, token en el cuerpo (nunca en la query), contraseña
+     * definitiva elegida por quien abrió el enlace (password + password2), clave de operación del formulario (doble clic),
+     * límite de intentos por IP y por huella del token. No inicia sesión; regenera el identificador de sesión del navegador.
+     */
+    public static function activar(Router $router)
+    {
+        iniciar_sesion_segura();
+        Usuario::limpiarAlertas();
+        self::cabecerasActivacion();
+        exigir_csrf();
+
+        $clave = clave_operacion_enviada();
+        $token = is_string($_POST['token'] ?? null) ? trim($_POST['token']) : '';
+        if ($clave === null) {
+            // Sin clave de operación no se admite la activación (el formulario siempre la incluye); no se toca nada.
+            $resultado = ['status' => AuthService::STATUS_INVALID, 'enlace' => true,
+                'alertas' => ['error' => ['El formulario venció. Abre de nuevo el enlace de tu correo.']]];
+        } else {
+            $resultado = self::obtenerAuthService()->activarCuenta(
+                ['token' => $_POST['token'] ?? null, 'password' => $_POST['password'] ?? null, 'password2' => $_POST['password2'] ?? null],
+                RateLimiter::obtenerIP(),
+                $clave,
+                // El actor se liga al enlace (no a la sesión): la sesión se regenera al activar y un reintento no debe perder la idempotencia.
+                'activacion:' . substr(hash('sha256', $token), 0, 32)
+            );
         }
 
-        $router->render('auth/confirmar-cuenta', [
-            'alertas' => $alertas,
-            'estadoConfirmacion' => $resultado['status'],
-        ]);
+        switch ($resultado['status']) {
+            case AuthService::STATUS_OK:
+                // Sin auto-login: nuevo identificador de sesión para este navegador y a iniciar sesión con la contraseña elegida.
+                session_regenerate_id(true);
+                http_response_code(200);
+                self::renderActivacion($router, 'exito', $resultado['alertas'], '');
+                return;
+            case AuthService::STATUS_RATE_LIMITED:
+                http_response_code(429);
+                header('Retry-After: ' . max(1, (int)($resultado['segundos_restantes'] ?? RateLimiter::DURACION_BLOQUEO)));
+                break;
+            case AuthService::STATUS_CONFLICT_CLAVE:
+                http_response_code(409);
+                break;
+            case AuthService::STATUS_EN_CURSO:
+                http_response_code(409);
+                header('Retry-After: ' . max(1, (int)($resultado['segundos_restantes'] ?? 3)));
+                break;
+            case AuthService::STATUS_ERROR:
+                http_response_code(500);
+                self::renderActivacion($router, 'error', $resultado['alertas'], '');
+                return;
+            default:
+                // Contraseña inválida o formulario vencido: el enlace sigue vigente, se vuelve a mostrar el formulario (422).
+                // Enlace inválido/vencido/usado: pantalla genérica (410) sin distinguir la causa.
+                if (($resultado['enlace'] ?? true) === false || $token === '') {
+                    http_response_code(410);
+                    self::renderActivacion($router, 'invalido', $resultado['alertas'], '');
+                    return;
+                }
+                http_response_code(422);
+        }
+        self::renderActivacion($router, 'formulario', $resultado['alertas'], $token);
+    }
+
+    private static function renderActivacion(Router $router, string $modo, array $alertas, string $token): void
+    {
+        // El Router vuelve a emitir las cabeceras de seguridad al renderizar: la política se fija solo durante este render.
+        $GLOBALS['__appsalon_referrer_policy'] = 'no-referrer';
+        try {
+            $router->render('auth/confirmar-cuenta', ['modo' => $modo, 'alertas' => $alertas, 'token' => $token]);
+        } finally {
+            unset($GLOBALS['__appsalon_referrer_policy']);
+        }
     }
 }

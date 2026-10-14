@@ -129,6 +129,7 @@ class ReservaConcurrenciaIntegrationTest extends TestCase
         $csrf = bin2hex(random_bytes(32));
         $_SESSION['login'] = true;
         $_SESSION['id'] = $usuarioId;
+        $_SESSION['version_sesion'] = (int)(self::$db->query("SELECT version_sesion v FROM usuarios WHERE id = {$usuarioId}")->fetch_assoc()['v'] ?? 1);
         $_SESSION['admin'] = $admin;
         $_SESSION['csrf_token'] = $csrf;
         return $csrf;

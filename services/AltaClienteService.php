@@ -27,7 +27,7 @@ use Repositories\UsuarioRepository;
  *    dos cuentas, no repite la decisión y no vuelve a mostrar el aviso.
  *  - El aviso muestra lo mínimo: nombre, correo enmascarado, última visita y teléfono parcial.
  *  - La cuenta creada no tiene contraseña utilizable ni correo confirmado, no envía correos y no otorga consentimiento comercial
- *    (el consentimiento solo lo da la propia persona). La persona activa su acceso con «Reenviar confirmación» y «Olvidé mi contraseña».
+ *    (el consentimiento solo lo da la propia persona). La persona activa su acceso con «Reenviar confirmación»: el enlace abre el formulario de activación donde ELIGE su contraseña definitiva.
  */
 final class AltaClienteService
 {
@@ -154,7 +154,7 @@ final class AltaClienteService
             }
             $op = Idempotencia::ejecutar($db, self::SCOPE, $actor, $clave, $contenido, function () use ($p, $confirma, $actorId, $actorRol, $ids, $criterios, $tokenHash, $clave, $ipHash): array {
                 $usuario = new Usuario(['nombre' => $p['nombre'], 'apellido' => $p['apellido'], 'email' => $p['email'], 'telefono' => $p['telefono'],
-                    // Contraseña aleatoria que nadie conoce: la persona fija la suya con «Olvidé mi contraseña» tras confirmar su correo.
+                    // Contraseña aleatoria que nadie conoce (provisional): la persona fija la suya al activar la cuenta desde el enlace de confirmación.
                     'password' => password_hash(bin2hex(random_bytes(24)), PASSWORD_BCRYPT), 'admin' => '0', 'confirmado' => '0']);
                 $id = $this->usuarios->createCliente($usuario, 'recepcion');
                 if ($confirma) {

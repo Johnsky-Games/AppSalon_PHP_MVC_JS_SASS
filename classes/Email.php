@@ -234,8 +234,8 @@ class Email
                 'categoria' => 'BIENVENIDO A TU SALÓN',
                 'titulo' => 'Tu próxima visita empieza aquí',
                 'preheader' => 'Confirma tu correo para activar tu cuenta y gestionar tus reservas.',
-                'parrafos' => ['Gracias por crear tu cuenta. Solo falta confirmar tu correo para acceder y gestionar tus reservas en un mismo lugar.'],
-                'boton' => 'Confirmar mi cuenta',
+                'parrafos' => ['Gracias por crear tu cuenta. Abre el enlace y elige tu contraseña definitiva para activarla: la que escribiste al registrarte era provisional y se descarta.'],
+                'boton' => 'Elegir mi contraseña y activar',
                 'nota' => 'Este enlace es personal y de un solo uso. Si no creaste esta cuenta, puedes ignorar este mensaje.',
             ],
             'recuperacion' => [
