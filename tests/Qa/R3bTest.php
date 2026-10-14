@@ -559,12 +559,12 @@ final class R3bTest extends R3Case
     }
 
     /**
-     * R3b-19 (rojo, Baja): una contraseña con un byte NUL (`%00`) provoca un 500 en TODOS los puntos donde se fija una contraseña con bcrypt. PHP 8.3
+     * R3b-19 (era rojo, Baja; corregido por el líder tras la Fase B y verificado en la ronda 4, ahora verde): una contraseña con un byte NUL (`%00`) provoca un 500 en TODOS los puntos donde se fija una contraseña con bcrypt. PHP 8.3
      * lanza `ValueError: Argument #1 ($password) must not contain any null bytes` en `password_hash()` y la aplicación no lo valida antes: debía
      * responder 422 como con cualquier otra contraseña inválida. Reproducción mínima: `POST /cliente/registro` con `password=Clave%00Nula1`.
      * Sin efecto sobre datos (la transacción no llega a escribir), pero es un 500 provocable por cualquiera y deja trazas de error.
      */
-    public function test_Defecto_R3b_19_una_contrasena_con_byte_nulo_da_500_en_registro_activacion_y_recuperacion(): void
+    public function test_R3b_19_una_contrasena_con_byte_nulo_da_500_en_registro_activacion_y_recuperacion(): void
     {
         $nul = "Clave\0-Nula-1";
         $fallos = [];

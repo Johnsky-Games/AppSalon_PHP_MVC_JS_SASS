@@ -332,12 +332,12 @@ final class R2bColaCorreosTest extends R2bCase
     }
 
     /**
-     * R2B-03d (RESIDUO, rojo, Baja): el saneador exige que el dominio sea `[A-Za-z0-9.-]+\.[A-Za-z]{2,}`; un literal de IPv6 (`usuario@[IPv6:2001:db8::1]`,
+     * R2B-03d (era RESIDUO rojo, Baja; corregido por el líder tras la Fase B y verificado en la ronda 4, ahora verde): el saneador exige que el dominio sea `[A-Za-z0-9.-]+\.[A-Za-z]{2,}`; un literal de IPv6 (`usuario@[IPv6:2001:db8::1]`,
      * que la aplicación admite al registrar) contiene `[`, `:` y no cumple, así que la dirección COMPLETA queda en `ultimo_error` y en
      * `--estado`/`--estado --json`. (El literal IPv4 sí se redacta.) Reproducción: registrar `zq@[IPv6:2001:db8::1]` con el SMTP en `rcptmulti`, ejecutar el
      * worker y leer `ultimo_error` o `procesar_correos.php --estado`.
      */
-    public function test_Defecto_R2B_03d_un_literal_de_ipv6_deja_la_direccion_completa_en_el_error_y_en_el_estado(): void
+    public function test_R2B_03d_un_literal_de_ipv6_deja_la_direccion_completa_en_el_error_y_en_el_estado(): void
     {
         $m = 'zq' . bin2hex(random_bytes(4));
         $f = $this->fugasDeEmail("{$m}@[IPv6:2001:db8::1]", [$m], 'rcptmulti');
