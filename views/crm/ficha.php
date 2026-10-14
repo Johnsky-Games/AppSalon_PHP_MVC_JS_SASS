@@ -42,7 +42,7 @@ $fid = $ficha['fidelidad'];
     <section class="crm-card" aria-labelledby="f-datos">
         <h2 id="f-datos">Datos y membresía</h2>
         <dl class="crm-dl">
-            <dt>Correo</dt><dd><?= s($cli['email']) ?><?= (int)$cli['confirmado'] === 1 ? '' : ' (sin confirmar)' ?></dd>
+            <dt>Correo</dt><dd><?= s($cli['email']) ?><?= (int)$cli['confirmado'] === 1 ? '' : ' (correo sin verificar)' ?></dd>
             <dt>Teléfono</dt><dd><?= s((string)$cli['telefono'] ?: 'No registrado') ?></dd>
             <dt>Membresía</dt><dd><?= s(CrmService::MEMBRESIAS[$cli['membresia']] ?? $cli['membresia']) ?><?php if ($cli['membresia'] === 'suspendido' && $cli['suspendido_motivo']): ?> · motivo: <?= s($cli['suspendido_motivo']) ?><?php endif; ?></dd>
             <dt>Alta</dt><dd><?= $cli['alta'] ? s($fechaHora($cli['alta'])) . ' · origen: ' . s((string)$cli['origen']) : 'Sin fecha de alta (cuenta legada sin membresía registrada)' ?></dd>

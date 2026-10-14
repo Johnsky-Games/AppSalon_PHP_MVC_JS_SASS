@@ -254,6 +254,7 @@ $claveActivar = preg_match('/name="idem_key" value="([A-Za-z0-9_-]+)"/', $getCon
 $postActivar = request('POST', '/confirmar-cuenta', [
     'csrf_token' => $csrfActivar, 'idem_key' => $claveActivar, 'token' => $tokenConfirmacion,
     'password' => 'PasswordDefinitiva456', 'password2' => 'PasswordDefinitiva456',
+    'nombre' => 'Carlos', 'apellido' => 'Mendoza', 'telefono' => '5551234567',   // el titular revisa los datos que escribió quien registró el correo
 ], $cookieAnon);
 $resConfirmado = $db->query("SELECT id, confirmado, token, token_hash, token_tipo, token_expira FROM usuarios WHERE email = 'carlos.mendoza@ejemplo.com'");
 $usuarioConfirmado = $resConfirmado->fetch_assoc();

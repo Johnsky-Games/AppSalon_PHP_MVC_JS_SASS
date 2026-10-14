@@ -20,6 +20,7 @@ Efectos visibles:
 * La activación **no inicia sesión sola**: tras activar, la persona entra por `/cliente/login` con la contraseña que acaba de elegir.
 * Las cuentas creadas por recepción (sin confirmar, contraseña aleatoria) se activan por el mismo formulario: la persona elige la suya.
 * Sesiones antiguas sin marca de versión (anteriores a la migración 010) de cuentas cuya versión ya subió se cierran una vez (volver a iniciar sesión). No afecta a sesiones iniciadas con este código.
+* **Revisión de datos personales en la activación (ronda 4).** El formulario de activación muestra, además de las dos contraseñas, **nombre, apellido y teléfono** precargados con lo que ya hay en la cuenta, editables y obligatorios (≤ 60 bytes los nombres; teléfono de 7 a 10 dígitos), con el aviso «Estos datos los escribió quien registró el correo antes de que se verificara. Revísalos y corrígelos. Tu correo queda verificado al activar; tu nombre y teléfono no se verifican.». Lo que la persona envíe reemplaza esos datos **en la misma operación atómica** que cambia la contraseña y consume el enlace: se aplican todos o ninguno. Los datos de nombre y teléfono son **declarados, no verificados** (solo el correo queda verificado); ninguna pantalla, correo, ficha de CRM o exportación los presenta como identidad verificada. Un formulario antiguo en caché (sin esos tres campos) recibe 422 con el formulario de nuevo, sin consumir el enlace. Límite conocido: un escáner de enlaces del proveedor de correo que haga `GET` verá esos datos (son los del propio registro y van al mismo buzón); `HEAD` no los muestra.
 * Límites de activación: 15 intentos por IP y 5 por huella de token cada 15 minutos; los errores de contraseña (débil, no coincide) **no** cuentan. Varias personas detrás de una misma NAT que activan en ráfaga podrían topar con el límite por IP.
 
 ## 2. Actualizar
@@ -47,6 +48,7 @@ Revisa `includes/.env` (no lo reemplaces):
 4. Abre el enlace en el navegador: aparece el formulario. Elige una contraseña **distinta** de la del registro y envía.
 5. Intenta entrar en `/cliente/login` con la contraseña del registro → **rechazada**. Con la elegida → entra.
 6. Repite el enlace → pantalla genérica «no válido o ya utilizado» (410), sin formulario.
+7. **Datos personales:** al abrir el formulario (paso 4) comprueba que nombre, apellido y teléfono aparecen precargados con lo que escribiste al registrarte y que el aviso «Estos datos los escribió quien registró el correo…» está visible. Cámbialos (p. ej. otro teléfono), activa y verifica en la base: `SELECT nombre,apellido,telefono FROM usuarios WHERE email='tu@correo'` → los **nuevos**. Prueba también enviar un teléfono con letras o un nombre vacío → vuelve el formulario con el error y el enlace sigue valiendo.
 
 PowerShell: `curl.exe -I "<enlace>"` (usa `curl.exe`, no el alias `curl`). Consulta SQL: `$COMPOSE exec db mysql -uroot -p<clave> <base> -e "SELECT confirmado FROM usuarios WHERE email='tu@correo'"`.
 

@@ -120,7 +120,7 @@ class UsuarioAuthIntegrationTest extends TestCase
 
         // 3. Activar la cuenta con el token emitido: la contraseña del registro era provisional; aquí se elige la definitiva
         //    (se reutiliza la misma para conservar el resto del ciclo).
-        $conf = $service->activarCuenta(['token' => $tokenConfirmacion, 'password' => 'claveSegura123', 'password2' => 'claveSegura123']);
+        $conf = $service->activarCuenta(['token' => $tokenConfirmacion, 'password' => 'claveSegura123', 'password2' => 'claveSegura123', 'nombre' => 'Valeria', 'apellido' => 'Castro', 'telefono' => '0991234567']);
         $this->assertSame(AuthService::STATUS_OK, $conf['status']);
 
         // 4. Login exitoso tras confirmar
@@ -297,7 +297,7 @@ class UsuarioAuthIntegrationTest extends TestCase
             $router->post('/confirmar-cuenta', [LoginController::class, 'activar']);
             $_SERVER['REQUEST_METHOD'] = 'POST';
             $_SESSION['csrf_token'] = 'csrf-activar';
-            $_POST = ['csrf_token' => 'csrf-activar', 'idem_key' => \Classes\Idempotencia::nuevaClave(), 'token' => $token, 'password' => 'Definitiva-Pass-1', 'password2' => 'Definitiva-Pass-1'];
+            $_POST = ['csrf_token' => 'csrf-activar', 'idem_key' => \Classes\Idempotencia::nuevaClave(), 'token' => $token, 'password' => 'Definitiva-Pass-1', 'password2' => 'Definitiva-Pass-1', 'nombre' => 'Enlace', 'apellido' => 'Seguro', 'telefono' => '0991234567'];
             $_GET = [];
             ob_start();
             try { $router->comprobarRutas(); } catch (\AppTerminationException) {}

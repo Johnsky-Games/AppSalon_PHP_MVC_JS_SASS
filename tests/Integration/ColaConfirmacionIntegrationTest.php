@@ -517,7 +517,7 @@ final class ColaConfirmacionIntegrationTest extends TestCase
         $this->assertStringContainsString('Subject: Confirma tu cuenta', $m[0]['cabeceras']);
 
         // De punta a punta: el enlace del correo capturado confirma la cuenta, una sola vez.
-        $activar = fn() => $this->auth()->activarCuenta(['token' => $token, 'password' => 'Definitiva-Pass-9', 'password2' => 'Definitiva-Pass-9']);
+        $activar = fn() => $this->auth()->activarCuenta(['token' => $token, 'password' => 'Definitiva-Pass-9', 'password2' => 'Definitiva-Pass-9', 'nombre' => 'Cola', 'apellido' => 'Prueba', 'telefono' => '0991234567']);
         $r = $activar();
         $this->assertSame(AuthService::STATUS_OK, $r['status']);
         $this->assertSame(1, (int)$this->fila("SELECT confirmado c FROM usuarios WHERE id={$id}")['c']);

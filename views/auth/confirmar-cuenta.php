@@ -14,6 +14,22 @@ $uiTemporal = $modo === 'error';
     <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
     <input type="hidden" name="idem_key" value="<?php echo s(clave_operacion_formulario()); ?>">
     <input type="hidden" name="token" value="<?php echo s($token ?? ''); ?>">
+    <div class="ui-form-aviso" role="note" id="activar-datos-aviso">
+        <strong>Revisa tus datos.</strong> Estos datos los escribió quien registró el correo antes de que se verificara. Revísalos y corrígelos.
+        Tu correo queda verificado al activar; tu nombre y teléfono no se verifican.
+    </div>
+    <div class="campo">
+        <label for="nombre">Nombre</label>
+        <input type="text" id="nombre" name="nombre" autocomplete="given-name" maxlength="60" required aria-describedby="activar-datos-aviso" value="<?php echo s($datos['nombre'] ?? ''); ?>">
+    </div>
+    <div class="campo">
+        <label for="apellido">Apellido</label>
+        <input type="text" id="apellido" name="apellido" autocomplete="family-name" maxlength="60" required value="<?php echo s($datos['apellido'] ?? ''); ?>">
+    </div>
+    <div class="campo">
+        <label for="telefono">Teléfono</label>
+        <input type="tel" id="telefono" name="telefono" autocomplete="tel" inputmode="numeric" pattern="[0-9]{7,10}" maxlength="10" required value="<?php echo s($datos['telefono'] ?? ''); ?>">
+    </div>
     <div class="campo">
         <label for="password">Contraseña definitiva</label>
         <input type="password" autocomplete="new-password" id="password" name="password" placeholder="Escribe tu contraseña" minlength="8" maxlength="72" required aria-describedby="activar-password-ayuda">

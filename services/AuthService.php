@@ -419,7 +419,8 @@ class AuthService
      * Límite de intentos por IP y por huella del token. Los mensajes no distinguen vencido / usado / inexistente.
      * No inicia sesión: la persona entra después con la contraseña elegida por /cliente/login.
      *
-     * @param array $datos `token`, `password`, `password2`.
+     * @param array $datos `token`, `password`, `password2`, `nombre`, `apellido`, `telefono` (los tres últimos son obligatorios: el titular
+     *        revisa lo que escribió quien registró el correo; se aplican con la contraseña en la MISMA sentencia atómica; son datos declarados, no verificados).
      * @return array `status`, `resultado`, `alertas`, `repetida` (y `segundos_restantes` si hay bloqueo).
      */
     public function activarCuenta(array $datos, ?string $ip = null, ?string $claveOperacion = null, ?string $actor = null): array
@@ -443,13 +444,30 @@ class AuthService
         if ($password !== $password2) {
             $alertas['error'][] = 'Las contraseñas no coinciden';
         }
+        // Datos de contacto que el TITULAR revisa y corrige (los escribió antes quien registró el correo): también se validan
+        // sin depender de que el token exista. Si falta alguno de los tres (formulario antiguo en caché) o no es texto, se
+        // responde 422 con el formulario, sin consumir el token ni contar contra el límite.
+        $nombre = $datos['nombre'] ?? null;
+        $apellido = $datos['apellido'] ?? null;
+        $telefono = $datos['telefono'] ?? null;
+        if (!is_string($nombre) || !is_string($apellido) || !is_string($telefono)) {
+            $alertas['error'][] = 'Revisa tu nombre, apellido y teléfono: el formulario está incompleto. Vuelve a abrir el enlace del correo.';
+            $nombre = is_string($nombre) ? $nombre : '';
+            $apellido = is_string($apellido) ? $apellido : '';
+            $telefono = is_string($telefono) ? $telefono : '';
+        }
+        $contactoUsuario = new Usuario(['nombre' => $nombre, 'apellido' => $apellido, 'telefono' => $telefono]);
+        foreach ($contactoUsuario->validarDatosContacto() as $tipo => $mensajes) {
+            foreach ($mensajes as $mensaje) { $alertas[$tipo][] = $mensaje; }
+        }
+        $contacto = ['nombre' => (string)$contactoUsuario->nombre, 'apellido' => (string)$contactoUsuario->apellido, 'telefono' => (string)$contactoUsuario->telefono];
         if (!empty($alertas)) {
             return $this->construirRespuesta(self::STATUS_INVALID, false, null, $alertas, ['repetida' => false, 'enlace' => true]);
         }
 
         $usaIdempotencia = $claveOperacion !== null && $actor !== null;
         $huellaToken = hash('sha256', $token);
-        $contenido = ['token' => $huellaToken, 'password' => $password];
+        $contenido = ['token' => $huellaToken, 'password' => $password, 'nombre' => $contacto['nombre'], 'apellido' => $contacto['apellido'], 'telefono' => $contacto['telefono']];
         try {
             if ($usaIdempotencia) {
                 if (!Idempotencia::claveValida($claveOperacion)) {
@@ -471,8 +489,8 @@ class AuthService
 
             // El coste de bcrypt se paga aunque el enlace no sea válido: el tiempo no distingue enlaces vigentes de inexistentes.
             $hash = password_hash($password, PASSWORD_BCRYPT);
-            $alta = function () use ($token, $hash): array {
-                $cuenta = $this->repository->activateAccountByToken($token, $hash);
+            $alta = function () use ($token, $hash, $contacto): array {
+                $cuenta = $this->repository->activateAccountByToken($token, $hash, $contacto);
                 if ($cuenta === null) {
                     // Revierte la reserva de idempotencia: un enlace inválido no deja rastro de «éxito».
                     throw new EnlaceActivacionNoValidoException();

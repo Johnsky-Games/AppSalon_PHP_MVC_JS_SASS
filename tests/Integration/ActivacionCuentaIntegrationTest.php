@@ -23,6 +23,8 @@ final class ActivacionCuentaIntegrationTest extends TestCase
     private const B = 'Titular-Pass-B2';
     private const C = 'Definitiva-Pass-C3';
     private const PUERTO_SMTP = 2610;
+    /** Datos que tiene toda cuenta creada por pendiente() (el formulario los precarga y el titular los conserva). */
+    private const CONTACTO = ['nombre' => 'Pen', 'apellido' => 'Diente', 'telefono' => '0991234567'];
 
     private static \mysqli $db;
     private static string $base = '';
@@ -132,7 +134,7 @@ final class ActivacionCuentaIntegrationTest extends TestCase
     private function fila(string $email): array
     {
         $e = self::$db->real_escape_string($email);
-        return self::$db->query("SELECT id,password,confirmado,token_hash,token_tipo,token_expira,version_sesion FROM usuarios WHERE email='$e'")->fetch_assoc() ?: [];
+        return self::$db->query("SELECT id,nombre,apellido,telefono,password,confirmado,token_hash,token_tipo,token_expira,version_sesion FROM usuarios WHERE email='$e'")->fetch_assoc() ?: [];
     }
 
     private function http(): ClienteHttpActivacion { return new ClienteHttpActivacion(self::$base); }
@@ -149,7 +151,7 @@ final class ActivacionCuentaIntegrationTest extends TestCase
     {
         $a = $this->abrirEnlace($token, $c);
         $this->assertSame(200, $a['pagina']['status'], 'el enlace vigente debe mostrar el formulario');
-        $post = $a['c']->peticion('POST', '/confirmar-cuenta', $cambios + ['csrf_token' => $a['csrf'], 'idem_key' => $a['clave'], 'token' => $token, 'password' => $pass, 'password2' => $pass2 ?? $pass]);
+        $post = $a['c']->peticion('POST', '/confirmar-cuenta', $cambios + ['csrf_token' => $a['csrf'], 'idem_key' => $a['clave'], 'token' => $token, 'password' => $pass, 'password2' => $pass2 ?? $pass] + ClienteHttpActivacion::contactoDe($a['pagina']['body']));
         return $a + ['post' => $post];
     }
 
@@ -234,7 +236,7 @@ final class ActivacionCuentaIntegrationTest extends TestCase
         $this->assertSame(200, $a['pagina']['status']);
         $this->assertSame('0', (string)$this->fila($email)['confirmado'], 'GET no activa');
         // 5) El titular activa eligiendo C.
-        $post = $a['c']->peticion('POST', '/confirmar-cuenta', ['csrf_token' => $a['csrf'], 'idem_key' => $a['clave'], 'token' => $token, 'password' => self::C, 'password2' => self::C]);
+        $post = $a['c']->peticion('POST', '/confirmar-cuenta', ['csrf_token' => $a['csrf'], 'idem_key' => $a['clave'], 'token' => $token, 'password' => self::C, 'password2' => self::C] + self::CONTACTO);
         $this->assertSame(200, $post['status']);
         $this->assertStringContainsString('Tu cuenta quedó activada', $post['body']);
         $despues = $this->fila($email);
@@ -336,7 +338,7 @@ final class ActivacionCuentaIntegrationTest extends TestCase
         $this->assertSame(410, $get['status']);
         $this->assertStringContainsString('venció', $get['body']);
         $this->assertSame(410, $this->http()->peticion('HEAD', '/confirmar-cuenta?token=' . $p['token'])['status']);
-        $post = $a['c']->peticion('POST', '/confirmar-cuenta', ['csrf_token' => $a['csrf'], 'idem_key' => $a['clave'], 'token' => $p['token'], 'password' => self::C, 'password2' => self::C]);
+        $post = $a['c']->peticion('POST', '/confirmar-cuenta', ['csrf_token' => $a['csrf'], 'idem_key' => $a['clave'], 'token' => $p['token'], 'password' => self::C, 'password2' => self::C] + self::CONTACTO);
         $this->assertSame(410, $post['status']);
         $this->assertStringContainsString('venció', $post['body']);
         $this->assertSame($antes, $this->fila($p['email']), 'un token vencido no cambia contraseña ni estado');
@@ -356,7 +358,7 @@ final class ActivacionCuentaIntegrationTest extends TestCase
             $c = $this->http();
             $pg = $c->peticion('GET', '/cliente/registro');   // sesión con CSRF y clave válidos
             $respuestas["POST $k"] = $firma($c->peticion('POST', '/confirmar-cuenta', ['csrf_token' => ClienteHttpActivacion::campo($pg['body'], 'csrf_token'),
-                'idem_key' => ClienteHttpActivacion::campo($pg['body'], 'idem_key'), 'token' => $tok, 'password' => self::C, 'password2' => self::C]));
+                'idem_key' => ClienteHttpActivacion::campo($pg['body'], 'idem_key'), 'token' => $tok, 'password' => self::C, 'password2' => self::C] + self::CONTACTO));
         }
         $this->assertSame(410, $respuestas['GET vencido']['status']);
         foreach (['GET', 'POST'] as $m) {
@@ -374,7 +376,7 @@ final class ActivacionCuentaIntegrationTest extends TestCase
         $p = $this->pendiente();
         $antes = $this->fila($p['email']);
         $a = $this->abrirEnlace($p['token']);
-        $cuerpo = ['idem_key' => $a['clave'], 'token' => $p['token'], 'password' => self::C, 'password2' => self::C];
+        $cuerpo = ['idem_key' => $a['clave'], 'token' => $p['token'], 'password' => self::C, 'password2' => self::C] + self::CONTACTO;
         // sin CSRF
         $this->assertSame(403, $a['c']->peticion('POST', '/confirmar-cuenta', $cuerpo)['status']);
         // CSRF de otra sesión
@@ -389,7 +391,7 @@ final class ActivacionCuentaIntegrationTest extends TestCase
             $this->assertContains($r['status'], [404, 405], $m);
         }
         // Token solo en la query (el POST lo exige en el cuerpo) y parámetros de activación en un GET
-        $r = $a['c']->peticion('POST', '/confirmar-cuenta?token=' . $p['token'], ['csrf_token' => $a['csrf'], 'idem_key' => $a['clave'], 'password' => self::C, 'password2' => self::C]);
+        $r = $a['c']->peticion('POST', '/confirmar-cuenta?token=' . $p['token'], ['csrf_token' => $a['csrf'], 'idem_key' => $a['clave'], 'password' => self::C, 'password2' => self::C] + self::CONTACTO);
         $this->assertNotSame(200, $r['status']);
         $r = $this->http()->peticion('GET', '/confirmar-cuenta?token=' . $p['token'] . '&password=' . self::C . '&password2=' . self::C . '&csrf_token=x');
         $this->assertSame(200, $r['status']);
@@ -408,7 +410,7 @@ final class ActivacionCuentaIntegrationTest extends TestCase
         }
         // Sin clave de operación del formulario no se admite la activación.
         $a = $this->abrirEnlace($p['token']);
-        $r = $a['c']->peticion('POST', '/confirmar-cuenta', ['csrf_token' => $a['csrf'], 'token' => $p['token'], 'password' => self::C, 'password2' => self::C]);
+        $r = $a['c']->peticion('POST', '/confirmar-cuenta', ['csrf_token' => $a['csrf'], 'token' => $p['token'], 'password' => self::C, 'password2' => self::C] + self::CONTACTO);
         $this->assertSame(422, $r['status']);
         $this->assertSame($antes, $this->fila($p['email']));
         // Con datos correctos, el mismo enlace activa.
@@ -423,7 +425,7 @@ final class ActivacionCuentaIntegrationTest extends TestCase
         for ($i = 0; $i < 6; $i++) {
             $c = $this->http();
             $pg = $c->peticion('GET', '/cliente/registro');
-            $r = $c->peticion('POST', '/confirmar-cuenta', ['csrf_token' => ClienteHttpActivacion::campo($pg['body'], 'csrf_token'), 'idem_key' => Idempotencia::nuevaClave(), 'token' => $falso, 'password' => self::C, 'password2' => self::C]);
+            $r = $c->peticion('POST', '/confirmar-cuenta', ['csrf_token' => ClienteHttpActivacion::campo($pg['body'], 'csrf_token'), 'idem_key' => Idempotencia::nuevaClave(), 'token' => $falso, 'password' => self::C, 'password2' => self::C] + self::CONTACTO);
             $estados[] = $r['status'];
         }
         $this->assertSame([410, 410, 410, 410, 410, 429], $estados);
@@ -433,7 +435,7 @@ final class ActivacionCuentaIntegrationTest extends TestCase
         for ($i = 0; $i < 16; $i++) {
             $c = $this->http();
             $pg = $c->peticion('GET', '/cliente/registro');
-            $estados[] = $c->peticion('POST', '/confirmar-cuenta', ['csrf_token' => ClienteHttpActivacion::campo($pg['body'], 'csrf_token'), 'idem_key' => Idempotencia::nuevaClave(), 'token' => bin2hex(random_bytes(32)), 'password' => self::C, 'password2' => self::C])['status'];
+            $estados[] = $c->peticion('POST', '/confirmar-cuenta', ['csrf_token' => ClienteHttpActivacion::campo($pg['body'], 'csrf_token'), 'idem_key' => Idempotencia::nuevaClave(), 'token' => bin2hex(random_bytes(32)), 'password' => self::C, 'password2' => self::C] + self::CONTACTO)['status'];
         }
         $this->assertSame(429, array_pop($estados));
         $this->assertSame(array_fill(0, 15, 410), $estados);
@@ -451,7 +453,7 @@ final class ActivacionCuentaIntegrationTest extends TestCase
         $evento = $svc->encolarConfirmacionCuenta($p['id'], $p['email'], 'Pen', $p['token']);
         $a = $this->abrirEnlace($p['token']);
         $sidAntes = $a['c']->cookie('PHPSESSID');
-        $post = $a['c']->peticion('POST', '/confirmar-cuenta', ['csrf_token' => $a['csrf'], 'idem_key' => $a['clave'], 'token' => $p['token'], 'password' => self::C, 'password2' => self::C]);
+        $post = $a['c']->peticion('POST', '/confirmar-cuenta', ['csrf_token' => $a['csrf'], 'idem_key' => $a['clave'], 'token' => $p['token'], 'password' => self::C, 'password2' => self::C] + self::CONTACTO);
         $this->assertSame(200, $post['status']);
         $despues = $this->fila($p['email']);
         $this->assertTrue(password_verify(self::C, $despues['password']));
@@ -537,7 +539,7 @@ final class ActivacionCuentaIntegrationTest extends TestCase
         for ($i = 0; $i < 40; $i++) {
             $c = $this->http();
             $pg = $c->peticion('GET', '/cliente/registro');
-            $estados[] = $c->peticion('POST', '/confirmar-cuenta', ['csrf_token' => ClienteHttpActivacion::campo($pg['body'], 'csrf_token'), 'idem_key' => Idempotencia::nuevaClave(), 'token' => bin2hex(random_bytes(32)), 'password' => self::C, 'password2' => self::C])['status'];
+            $estados[] = $c->peticion('POST', '/confirmar-cuenta', ['csrf_token' => ClienteHttpActivacion::campo($pg['body'], 'csrf_token'), 'idem_key' => Idempotencia::nuevaClave(), 'token' => bin2hex(random_bytes(32)), 'password' => self::C, 'password2' => self::C] + self::CONTACTO)['status'];
         }
         $this->assertContains(429, $estados);
         $this->assertSame(0, array_search(429, $estados) - 15, 'el bloqueo llega con el intento 16 (15 admitidos por IP)');
@@ -554,7 +556,7 @@ final class ActivacionCuentaIntegrationTest extends TestCase
         $this->assertSame(410, $this->http()->peticion('HEAD', '/confirmar-cuenta?token=' . $p['token'])['status']);
         $c = $this->http();
         $pg = $c->peticion('GET', '/cliente/registro');
-        $r = $c->peticion('POST', '/confirmar-cuenta', ['csrf_token' => ClienteHttpActivacion::campo($pg['body'], 'csrf_token'), 'idem_key' => ClienteHttpActivacion::campo($pg['body'], 'idem_key'), 'token' => $p['token'], 'password' => self::C, 'password2' => self::C]);
+        $r = $c->peticion('POST', '/confirmar-cuenta', ['csrf_token' => ClienteHttpActivacion::campo($pg['body'], 'csrf_token'), 'idem_key' => ClienteHttpActivacion::campo($pg['body'], 'idem_key'), 'token' => $p['token'], 'password' => self::C, 'password2' => self::C] + self::CONTACTO);
         $this->assertSame(410, $r['status']);
         $this->assertSame($antes, $this->fila($p['email']));
         $this->assertSame(302, $this->login($p['email'], 'Original-Pass-77')['status'], 'la contraseña original sigue valiendo');
@@ -600,7 +602,7 @@ final class ActivacionCuentaIntegrationTest extends TestCase
     {
         $p = $this->pendiente();
         $a = $this->abrirEnlace($p['token']);
-        $cuerpo = ['csrf_token' => $a['csrf'], 'idem_key' => $a['clave'], 'token' => $p['token'], 'password' => self::C, 'password2' => self::C];
+        $cuerpo = ['csrf_token' => $a['csrf'], 'idem_key' => $a['clave'], 'token' => $p['token'], 'password' => self::C, 'password2' => self::C] + self::CONTACTO;
         $r1 = $a['c']->peticion('POST', '/confirmar-cuenta', $cuerpo);
         $hash1 = $this->fila($p['email'])['password'];
         $v1 = $this->fila($p['email'])['version_sesion'];
@@ -618,9 +620,9 @@ final class ActivacionCuentaIntegrationTest extends TestCase
         $this->assertSame($hash1, $this->fila($p['email'])['password']);
     }
 
-    private function lanzar(string $token, string $pass, string $clave, string $actor, bool $conIp = false): array
+    private function lanzar(string $token, string $pass, string $clave, string $actor, bool $conIp = false, ?array $contacto = null): array
     {
-        $proceso = proc_open([PHP_BINARY, '-d', 'variables_order=EGPCS', __DIR__ . '/../fixtures/activacion_worker.php', $token, $pass, $clave, $actor, $conIp ? '1' : '0'],
+        $proceso = proc_open([PHP_BINARY, '-d', 'variables_order=EGPCS', __DIR__ . '/../fixtures/activacion_worker.php', $token, $pass, $clave, $actor, $conIp ? '1' : '0', json_encode($contacto ?? self::CONTACTO)],
             [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, __DIR__ . '/../..', array_merge(getenv(), ['APP_ENV' => 'testing']));
         $this->assertTrue(is_resource($proceso));
         $this->assertSame('READY', trim((string)fgets($pipes[1])));
@@ -647,7 +649,8 @@ final class ActivacionCuentaIntegrationTest extends TestCase
         $p = $this->pendiente(self::A);
         $passes = array_map(fn($i) => "Ganadora-Pass-$i-x", range(0, 5));
         $ws = [];
-        foreach ($passes as $i => $pw) { $ws[] = $this->lanzar($p['token'], $pw, Idempotencia::nuevaClave(), 'anonimo:activ-d' . $i); }
+        $contactos = array_map(fn($i) => ['nombre' => "Nombre$i", 'apellido' => "Apellido$i", 'telefono' => '09900000' . str_pad((string)$i, 2, '0', STR_PAD_LEFT)], range(0, 5));
+        foreach ($passes as $i => $pw) { $ws[] = $this->lanzar($p['token'], $pw, Idempotencia::nuevaClave(), 'anonimo:activ-d' . $i, false, $contactos[$i]); }
         $res = $this->liberar($ws);
         $ok = array_keys(array_filter($res, fn($r) => $r['status'] === AuthService::STATUS_OK));
         $this->assertCount(1, $ok, 'exactamente una activación: ' . json_encode($res));
@@ -658,6 +661,8 @@ final class ActivacionCuentaIntegrationTest extends TestCase
         $this->assertSame('1', (string)$fila['confirmado']);
         $this->assertTrue(password_verify($passes[$ok[0]], $fila['password']), 'la contraseña final es la de la ganadora');
         foreach ($passes as $i => $pw) { if ($i !== $ok[0]) { $this->assertFalse(password_verify($pw, $fila['password'])); } }
+        // La fila final es TODA de la ganadora: nunca una mezcla de campos de dos peticiones.
+        $this->assertSame([$contactos[$ok[0]]['nombre'], $contactos[$ok[0]]['apellido'], $contactos[$ok[0]]['telefono']], [$fila['nombre'], $fila['apellido'], $fila['telefono']]);
         $this->assertSame(1, (int)self::$db->query("SELECT COUNT(*) n FROM operaciones_idempotentes WHERE scope='cliente.activacion'")->fetch_assoc()['n'], 'las perdedoras no dejan reserva');
     }
 
@@ -676,14 +681,17 @@ final class ActivacionCuentaIntegrationTest extends TestCase
         $p = $this->pendiente(self::A);
         $clave = Idempotencia::nuevaClave();
         $passes = array_map(fn($i) => "Misma-Clave-Pass-$i-x", range(0, 5));
-        $res = $this->liberar(array_map(fn($i) => $this->lanzar($p['token'], $passes[$i], $clave, 'anonimo:activ-mc'), range(0, 5)));
+        $contactos = array_map(fn($i) => ['nombre' => "Mc$i", 'apellido' => "Clave$i", 'telefono' => '09911111' . str_pad((string)$i, 2, '0', STR_PAD_LEFT)], range(0, 5));
+        $res = $this->liberar(array_map(fn($i) => $this->lanzar($p['token'], $passes[$i], $clave, 'anonimo:activ-mc', false, $contactos[$i]), range(0, 5)));
         $ok = array_keys(array_filter($res, fn($r) => $r['status'] === AuthService::STATUS_OK));
         $this->assertCount(1, $ok, json_encode($res));
         foreach ($res as $i => $r) {
             if ($i !== $ok[0]) { $this->assertContains($r['status'], [AuthService::STATUS_CONFLICT_CLAVE, AuthService::STATUS_EN_CURSO], json_encode($r)); }
         }
-        $this->assertTrue(password_verify($passes[$ok[0]], $this->fila($p['email'])['password']));
-        $this->assertSame('1', (string)$this->fila($p['email'])['confirmado']);
+        $fila = $this->fila($p['email']);
+        $this->assertTrue(password_verify($passes[$ok[0]], $fila['password']));
+        $this->assertSame([$contactos[$ok[0]]['nombre'], $contactos[$ok[0]]['apellido'], $contactos[$ok[0]]['telefono']], [$fila['nombre'], $fila['apellido'], $fila['telefono']], 'datos y contraseña de la misma ganadora');
+        $this->assertSame('1', (string)$fila['confirmado']);
     }
 
     public function test_registro_y_activacion_siguen_siendo_uniformes_con_dos_pre_registros_concurrentes(): void
@@ -700,6 +708,255 @@ final class ActivacionCuentaIntegrationTest extends TestCase
         $this->intentoDeAcceso($this->login($email, self::A), 'A');
         $this->intentoDeAcceso($this->login($email, self::B), 'B');
         $this->assertSame(302, $this->login($email, self::C)['status']);
+    }
+
+    // ================================================================== 6. revisión de datos personales por el titular
+
+    private function datosDe(string $email): array
+    {
+        $f = $this->fila($email);
+        return ['nombre' => $f['nombre'], 'apellido' => $f['apellido'], 'telefono' => $f['telefono']];
+    }
+
+    /** Cuenta pendiente cuyos datos escribió «otra persona» (atacante o recepción). */
+    private function pendienteConDatos(string $nombre, string $apellido, string $telefono, string $origen = 'registro_publico'): array
+    {
+        $email = $this->correo('datos');
+        $u = new Usuario(['nombre' => $nombre, 'apellido' => $apellido, 'email' => $email, 'password' => password_hash(self::A, PASSWORD_BCRYPT), 'telefono' => $telefono]);
+        $repo = new UsuarioRepository(self::$db);
+        $id = $repo->createCliente($u, $origen);
+        $token = $repo->issueConfirmationToken($repo->findById($id), 24);
+        return ['id' => $id, 'email' => $email, 'token' => $token];
+    }
+
+    private function postActivacion(array $a, string $token, array $cambios = []): array
+    {
+        return $a['c']->peticion('POST', '/confirmar-cuenta', $cambios + ['csrf_token' => $a['csrf'], 'idem_key' => $a['clave'], 'token' => $token,
+            'password' => self::C, 'password2' => self::C] + ClienteHttpActivacion::contactoDe($a['pagina']['body']));
+    }
+
+    public function test_el_formulario_muestra_los_datos_del_registro_editables_con_el_aviso_y_escapados(): void
+    {
+        $p = $this->pendienteConDatos('"><script>alert(1)</script>', "O'Brien & <b>Hijo</b>", '0990000001');
+        $a = $this->abrirEnlace($p['token']);
+        $b = $a['pagina']['body'];
+        $this->assertSame(200, $a['pagina']['status']);
+        $this->assertStringContainsString('Estos datos los escribió quien registró el correo antes de que se verificara. Revísalos y corrígelos.', $b);
+        $this->assertStringContainsString('Tu correo queda verificado al activar; tu nombre y teléfono no se verifican.', $b);
+        foreach (['nombre' => 60, 'apellido' => 60, 'telefono' => 10] as $campo => $max) {
+            $this->assertSame(1, preg_match('/<input[^>]*name="' . $campo . '"[^>]*>/', $b, $m), $campo);
+            $this->assertStringContainsString('required', $m[0], "$campo obligatorio");
+            $this->assertStringContainsString('maxlength="' . $max . '"', $m[0], $campo);
+        }
+        $this->assertStringContainsString('pattern="[0-9]{7,10}"', $b);
+        $this->assertSame(1, preg_match('/<form[^>]*method="post"[^>]*action="\/confirmar-cuenta"/', $b));
+        // Precarga con lo que hay en la cuenta, escapado: ni el HTML ni el JS del atacante llegan crudos a la página.
+        $this->assertStringNotContainsString('<script>alert', $b);
+        $this->assertStringNotContainsString('<b>Hijo</b>', $b);
+        $this->assertSame('"><script>alert(1)</script>', ClienteHttpActivacion::valorInput($b, 'nombre'));
+        $this->assertSame('0990000001', ClienteHttpActivacion::valorInput($b, 'telefono'));
+        $this->assertSame('no-store', $a['pagina']['headers']['cache-control'][0] ?? null);
+        $this->assertSame('no-referrer', $a['pagina']['headers']['referrer-policy'][0] ?? null);
+        // HEAD sigue sin cuerpo (no muestra datos); un enlace inválido no muestra ningún dato ni formulario.
+        $h = $this->http()->peticion('HEAD', '/confirmar-cuenta?token=' . $p['token']);
+        $this->assertSame([200, ''], [$h['status'], $h['body']]);
+        $inv = $this->http()->peticion('GET', '/confirmar-cuenta?token=' . bin2hex(random_bytes(32)));
+        $this->assertSame(410, $inv['status']);
+        $this->assertStringNotContainsString('name="nombre"', $inv['body']);
+    }
+
+    public function test_adversarial_el_atacante_no_conserva_ni_la_contrasena_ni_los_datos_tras_la_activacion_del_titular(): void
+    {
+        $email = $this->correo('titular');
+        // 1) El atacante registra el correo del titular con SUS datos y SU contraseña.
+        self::$db->query('DELETE FROM intentos_login');
+        $c = $this->http();
+        $pg = $c->peticion('GET', '/cliente/registro');
+        $this->assertSame(302, $c->peticion('POST', '/cliente/registro', ['csrf_token' => ClienteHttpActivacion::campo($pg['body'], 'csrf_token'), 'idem_key' => ClienteHttpActivacion::campo($pg['body'], 'idem_key'),
+            'nombre' => 'Atacante', 'apellido' => 'Falso', 'telefono' => '0990000001', 'email' => $email, 'password' => self::A])['status']);
+        // 2) El titular se registra con los suyos: la cuenta existente NO cambia (respuesta uniforme).
+        $this->assertSame(302, $this->registrar($email, self::B)['status']);
+        $this->assertSame(['nombre' => 'Atacante', 'apellido' => 'Falso', 'telefono' => '0990000001'], $this->datosDe($email));
+        // 3) Llega el correo; el titular abre el enlace y ve lo que escribió el atacante, listo para corregir.
+        $this->correrWorker();
+        $m = self::mensajesPara($email);
+        $this->assertNotEmpty($m);
+        $token = self::tokenDe(end($m));
+        $a = $this->abrirEnlace($token);
+        $this->assertSame('Atacante', ClienteHttpActivacion::valorInput($a['pagina']['body'], 'nombre'));
+        $this->assertSame('Falso', ClienteHttpActivacion::valorInput($a['pagina']['body'], 'apellido'));
+        // 4) El titular corrige sus datos y elige su contraseña.
+        $post = $this->postActivacion($a, $token, ['nombre' => 'María José', 'apellido' => 'Núñez', 'telefono' => '0992222222']);
+        $this->assertSame(200, $post['status']);
+        // 5) La fila es TODA del titular: ni la contraseña ni los datos del atacante sobreviven.
+        $fila = $this->fila($email);
+        $this->assertSame(['María José', 'Núñez', '0992222222'], [$fila['nombre'], $fila['apellido'], $fila['telefono']]);
+        $this->assertTrue(password_verify(self::C, $fila['password']));
+        $this->assertFalse(password_verify(self::A, $fila['password']));
+        $this->assertSame('1', (string)$fila['confirmado']);
+        $this->intentoDeAcceso($this->login($email, self::A), 'contraseña del atacante');
+        $ok = $this->login($email, self::C);
+        $this->assertSame('/cita', $ok['location']);
+        // La sesión del titular muestra SUS datos.
+        $this->assertStringContainsString('María José', $ok['cliente']->peticion('GET', '/cita')['body']);
+    }
+
+    public function test_solo_quien_posee_un_token_valido_de_la_cuenta_pendiente_puede_corregir_sus_datos(): void
+    {
+        $victima = $this->pendienteConDatos('Victima', 'Intacta', '0991000001');
+        $otra = $this->pendienteConDatos('Otra', 'Cuenta', '0991000002');
+        $original = $this->datosDe($victima['email']);
+        $intruso = ['nombre' => 'Intruso', 'apellido' => 'Cambiado', 'telefono' => '0999999999'];
+        $a = $this->abrirEnlace($victima['token']);
+
+        // Sin CSRF / CSRF de otra sesión
+        $this->assertSame(403, $a['c']->peticion('POST', '/confirmar-cuenta', ['idem_key' => $a['clave'], 'token' => $victima['token'], 'password' => self::C, 'password2' => self::C] + $intruso)['status']);
+        $ajeno = $this->abrirEnlace($otra['token']);
+        $this->assertSame(403, $a['c']->peticion('POST', '/confirmar-cuenta', ['csrf_token' => $ajeno['csrf'], 'idem_key' => $a['clave'], 'token' => $victima['token'], 'password' => self::C, 'password2' => self::C] + $intruso)['status']);
+        // Sin token, token inventado, de recuperación, vencido, usado
+        $base = ['csrf_token' => $a['csrf'], 'idem_key' => $a['clave'], 'password' => self::C, 'password2' => self::C] + $intruso;
+        $this->assertSame(410, $a['c']->peticion('POST', '/confirmar-cuenta', $base)['status'], 'sin token');
+        $this->assertSame(410, $a['c']->peticion('POST', '/confirmar-cuenta', ['token' => bin2hex(random_bytes(32))] + $base)['status'], 'token inventado');
+        self::$db->query("UPDATE usuarios SET token_tipo='recuperacion' WHERE id={$victima['id']}");
+        $this->assertSame(410, $a['c']->peticion('POST', '/confirmar-cuenta', ['token' => $victima['token']] + $base)['status'], 'token de recuperación');
+        self::$db->query("UPDATE usuarios SET token_tipo='confirmacion', token_expira=DATE_SUB(UTC_TIMESTAMP(), INTERVAL 1 MINUTE) WHERE id={$victima['id']}");
+        $this->assertSame(410, $a['c']->peticion('POST', '/confirmar-cuenta', ['token' => $victima['token']] + $base)['status'], 'token vencido');
+        $this->assertSame($original, $this->datosDe($victima['email']), 'ninguno de esos intentos tocó los datos de la víctima');
+        $this->assertSame('0', (string)$this->fila($victima['email'])['confirmado']);
+
+        // Con SU propio token válido solo se modifica SU cuenta (aunque haya una sesión iniciada de otro cliente).
+        self::$db->query("UPDATE usuarios SET token_expira=DATE_ADD(UTC_TIMESTAMP(), INTERVAL 5 HOUR) WHERE id={$victima['id']}");
+        $otraAntes = $this->datosDe($otra['email']);
+        $sesion = $this->http();
+        $cli = $this->correo('sesion');
+        self::$db->query("INSERT INTO usuarios(nombre,apellido,email,password,telefono,admin,confirmado) VALUES ('Con','Sesion','$cli','" . password_hash(self::C, PASSWORD_BCRYPT) . "','0991234567',0,1)");
+        self::$db->query("INSERT INTO clientes(usuario_id) VALUES (" . (int)self::$db->insert_id . ")");
+        $pg = $sesion->peticion('GET', '/cliente/login');
+        $this->assertSame(302, $sesion->peticion('POST', '/cliente/login', ['csrf_token' => ClienteHttpActivacion::campo($pg['body'], 'csrf_token'), 'email' => $cli, 'password' => self::C])['status']);
+        $conSesion = $this->abrirEnlace($otra['token'], $sesion);   // la sesión de otro cliente abre el enlace de OTRA cuenta
+        $r = $this->postActivacion($conSesion, $otra['token'], ['nombre' => 'Titular', 'apellido' => 'Legítimo', 'telefono' => '0993333333']);
+        $this->assertSame(200, $r['status']);
+        $this->assertSame(['nombre' => 'Titular', 'apellido' => 'Legítimo', 'telefono' => '0993333333'], $this->datosDe($otra['email']), 'el token cambia solo la cuenta a la que pertenece');
+        $this->assertSame($original, $this->datosDe($victima['email']), 'la víctima sigue intacta');
+        $this->assertSame(['nombre' => 'Con', 'apellido' => 'Sesion', 'telefono' => '0991234567'], $this->datosDe($cli), 'la cuenta de la sesión iniciada tampoco cambia');
+        $this->assertNotSame($otraAntes, $this->datosDe($otra['email']));
+    }
+
+    public function test_una_cuenta_ya_confirmada_con_token_residual_no_cambia_sus_datos(): void
+    {
+        $p = $this->pendienteConDatos('Real', 'Confirmada', '0991000009');
+        self::$db->query("UPDATE usuarios SET confirmado='1' WHERE id={$p['id']}");   // el token queda residual
+        $antes = $this->fila($p['email']);
+        $c = $this->http();
+        $pg = $c->peticion('GET', '/cliente/registro');
+        $r = $c->peticion('POST', '/confirmar-cuenta', ['csrf_token' => ClienteHttpActivacion::campo($pg['body'], 'csrf_token'), 'idem_key' => ClienteHttpActivacion::campo($pg['body'], 'idem_key'),
+            'token' => $p['token'], 'password' => self::C, 'password2' => self::C, 'nombre' => 'Intruso', 'apellido' => 'Cambiado', 'telefono' => '0999999999']);
+        $this->assertSame(410, $r['status']);
+        $this->assertSame($antes, $this->fila($p['email']));
+    }
+
+    public static function datosInvalidos(): array
+    {
+        return [
+            'HTML en nombre' => [['nombre' => '<b>Ana</b>']],
+            'JS en apellido' => [['apellido' => '"><script>alert(1)</script>']],
+            'NUL en nombre' => [['nombre' => "Ana\0Maria"]],
+            'control en apellido' => [['apellido' => "Per\x07ez"]],
+            'longitud 61 en nombre' => [['nombre' => str_repeat('a', 61)]],
+            'longitud 61 en apellido' => [['apellido' => str_repeat('b', 61)]],
+            'unicode de más de 60 bytes' => [['nombre' => str_repeat('ñ', 31)]],
+            'UTF-8 inválido' => [['nombre' => "Ana\xC3\x28"]],
+            'teléfono con letras' => [['telefono' => '099abc1234']],
+            'teléfono de 11 dígitos' => [['telefono' => '09912345678']],
+            'teléfono de 6 dígitos' => [['telefono' => '099123']],
+            'nombre vacío' => [['nombre' => '']],
+            'apellido en blanco' => [['apellido' => '   ']],
+            'teléfono vacío' => [['telefono' => '']],
+            'nombre como arreglo' => [['nombre' => ['x']]],
+            'apellido como arreglo' => [['apellido' => ['x', 'y']]],
+            'teléfono como arreglo' => [['telefono' => ['0991234567']]],
+        ];
+    }
+
+    /** @dataProvider datosInvalidos */
+    public function test_los_datos_de_contacto_invalidos_dan_422_sin_consumir_el_token_ni_reflejar_html(array $cambios): void
+    {
+        $p = $this->pendienteConDatos('Datos', 'Originales', '0991000005');
+        $antes = $this->fila($p['email']);
+        self::$db->query('DELETE FROM intentos_login');
+        $a = $this->abrirEnlace($p['token']);
+        $r = $this->postActivacion($a, $p['token'], $cambios);
+        $this->assertSame(422, $r['status'], substr(strip_tags($r['body']), 0, 300));
+        $this->assertStringContainsString('name="password2"', $r['body'], 'el formulario vuelve a mostrarse');
+        $this->assertStringNotContainsString('<script>alert', $r['body']);
+        $this->assertStringNotContainsString('<b>Ana</b>', $r['body']);
+        $this->assertStringNotContainsString(self::C, $r['body'], 'nunca se devuelve la contraseña');
+        $this->assertSame($antes, $this->fila($p['email']), 'sin cambios y sin consumir el token');
+        $this->assertSame(0, (int)self::$db->query("SELECT COUNT(*) n FROM intentos_login WHERE tipo IN ('ip_activate','token_activate')")->fetch_assoc()['n'], 'los errores de validación no cuentan contra el límite');
+        $this->assertSame(0, (int)self::$db->query("SELECT COUNT(*) n FROM operaciones_idempotentes WHERE scope='cliente.activacion'")->fetch_assoc()['n'], 'ni gastan la clave de operación');
+        // Corregido el dato, el MISMO enlace y la MISMA clave activan.
+        $ok = $this->postActivacion($a, $p['token']);
+        $this->assertSame(200, $ok['status']);
+    }
+
+    public function test_un_formulario_antiguo_sin_los_tres_campos_da_422_conserva_lo_escrito_y_no_consume_nada(): void
+    {
+        $p = $this->pendienteConDatos('Datos', 'Originales', '0991000006');
+        $antes = $this->fila($p['email']);
+        self::$db->query('DELETE FROM intentos_login');
+        $a = $this->abrirEnlace($p['token']);
+        $cuerpo = ['csrf_token' => $a['csrf'], 'idem_key' => $a['clave'], 'token' => $p['token'], 'password' => self::C, 'password2' => self::C];
+        foreach ([[], ['nombre' => 'Solo', 'apellido' => 'Dos'], ['telefono' => '0994444444']] as $parcial) {
+            $r = $a['c']->peticion('POST', '/confirmar-cuenta', $cuerpo + $parcial);
+            $this->assertSame(422, $r['status']);
+            $this->assertStringContainsString('name="password2"', $r['body']);
+            foreach ($parcial as $campo => $valor) { $this->assertSame($valor, ClienteHttpActivacion::valorInput($r['body'], $campo), 'conserva lo escrito'); }
+            $this->assertStringNotContainsString(self::C, $r['body']);
+        }
+        $this->assertSame($antes, $this->fila($p['email']));
+        $this->assertSame(0, (int)self::$db->query("SELECT COUNT(*) n FROM intentos_login WHERE tipo IN ('ip_activate','token_activate')")->fetch_assoc()['n']);
+    }
+
+    public function test_idempotencia_con_datos_mismo_envio_una_sola_aplicacion_y_otros_datos_con_la_misma_clave_dan_409(): void
+    {
+        $p = $this->pendienteConDatos('Datos', 'Originales', '0991000007');
+        $a = $this->abrirEnlace($p['token']);
+        $nuevos = ['nombre' => 'Elegido', 'apellido' => 'Titular', 'telefono' => '0995555555'];
+        $r1 = $this->postActivacion($a, $p['token'], $nuevos);
+        $fila1 = $this->fila($p['email']);
+        $r2 = $this->postActivacion($a, $p['token'], $nuevos);
+        $r3 = $this->postActivacion($a, $p['token'], $nuevos);
+        $this->assertSame([200, 200, 200], [$r1['status'], $r2['status'], $r3['status']]);
+        $this->assertSame($fila1, $this->fila($p['email']), 'el doble clic no reaplica nada (misma contraseña, mismos datos, misma versión de sesión)');
+        // Misma clave con otros datos, o con otra contraseña: conflicto sin cambios.
+        $this->assertSame(409, $this->postActivacion($a, $p['token'], ['nombre' => 'Otro'] + $nuevos)['status']);
+        $this->assertSame(409, $this->postActivacion($a, $p['token'], ['password' => self::A . 'x', 'password2' => self::A . 'x'] + $nuevos)['status']);
+        $this->assertSame($fila1, $this->fila($p['email']));
+    }
+
+    public function test_cuentas_de_recepcion_y_de_registro_publico_dejan_los_datos_del_titular(): void
+    {
+        foreach (['recepcion', 'registro_publico'] as $origen) {
+            $p = $this->pendienteConDatos('Cargado', 'PorRecepcion', '0991000008', $origen);
+            $this->assertSame($origen, self::$db->query("SELECT origen FROM clientes WHERE usuario_id={$p['id']}")->fetch_assoc()['origen']);
+            $a = $this->abrirEnlace($p['token']);
+            $this->assertSame('Cargado', ClienteHttpActivacion::valorInput($a['pagina']['body'], 'nombre'));
+            $this->assertSame(200, $this->postActivacion($a, $p['token'], ['nombre' => "Dueño $origen", 'telefono' => '0996666666'])['status']);
+            $f = $this->fila($p['email']);
+            $this->assertSame(["Dueño $origen", 'PorRecepcion', '0996666666'], [$f['nombre'], $f['apellido'], $f['telefono']], $origen);
+            $this->assertSame(302, $this->login($p['email'], self::C)['status']);
+        }
+    }
+
+    public function test_seis_procesos_con_la_misma_clave_y_los_mismos_datos_aplican_una_sola_vez(): void
+    {
+        $p = $this->pendienteConDatos('Datos', 'Originales', '0991000010');
+        $clave = Idempotencia::nuevaClave();
+        $contacto = ['nombre' => 'Mismo', 'apellido' => 'Envio', 'telefono' => '0997777777'];
+        $res = $this->liberar(array_map(fn() => $this->lanzar($p['token'], self::C, $clave, 'anonimo:activ-datos', false, $contacto), range(0, 5)));
+        $this->assertSame(array_fill(0, 6, AuthService::STATUS_OK), array_column($res, 'status'), json_encode($res));
+        $this->assertCount(1, array_filter(array_column($res, 'repetida'), fn($r) => $r === false));
+        $this->assertSame(['Mismo', 'Envio', '0997777777'], array_values($this->datosDe($p['email'])));
     }
 }
 
@@ -743,6 +1000,18 @@ final class ClienteHttpActivacion
             if (count($p) >= 7 && $p[5] === $nombre) { return $p[6]; }
         }
         return null;
+    }
+
+    /** Valor de un <input> por su atributo name, sea cual sea el orden de los atributos. */
+    public static function valorInput(string $html, string $nombre): ?string
+    {
+        return preg_match('/<input[^>]*\bname="' . preg_quote($nombre, '/') . '"[^>]*\bvalue="([^"]*)"/', $html, $m) ? html_entity_decode($m[1], ENT_QUOTES) : null;
+    }
+
+    /** Lo que enviaría un navegador con el formulario de activación sin tocar los datos de contacto. */
+    public static function contactoDe(string $html): array
+    {
+        return ['nombre' => self::valorInput($html, 'nombre') ?? '', 'apellido' => self::valorInput($html, 'apellido') ?? '', 'telefono' => self::valorInput($html, 'telefono') ?? ''];
     }
 
     public static function campo(string $html, string $nombre): ?string

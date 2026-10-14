@@ -416,7 +416,7 @@ class UsuarioRepository
 
     /**
      * ACTIVACIÓN de una cuenta (única vía de confirmación): en UNA sola sentencia UPDATE atómica consume el token de
-     * confirmación Y reemplaza la contraseña por la elegida por quien demostró controlar el buzón. La contraseña del
+     * confirmación, reemplaza los datos de contacto por los revisados por el titular Y reemplaza la contraseña por la elegida por quien demostró controlar el buzón. La contraseña del
      * registro es provisional y se descarta aquí. Condiciones (todas en el WHERE): hash del token, propósito 'confirmacion',
      * vigencia y cuenta aún sin confirmar; solo `affected_rows === 1` cuenta como éxito, de modo que el perdedor de dos
      * activaciones simultáneas no cambia la contraseña del ganador y un token residual nunca toca una cuenta confirmada.
@@ -426,10 +426,12 @@ class UsuarioRepository
      *
      * @param string $tokenRaw Token en texto plano.
      * @param string $nuevoPasswordHash Hash bcrypt de la contraseña elegida.
+     * @param array{nombre:string,apellido:string,telefono:string} $contacto Datos revisados por el titular: reemplazan, en la MISMA
+     *        sentencia, a los que escribió quien registró el correo antes de verificarlo (ya validados por el llamador). Declarados, no verificados.
      * @return array{id:int,email:string}|null Cuenta activada, o null si el token no era válido, venció, ya se usó o la cuenta ya estaba confirmada.
      * @throws PersistenceException Si ocurre un fallo SQL.
      */
-    public function activateAccountByToken(string $tokenRaw, string $nuevoPasswordHash): ?array
+    public function activateAccountByToken(string $tokenRaw, string $nuevoPasswordHash, array $contacto): ?array
     {
         $tokenTrimmed = trim($tokenRaw);
         if ($tokenTrimmed === '' || $nuevoPasswordHash === '') {
@@ -443,7 +445,7 @@ class UsuarioRepository
         try {
             // `id = LAST_INSERT_ID(id)` deja disponible el id de la fila actualizada sin una lectura posterior.
             $sql = "UPDATE usuarios
-                    SET password = ?, confirmado = '1', version_sesion = version_sesion + 1, id = LAST_INSERT_ID(id),
+                    SET password = ?, nombre = ?, apellido = ?, telefono = ?, confirmado = '1', version_sesion = version_sesion + 1, id = LAST_INSERT_ID(id),
                         token = NULL, token_hash = NULL, token_tipo = NULL, token_expira = NULL
                     WHERE token_hash = ? AND token_tipo = ? AND token_expira >= UTC_TIMESTAMP() AND confirmado = '0'
                     LIMIT 1";
@@ -451,7 +453,10 @@ class UsuarioRepository
             if (!$stmt) {
                 throw new PersistenceException("Error al preparar activación por token: " . $db->error);
             }
-            $stmt->bind_param('sss', $nuevoPasswordHash, $hash, $tipo);
+            $nombre = (string)($contacto['nombre'] ?? '');
+            $apellido = (string)($contacto['apellido'] ?? '');
+            $telefono = (string)($contacto['telefono'] ?? '');
+            $stmt->bind_param('ssssss', $nuevoPasswordHash, $nombre, $apellido, $telefono, $hash, $tipo);
             if (!$stmt->execute()) {
                 $err = $stmt->error;
                 $stmt->close();
