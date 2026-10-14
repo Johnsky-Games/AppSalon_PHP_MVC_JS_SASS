@@ -16,7 +16,7 @@ $etiquetaRol = ['gerente' => 'Gerencia', 'recepcion' => 'Recepción', 'profesion
         <input type="password" id="password_actual" name="password_actual" autocomplete="current-password" required maxlength="72">
     </div>
     <?php } else { ?>
-    <p class="ui-form-help"><?php echo ($vista['identidad'] ?? '') === 'existente_sin_confirmar' ? 'Tu correo ya tenía un registro sin confirmar. Al aceptar quedará verificado con la contraseña que elijas.' : 'Elige la contraseña con la que entrarás al equipo.'; ?></p>
+    <p class="ui-form-help"><?php echo ($vista['identidad'] ?? '') === 'existente_sin_confirmar' ? 'Tu correo ya tenía un registro sin confirmar. Al aceptar, tu correo quedará verificado y entrarás con la contraseña que elijas.' : 'Elige la contraseña con la que entrarás al equipo.'; ?></p>
     <div class="campo">
         <label for="password">Nueva contraseña</label>
         <input type="password" id="password" name="password" autocomplete="new-password" required minlength="8" maxlength="72">

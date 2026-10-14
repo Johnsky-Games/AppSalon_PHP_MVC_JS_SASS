@@ -75,7 +75,7 @@ final class AccesoClienteIntegrationTest extends TestCase
         $r = $this->servicio()->registrar(['nombre' => 'Ana', 'apellido' => 'Cliente', 'telefono' => '0991234567', 'email' => $email, 'password' => 'ClaveSegura123'], '198.51.100.77');
         $this->assertSame(AuthService::STATUS_OK, $r['status']);
         // La contraseña del registro es provisional: al activar se elige la definitiva (aquí la misma, para conservar la intención del caso).
-        $this->assertSame(AuthService::STATUS_OK, $this->servicio()->activarCuenta(['token' => $this->tokens[$email], 'password' => 'ClaveSegura123', 'password2' => 'ClaveSegura123'])['status']);
+        $this->assertSame(AuthService::STATUS_OK, $this->servicio()->activarCuenta(['token' => $this->tokens[$email], 'password' => 'ClaveSegura123', 'password2' => 'ClaveSegura123', 'nombre' => 'Ana', 'apellido' => 'Cliente', 'telefono' => '0991234567'])['status']);
         return $email;
     }
 

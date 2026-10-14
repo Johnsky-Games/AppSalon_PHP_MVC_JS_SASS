@@ -417,8 +417,16 @@ class LoginController
         if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'HEAD') {
             return;
         }
+        // Se precargan nombre, apellido y teléfono con lo que ya hay en la cuenta: los escribió quien registró el correo ANTES de
+        // verificarlo y el titular debe poder revisarlos y corregirlos. Riesgo residual documentado: un escáner de enlaces del
+        // proveedor de correo que haga GET verá esos datos; son los del propio registro y van al mismo buzón (HEAD no los muestra).
+        $datos = [];
+        if ($estado === AuthService::STATUS_OK && $validacion['usuario'] instanceof Usuario) {
+            $u = $validacion['usuario'];
+            $datos = ['nombre' => (string)$u->nombre, 'apellido' => (string)$u->apellido, 'telefono' => (string)$u->telefono];
+        }
         self::renderActivacion($router, $estado === AuthService::STATUS_OK ? 'formulario' : ($estado === AuthService::STATUS_ERROR ? 'error' : 'invalido'),
-            $validacion['alertas'], $token);
+            $validacion['alertas'], $token, $datos);
     }
 
     /**
@@ -441,7 +449,8 @@ class LoginController
                 'alertas' => ['error' => ['El formulario venció. Abre de nuevo el enlace de tu correo.']]];
         } else {
             $resultado = self::obtenerAuthService()->activarCuenta(
-                ['token' => $_POST['token'] ?? null, 'password' => $_POST['password'] ?? null, 'password2' => $_POST['password2'] ?? null],
+                ['token' => $_POST['token'] ?? null, 'password' => $_POST['password'] ?? null, 'password2' => $_POST['password2'] ?? null,
+                    'nombre' => $_POST['nombre'] ?? null, 'apellido' => $_POST['apellido'] ?? null, 'telefono' => $_POST['telefono'] ?? null],
                 RateLimiter::obtenerIP(),
                 $clave,
                 // El actor se liga al enlace (no a la sesión): la sesión se regenera al activar y un reintento no debe perder la idempotencia.
@@ -481,15 +490,20 @@ class LoginController
                 }
                 http_response_code(422);
         }
-        self::renderActivacion($router, 'formulario', $resultado['alertas'], $token);
+        // Se conserva lo escrito en los datos de contacto (nunca la contraseña) y solo si son texto.
+        $escrito = [];
+        foreach (['nombre', 'apellido', 'telefono'] as $campo) {
+            $escrito[$campo] = is_string($_POST[$campo] ?? null) ? $_POST[$campo] : '';
+        }
+        self::renderActivacion($router, 'formulario', $resultado['alertas'], $token, $escrito);
     }
 
-    private static function renderActivacion(Router $router, string $modo, array $alertas, string $token): void
+    private static function renderActivacion(Router $router, string $modo, array $alertas, string $token, array $datos = []): void
     {
         // El Router vuelve a emitir las cabeceras de seguridad al renderizar: la política se fija solo durante este render.
         $GLOBALS['__appsalon_referrer_policy'] = 'no-referrer';
         try {
-            $router->render('auth/confirmar-cuenta', ['modo' => $modo, 'alertas' => $alertas, 'token' => $token]);
+            $router->render('auth/confirmar-cuenta', ['modo' => $modo, 'alertas' => $alertas, 'token' => $token, 'datos' => $datos]);
         } finally {
             unset($GLOBALS['__appsalon_referrer_policy']);
         }

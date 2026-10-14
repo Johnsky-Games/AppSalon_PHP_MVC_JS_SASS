@@ -290,7 +290,7 @@ final class ColaboradoresPortalesIntegrationTest extends TestCase
         $tokenInvitacion = $this->tokenEnviado($email);
         $auth = new AuthService(new UsuarioRepository($this->db));
         $this->assertNotSame(AuthService::STATUS_OK, $auth->validarTokenRecuperacion($tokenInvitacion)['status']);
-        $this->assertNotSame(AuthService::STATUS_OK, $auth->activarCuenta(['token' => $tokenInvitacion, 'password' => 'ClaveSegura123', 'password2' => 'ClaveSegura123'])['status']);
+        $this->assertNotSame(AuthService::STATUS_OK, $auth->activarCuenta(['token' => $tokenInvitacion, 'password' => 'ClaveSegura123', 'password2' => 'ClaveSegura123', 'nombre' => 'In', 'apellido' => 'Vi', 'telefono' => '0991234567'])['status']);
         // Token de recuperación de un usuario cualquiera no acepta invitaciones.
         $cliente = $this->cuenta('cliente');
         $usuario = (new UsuarioRepository($this->db))->findById($cliente);

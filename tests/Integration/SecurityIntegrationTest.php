@@ -151,7 +151,7 @@ class SecurityIntegrationTest extends TestCase
         $idUsuario = $repo->create($usuario);
 
         // 1. Primer intento de consumo atómico (Solicitud 1) -> Debe ser exitoso
-        $exito1 = $repo->activateAccountByToken($tokenRaw, password_hash('Elegida-Por-El-Titular-1', PASSWORD_BCRYPT));
+        $exito1 = $repo->activateAccountByToken($tokenRaw, password_hash('Elegida-Por-El-Titular-1', PASSWORD_BCRYPT), ['nombre' => 'Carlos', 'apellido' => 'Perez', 'telefono' => '5544332211']);
         $this->assertNotNull($exito1, 'El primer consumo del token de confirmación debe ser exitoso');
         $this->assertSame($idUsuario, $exito1['id']);
 
@@ -162,9 +162,10 @@ class SecurityIntegrationTest extends TestCase
         $this->assertFalse(password_verify('clave123', $usuarioActualizado->password));
 
         // 2. Intento concurrente o secundario con el mismo token (Solicitud 2) -> Debe fallar
-        $exito2 = $repo->activateAccountByToken($tokenRaw, password_hash('Otra-Pass-Del-Perdedor-2', PASSWORD_BCRYPT));
+        $exito2 = $repo->activateAccountByToken($tokenRaw, password_hash('Otra-Pass-Del-Perdedor-2', PASSWORD_BCRYPT), ['nombre' => 'Perdedor', 'apellido' => 'Intruso', 'telefono' => '0999999999']);
         $this->assertNull($exito2, 'El segundo intento de consumo debe fallar (0 filas afectadas)');
         $this->assertTrue(password_verify('Elegida-Por-El-Titular-1', $repo->findById($idUsuario)->password), 'el perdedor no cambia la contraseña del ganador');
+        $this->assertSame('Carlos', $repo->findById($idUsuario)->nombre, 'ni los datos del ganador');
     }
 
     public function testTokenPropositoIncorrectoEsRechazado(): void

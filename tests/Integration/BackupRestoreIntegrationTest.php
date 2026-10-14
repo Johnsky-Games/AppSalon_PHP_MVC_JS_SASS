@@ -314,6 +314,9 @@ class BackupRestoreIntegrationTest extends TestCase
     public function testAuditoriaIntegralDeCabecerasSeguridadRutasPermisosEIndices(): void
     {
         ActiveRecord::setDB(self::$db);
+        // Dependía del orden: si ninguna prueba previa había abierto la sesión, iniciar_sesion_segura() la abría dentro del controlador
+        // y reemplazaba $_SESSION por la sesión vacía (401 en lugar de 403). Se abre antes de preparar la sesión de la prueba.
+        if (session_status() === PHP_SESSION_NONE) { session_start(); }
 
         // 1. Verificar emisión consistente de cabeceras de seguridad
         $headersSeguridad = emitir_cabeceras_seguridad();

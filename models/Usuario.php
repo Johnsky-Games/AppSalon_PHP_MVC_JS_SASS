@@ -129,6 +129,25 @@ class Usuario
         return self::$alertas;
     }
 
+    /**
+     * Datos de contacto declarados (nombre, apellido, teléfono) con la misma política del registro público
+     * (obligatorios, ≤ 60 bytes, teléfono de 7 a 10 dígitos) y, además, sin caracteres de control (NUL, saltos, etc.).
+     * Los usa la activación de la cuenta, donde el titular revisa lo que escribió quien registró el correo.
+     */
+    public function validarDatosContacto(): array
+    {
+        self::$alertas = [];
+        if (!$this->nombre) { self::$alertas['error'][] = 'Debes añadir un nombre'; }
+        if (!$this->apellido) { self::$alertas['error'][] = 'Debes añadir un apellido'; }
+        if (!$this->telefono) { self::$alertas['error'][] = 'El teléfono es obligatorio'; }
+        if (strlen((string)$this->nombre) > 60 || strlen((string)$this->apellido) > 60) { self::$alertas['error'][] = 'Nombre y apellido admiten hasta 60 bytes'; }
+        if ($this->telefono && !preg_match('/^[0-9]{7,10}$/', (string)$this->telefono)) { self::$alertas['error'][] = 'El teléfono debe contener entre 7 y 10 dígitos'; }
+        if (preg_match('/[\x00-\x1F\x7F]/', (string)$this->nombre . (string)$this->apellido . (string)$this->telefono)) { self::$alertas['error'][] = 'Los datos contienen caracteres no válidos'; }
+        if (preg_match('/[<>]/', (string)$this->nombre . (string)$this->apellido)) { self::$alertas['error'][] = 'Los datos contienen caracteres no válidos'; }
+        if (!mb_check_encoding((string)$this->nombre . (string)$this->apellido, 'UTF-8')) { self::$alertas['error'][] = 'Los datos contienen caracteres no válidos'; }
+        return self::$alertas;
+    }
+
     public function validarLogin(): array
     {
         self::$alertas = [];

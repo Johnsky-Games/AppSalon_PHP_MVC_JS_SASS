@@ -90,7 +90,7 @@ class InMemoryUsuarioRepositoryStub extends UsuarioRepository
     }
 
     /** Doble en memoria de la activación atómica: consume el token y reemplaza la contraseña provisional. */
-    public function activateAccountByToken(string $tokenRaw, string $nuevoPasswordHash): ?array
+    public function activateAccountByToken(string $tokenRaw, string $nuevoPasswordHash, array $contacto): ?array
     {
         $this->checkFallo();
         $hash = hash('sha256', trim($tokenRaw));
@@ -103,6 +103,9 @@ class InMemoryUsuarioRepositoryStub extends UsuarioRepository
                 strtotime($u->token_expira . ' UTC') >= time()
             ) {
                 $u->password = $nuevoPasswordHash;
+                $u->nombre = $contacto['nombre'];
+                $u->apellido = $contacto['apellido'];
+                $u->telefono = $contacto['telefono'];
                 $u->confirmado = '1';
                 $u->token = null;
                 $u->token_hash = null;
@@ -259,7 +262,7 @@ class AuthServiceTest extends TestCase
             public int $llamadas = 0;
             public int $interbloqueos = 0;
             public string $mensaje = 'Deadlock found when trying to get lock; try restarting transaction';
-            public function activateAccountByToken(string $tokenRaw, string $nuevoPasswordHash): ?array
+            public function activateAccountByToken(string $tokenRaw, string $nuevoPasswordHash, array $contacto): ?array
             {
                 $this->llamadas++;
                 if ($this->llamadas <= $this->interbloqueos) { throw new \Repositories\PersistenceException($this->mensaje); }
@@ -267,7 +270,7 @@ class AuthServiceTest extends TestCase
             }
         };
         $service = new AuthService($repo, static fn() => true);
-        $datos = ['token' => 'abc', 'password' => 'ClaveDefinitiva9', 'password2' => 'ClaveDefinitiva9'];
+        $datos = ['token' => 'abc', 'password' => 'ClaveDefinitiva9', 'password2' => 'ClaveDefinitiva9', 'nombre' => 'Sofia', 'apellido' => 'Castro', 'telefono' => '9988776655'];
 
         $repo->interbloqueos = 2;
         $r = $service->activarCuenta($datos);
@@ -301,7 +304,7 @@ class AuthServiceTest extends TestCase
         ]);
 
         // 1. Token vacío o inexistente -> STATUS_INVALID (la activación exige elegir contraseña: reemplaza la provisional)
-        $activar = static fn(string $t) => $service->activarCuenta(['token' => $t, 'password' => 'ClaveDefinitiva9', 'password2' => 'ClaveDefinitiva9']);
+        $activar = static fn(string $t) => $service->activarCuenta(['token' => $t, 'password' => 'ClaveDefinitiva9', 'password2' => 'ClaveDefinitiva9', 'nombre' => 'Sofia', 'apellido' => 'Castro', 'telefono' => '9988776655']);
         $invalido = $activar('token_inexistente');
         $this->assertSame(AuthService::STATUS_INVALID, $invalido['status']);
 
