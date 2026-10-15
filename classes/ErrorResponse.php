@@ -84,15 +84,96 @@ final class ErrorResponse
         $errorDescription = (string)($options['mensaje'] ?? $details['description']);
         $errorReference = (string)($options['reference'] ?? '');
         $errorCompany = self::company();
-        $errorHome = $status === 401 || empty($_SESSION['login']) ? '/' : match ($_SESSION['rol'] ?? '') {
+        [$errorHome, $errorHomeEtiqueta] = self::inicio($status);
+        [$errorVolver, $errorVolverEtiqueta] = self::volver($options);
+        $errorEscape = static fn ($value): string => htmlspecialchars((string)$value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        // Un error de cliente (4xx) de una persona con sesión se pinta dentro del layout de su portal (menú incluido); los 5xx y
+        // cualquier fallo del layout usan la página independiente, que no depende de la base de datos.
+        if (self::enLayout($status, $options) && self::incluirEnLayout(get_defined_vars())) {
+            return;
+        }
+        include __DIR__ . '/../views/errores/layout.php';
+    }
+
+    /**
+     * Enlace principal de «inicio» y su etiqueta, calculados por el PORTAL de la sesión (inicio_portal()), no por el rol que el
+     * navegador guarda: sin sesión o con 401 es el acceso del portal; con sesión, el inicio de su rol dentro de su portal.
+     *
+     * @return array{0:string,1:string}
+     */
+    private static function inicio(int $status): array
+    {
+        $logueado = ($_SESSION['login'] ?? false) === true;
+        if ($status === 401 || !$logueado) {
+            $esEquipo = ($_SESSION['portal'] ?? '') === 'equipo' || ($_SESSION['portal_aviso'] ?? '') === '/equipo/login';
+            $acceso = $esEquipo ? '/equipo/login' : '/';
+            return [$acceso, $status === 401 ? 'Iniciar sesión' : 'Volver al inicio'];
+        }
+        $porRol = static fn (): string => match ($_SESSION['rol'] ?? '') {
             'propietario', 'gerente', 'recepcion' => '/admin',
             'finanzas' => '/admin/finanzas',
             'profesional' => '/agenda',
             'cliente' => '/cita',
             default => '/perfil',
         };
-        $errorEscape = static fn ($value): string => htmlspecialchars((string)$value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-        include __DIR__ . '/../views/errores/layout.php';
+        // Sesiones heredadas o de pruebas, sin marca de portal ni identificador: solo queda el rol guardado (el destino vuelve a autorizar).
+        if (!isset($_SESSION['portal']) && (int)($_SESSION['id'] ?? 0) <= 0 || !function_exists('inicio_portal')) {
+            return [$porRol(), 'Volver al inicio'];
+        }
+        try {
+            return [inicio_portal(), 'Volver al inicio'];
+        } catch (\Throwable $e) {
+            // La autorización puede no estar disponible (503): el enlace se deduce de la marca de portal de la sesión.
+            return [($_SESSION['portal'] ?? '') === 'equipo' ? $porRol() : '/cita', 'Volver al inicio'];
+        }
+    }
+
+    /**
+     * Botón «Volver» opcional (opciones `volver` y `volver_etiqueta`). La ruta se valida otra vez contra el catálogo de destinos,
+     * el portal y los permisos de la sesión: una URL externa, una ruta de otro portal o inventada se descarta y queda solo «inicio».
+     *
+     * @return array{0:string,1:string}
+     */
+    private static function volver(array $options): array
+    {
+        $ruta = $options['volver'] ?? null;
+        if (!is_string($ruta) || $ruta === '' || !function_exists('destino_validar_ruta')) { return ['', 'Volver']; }
+        try {
+            $valida = destino_validar_ruta($ruta);
+        } catch (\Throwable $e) {
+            $valida = '';
+        }
+        if ($valida === '') { return ['', 'Volver']; }
+        $etiqueta = $options['volver_etiqueta'] ?? null;
+        $etiqueta = is_string($etiqueta) ? trim(preg_replace('/[\x00-\x1f\x7f]+/u', ' ', mb_scrub($etiqueta, 'UTF-8')) ?? '') : '';
+        return [$valida, $etiqueta !== '' ? mb_substr($etiqueta, 0, 80) : 'Volver'];
+    }
+
+    private static function enLayout(int $status, array $options): bool
+    {
+        return ($_SESSION['login'] ?? false) === true && $status >= 400 && $status < 500 && $status !== 401
+            && ($options['standalone'] ?? false) !== true && is_file(__DIR__ . '/../views/layout.php');
+    }
+
+    /** Pinta la tarjeta de error dentro del layout del portal; devuelve false (sin salida parcial) si el layout no puede renderizarse. */
+    private static function incluirEnLayout(array $variables): bool
+    {
+        $nivel = ob_get_level();
+        try {
+            extract($variables, EXTR_SKIP);
+            ob_start();
+            echo '<div class="nav-equipo-error">';
+            include __DIR__ . '/../views/errores/tarjeta.php';
+            echo '</div>';
+            $contenido = ob_get_clean();
+            ob_start();
+            include __DIR__ . '/../views/layout.php';
+            ob_end_flush();
+            return true;
+        } catch (\Throwable $e) {
+            while (ob_get_level() > $nivel) { ob_end_clean(); }
+            return false;
+        }
     }
 
     public static function fromThrowable(\Throwable $exception): void

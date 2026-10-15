@@ -394,6 +394,40 @@ class APIController
     }
 
     /**
+     * Error de un envío de formulario (no JSON) con «Volver» al mismo portal: el destino sale del catálogo (campos `volver`/`r_*` del
+     * formulario o el predeterminado del portal), nunca del `Referer`. HTML aunque la ruta sea /api (contrato del formulario legado).
+     */
+    private static function errorHtml(int $codigo, string $mensaje, string $porDefecto): void
+    {
+        [$volver, $clave] = destino_volver_con_clave($porDefecto);
+        \Classes\ErrorResponse::render($codigo, ['format' => 'html', 'mensaje' => $mensaje, 'volver' => $volver, 'volver_etiqueta' => etiqueta_destino($clave)]);
+    }
+
+    /**
+     * Cita inexistente o identificador inválido en un formulario (página vieja): vuelve al destino del catálogo del portal con un
+     * aviso visible en la pantalla de destino (sin callejón y sin depender de un toast).
+     */
+    private static function redirigirConAviso(string $mensaje, string $porDefecto): void
+    {
+        aviso_portal($mensaje);
+        header('Location: ' . destino_volver($porDefecto));
+        detener_ejecucion(302);
+    }
+
+    /** ¿La cita existe y pertenece a la persona de la sesión? (consulta de solo lectura; un fallo cuenta como «no»). */
+    private static function esCitaPropia($idRaw, $usuarioId): bool
+    {
+        $id = filter_var($idRaw, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+        if (!$id) { return false; }
+        try {
+            $cita = (new \Repositories\CitaRepository())->findById($id);
+        } catch (\Throwable $e) {
+            return false;
+        }
+        return $cita !== null && (int)$cita->usuarioId === (int)$usuarioId;
+    }
+
+    /**
      * Endpoint para cancelación lógica de citas:
      * Valida autenticación y CSRF en el controlador, y delega a CitaService::cancelarCita.
      */
@@ -408,6 +442,23 @@ class APIController
             $usuarioIdAutenticado = $_SESSION['id'] ?? null;
             $esAdmin = puede('agenda.gestionar');
             $esJsonExplicito = self::solicitaRespuestaJsonExplicita();
+            // Destino por portal (catálogo central; sin Referer): el equipo vuelve a las citas del día, el cliente a sus citas.
+            $porDefecto = portal_sesion() === 'equipo' ? 'admin_citas' : 'cliente_citas';
+
+            // Una sesión del equipo sin agenda.gestionar no cancela citas por esta vía: ni las ajenas (lo niega el servicio) ni sus citas
+            // personales si también es clienta, que se gestionan desde el portal de clientes (cada portal ve y modifica solo lo suyo).
+            if (portal_sesion() === 'equipo' && !$esAdmin && self::esCitaPropia($_POST['id'] ?? null, $usuarioIdAutenticado)) {
+                $mensajePortal = 'Tu sesión es la del portal del equipo y no incluye cancelar citas. Las citas personales se gestionan desde el portal de clientes.';
+                if ($esJsonExplicito) {
+                    http_response_code(403);
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode(['resultado' => false, 'status' => 'forbidden', 'codigo' => 'portal_incorrecto', 'error' => $mensajePortal], JSON_UNESCAPED_UNICODE);
+                } else {
+                    self::errorHtml(403, $mensajePortal, $porDefecto);
+                }
+                detener_ejecucion(403);
+                return;
+            }
 
             $motivo = $_POST['motivo'] ?? ($_POST['motivo_cancelacion'] ?? null);
             $resultado = self::obtenerCitaService()->cancelarCita(
@@ -431,8 +482,7 @@ class APIController
                     detener_ejecucion($httpCode);
                     return;
                 }
-                header('Location: ' . inicio_portal());
-                detener_ejecucion(302);
+                self::redirigirConAviso((string)($resultado['error'] ?? 'Identificador de cita inválido.'), $porDefecto);
                 return;
             }
 
@@ -449,8 +499,7 @@ class APIController
                     detener_ejecucion(404);
                     return;
                 }
-                header('Location: ' . destino_retorno_seguro());
-                detener_ejecucion(302);
+                self::redirigirConAviso('La cita ya no existe o fue retirada. Revisa el listado actualizado.', $porDefecto);
                 return;
             }
 
@@ -468,7 +517,7 @@ class APIController
                         'error' => $resultado['error'] ?? 'No tienes autorización para eliminar esta cita'
                     ]);
                 } else {
-                    \Classes\ErrorResponse::render(403, ['format' => 'html']);
+                    self::errorHtml(403, 'No tienes autorización para cancelar esta cita.', $porDefecto);
                 }
                 detener_ejecucion(403);
                 return;
@@ -484,7 +533,7 @@ class APIController
                         'error' => $mensajeError
                     ]);
                 } else {
-                    \Classes\ErrorResponse::render(500, ['format' => 'html']);
+                    self::errorHtml(500, 'No fue posible cancelar la cita. Revisa su estado antes de intentarlo de nuevo.', $porDefecto);
                 }
                 detener_ejecucion(500);
                 return;
@@ -503,8 +552,7 @@ class APIController
                 return;
             }
 
-            $destino = destino_retorno_seguro();
-            header('Location: ' . $destino);
+            header('Location: ' . destino_volver($porDefecto));
             detener_ejecucion(302);
             return;
         }

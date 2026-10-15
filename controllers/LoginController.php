@@ -136,6 +136,9 @@ class LoginController
                     }
                 }
 
+                // La pantalla pedida antes de iniciar sesión (solo del catálogo, la guardó isAuth) se lee antes de reconstruir la sesión.
+                $intencion = is_array($_SESSION['destino_tras_login'] ?? null) ? $_SESSION['destino_tras_login'] : null;
+
                 // Reconstruir sesión: limpiar datos y roles previos antes de poblar
                 $_SESSION = [];
                 session_regenerate_id(true);
@@ -153,11 +156,11 @@ class LoginController
                 if ($portal === 'equipo') {
                     if (in_array($acceso['rol'], ['propietario','gerente'], true)) { $_SESSION['admin'] = '1'; }
                     else { unset($_SESSION['admin']); }
-                    redirigir($acceso['rol'] === 'profesional' ? '/agenda' : ($acceso['rol'] === 'finanzas' ? '/admin/finanzas' : '/admin'));
                 } else {
                     unset($_SESSION['admin']);
-                    redirigir('/cita');
                 }
+                // Mismo portal que la intención guardada y permiso vigente → esa pantalla; si no, el inicio del rol en su portal.
+                redirigir(destino_tras_login($intencion, $portal));
                 return;
             } elseif ($resultado['status'] === AuthService::STATUS_INVALID_TYPE) {
                 http_response_code(422);
@@ -191,7 +194,7 @@ class LoginController
 
         exigir_csrf();
 
-        $destino = ($_SESSION['portal'] ?? '') === 'equipo' ? '/equipo/login' : '/';
+        $destino = destino_portal(($_SESSION['portal'] ?? '') === 'equipo' ? 'login_equipo' : 'login_cliente');
         $_SESSION = [];
 
         if (ini_get('session.use_cookies')) {
@@ -311,7 +314,7 @@ class LoginController
             $alertas = $resultadoReset['alertas'];
 
             if ($resultadoReset['status'] === AuthService::STATUS_OK) {
-                redirigir(($_GET['portal'] ?? '') === 'equipo' ? '/equipo/login' : '/');
+                redirigir(destino_portal(($_GET['portal'] ?? '') === 'equipo' ? 'login_equipo' : 'login_cliente'));
                 return;
             } elseif ($resultadoReset['status'] === AuthService::STATUS_INVALID_TYPE) {
                 http_response_code(422);
