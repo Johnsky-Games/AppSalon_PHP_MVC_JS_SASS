@@ -70,10 +70,10 @@ final class ReglaAtencion
     /**
      * Evalúa si «Iniciar atención» está disponible en $ahora.
      *
-     * Ventana: desde (inicio − ADELANTO_INICIO_MINUTOS) inclusive hasta el final del día de la cita (00:00 del día siguiente, exclusivo).
+     * Ventana: abierta desde (inicio − ADELANTO_INICIO_MINUTOS) inclusive y SIN cierre (se puede registrar con retraso; ver nota abajo).
      *
      * @return array{permitido:bool,motivo:?string,disponible_desde:\DateTimeImmutable,cierra:\DateTimeImmutable,mensaje:string}
-     *   motivo: null | 'antes_de_ventana' | 'ventana_cerrada'
+     *   motivo: null | 'antes_de_ventana'
      */
     public static function evaluarInicio(string $fecha, string $hora, \DateTimeImmutable $ahora): array
     {
@@ -86,10 +86,8 @@ final class ReglaAtencion
             return ['permitido' => false, 'motivo' => 'antes_de_ventana', 'disponible_desde' => $desde, 'cierra' => $cierra,
                 'mensaje' => 'Disponible desde las ' . $desde->format('H:i') . ($desde->format('Y-m-d') !== $inicio->format('Y-m-d') ? ' del ' . $desde->format('d/m') : '')];
         }
-        if ($ahora >= $cierra) {
-            return ['permitido' => false, 'motivo' => 'ventana_cerrada', 'disponible_desde' => $desde, 'cierra' => $cierra,
-                'mensaje' => 'El día de esta cita ya terminó: ya no se puede iniciar la atención. Si el cliente no asistió, registra la ausencia'];
-        }
+        // Sin cierre: una cita confirmada que nadie inició (p. ej. días atrás) puede registrarse con retraso para atenderla y cobrarla.
+        // La trazabilidad no se pierde: el evento guarda quién y CUÁNDO lo hizo (fecha real), distinta de la fecha de la cita.
         return ['permitido' => true, 'motivo' => null, 'disponible_desde' => $desde, 'cierra' => $cierra, 'mensaje' => ''];
     }
 

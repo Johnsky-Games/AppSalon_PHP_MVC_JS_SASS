@@ -212,7 +212,7 @@ final class R5DevPortalesTest extends R5DevPortalesCase
     {
         // Pidió una pantalla del equipo sin sesión y entra como cliente: va al inicio del cliente, nunca a la pantalla del equipo.
         $n = new Navegador(self::$base);
-        $this->assertSame([302, '/'], [($r = $n->get('/admin/finanzas'))['status'], $r['location']]);
+        $this->assertSame([302, '/equipo/login'], [($r = $n->get('/admin/finanzas'))['status'], $r['location']]);
         self::q('TRUNCATE intentos_login');
         $l = $n->login('cliente', self::$cliente['email'], self::$cliente['password']);
         $this->assertSame('/cita', $l['location']);

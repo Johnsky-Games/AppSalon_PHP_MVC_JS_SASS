@@ -66,6 +66,10 @@ final class R2bReversionTest extends R2bCase
         $db->query("INSERT INTO colaborador_invitaciones(colaborador_id,token_hash,expira_en) VALUES (LAST_INSERT_ID(),'" . str_repeat('a', 64) . "',DATE_ADD(UTC_TIMESTAMP(),INTERVAL 7 DAY))");
         $db->query("INSERT INTO operaciones_idempotentes(scope,actor,clave_hash,huella,expira_en) VALUES ('x','anonimo:1','" . str_repeat('b', 64) . "','" . str_repeat('c', 64) . "',DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 DAY))");
         $db->close();
+        // Ronda 5: las migraciones 023-026 son posteriores a la 022. Estas pruebas tratan la reversión de la 022, así que se deja la base en
+        // la 022 revirtiendo primero las nuevas (sin datos de negocio, su reversión es segura y completa).
+        $r = $this->down($nombre, ['--hasta=023_atencion_citas']);
+        if ($r['exit'] !== 0) { throw new \RuntimeException('No se pudo dejar la base en la migración 022: ' . $r['out']); }
         return $nombre;
     }
 

@@ -635,6 +635,9 @@ final class R4Test extends R3Case
         // Coincidencias revisadas a mano y descartadas (no hablan de nombre/teléfono): el correo del equipo «quedará verificado» (se verifica el CORREO,
         // que es lo que prueba el enlace), el comentario sobre la identidad de la SESIÓN y una fila de auditoría técnica sobre bloqueos de reservas.
         $sospechosos = array_values(array_filter($sospechosos, fn($s) => !preg_match('~^(views/equipo/aceptar\.php:19 |controllers/APIController\.php:262 |docs/AUDITORIA\.md:50 )~', $s)));
+        // Ronda 5 (revisado a mano): la «verificación» de caja/cobros es la de una TRANSFERENCIA por una persona del equipo, con su nombre como responsable;
+        // no afirma que el nombre o el teléfono de nadie estén verificados.
+        $sospechosos = array_values(array_filter($sospechosos, fn($s) => !preg_match('~^(views/caja/|services/(CobroCita|Comprobante)Service\.php:|docs/(CAJA_Y_COBROS|R5_[A-Z_]+)\.md:)~', $s)));
         $this->assertSame([], $sospechosos, "textos que podrían presentar nombre/teléfono como verificados:\n" . implode("\n", $sospechosos));
         // Pantallas reales: formulario de activación, éxito, perfil y CRM.
         $email = self::correo('verif');

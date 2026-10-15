@@ -126,8 +126,8 @@ final class AutorizacionHttpTest extends QaCase
     /**
      * Contrato exacto para el anónimo (isAuth): navegación → 302 con Location `/` (acceso de clientes, el único público; el portal del
      * equipo solo se conoce por la marca de una sesión previa); rutas /api → 401 JSON. Nunca contenido.
-     * OBSERVACIÓN: las pantallas del equipo (/admin…) mandan al anónimo a `/` y no a `/equipo/login`; es coherente con el código
-     * (sin sesión no se sabe a qué portal iba) y `/` enlaza el acceso del equipo, así que no se considera defecto.
+     * RONDA 5 (login_por_ruta): las pantallas EXCLUSIVAS del equipo (/agenda, /caja, /admin…, /profesionales, /servicios) mandan al
+     * anónimo a `/equipo/login`; las compartidas o del cliente (/perfil, /cita, /mis-citas) siguen yendo a `/`.
      */
     public function test_anonimo_es_redirigido_a_la_raiz_o_401_json_exacto_nunca_ve_contenido(): void
     {
@@ -135,11 +135,13 @@ final class AutorizacionHttpTest extends QaCase
         $fallos = [];
         foreach (array_keys(self::RUTAS) as $ruta) {
             $r = $n->get($ruta);
-            if (!($r['status'] === 302 && $r['location'] === '/' && $r['body'] === '')) { $fallos[] = "$ruta => {$r['status']} {$r['location']}"; }
+            $esperado = preg_match('~^/(agenda|caja|admin|profesionales|servicios)(/|\?|$)~', $ruta) ? '/equipo/login' : '/';
+            if (!($r['status'] === 302 && $r['location'] === $esperado && $r['body'] === '')) { $fallos[] = "$ruta => {$r['status']} {$r['location']} (esperado $esperado)"; }
         }
         foreach (['/admin/equipo/ficha?id=1', '/admin/clientes/ficha?id=1', '/perfil'] as $ruta) {
             $r = $n->get($ruta);
-            if (!($r['status'] === 302 && $r['location'] === '/' && $r['body'] === '')) { $fallos[] = "$ruta => {$r['status']} {$r['location']}"; }
+            $esperado = $ruta === '/perfil' ? '/' : '/equipo/login';
+            if (!($r['status'] === 302 && $r['location'] === $esperado && $r['body'] === '')) { $fallos[] = "$ruta => {$r['status']} {$r['location']} (esperado $esperado)"; }
         }
         $this->assertSame([], $fallos);
         $r = $n->get('/api/mis-citas');

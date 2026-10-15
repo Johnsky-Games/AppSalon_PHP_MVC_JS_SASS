@@ -72,7 +72,7 @@ return [
     // CAMBIO DE CONTRATO (ronda 2, DEF-R2-02 corregido): un id inválido ya no redirige a /admin (403 para casi todos) sino al inicio del portal
     // de la sesión (destino_retorno_seguro → inicio_portal): '@inicio' = /admin (propietario, gerente, recepción), /agenda (profesional),
     // /admin/finanzas (finanzas), /cita (cliente).
-    ['m' => 'POST', 'p' => '/api/eliminar',          'g' => 'sesion', 'orden' => 'csrf', 'csrf' => 'exigir', 'ok' => [302, 'redir', '@inicio']],
+    ['m' => 'POST', 'p' => '/api/eliminar',          'g' => 'sesion', 'orden' => 'csrf', 'csrf' => 'exigir', 'ok' => [302, 'redir', '@inicio'], 'ok_por_rol' => ['cliente' => [302, 'redir', '/mis-citas']]],
     ['m' => 'POST', 'p' => '/api/pagos/iniciar',     'g' => 'sesion', 'orden' => 'auth', 'csrf' => 'json_api', 'csrf_json' => ['resultado' => false, 'status' => 'forbidden', 'error' => 'Token CSRF inválido o ausente'], 'ok' => [422, 'json', ['resultado' => false, 'status' => 'invalid', 'errores' => ['El identificador de la cita es obligatorio y debe ser un entero positivo.']]],
         'unauth_json' => ['resultado' => false, 'status' => 'unauthorized', 'error' => 'No autenticado']],
 

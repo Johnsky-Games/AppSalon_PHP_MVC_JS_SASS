@@ -102,8 +102,8 @@ final class R2bRedireccionTest extends R2bCase
         $this->assertTrue($this->localSeguro($loc), "«{$caso}»: Location no es una ruta local segura: " . json_encode($loc));
         $this->assertArrayNotHasKey('set-cookie-inyectada', $r['headers']);
         foreach ($r['headers']['set-cookie'] ?? [] as $c) { $this->assertStringNotContainsString('x=1', $c, 'inyección de cabeceras mediante CRLF'); }
-        if ($esperado === 'inicio') { $this->assertSame(self::$p['cliente']['inicio'], $loc, "«{$caso}»"); }
-        elseif ($esperado !== 'cualquiera-seguro') { $this->assertSame($esperado, $loc, "«{$caso}»"); }
+        // Ronda 5: el destino tras cancelar lo fija el catálogo central de destinos del portal (nunca el Referer): siempre «mis citas».
+        $this->assertSame('/mis-citas', parse_url($loc, PHP_URL_PATH), "«{$caso}» ($esperado esperado antes de la ronda 5)");
     }
 
     public static function referersProveedor(): array
@@ -123,7 +123,7 @@ final class R2bRedireccionTest extends R2bCase
         foreach (['X-Forwarded-Host: evil.example', 'Forwarded: host=evil.example', 'X-Host: evil.example', 'X-Original-Url: http://evil.example/x'] as $h) {
             $r = $this->cancelar('cliente', 'http://evil.example/steal', [$h]);
             $this->assertSame(302, $r['status']);
-            $this->assertSame(self::$p['cliente']['inicio'], $r['location'], "$h permitió un Referer externo");
+            $this->assertSame('/mis-citas', $r['location'], "$h permitió un Referer externo");   // ronda 5: destino central del cliente
         }
         // Host con userinfo o con salto de línea codificado en el puerto.
         foreach (['Host: 127.0.0.1:' . self::$puerto . '@evil.example', 'Host: evil.example:' . self::$puerto . '/../'] as $h) {
@@ -139,7 +139,7 @@ final class R2bRedireccionTest extends R2bCase
             foreach (['99999999', 'no-es-un-id', '', '0', '-5', '1e3'] as $id) {
                 $r = $this->cancelar($quien, null, [], $id);
                 $this->assertSame(302, $r['status'], "$quien / id «{$id}»");
-                $this->assertSame(self::$p[$quien]['inicio'], $r['location'], "$quien / id «{$id}»");
+                $this->assertSame($quien === 'cliente' ? '/mis-citas' : self::$p[$quien]['inicio'], $r['location'], "$quien / id «{$id}»");   // ronda 5: el cliente vuelve a «mis citas»
                 $this->assertSame(200, $this->sesion($quien)->get($r['location'])['status'], "$quien: el destino {$r['location']} no es accesible para quien lo recibe (callejón)");
             }
         }

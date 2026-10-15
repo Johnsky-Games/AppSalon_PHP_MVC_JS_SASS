@@ -147,7 +147,7 @@ final class R5DevAgendaTest extends R5DevAgendaCase
         $this->assertSame(422, $r['status']);
         $this->assertStringContainsString('text/html', $r['headers']['content-type'][0] ?? '');
         $this->assertStringContainsString('<html', strtolower($r['body']), 'la respuesta es una página completa, no HTML suelto');
-        $this->assertStringContainsString('ui-error-shell', $r['body']);
+        $this->assertStringContainsString('ui-error-card', $r['body']);   // tarjeta de error dentro del layout del equipo
         $this->assertStringContainsString('No se pudo actualizar la cita.', $r['body']);
         $this->assertStringContainsString('disponible desde las 14:00', $r['body']);
         foreach (self::enlaces($r['body']) as $href) {
@@ -170,21 +170,19 @@ final class R5DevAgendaTest extends R5DevAgendaCase
         foreach (self::enlaces($r['body']) as $href) { $this->assertStringNotContainsString('/mis-citas', $href); }
     }
 
-    public function test_cita_de_un_dia_anterior_no_se_puede_iniciar_pero_si_registrar_la_ausencia(): void
+    public function test_cita_de_un_dia_anterior_sin_iniciar_se_puede_registrar_con_retraso_y_tambien_la_ausencia(): void
     {
         $n = $this->dueno();
         $c = $this->cita(self::diaNegocio(-1), '10:00:00');
+        $d = $this->cita(self::diaNegocio(-1), '11:00:00');
         $pag = $n->get('/agenda?desde=' . self::diaNegocio(-1) . '&hasta=' . self::diaNegocio(0));
-        $this->assertNull(self::formulario($pag['body'], $c, 'en_servicio'));
-        $this->assertStringContainsString('El día de esta cita ya terminó', $pag['body']);
-        $form = self::formulario($pag['body'], $c, 'no_asistio');
-        $this->assertNotNull($form, 'una cita pasada sí admite registrar la ausencia');
+        $this->assertNotNull(self::formulario($pag['body'], $c, 'en_servicio'), 'sin cierre de ventana: se puede iniciar con retraso');
+        $this->assertNotNull($ausencia = self::formulario($pag['body'], $d, 'no_asistio'), 'una cita pasada también admite registrar la ausencia');
         $r = self::postEstado($n, $c, 'en_servicio');
-        $this->assertSame(422, $r['status']);
-        $this->assertStringContainsString('El día de esta cita ya terminó', $r['body']);
-        $this->assertSame('confirmada', self::escalar('SELECT estado FROM citas WHERE id=?', [$c]));
-        $this->assertSame(302, $this->enviarFormulario($n, $form)['status']);
-        $this->assertSame('no_asistio', self::escalar('SELECT estado FROM citas WHERE id=?', [$c]));
+        $this->assertSame(302, $r['status']);
+        $this->assertSame('en_servicio', self::escalar('SELECT estado FROM citas WHERE id=?', [$c]));
+        $this->assertSame(302, $this->enviarFormulario($n, $ausencia)['status']);
+        $this->assertSame('no_asistio', self::escalar('SELECT estado FROM citas WHERE id=?', [$d]));
     }
 
     // ------------------------------------------------------------------ finalización y estados terminales

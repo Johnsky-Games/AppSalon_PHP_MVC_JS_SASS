@@ -50,12 +50,24 @@ function opciones_volver_portal(): array
  *  · `cliente` pedido con sesión del equipo: HTML → redirige al inicio del equipo con aviso; JSON/API → 403 con `codigo: portal_incorrecto`.
  *  · `equipo` pedido con sesión de cliente: 403 (HTML con «Volver» al portal del cliente; JSON).
  */
+/** ¿La sesión actual sigue vigente? Mismas comprobaciones que isAuth(), pero sin redirigir ni responder. */
+function sesion_vigente_sin_responder(): bool
+{
+    $id = (int)($_SESSION['id'] ?? 0);
+    if ($id <= 0) { return false; }
+    $contexto = (new \Services\AuthorizationService())->contexto($id);
+    if (!$contexto) { return false; }
+    return \Services\AuthorizationService::sesionVigente($contexto, portal_sesion($contexto)) && (int)$contexto['confirmado'] === 1 && version_sesion_vigente($contexto);
+}
+
 function exigir_portal(string $portal): void
 {
     iniciar_sesion_segura();
     // Sin sesión no hay portal que comparar: responde la autenticación propia de la acción (login del portal o 401 JSON de su contrato).
     if (($_SESSION['login'] ?? false) !== true) { return; }
-    isAuth();
+    // Sesión sin cuenta, caducada o invalidada: tampoco hay portal fiable que comparar. Responde la autenticación propia de la acción
+    // (conserva el cuerpo JSON y los destinos de su contrato); aquí no se responde nada en su lugar.
+    if (!sesion_vigente_sin_responder()) { return; }
     if (portal_sesion() === $portal) { return; }
     $inicio = inicio_portal();
     if ($portal === 'cliente') {

@@ -17,7 +17,7 @@ trait MatrizHttp
 {
     /** Tablas que NO entran en la huella: migraciones (esquema), equipo_mutex (semilla del candado) e intentos_login
      *  (bitácora legítima del limitador de intentos: un login fallido debe contarse). */
-    private const TABLAS_EXCLUIDAS = ['migraciones', 'equipo_mutex', 'intentos_login'];
+    private const TABLAS_EXCLUIDAS = ['migraciones', 'equipo_mutex', 'intentos_login', 'exportaciones_auditoria_general'];   // ronda 5: la auditoría de exportaciones (también de las denegadas) es bitácora legítima, como intentos_login
 
     public const SMTP_PUERTO = 2599;
 

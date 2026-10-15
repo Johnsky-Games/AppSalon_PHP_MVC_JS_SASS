@@ -380,7 +380,9 @@ final class R2bAgendaTest extends R2bCase
         $this->assertGreaterThan(0, $pid);
         $this->assertSame(0, (int)self::escalar('SELECT activo FROM profesionales WHERE id=?', [$pid]), 'la ficha nueva debe nacer inactiva');
         $this->assertSame(5, (int)self::escalar('SELECT COUNT(*) FROM horarios_profesionales WHERE profesionalId=?', [$pid]), 'el horario del asistente queda guardado');
+        // El asistente de este caso configura lunes a viernes: se usa un día hábil (con fecha(9) fija la prueba fallaba cuando caía en fin de semana).
         $dia = self::fecha(9);
+        while ((int)(new \DateTimeImmutable($dia))->format('N') > 5) { $dia = (new \DateTimeImmutable($dia))->modify('+1 day')->format('Y-m-d'); }
         // Catálogo y disponibilidad vistos por una cliente.
         $c = $this->nav('cliente');
         $profs = json_decode($c->get('/api/profesionales?servicios=' . self::$s1)['body'], true);

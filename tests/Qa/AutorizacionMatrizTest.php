@@ -61,6 +61,16 @@ final class AutorizacionMatrizTest extends QaCase
         return match (self::personas()[$persona]['rol'] ?? 'cliente') { 'cliente' => '/cita', 'profesional' => '/agenda', 'finanzas' => '/admin/finanzas', default => '/admin' };
     }
 
+    /** Ronda 5 (login_por_ruta): un anónimo en una pantalla EXCLUSIVA del equipo va al acceso del equipo; en el resto, a la raíz. */
+    private static function loginAnonimo(string $ruta): string
+    {
+        $camino = (string)parse_url($ruta, PHP_URL_PATH);
+        foreach (['/agenda', '/caja', '/admin', '/profesionales', '/servicios'] as $prefijo) {
+            if ($camino === $prefijo || str_starts_with($camino, $prefijo . '/')) { return '/equipo/login'; }
+        }
+        return '/';
+    }
+
     private static function etiqueta(array $r): string { return $r['m'] . ' ' . $r['p']; }
 
     /** Normaliza [status, tipo, extra] → ['s','k','x']. */
@@ -97,9 +107,20 @@ final class AutorizacionMatrizTest extends QaCase
                 }
                 return ['s' => 401, 'k' => 'jsonx', 'x' => self::J_NOAUTH, 'denegado' => true];
             }
-            return ['s' => 302, 'k' => 'redir', 'x' => $per['cat'] === 'anonimo' ? '/' : $per['destino'], 'denegado' => true];
+            return ['s' => 302, 'k' => 'redir', 'x' => $per['cat'] === 'anonimo' ? self::loginAnonimo($r['p']) : $per['destino'], 'denegado' => true];
         }
         $rol = $per['rol'];
+        // Ronda 5 (separación de portales): las pantallas y API PERSONALES del cliente no se abren con una sesión del equipo.
+        $camino = (string)parse_url($r['p'], PHP_URL_PATH);
+        $soloCliente = ['GET' => ['/cita', '/mis-citas', '/mi-bienestar', '/api/mis-citas', '/api/disponibilidad', '/api/profesionales'], 'POST' => ['/mi-bienestar', '/api/citas']];
+        if ($rol !== 'cliente' && in_array($camino, $soloCliente[$r['m']] ?? [], true)) {
+            if ($json) {
+                return ['s' => 403, 'k' => 'jsonx', 'denegado' => true, 'x' => ['resultado' => false, 'status' => 'forbidden', 'codigo' => 'portal_incorrecto',
+                    'error' => 'Esa pantalla es del portal de clientes. Estás trabajando en el portal del equipo; para reservar o ver tus citas personales, cierra sesión e ingresa por el acceso de clientes.',
+                    'destino' => self::inicioDe($persona)]];
+            }
+            return ['s' => 302, 'k' => 'redir', 'x' => '@inicio', 'denegado' => true];
+        }
         if ($r['g'] === 'permiso' && !in_array($rol, $r['roles'], true)) {
             if ($json) { return ['s' => 403, 'k' => 'jsonx', 'x' => isset($r['deny_msg'][$rol]) ? ['resultado' => false, 'error' => $r['deny_msg'][$rol]] : self::J_PERM, 'denegado' => true]; }
             return ['s' => 403, 'k' => 'html', 'x' => [$r['deny_msg'][$rol] ?? self::M_PERM, self::T_403], 'denegado' => true];
@@ -591,10 +612,16 @@ final class AutorizacionMatrizTest extends QaCase
             if ($per['cat'] !== 'valida') { continue; }
             $x = $this->ejecutar($persona, ['m' => 'GET', 'p' => '/api/mis-citas']);
             $j = json_decode($x['r']['body'], true);
+            $esCliente = $per['rol'] === 'cliente';
+            if (!$esCliente) {   // ronda 5: una sesión del equipo no recibe las citas personales (ni vacías): 403 portal_incorrecto
+                $this->assertSame(403, $x['r']['status'], $persona);
+                $this->assertSame('portal_incorrecto', $j['codigo'] ?? null, $persona);
+                $this->assertArrayNotHasKey('citas', $j, $persona);
+                continue;
+            }
             $this->assertSame(200, $x['r']['status'], $persona);
             $ids = array_map('intval', array_column($j['citas'], 'id'));
             sort($ids);
-            $esCliente = $per['rol'] === 'cliente';
             $this->assertSame($esCliente ? $propias : [], $ids, "$persona: /api/mis-citas debe listar exactamente sus citas");
             foreach ($j['citas'] as $c) { $this->assertSame((string)self::$P['cliente']['id'], (string)$c['usuarioId'], "$persona: cita ajena en /api/mis-citas"); }
             $y = $this->ejecutar($persona, ['m' => 'GET', 'p' => '/api/profesionales']);

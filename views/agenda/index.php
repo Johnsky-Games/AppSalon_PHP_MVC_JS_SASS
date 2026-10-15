@@ -25,7 +25,7 @@ $etiquetaEstado = static fn(string $e): string => ReglaAtencion::etiqueta($e);
     <details class="agenda-leyenda">
         <summary>¿Qué significa cada estado?</summary>
         <ul>
-            <li><span class="agenda-estado agenda-estado--confirmada">Confirmada</span> Reservada, aún sin iniciar. Se puede iniciar desde <?php echo (int)ReglaAtencion::ADELANTO_INICIO_MINUTOS; ?> minutos antes de la hora y hasta el final de ese día.</li>
+            <li><span class="agenda-estado agenda-estado--confirmada">Confirmada</span> Reservada, aún sin iniciar. Se puede iniciar desde <?php echo (int)ReglaAtencion::ADELANTO_INICIO_MINUTOS; ?> minutos antes de la hora y, si nadie la inició, también después (queda registrado quién y cuándo lo hizo).</li>
             <li><span class="agenda-estado agenda-estado--en_servicio">En servicio</span> La atención está en curso.</li>
             <li><span class="agenda-estado agenda-estado--completada">Atendida</span> Atención finalizada. El cobro es independiente.</li>
             <li><span class="agenda-estado agenda-estado--no_asistio">No asistió</span> Ausencia registrada.</li>

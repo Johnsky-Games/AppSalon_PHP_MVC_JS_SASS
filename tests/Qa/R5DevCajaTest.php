@@ -114,8 +114,10 @@ final class R5DevCajaTest extends QaCase
             foreach ($rutas as $r) {
                 $x = $n->get($r);
                 $this->assertSame(403, $x['status'], "$quien $r");
-                $this->assertStringNotContainsString('href="/mis-citas"', $x['body'], "$quien $r no manda al portal del cliente");
-                $this->assertStringNotContainsString('Reservar una cita', $x['body']);
+                if (!str_contains($quien, 'cliente')) {   // a quien pertenece al portal del cliente su propio menú le corresponde; el equipo nunca ve enlaces del cliente
+                    $this->assertStringNotContainsString('href="/mis-citas"', $x['body'], "$quien $r no manda al portal del cliente");
+                    $this->assertStringNotContainsString('Reservar una cita', $x['body']);
+                }
             }
             $csrf = $n->csrf('/perfil');
             $x = $n->post('/caja/cita/cobrar', ['csrf_token' => $csrf, 'cita_id' => $cita, 'metodo' => 'efectivo', 'monto' => '1.00', 'idem_key' => bin2hex(random_bytes(16))]);

@@ -124,13 +124,11 @@ final class R5AtencionCitaIntegrationTest extends TestCase
         $this->assertTrue($this->mover($id, 'en_servicio', '2030-01-07 12:00:00')['resultado'], 'exactamente 60 minutos antes');
     }
 
-    public function testFronteraDelDiaLaVentanaTerminaAMedianocheYUnaCitaDeMadrugadaSeAbreLaVispera(): void
+    public function testFronteraDelDiaSinCierreYUnaCitaDeMadrugadaSeAbreLaVispera(): void
     {
         $ayer = $this->cita('2030-01-06', '23:30');
-        $r = $this->mover($ayer, 'en_servicio', '2030-01-07 00:00:00');
-        $this->assertSame(422, $r['httpCode']);
-        $this->assertStringContainsString('ya terminó', $r['error']);
-        $this->assertTrue($this->mover($ayer, 'en_servicio', '2030-01-06 23:59:59')['resultado']);
+        // Sin cierre de ventana: pasada la medianoche todavía se puede registrar (con retraso, con su fecha real en la auditoría).
+        $this->assertTrue($this->mover($ayer, 'en_servicio', '2030-01-07 00:00:00')['resultado']);
 
         $madrugada = $this->cita('2030-01-08', '00:30');
         $this->assertSame(422, $this->mover($madrugada, 'en_servicio', '2030-01-07 23:29:59')['httpCode']);

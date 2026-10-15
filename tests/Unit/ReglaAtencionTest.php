@@ -34,8 +34,8 @@ final class ReglaAtencionTest extends TestCase
             'a la hora exacta' => ['2030-01-08 11:00:00', '11:00:00', true, null],
             'ya comenzada' => ['2030-01-08 15:30:00', '11:00:00', true, null],
             'ultimo segundo del dia' => ['2030-01-08 23:59:59', '11:00:00', true, null],
-            'primer segundo del dia siguiente' => ['2030-01-09 00:00:00', '11:00:00', false, 'ventana_cerrada'],
-            'dia siguiente por la tarde' => ['2030-01-09 14:00:00', '11:00:00', false, 'ventana_cerrada'],
+            'primer segundo del dia siguiente' => ['2030-01-09 00:00:00', '11:00:00', true, null],   // sin cierre: registro con retraso
+            'dia siguiente por la tarde' => ['2030-01-09 14:00:00', '11:00:00', true, null],
             'vispera' => ['2030-01-07 12:00:00', '11:00:00', false, 'antes_de_ventana'],
             // La hora puede llegar con segundos o sin ellos.
             'hora corta HH:MM' => ['2030-01-08 10:00:00', '11:00', true, null],
@@ -69,9 +69,9 @@ final class ReglaAtencionTest extends TestCase
         // Cita a las 00:00 exactas: desde las 23:00 del día anterior.
         $this->assertFalse(ReglaAtencion::evaluarInicio('2030-01-08', '00:00:00', self::ahora('2030-01-07 22:59:59'))['permitido']);
         $this->assertTrue(ReglaAtencion::evaluarInicio('2030-01-08', '00:00:00', self::ahora('2030-01-07 23:00:00'))['permitido']);
-        // Cita a las 23:30: el día de la cita termina 30 minutos después de su inicio.
+        // Sin cierre de ventana: pasada la medianoche todavía se puede registrar con retraso.
         $this->assertTrue(ReglaAtencion::evaluarInicio('2030-01-08', '23:30:00', self::ahora('2030-01-08 23:59:59'))['permitido']);
-        $this->assertFalse(ReglaAtencion::evaluarInicio('2030-01-08', '23:30:00', self::ahora('2030-01-09 00:00:00'))['permitido']);
+        $this->assertTrue(ReglaAtencion::evaluarInicio('2030-01-08', '23:30:00', self::ahora('2030-01-09 00:00:00'))['permitido']);
     }
 
     public function test_la_zona_es_la_del_negocio_aunque_el_instante_llegue_en_otra(): void
@@ -81,7 +81,7 @@ final class ReglaAtencionTest extends TestCase
         $this->assertFalse(ReglaAtencion::evaluarInicio('2030-01-08', '11:00:00', self::ahora('2030-01-08 14:59:59', 'UTC'))['permitido']);
         // 04:59:59 UTC del día 9 == 23:59:59 del día 8 en Guayaquil: todavía es el día de la cita; 05:00:00 UTC ya no.
         $this->assertTrue(ReglaAtencion::evaluarInicio('2030-01-08', '11:00:00', self::ahora('2030-01-09 04:59:59', 'UTC'))['permitido']);
-        $this->assertSame('ventana_cerrada', ReglaAtencion::evaluarInicio('2030-01-08', '11:00:00', self::ahora('2030-01-09 05:00:00', 'UTC'))['motivo']);
+        $this->assertTrue(ReglaAtencion::evaluarInicio('2030-01-08', '11:00:00', self::ahora('2030-01-09 05:00:00', 'UTC'))['permitido'], 'sin cierre: también el día siguiente');
         // Y desde otra zona con cambio de fecha (Asia/Tokio va 14 h por delante de Guayaquil).
         $this->assertSame('antes_de_ventana', ReglaAtencion::evaluarInicio('2030-01-08', '11:00:00', self::ahora('2030-01-08 23:30:00', 'Asia/Tokyo'))['motivo']);
     }
@@ -141,8 +141,7 @@ final class ReglaAtencionTest extends TestCase
         $this->assertSame([false, 422], [$r['ok'], $r['httpCode']]);
         $this->assertStringContainsString('disponible desde las 14:00', $r['error']);
         $r = ReglaAtencion::validarTransicion('confirmada', 'en_servicio', '2030-01-07', '15:00:00', $ahora);
-        $this->assertSame([false, 422], [$r['ok'], $r['httpCode']]);
-        $this->assertStringContainsString('ya terminó', $r['error']);
+        $this->assertSame([true, 200], [$r['ok'], $r['httpCode']], 'una cita de un día anterior sin iniciar se puede registrar con retraso');
         $r = ReglaAtencion::validarTransicion('confirmada', 'no_asistio', '2030-01-08', '15:00:00', $ahora);
         $this->assertSame([false, 422], [$r['ok'], $r['httpCode']]);
         $r = ReglaAtencion::validarTransicion('completada', 'en_servicio', '2030-01-08', '07:00:00', $ahora);
