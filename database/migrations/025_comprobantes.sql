@@ -36,13 +36,14 @@ CREATE TABLE IF NOT EXISTS comprobantes (
  cobrado_centavos BIGINT NOT NULL,
  devuelto_centavos BIGINT NOT NULL,
  saldo_centavos BIGINT NOT NULL,
- contenido_json JSON NOT NULL,
+ contenido_json LONGTEXT NOT NULL COMMENT 'JSON canónico tal como se firmó; LONGTEXT (no JSON) para que MySQL no lo reordene y el SHA-256 siga verificable',
  contenido_sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
  UNIQUE KEY uq_comprobantes_codigo (codigo),
  UNIQUE KEY uq_comprobantes_serie_numero (serie, numero),
  INDEX idx_comprobantes_cita (cita_id, id),
  INDEX idx_comprobantes_pago (pago_id),
- CONSTRAINT ck_comprobantes_tipo CHECK (tipo IN ('cobro','devolucion'))
+ CONSTRAINT ck_comprobantes_tipo CHECK (tipo IN ('cobro','devolucion')),
+ CONSTRAINT ck_comprobantes_json CHECK (JSON_VALID(contenido_json))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 DROP TRIGGER IF EXISTS trg_comprobantes_no_update;

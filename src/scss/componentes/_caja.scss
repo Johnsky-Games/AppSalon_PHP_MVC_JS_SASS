@@ -1,0 +1,19 @@
+// Caja y cobros (ronda 5). Prefijo propio `caja-`.
+.caja { .campo fieldset, fieldset.campo { border: 0; padding: 0; margin: 0 0 1.6rem; legend { font-weight: 700; margin-bottom: .8rem; } label { display: inline-flex; align-items: center; gap: .6rem; margin-right: 2rem; } }
+  h2 { margin: 3rem 0 1rem; }
+  tfoot th, tfoot td { background: #f1f7f4; font-weight: 700; }
+}
+.caja-badge { display: inline-block; border-radius: 2rem; padding: .4rem 1.1rem; font-weight: 700; font-size: 1.3rem; white-space: nowrap;
+  &--ok { background: #e5f4ed; color: #1d5a45; }
+  &--aviso { background: #fff0d4; color: #6b4b0a; }
+  &--accion { background: #e4eefb; color: #1d4577; }
+  &--pendiente { background: #f4e7e8; color: #7d2a31; }
+  &--neutro { background: #eceff0; color: #3c4a50; }
+}
+.caja-acciones { display: flex; flex-wrap: wrap; gap: .8rem; align-items: flex-start; form { margin: 0; } .campo { margin-bottom: .8rem; } }
+.caja-ficha dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); gap: 1.2rem; margin: 0; padding: 1.6rem; dt { font-size: 1.3rem; opacity: .7; } dd { margin: 0; font-weight: 700; } }
+.caja-saldo strong { color: #16766c; }
+.caja-nota, .caja-activos { font-size: 1.4rem; opacity: .85; }
+.caja-lista-simple { list-style: none; padding: 0; li { padding: .6rem 0; border-bottom: 1px solid #e6ede9; } }
+.caja-form-cobro { max-width: 60rem; [hidden] { display: none !important; } }
+.ops-table tfoot td { border-bottom: 0; }

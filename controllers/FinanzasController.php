@@ -27,6 +27,7 @@ final class FinanzasController
         iniciar_sesion_segura(); exigir_permiso('finanzas.gestionar');
         exigir_csrf();
         try {
+            if (trim((string)($_POST['cita_id'] ?? '')) !== '') { throw new \InvalidArgumentException('El cobro de una cita se hace desde Caja (Cobros por cita), no con un identificador escrito aquí.'); }
             $service=new FinanzasService();
             if (($_POST['accion'] ?? '')==='configurar_comision') { (new ComisionService())->configurar((int)$_SESSION['id'],$_POST); }
             elseif (($_POST['accion'] ?? '')==='liquidar_comision') { (new ComisionService())->liquidar((int)$_SESSION['id'],$_POST); }

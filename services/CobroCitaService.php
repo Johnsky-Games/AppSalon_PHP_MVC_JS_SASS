@@ -332,6 +332,7 @@ final class CobroCitaService
         $saldo = CobroCalculo::saldo($total, $cobrado, $devuelto);
         $estadoAtencion = (string)$cita['estado'];
         $cobrable = in_array($estadoAtencion, self::ESTADOS_COBRABLES, true);
+        $estadoAtencionCobrable = $cobrable;
         $disponible = CobroCalculo::disponible($total, $cobrado, $devuelto, $pendiente);
         return [
             'cita' => [
@@ -346,6 +347,8 @@ final class CobroCitaService
             'estado' => CobroCalculo::estado($total, $cobrado, $devuelto, $pendiente),
             'intento_en_linea' => $enLinea, 'cobrable' => $cobrable && !$enLinea && $disponible > 0 && $total > 0,
             'anticipo_sin_resolver' => !$cobrable && ($cobrado - $devuelto) > 0,
+            'anticipo_sin_resolver_centavos' => $cobrable ? 0 : max(0, $cobrado - $devuelto),
+            'por_cobrar_centavos' => $estadoAtencionCobrable ? max(0, $saldo) : 0,
         ];
     }
 

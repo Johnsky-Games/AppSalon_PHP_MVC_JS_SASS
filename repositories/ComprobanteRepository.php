@@ -13,6 +13,9 @@ class ComprobanteRepository
      */
     public function siguienteNumero(string $serie): int
     {
+        // Autorreparación: si la fila del contador falta (p. ej. una base vaciada por una herramienta), se reconstruye desde el último
+        // comprobante emitido; nunca desde cero, para no repetir números.
+        $this->repo->consulta('INSERT IGNORE INTO comprobantes_secuencia (serie,ultimo) SELECT ?,COALESCE(MAX(numero),0) FROM comprobantes WHERE serie=?', 'ss', [$serie, $serie]);
         $fila = $this->repo->consulta('SELECT ultimo FROM comprobantes_secuencia WHERE serie=? FOR UPDATE', 's', [$serie])[0] ?? null;
         if (!$fila) { throw new PersistenceException('La serie de comprobantes no está configurada.'); }
         $n = (int)$fila['ultimo'] + 1;
