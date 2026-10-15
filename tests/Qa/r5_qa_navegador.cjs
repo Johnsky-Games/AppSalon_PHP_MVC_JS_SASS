@@ -167,20 +167,21 @@ const FN = {
         if (!(await page.$(selForm))) throw new Error('sin formulario ' + selForm);
         if (preparar) await preparar();
         const nav = page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 20000 }).catch(() => {});
+        await page.evaluate(() => { try { sessionStorage.removeItem('__r5_envio'); } catch (e) {} }).catch(() => {});   // sin restos de pasos anteriores
         const r = await page.evaluate(async sel => {
           const f = document.querySelector(sel);
           const b = f.querySelector('button[type=submit],input[type=submit],button:not([type])');
           const leer = () => ({ disabled: b.disabled, busy: b.getAttribute('aria-busy'), texto: (b.textContent || b.value).trim(), formBusy: f.getAttribute('aria-busy') });
+          // TODO EN EL MISMO TURNO SÍNCRONO (la navegación no puede interponerse): primer clic, estado inmediato, y varios envíos adicionales
+          // (clics extra y requestSubmit) que una protección real contra doble envío debe ignorar. Solo los POST de red cuentan como envíos.
           b.click();
           const t0 = leer();
-          // La navegación puede destruir este contexto antes de devolver el resultado: el estado se guarda en sessionStorage (sobrevive a la navegación).
-          try { sessionStorage.setItem('__r5_envio', JSON.stringify({ t0, t1: t0 })); } catch (e) {}
-          await new Promise(r => setTimeout(r, 40));
-          let t1; try { t1 = leer(); } catch (e) { t1 = t0; }
-          try { sessionStorage.setItem('__r5_envio', JSON.stringify({ t0, t1 })); } catch (e) {}
           b.click(); b.click();
           if (f.requestSubmit) { try { f.requestSubmit(); } catch (e) {} }
-          return { t0, t1 };
+          const t1 = leer();
+          // El resultado se guarda también en sessionStorage (sobrevive a la navegación por si este contexto muere antes de responder).
+          try { sessionStorage.setItem('__r5_envio', JSON.stringify({ t0, t1, via: 'sessionStorage' })); } catch (e) {}
+          return { t0, t1, via: 'directo' };
         }, selForm).catch(e => ({ error: String(e.message).slice(0, 150) }));
         await nav; await esperar(400);
         if (r && r.error) {   // el contexto murió por la navegación: se recupera lo que la página dejó en sessionStorage

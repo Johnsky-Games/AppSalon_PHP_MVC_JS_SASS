@@ -604,6 +604,38 @@ final class R5QaCobroTest extends R5Case
         $this->conciliado();
     }
 
+    /** Req C3 (revisión independiente de comisiones): un cambio de tarifa entre pagos NO reescribe el pasado ni mezcla tarifas: cada pago devenga a la tarifa vigente. */
+    public function test_C3_cambio_de_tarifa_entre_pagos_parciales_no_mezcla_tarifas(): void
+    {
+        $c = $this->cita([['Servicio tarifa', '20.00']]);
+        $n = $this->eq('dueno');
+        $pro = self::$e['proA']['profesional_id'];
+        $this->aceptado($this->cobrar($n, $c, ['monto' => 1000, 'metodo' => 'efectivo', 'recibido' => 1000]), 'primer pago $10 al 10 %');
+        self::q('UPDATE comisiones_config SET porcentaje_pb=2000 WHERE profesional_id=?', [$pro]);
+        try {
+            $this->aceptado($this->cobrar($n, $c, ['monto' => 1000, 'metodo' => 'efectivo', 'recibido' => 1000]), 'segundo pago $10 al 20 %');
+        } finally { self::q('UPDATE comisiones_config SET porcentaje_pb=1000 WHERE profesional_id=?', [$pro]); }
+        $com = (int)self::escalar("SELECT COALESCE(SUM(m.monto_centavos),0) FROM comisiones_movimientos m JOIN pagos p ON p.id=m.pago_id WHERE m.tipo='devengo' AND p.cita_id=?", [$c]);
+        $this->assertSame(100 + 200, $com, 'primer pago al 10 % ($1.00) + segundo al 20 % ($2.00)');
+        $this->conciliado();
+    }
+
+    /** Req C4 (revisión independiente): cobrar, devolver parte y volver a cobrar el saldo: la comisión neta es el % de lo realmente retenido, sin deriva. */
+    public function test_C4_pago_despues_de_devolucion_parcial_mantiene_la_comision_neta_exacta(): void
+    {
+        $c = $this->cita([['Servicio devol', '30.00']]);
+        $n = $this->eq('dueno');
+        $this->aceptado($this->cobrar($n, $c, ['monto' => 3000, 'metodo' => 'efectivo', 'recibido' => 3000]), 'cobro total $30');
+        $this->aceptado($this->devolver($n, $c, 1000), 'devolución $10');
+        $this->aceptado($this->cobrar($n, $c, ['monto' => 1000, 'metodo' => 'efectivo', 'recibido' => 1000, 'clave' => bin2hex(random_bytes(16))]), 'nuevo cobro del saldo $10');
+        $f = self::resumenFinanciero($c);
+        $this->assertSame(3000, $f['neto']);
+        $this->assertSame('pagado', $f['estado_pago']);
+        $neta = (int)self::escalar("SELECT COALESCE(SUM(m.monto_centavos),0) FROM comisiones_movimientos m JOIN pagos p ON p.id=m.pago_id WHERE p.cita_id=? AND m.estado<>'anulada'", [$c]);
+        $this->assertSame(300, $neta, 'comisión neta = 10 % de los $30.00 retenidos');
+        $this->conciliado();
+    }
+
     /** Req C3 (criterio QA, comisiones): 10 pagos parciales de $0.15 sobre $1.50 con comisión del 10 % no pierden céntimos por redondeo: Σ comisión = 10 % del cobrado ±1 centavo. */
     public function test_C3_redondeo_de_comision_no_deriva_con_pagos_parciales(): void
     {

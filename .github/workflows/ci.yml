@@ -95,7 +95,8 @@ jobs:
       # La validación independiente de los XLSX exportados (ronda 5) usa dos lectores ajenos a nuestro escritor: openpyxl y LibreOffice.
       - name: Instalar lectores independientes de XLSX (openpyxl y LibreOffice Calc)
         run: |
-          python3 -m pip install --user 'openpyxl==3.1.5'
+          # Instalación del sistema: el QA lanza python3 con un entorno mínimo (sin HOME) y no vería el sitio de usuario.
+          sudo python3 -m pip install --break-system-packages 'openpyxl==3.1.5'
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends libreoffice-calc
           python3 -c "import openpyxl; print('openpyxl', openpyxl.__version__)"
