@@ -254,7 +254,7 @@ final class R5QaAtencionTest extends R5Case
             $r = self::enviar($n, $f, [], [], $b);
             $this->assertContains($r['status'], [302, 303], "$rol: " . substr(self::texto($r['body']), 0, 200));
             $loc = self::ubicacion($r);
-            $this->assertSame('/caja/cita', self::pathDe($loc), "$rol: destino inesperado «$loc»");
+            $this->assertSame('/caja/cita', self::pathDe($loc), "$rol: destino inesperado «{$loc}»");
             $this->assertSame((string)$c, self::param($loc, 'id'), "$rol: el cobro debe ser de la cita finalizada");
             $this->assertSame('completada', $this->estado($c));
             $fin = $n->get($loc);
@@ -318,7 +318,7 @@ final class R5QaAtencionTest extends R5Case
         $r = $dueno->get("/agenda/cita?id=$c");
         $this->assertSame(200, $r['status'], 'GET /agenda/cita?id=' . $c . ' → ' . $r['status']);
         $txt = self::texto($r['body']);
-        foreach (['Clienta', 'Quinta', 'ProA', 'Corte Q5', '20.00'] as $esperado) { $this->assertStringContainsString($esperado, $txt, "el detalle no muestra «$esperado»"); }
+        foreach (['Clienta', 'Quinta', 'ProA', 'Corte Q5', '20.00'] as $esperado) { $this->assertStringContainsString($esperado, $txt, "el detalle no muestra «{$esperado}»"); }
         $this->assertMatchesRegularExpression('/completada/iu', $txt);
         $this->assertMatchesRegularExpression('/pago|pendiente/iu', $txt, 'el detalle no muestra el estado de pago');
         $this->assertNotEmpty(array_filter(self::destinos($r['body']), fn($d) => str_starts_with(self::pathDe($d), '/caja')), 'sin acceso a cobro/pagos/comprobante para quien tiene finanzas.gestionar');
@@ -435,7 +435,7 @@ final class R5QaAtencionTest extends R5Case
                 }
             }
         }
-        $this->assertSame([], $malas, "violaciones de la máquina de estados:\n" . implode("\n", $malas));
+        $this->sinFallos($malas, "violaciones de la máquina de estados:");
     }
 
     /**

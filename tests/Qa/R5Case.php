@@ -197,6 +197,12 @@ abstract class R5Case extends QaCase
         return $p;
     }
 
+    /** Aserción de "lista de hallazgos vacía" con mensaje legible (evita el volcado de diferencias de assertSame). @param string[] $hallazgos */
+    protected function sinFallos(array $hallazgos, string $titulo = ''): void
+    {
+        $this->assertTrue($hallazgos === [], ($titulo !== '' ? $titulo . "\n" : '') . implode("\n", $hallazgos));
+    }
+
     // ====================================================================================================== HTML
 
     protected static function xp(string $html): \DOMXPath
