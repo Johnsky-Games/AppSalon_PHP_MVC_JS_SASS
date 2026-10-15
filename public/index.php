@@ -138,6 +138,9 @@ $router->get('/admin/clientes/auditoria', [\Controllers\CrmController::class, 'a
 $router->get('/admin/clientes/nuevo', [\Controllers\AltaClienteController::class, 'nuevo']);
 $router->post('/admin/clientes/nuevo', [\Controllers\AltaClienteController::class, 'nuevo']);
 
+// Ronda 5: rutas por módulo (agenda/atención, caja y cobros, portales y navegación, CRM y exportaciones).
+foreach (['agenda', 'caja', 'portales', 'crm'] as $modulo) { require __DIR__ . '/../includes/rutas/' . $modulo . '.php'; }
+
 // Comprueba y valida las rutas, que existan y les asigna las funciones del Controlador
     emitir_cabeceras_seguridad();
     $router->comprobarRutas();

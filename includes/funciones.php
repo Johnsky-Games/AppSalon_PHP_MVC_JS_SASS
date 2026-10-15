@@ -330,3 +330,6 @@ function profesional_actual_id(): ?int
     $c = (new \Services\AuthorizationService())->contexto((int)($_SESSION['id'] ?? 0));
     return $c && portal_sesion($c) === 'equipo' && \Services\AuthorizationService::sesionVigente($c, 'equipo') && $c['profesional_id'] !== null ? (int)$c['profesional_id'] : null;
 }
+
+// Destinos centrales por portal y permiso (ronda 5).
+require_once __DIR__ . '/destinos.php';
