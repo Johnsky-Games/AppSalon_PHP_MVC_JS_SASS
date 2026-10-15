@@ -11,7 +11,7 @@
     <div class="ui-error-content">
         <p class="ui-eyebrow">ESTAMOS AQUÍ PARA AYUDARTE</p>
         <h1 id="error-title"><?php echo $errorEscape($errorDetails['title']); ?></h1>
-        <p class="ui-error-description"><?php echo $errorEscape($errorDescription); ?></p>
+        <p class="ui-error-description" role="alert"><?php echo $errorEscape($errorDescription); ?></p>
         <p class="ui-error-hint"><?php echo $errorEscape($errorDetails['hint']); ?></p>
         <div class="ui-state-actions">
             <?php if ($errorVolver !== ''): ?>
