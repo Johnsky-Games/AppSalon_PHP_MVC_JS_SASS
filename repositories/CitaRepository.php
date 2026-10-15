@@ -1663,6 +1663,13 @@ class CitaRepository
             throw new PersistenceException("Fallo en la capa de persistencia al consultar las citas del cliente.", 0, $e);
         }
     }
+    /**
+     * Solo para pruebas de concurrencia (patrón de Idempotencia::$observadorTrasReserva): se invoca con la cita ya bloqueada y leída,
+     * antes de validar y escribir, para ensanchar la ventana de carrera de forma determinista. Nulo en producción.
+     * @var (callable(): void)|null
+     */
+    public static $observadorTrasBloqueoAgenda = null;
+
     /** Operaciones de agenda: bloqueo de profesional antes de cita, igual que una reserva. */
     public function mutarAgenda(int $id, int $actorId, bool $gestiona, bool $profesionalPropio, string $operacion, array $datos, string $ahora): array
     {
@@ -1685,6 +1692,7 @@ class CitaRepository
             $fila = $stmt->get_result()->fetch_assoc(); $stmt->close();
             if (!$fila) { $db->rollback(); return $error(404, 'Cita no encontrada.'); }
             if ((string)$fila['profesionalId'] !== (string)$previa->profesionalId) { $db->rollback(); return $error(409, 'La cita cambió. Vuelve a intentarlo.'); }
+            if (self::$observadorTrasBloqueoAgenda !== null) { (self::$observadorTrasBloqueoAgenda)(); }
             $esCliente = (int)$fila['usuarioId'] === $actorId;
             $esProfesional = $profesionalPropio && $prof && (int)$prof['usuarioId'] === $actorId;
             if (!$gestiona && !(($operacion === 'reprogramar' && $esCliente) || ($operacion === 'estado' && $esProfesional))) {
@@ -1692,16 +1700,33 @@ class CitaRepository
             }
             $anterior = $fila['estado'];
             $antes = json_encode(['estado' => $anterior, 'fecha' => $fila['fecha'], 'hora' => $fila['hora_inicio'] ?: $fila['hora']], JSON_THROW_ON_ERROR);
+            $mensajeOk = 'Cita actualizada correctamente.';
+            $datosEvento = [];
             if ($operacion === 'estado') {
                 $nuevo = $datos['estado'] ?? '';
-                $transiciones = ['confirmada' => ['en_servicio', 'no_asistio'], 'en_servicio' => ['completada']];
-                if ($nuevo === $anterior) { if (!$db->commit()) throw new PersistenceException('No se pudo confirmar la operación.'); return ['resultado' => true, 'httpCode' => 200, 'mensaje' => 'Estado ya actualizado.']; }
-                if (!in_array($nuevo, $transiciones[$anterior] ?? [], true)) { $db->rollback(); return $error(409, 'Transición de estado no permitida.'); }
-                $inicio = $fila['fecha'] . ' ' . ($fila['hora_inicio'] ?: $fila['hora']);
-                if ($inicio > $ahora) { $db->rollback(); return $error(422, 'La atención todavía no ha comenzado.'); }
-                $stmt = $db->prepare('UPDATE citas SET estado = ? WHERE id = ?');
-                $stmt->bind_param('si', $nuevo, $id); if (!$stmt->execute()) throw new PersistenceException('Fallo de escritura de agenda.'); $stmt->close();
-                $despues = json_encode(['estado' => $nuevo], JSON_THROW_ON_ERROR);
+                $accion = \Classes\ReglaAtencion::accionDeTransicion($nuevo);
+                // Idempotencia: repetir la transición ya aplicada (doble clic, reintento, proceso que perdió la carrera) no escribe nada.
+                if ($nuevo === $anterior) {
+                    if (!$db->commit()) throw new PersistenceException('No se pudo confirmar la operación.');
+                    return ['resultado' => true, 'httpCode' => 200, 'idempotente' => true, 'estado' => $anterior, 'accion' => $accion, 'cita_id' => $id, 'mensaje' => 'Estado ya actualizado.'];
+                }
+                // Regla única (estado + tiempo) compartida con la agenda: lo que el botón ofrece es lo que se acepta aquí.
+                $zona = new \DateTimeZone(\Services\CitaService::TIMEZONE);
+                $ahoraDt = \DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', $ahora, $zona);
+                $validacion = \Classes\ReglaAtencion::validarTransicion((string)$anterior, (string)$nuevo, (string)$fila['fecha'], (string)($fila['hora_inicio'] ?: $fila['hora']), $ahoraDt);
+                if (!$validacion['ok']) {
+                    $db->rollback();
+                    return $error($validacion['httpCode'], $validacion['error']) + ['estado_actual' => $anterior];
+                }
+                // Compare-and-set: además del bloqueo FOR UPDATE, la escritura exige que el estado siga siendo el leído.
+                $columnas = ['en_servicio' => ['atencion_inicio_at', 'atencion_inicio_por'], 'completada' => ['atencion_fin_at', 'atencion_fin_por'], 'no_asistio' => ['ausencia_at', 'ausencia_por']][$nuevo];
+                $stmt = $db->prepare("UPDATE citas SET estado = ?, {$columnas[0]} = ?, {$columnas[1]} = ? WHERE id = ? AND estado = ?");
+                $stmt->bind_param('ssiis', $nuevo, $ahora, $actorId, $id, $anterior); if (!$stmt->execute()) throw new PersistenceException('Fallo de escritura de agenda.');
+                $filas = $stmt->affected_rows; $stmt->close();
+                if ($filas !== 1) { $db->rollback(); return $error(409, 'La cita cambió mientras se procesaba. Vuelve a abrirla para ver su estado actual.'); }
+                $despues = json_encode(['estado' => $nuevo, 'accion' => $accion, 'origen' => $gestiona ? 'gestion' : 'profesional_propio'], JSON_THROW_ON_ERROR);
+                $mensajeOk = ['iniciar' => 'Atención iniciada.', 'finalizar' => 'Atención finalizada: la cita quedó como atendida.', 'ausencia' => 'Ausencia registrada.'][$accion] ?? $mensajeOk;
+                $datosEvento = ['estado' => $nuevo, 'accion' => $accion];
             } elseif ($operacion === 'reprogramar') {
                 if ($anterior !== 'confirmada') { $db->rollback(); return $error(409, 'Sólo se reprograman citas confirmadas.'); }
                 if (($fila['fecha'] . ' ' . ($fila['hora_inicio'] ?: $fila['hora'])) <= $ahora) { $db->rollback(); return $error(422, 'La cita ya comenzó.'); }
@@ -1744,7 +1769,7 @@ class CitaRepository
             $stmt = $db->prepare('INSERT INTO agenda_eventos (citaId, actorId, tipo, antes_json, despues_json, creado_en) VALUES (?, ?, ?, ?, ?, ?)');
             $stmt->bind_param('iissss', $id, $actorId, $operacion, $antes, $despues, $ahora); if (!$stmt->execute()) throw new PersistenceException('Fallo de escritura de agenda.'); $stmt->close();
             if (!$db->commit()) throw new PersistenceException('No se pudo confirmar la operación.');
-            return ['resultado' => true, 'httpCode' => 200, 'mensaje' => 'Cita actualizada correctamente.'];
+            return ['resultado' => true, 'httpCode' => 200, 'idempotente' => false, 'cita_id' => $id, 'mensaje' => $mensajeOk] + $datosEvento;
         } catch (\Throwable $e) {
             try { $db->rollback(); } catch (\Throwable $rollbackError) { error_log('[Agenda] Conexión perdida durante rollback.'); }
             error_log('[Agenda] Operación revertida: ' . $e->getMessage());
@@ -1752,22 +1777,64 @@ class CitaRepository
         }
     }
 
-    /** Lista limitada de un período; el alcance profesional se aplica en SQL. */
-    public function listarAgenda(string $desde, string $hasta, ?int $profesionalUsuario = null): array
+    /**
+     * Lista limitada de un período; el alcance profesional se aplica en SQL. `$estado` filtra por estado de la cita (null = todos).
+     * Incluye quién inició, finalizó o registró la ausencia (nombres de las cuentas, no ids sueltos).
+     */
+    public function listarAgenda(string $desde, string $hasta, ?int $profesionalUsuario = null, ?string $estado = null): array
     {
         $db = $this->resolveDb();
         $sql = "SELECT c.*, CONCAT(u.nombre, ' ', u.apellido) cliente, p.nombre profesional_nombre,
-                (SELECT GROUP_CONCAT(COALESCE(cs.nombre_servicio, s.nombre) SEPARATOR ', ') FROM citasservicios cs LEFT JOIN servicios s ON s.id = cs.servicioId WHERE cs.citaId = c.id) servicios
+                (SELECT GROUP_CONCAT(COALESCE(cs.nombre_servicio, s.nombre) SEPARATOR ', ') FROM citasservicios cs LEFT JOIN servicios s ON s.id = cs.servicioId WHERE cs.citaId = c.id) servicios,
+                CONCAT(ui.nombre, ' ', ui.apellido) atencion_inicio_por_nombre, CONCAT(uf.nombre, ' ', uf.apellido) atencion_fin_por_nombre, CONCAT(ua.nombre, ' ', ua.apellido) ausencia_por_nombre
                 FROM citas c JOIN usuarios u ON u.id = c.usuarioId LEFT JOIN profesionales p ON p.id = c.profesionalId
+                LEFT JOIN usuarios ui ON ui.id = c.atencion_inicio_por LEFT JOIN usuarios uf ON uf.id = c.atencion_fin_por LEFT JOIN usuarios ua ON ua.id = c.ausencia_por
                 WHERE c.fecha BETWEEN ? AND ?";
-        if ($profesionalUsuario !== null) $sql .= ' AND p.usuarioId = ?';
+        $tipos = 'ss'; $valores = [$desde, $hasta];
+        if ($profesionalUsuario !== null) { $sql .= ' AND p.usuarioId = ?'; $tipos .= 'i'; $valores[] = $profesionalUsuario; }
+        if ($estado !== null) { $sql .= ' AND c.estado = ?'; $tipos .= 's'; $valores[] = $estado; }
         $sql .= ' ORDER BY c.fecha, c.hora, c.id LIMIT 500';
         $stmt = $db->prepare($sql);
         if (!$stmt) throw new PersistenceException('No se pudo consultar la agenda.');
-        if ($profesionalUsuario !== null) $stmt->bind_param('ssi', $desde, $hasta, $profesionalUsuario);
-        else $stmt->bind_param('ss', $desde, $hasta);
+        $stmt->bind_param($tipos, ...$valores);
         if (!$stmt->execute()) throw new PersistenceException('No se pudo consultar la agenda.');
         $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC); $stmt->close(); return $rows;
     }
 
+    /**
+     * Detalle de una cita para el equipo. `$profesionalUsuario` limita a la agenda propia (null = toda la agenda): una cita ajena
+     * es indistinguible de una inexistente (devuelve null). Los precios históricos solo se leen si `$conFinanzas`.
+     *
+     * @return array<string,mixed>|null cita + `servicios` (nombre, duración y, con finanzas, precio histórico) + `historial` (eventos de agenda)
+     */
+    public function obtenerDetalleAgenda(int $id, ?int $profesionalUsuario, bool $conFinanzas): ?array
+    {
+        $db = $this->resolveDb();
+        $sql = "SELECT c.*, CONCAT(u.nombre, ' ', u.apellido) cliente, p.nombre profesional_nombre,
+                CONCAT(ui.nombre, ' ', ui.apellido) atencion_inicio_por_nombre, CONCAT(uf.nombre, ' ', uf.apellido) atencion_fin_por_nombre, CONCAT(ua.nombre, ' ', ua.apellido) ausencia_por_nombre
+                FROM citas c JOIN usuarios u ON u.id = c.usuarioId LEFT JOIN profesionales p ON p.id = c.profesionalId
+                LEFT JOIN usuarios ui ON ui.id = c.atencion_inicio_por LEFT JOIN usuarios uf ON uf.id = c.atencion_fin_por LEFT JOIN usuarios ua ON ua.id = c.ausencia_por
+                WHERE c.id = ?" . ($profesionalUsuario !== null ? ' AND p.usuarioId = ?' : '');
+        $stmt = $db->prepare($sql);
+        if (!$stmt) throw new PersistenceException('No se pudo consultar la cita.');
+        if ($profesionalUsuario !== null) $stmt->bind_param('ii', $id, $profesionalUsuario); else $stmt->bind_param('i', $id);
+        if (!$stmt->execute()) throw new PersistenceException('No se pudo consultar la cita.');
+        $cita = $stmt->get_result()->fetch_assoc(); $stmt->close();
+        if (!$cita) return null;
+        if (!$conFinanzas) unset($cita['estado_pago']);
+
+        $columnasPrecio = $conFinanzas ? ', cs.precio_servicio' : '';
+        $stmt = $db->prepare("SELECT COALESCE(cs.nombre_servicio, s.nombre) nombre, cs.duracion_minutos{$columnasPrecio} FROM citasservicios cs LEFT JOIN servicios s ON s.id = cs.servicioId WHERE cs.citaId = ? ORDER BY cs.id");
+        if (!$stmt) throw new PersistenceException('No se pudo consultar los servicios de la cita.');
+        $stmt->bind_param('i', $id);
+        if (!$stmt->execute()) throw new PersistenceException('No se pudo consultar los servicios de la cita.');
+        $cita['servicios'] = $stmt->get_result()->fetch_all(MYSQLI_ASSOC); $stmt->close();
+
+        $stmt = $db->prepare("SELECT e.tipo, e.antes_json, e.despues_json, e.creado_en, CONCAT(a.nombre, ' ', a.apellido) actor FROM agenda_eventos e LEFT JOIN usuarios a ON a.id = e.actorId WHERE e.citaId = ? ORDER BY e.creado_en, e.id LIMIT 50");
+        if (!$stmt) throw new PersistenceException('No se pudo consultar el historial de la cita.');
+        $stmt->bind_param('i', $id);
+        if (!$stmt->execute()) throw new PersistenceException('No se pudo consultar el historial de la cita.');
+        $cita['historial'] = $stmt->get_result()->fetch_all(MYSQLI_ASSOC); $stmt->close();
+        return $cita;
+    }
 }

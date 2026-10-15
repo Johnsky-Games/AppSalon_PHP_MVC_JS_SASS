@@ -5,6 +5,7 @@
     <form method="POST" action="/agenda/reprogramar" class="formulario">
         <input type="hidden" name="csrf_token" value="<?php echo s(csrf_token()); ?>">
         <input type="hidden" name="id" value="<?php echo (int)$cita['id']; ?>">
+        <?php echo campos_retorno($retornoClave ?? 'cliente_citas', $retornoParams ?? []); ?>
         <label>Nueva fecha <input type="date" name="fecha" required min="<?php echo (new \DateTimeImmutable('tomorrow', new \DateTimeZone('America/Guayaquil')))->format('Y-m-d'); ?>"></label>
         <label>Nueva hora <input type="time" name="hora" required></label>
         <p class="agenda-ayuda">Conservamos tus servicios, precio y profesional. Confirmamos disponibilidad antes de aplicar el cambio.</p>
