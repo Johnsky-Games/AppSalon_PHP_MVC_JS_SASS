@@ -121,7 +121,7 @@ const FN = {
       const { btn } = await accion(cfg.citaEnServicio, '^Finalizar atenci');
       await clic(btn);
       const texto = await page.evaluate(() => document.body.innerText);
-      return { destino: url().pathname + url().search, completada: /completada/i.test(texto), dicePagado: /pagad[oa]\b/i.test(texto) && !/pendiente/i.test(texto) };
+      return { destino: url().pathname + url().search, completada: /completad|atendid/i.test(texto), dicePagado: /pagad[oa]\b/i.test(texto) && !/pendiente/i.test(texto) };
     });
 
     await paso('C_finalizar_y_cobrar', async () => {
@@ -151,11 +151,11 @@ const FN = {
       await esperar(300);
       const info = await page.evaluate(() => {
         const a = [...document.querySelectorAll('.alerta,[role=alert],[role=status],.alert,.mensaje-error,.ui-alert')].map(x => x.innerText.trim()).filter(Boolean);
-        return { alertas: a, texto: document.body.innerText.replace(/\s+/g, ' ').slice(0, 500), status: document.title };
+        const m = document.querySelector('main,#contenido-principal,.ui-main,.contenido') || document.body; return { alertas: a, texto: m.innerText.replace(/\s+/g, ' ').slice(0, 700), status: document.title };
       });
       await esperar(5500); // un toast desaparece; el mensaje crítico debe seguir en la página
       const despues = await page.evaluate(() => [...document.querySelectorAll('.alerta,[role=alert],[role=status],.alert,.mensaje-error,.ui-alert')].map(x => x.innerText.trim()).filter(Boolean));
-      return { alertasInmediatas: info.alertas, alertasTras5s: despues, texto: info.texto };
+      return { alertasInmediatas: info.alertas, alertasTras5s: despues, texto: info.texto, url: url().pathname + url().search };
     });
 
     // Estado del botón de envío inmediatamente tras el primer clic y varios clics/envíos extra EN LA MISMA PÁGINA (sin esperar a la red): cuenta los POST reales.
@@ -224,7 +224,7 @@ const FN = {
       });
       if (!d) { return { sinModal: true, url: page.url() }; }
       let atrapa = true;
-      for (let i = 0; i < 12; i++) { await page.keyboard.press('Tab'); atrapa = atrapa && await page.evaluate(() => { const dlg = document.querySelector('dialog[open], [role=dialog], [role=alertdialog], .swal2-popup, [aria-modal=true]'); return !!dlg && dlg.contains(document.activeElement); }); }
+      for (let i = 0; i < 12; i++) { await page.keyboard.press('Tab'); atrapa = atrapa && await page.evaluate(() => { const dlg = document.querySelector('dialog[open], [role=dialog], [role=alertdialog], .swal2-popup, [aria-modal=true]'); if (!dlg) return false; if (dlg.contains(document.activeElement)) return true; return dlg.tagName === 'DIALOG' && dlg.matches(':modal') && (document.activeElement === document.body || document.activeElement === null); }); }
       await page.keyboard.press('Escape');
       await esperar(500);
       const post = await page.evaluate(() => ({ abierto: !!document.querySelector('dialog[open], [role=dialog]:not([hidden]), [role=alertdialog], .swal2-popup, [aria-modal=true]'), retorno: !!(document.activeElement && document.activeElement.hasAttribute('data-q5-disparador')) }));
@@ -257,7 +257,7 @@ const FN = {
       const pantalla = await page.evaluate(() => document.body.innerText.replace(/\s+/g, ' '));
       await page.emulateMediaType('print');
       const impresion = await page.evaluate(() => ({ barraLateral: (() => { const s = document.querySelector('.ui-sidebar,aside,nav'); return s ? getComputedStyle(s).display : 'ausente'; })(), leyenda: /Comprobante interno\s*[—–-]\s*no es factura autorizada por el SRI/i.test(document.body.innerText), botones: [...document.querySelectorAll('button,.boton')].filter(b => getComputedStyle(b).display !== 'none' && b.getBoundingClientRect().height > 0).length }));
-      const pdf = await page.pdf({ format: 'A4', printBackground: true });
+      const pdf = Buffer.from(await page.pdf({ format: 'A4', printBackground: true }));
       await page.emulateMediaType('screen');
       return { status: st, leyendaPantalla: /Comprobante interno\s*[—–-]\s*no es factura autorizada por el SRI/i.test(pantalla), impresion, pdfBytes: pdf.length, pdfValido: pdf.slice(0, 4).toString() === '%PDF' };
     });
@@ -271,10 +271,12 @@ const FN = {
         for (let i = 0; i < 40; i++) {
           await page.keyboard.press('Tab');
           const e = await page.evaluate(() => { const a = document.activeElement; if (!a || a === document.body) return null; const s = getComputedStyle(a); const b = a.getBoundingClientRect();
-            return { tag: a.tagName.toLowerCase(), id: a.id, nombre: (a.textContent || a.value || a.name || '').replace(/\s+/g, ' ').trim().slice(0, 30), contorno: s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) > 0, sombra: s.boxShadow !== 'none', visible: b.width > 0 && b.height > 0 }; });
+            const foto = x => [x.outlineStyle + x.outlineWidth + x.outlineColor, x.boxShadow, x.borderColor, x.backgroundColor, x.textDecorationLine].join('|');
+            const con = foto(s); a.blur(); const sin = foto(getComputedStyle(a)); a.focus();
+            return { tag: a.tagName.toLowerCase(), id: a.id, nombre: (a.textContent || a.value || a.name || '').replace(/\s+/g, ' ').trim().slice(0, 30), contorno: s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) > 0, sombra: s.boxShadow !== 'none', cambia: con !== sin, visible: b.width > 0 && b.height > 0 }; });
           if (e) seq.push(e);
         }
-        res.push({ ruta, total: seq.length, sinIndicador: seq.filter(s => ['input', 'a', 'button', 'select', 'summary', 'textarea'].includes(s.tag) && !s.contorno && !s.sombra).map(s => s.tag + ':' + s.nombre) });
+        res.push({ ruta, total: seq.length, sinIndicador: seq.filter(s => ['input', 'a', 'button', 'select', 'summary', 'textarea'].includes(s.tag) && !s.contorno && !s.sombra && !s.cambia).map(s => s.tag + ':' + s.nombre) });
       }
       return { pantallas: res };
     });

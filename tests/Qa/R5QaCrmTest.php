@@ -68,10 +68,10 @@ final class R5QaCrmTest extends R5Case
         $this->assertSame(200, $r['status'], 'GET /admin/clientes → ' . $r['status']);
         $mapa = [];
         $defs = [
-            'membresia' => ['/membres|estado_cliente|estado$/i', ['activo' => '/activ/iu', 'suspendido' => '/suspend/iu']],
-            'cuenta' => ['/confirm|cuenta/i', ['sin' => '/sin confirm|no confirm|pendiente/iu', 'conf' => '/confirmad/iu']],
-            'consent' => ['/consent|suscrip|comunic|marketing/i', ['otorgado' => '/otorg|acept|vigente|suscrit/iu', 'revocado' => '/revoc|retir|baja/iu', 'sin' => '/sin decisi|sin respuesta|no decid|nunca/iu']],
-            'actividad' => ['/activid|visita|recien|inactiv/i', ['reciente' => '/recient|activ/iu', 'inactivo' => '/inactiv/iu', 'nunca' => '/nunca/iu']],
+            'membresia' => ['/membres|estado_cliente|estado$/i', ['activo' => '/^(activ)/iu', 'suspendido' => '/^(suspend)/iu']],
+            'cuenta' => ['/confirm|cuenta/i', ['sin' => '/^(sin confirm|no confirm|pendiente)/iu', 'conf' => '/^(confirmad)/iu']],
+            'consent' => ['/consent|suscrip|comunic|marketing/i', ['otorgado' => '/^(otorg|acept|suscrit)/iu', 'revocado' => '/^(revoc|retir|dio de baja)/iu', 'sin' => '/^(sin decisi|sin respuesta|nunca decid)/iu']],
+            'actividad' => ['/activid|visita|recien|inactiv/i', ['reciente' => '/^(recient)/iu', 'inactivo' => '/^(inactiv)/iu', 'nunca' => '/^(nunca)/iu']],
         ];
         foreach (self::formularios($r['body']) as $f) {
             if (!preg_match('~^/admin/clientes/?(\?.*)?$~', $f['action'])) { continue; }
@@ -83,7 +83,7 @@ final class R5QaCrmTest extends R5Case
                     foreach ($opts as $clave => $reEt) {
                         foreach ($etiquetas as $valor => $et) {
                             if ($valor === '' ) { continue; }
-                            if (preg_match($reEt, $et . ' ' . $valor) && !isset($m[$clave])) { $m[$clave] = $valor; }
+                            if (preg_match($reEt, $et) && !isset($m[$clave])) { $m[$clave] = $valor; }
                         }
                     }
                     if ($m) { $mapa[$logico] = [$campo, $m, $etiquetas]; break; }
@@ -396,7 +396,9 @@ final class R5QaCrmTest extends R5Case
         $this->assertSame([], array_diff(array_keys($this->queryDe($limpiar)), ['por_pagina']), '«Limpiar filtros» conserva filtros: ' . $limpiar);
         $sin = $n->get($limpiar);
         $this->assertSame(200, $sin['status']);
-        $this->assertDoesNotMatchRegularExpression('/filtros? activos?:?\s*\S/iu', preg_replace('/filtros? activos? \(?0\)?/iu', '', self::texto($sin['body'])) ?? '', 'quedan chips tras limpiar');
+        $linkLimpiarSin = false;
+        foreach (self::xp($sin['body'])->query('//a') as $a) { if (preg_match('/Limpiar filtros/iu', $a->textContent)) { $linkLimpiarSin = true; } }
+        $this->assertFalse($linkLimpiarSin, 'sin filtros activos no debe ofrecerse «Limpiar filtros» (quedan chips)');
         $this->assertNotNull($this->conteoMostrado($r['body']), 'falta el conteo');
         $this->assertGreaterThan($this->conteoMostrado($r['body']), $this->conteoMostrado($sin['body']), 'limpiar filtros debe ampliar el universo');
     }
@@ -421,7 +423,7 @@ final class R5QaCrmTest extends R5Case
             $vistos = array_merge($vistos, $ids);
             $paginas++;
             foreach (self::destinos($r['body']) as $d) {
-                if (self::pathDe($d) === '/admin/clientes' && preg_match('/pagina=/', $d)) {
+                if (self::pathDe($d) === '/admin/clientes' && preg_match('/[?&]pagina=/', $d)) {
                     $this->assertStringContainsString($mapa['membresia'][0] . '=', $d, "el enlace de paginación «{$d}» pierde el filtro");
                 }
             }
@@ -510,7 +512,7 @@ final class R5QaCrmTest extends R5Case
             $t = self::texto($n->get($ruta)['body']);
             if (preg_match('/plan(?:es)? de pago|mensualidad|premium|membres[ií]a de pago|\$\s?\d+(?:\.\d\d)?\s?\/\s?mes|renovaci[oó]n autom|pr[oó]ximo cobro|facturaci[oó]n recurrente/iu', $t, $m)) { $fallos[] = "$ruta muestra «{$m[0]}»"; }
             foreach (preg_split('/(?<=[.!?])\s+/u', $t) as $frase) {
-                if (preg_match('/suscrip/iu', $frase) && !preg_match('/comunicaci|promocion|consentim|correo|marketing/iu', $frase)) { $fallos[] = "$ruta usa «suscripción» sin aclarar que es de comunicaciones comerciales: «" . mb_substr($frase, 0, 120) . '»'; break; }
+                if (preg_match('/suscrip/iu', $frase) && !preg_match('/comunicaci|promocion|consentim|correo|marketing|no (?:es|hay|cobra|existe)/iu', $frase)) { $fallos[] = "$ruta usa «suscripción» sin aclarar que es de comunicaciones comerciales: «" . mb_substr($frase, 0, 120) . '»'; break; }
             }
         }
         $this->assertSame(0, (int)self::escalar("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name LIKE '%suscrip%'"), 'se creó una entidad de suscripción de pago');

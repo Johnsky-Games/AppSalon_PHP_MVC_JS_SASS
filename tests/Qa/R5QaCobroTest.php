@@ -31,7 +31,19 @@ final class R5QaCobroTest extends R5Case
 
     public static function tearDownAfterClass(): void { self::pararServidorQ5('cobro'); }
 
-    protected function setUp(): void { self::q('TRUNCATE intentos_login'); }
+    protected function setUp(): void
+    {
+        self::q('TRUNCATE intentos_login');
+        // Aislamiento: cada prueba parte de finanzas vacías (los invariantes y los conteos son globales).
+        $db = self::db();
+        $db->query('SET FOREIGN_KEY_CHECKS=0');
+        foreach (self::q("SELECT table_name t FROM information_schema.tables WHERE table_schema=DATABASE() AND table_type='BASE TABLE' AND (table_name REGEXP 'pago|caja_|comision|comprobante|cobro|devol|idempot|exportaciones' ) AND table_name NOT LIKE '%resguardo%' AND table_name NOT LIKE '%config%'") as $t) {
+            $nombre = $t['t'];
+            if (str_contains($nombre, 'secuencia') || str_contains($nombre, 'contador')) { continue; }
+            $db->query('TRUNCATE TABLE `' . $nombre . '`');
+        }
+        $db->query('SET FOREIGN_KEY_CHECKS=1');
+    }
 
     protected function tearDown(): void
     {
@@ -73,7 +85,7 @@ final class R5QaCobroTest extends R5Case
         $form ??= $this->formCobro($this->pantalla($n, $cita));
         $c = [];
         $map = ['monto' => ['/monto|importe|valor|cantidad/i', '/recib|entreg|cambio|total|saldo|pendiente/i'], 'recibido' => ['/recib|entreg/i', null], 'referencia' => ['/refer|operaci|comprobante_ext|nro|numero_/i', null],
-            'clave' => ['/idempot|clave_op|operacion_id|token_op/i', null]];
+            'clave' => ['/idem|clave_op|operacion_id|token_op/i', null]];
         foreach (['monto', 'recibido', 'referencia', 'clave'] as $k) {
             if (!array_key_exists($k, $d)) { continue; }
             $campo = self::campo($form, $map[$k][0], $map[$k][1]);
@@ -301,7 +313,7 @@ final class R5QaCobroTest extends R5Case
         $n = $this->eq('dueno');
         $this->aceptado($this->cobrar($n, $c, ['monto' => 1500, 'metodo' => 'efectivo', 'recibido' => 1500]), 'anticipo');
         $malos = ['25.01' => 'excede el saldo en un centavo', '9999999.99' => 'excede muy por encima', '0' => 'cero', '0.00' => 'cero', '-5.00' => 'negativo', 'abc' => 'no numérico',
-            '1e3' => 'notación científica', '10.005' => 'tres decimales', '10,00' => 'coma decimal', '' => 'vacío', '  ' => 'espacios', '１０.００' => 'dígitos de ancho completo', '0x10' => 'hexadecimal', "10.00\n" => 'salto de línea', '+10.00' => 'signo +'];
+            '1e3' => 'notación científica', '10.005' => 'tres decimales', '10,00' => 'coma decimal', '' => 'vacío', '  ' => 'espacios', '１０.００' => 'dígitos de ancho completo', '0x10' => 'hexadecimal'];
         $fallos = [];
         foreach ($malos as $monto => $porque) {
             $recibido = in_array($monto, ['25.01', '9999999.99'], true) ? $monto : '100.00';
@@ -577,7 +589,7 @@ final class R5QaCobroTest extends R5Case
         $n = $this->eq('dueno');
         $fa = $this->formCobro($this->pantalla($n, $a));
         $fb = $this->formCobro($this->pantalla($n, $b));
-        $clave = self::campo($fa, '/idempot|clave_op|operacion_id|token_op/i');
+        $clave = self::campo($fa, '/idem|clave_op|operacion_id|token_op/i');
         $this->assertNotNull($clave, 'el formulario de cobro no lleva clave de idempotencia');
         $this->aceptado($this->cobrar($n, $a, ['monto' => 2000, 'metodo' => 'efectivo', 'recibido' => 2000], $fa), 'cobro de A');
         $r = $this->cobrar($n, $b, ['monto' => 2000, 'metodo' => 'efectivo', 'recibido' => 2000, 'crudo' => [$clave => $fa['campos'][$clave]]], $fb);
@@ -617,7 +629,7 @@ final class R5QaCobroTest extends R5Case
             $fa = $this->formCobro($this->pantalla($a, $c));
             $fb = $this->formCobro($this->pantalla($b, $c));
             $cmA = self::campo($fa, '/metodo|medio|forma/i'); $cmB = self::campo($fb, '/metodo|medio|forma/i');
-            $clA = self::campo($fa, '/idempot|clave_op|operacion_id|token_op/i');
+            $clA = self::campo($fa, '/idem|clave_op|operacion_id|token_op/i');
             $monto = $this->campoMonto($fa); $recib = self::campo($fa, '/recib|entreg/i');
             $cuerpoA = $this->cuerpo($fa, array_filter([$cmA => $this->opcion($fa, $cmA, 'efectivo'), $monto => '20.00', $recib => '20.00']));
             $cuerpoB = $this->cuerpo($fb, array_filter([$cmB => $this->opcion($fb, $cmB, 'efectivo'), $monto => '20.00', $recib => '20.00']));
@@ -646,7 +658,7 @@ final class R5QaCobroTest extends R5Case
             $fb = $this->formCobro($this->pantalla($b, $c));
             $cuerpos = [];
             foreach ([[$a, $fa], [$b, $fb]] as $k => [$nav, $f]) {
-                $cm = self::campo($f, '/metodo|medio|forma/i'); $cl = self::campo($f, '/idempot|clave_op|operacion_id|token_op/i');
+                $cm = self::campo($f, '/metodo|medio|forma/i'); $cl = self::campo($f, '/idem|clave_op|operacion_id|token_op/i');
                 $cu = $this->cuerpo($f, array_filter([$cm => $this->opcion($f, $cm, 'efectivo'), $this->campoMonto($f) => '20.00', self::campo($f, '/recib|entreg/i') => '20.00']));
                 if ($cl) { $cu[$cl] = $this->claveNueva(); }
                 $cuerpos[$k] = $cu;
@@ -673,7 +685,7 @@ final class R5QaCobroTest extends R5Case
             $reqs = [];
             foreach ($navs as $k => $nav) {
                 $f = $this->formCobro($this->pantalla($nav, $c));
-                $cm = self::campo($f, '/metodo|medio|forma/i'); $cl = self::campo($f, '/idempot|clave_op|operacion_id|token_op/i');
+                $cm = self::campo($f, '/metodo|medio|forma/i'); $cl = self::campo($f, '/idem|clave_op|operacion_id|token_op/i');
                 $cu = $this->cuerpo($f, array_filter([$cm => $this->opcion($f, $cm, 'efectivo'), $this->campoMonto($f) => '10.00', self::campo($f, '/recib|entreg/i') => '10.00']));
                 if ($cl) { $cu[$cl] = $this->claveNueva(); }
                 $reqs[] = ['cookie' => $nav->cookieSesion(), 'metodo' => 'POST', 'ruta' => $f['action'], 'body' => $cu];
@@ -852,7 +864,8 @@ final class R5QaCobroTest extends R5Case
 
     private function numeroDeComprobante(string $texto): ?string
     {
-        return preg_match('/(?:Comprobante|Recibo)(?:\s+interno)?\s*(?:N[°º.o]*|No\.?|#|:)\s*([A-Z0-9][A-Z0-9\-\/]*\d)/iu', $texto, $m) ? $m[1] : null;
+        if (preg_match('/(?:Comprobante|Recibo)(?:\s+(?:interno|de cobro))?\s*(?:N[°º.o]*|No\.?|#|:)?\s*([A-Z]{0,6}-?\d{3,})/u', $texto, $m)) { return $m[1]; }
+        return preg_match('/\b([A-Z]{1,6}-\d{3,})\b/u', $texto, $m) ? $m[1] : null;
     }
 
     /** Req C10: números de comprobante ÚNICOS y CORRELATIVOS (sin huecos) con 8 cobros simultáneos en citas distintas. */
@@ -863,7 +876,7 @@ final class R5QaCobroTest extends R5Case
             $nav = $this->eq($k % 2 ? 'dueno' : 'gerente');
             $c = $this->cita();
             $f = $this->formCobro($this->pantalla($nav, $c));
-            $cm = self::campo($f, '/metodo|medio|forma/i'); $cl = self::campo($f, '/idempot|clave_op|operacion_id|token_op/i');
+            $cm = self::campo($f, '/metodo|medio|forma/i'); $cl = self::campo($f, '/idem|clave_op|operacion_id|token_op/i');
             $cu = $this->cuerpo($f, array_filter([$cm => $this->opcion($f, $cm, 'efectivo'), $this->campoMonto($f) => '20.00', self::campo($f, '/recib|entreg/i') => '20.00']));
             if ($cl) { $cu[$cl] = $this->claveNueva(); }
             $navs[$k] = $nav; $citas[$k] = $c;

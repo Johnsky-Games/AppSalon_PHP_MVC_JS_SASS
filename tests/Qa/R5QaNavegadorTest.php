@@ -160,7 +160,7 @@ final class R5QaNavegadorTest extends R5Case
     public function test_N_mensaje_de_exceso_concreto_y_persistente(): void
     {
         $p = $this->paso('N_cobro_exceso_mensaje_concreto_y_persistente');
-        $this->assertNotEmpty($p['alertasInmediatas'], 'el rechazo no deja ningún mensaje visible en la página. Texto: ' . $p['texto']);
+        $this->assertNotEmpty($p['alertasInmediatas'], 'el rechazo no deja ningún mensaje visible en la página (' . $p['url'] . '). Texto: ' . $p['texto']);
         $this->assertMatchesRegularExpression('/saldo|monto|importe|excede|supera/iu', implode(' ', $p['alertasInmediatas']), 'mensaje poco concreto: ' . implode(' | ', $p['alertasInmediatas']));
         $this->assertNotEmpty($p['alertasTras5s'], 'el mensaje crítico desapareció a los 5 s (¿solo un toast?)');
         $this->assertSame(0, (int)self::escalar('SELECT COUNT(*) FROM pagos WHERE cita_referencia_id=?', [self::$cfg['citaCobro']]));

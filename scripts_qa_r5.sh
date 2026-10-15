@@ -36,6 +36,7 @@ echo "== Árbol: $ARBOL   ($(git -C "$ARBOL" log --oneline -1 2>/dev/null))"
 echo "== 1/4 copiando pruebas R5Qa* y utilidades al árbol"
 [ "$ARBOL" = "$ORIGEN" ] || cp "$ORIGEN"/tests/Qa/R5Case.php "$ORIGEN"/tests/Qa/R5Qa*.php "$ORIGEN"/tests/Qa/r5_qa_navegador.cjs "$ARBOL/tests/Qa/"
 
+[ -e "$ARBOL/vendor/autoload.php" ] || { echo "   (sin vendor/: se copia el vendor enlazado de q5)"; cp -a "$ORIGEN/vendor" "$ARBOL/vendor"; }
 echo "== 2/4 recreando $DB_NAME con las migraciones del árbol"
 mysql -uroot -proot -h127.0.0.1 -e "DROP DATABASE IF EXISTS $DB_NAME; CREATE DATABASE $DB_NAME CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci" 2>/dev/null || { echo "MySQL no responde"; exit 3; }
 mysql -uroot -proot -h127.0.0.1 "$DB_NAME" < "$ARBOL/database/schema_base.sql" 2>/dev/null
@@ -57,6 +58,7 @@ for C in "${CLASES[@]}"; do
   echo "-- $C: ✔ $PASA  ✘ $FALLA   $RES"
   grep -E '^ ✘' "$SALIDA/$C.txt" | sed 's/^/     /'
   grep -qE '^(FAILURES!|ERRORS!)' "$SALIDA/$C.txt" && FALLO=1
+  grep -qE '^(OK|Tests:)' "$SALIDA/$C.txt" || { echo "     ¡la clase no llegó a ejecutarse! ver $SALIDA/$C.txt"; FALLO=1; }
 done
 echo "== Salida literal en $SALIDA/"
 exit $FALLO

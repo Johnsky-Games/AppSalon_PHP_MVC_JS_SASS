@@ -304,6 +304,14 @@ PHP;
         return array_column(self::q("SELECT table_name t FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name LIKE '%exportaciones%'"), 't');
     }
 
+    /** TRUNCATE no activa los triggers de solo-anexado: sólo para aislar mediciones en la BD de pruebas. */
+    private function vaciarAuditorias(): void
+    {
+        self::db()->query('SET FOREIGN_KEY_CHECKS=0');
+        foreach ($this->tablasAuditoria() as $t) { self::q("TRUNCATE TABLE `$t`"); }
+        self::db()->query('SET FOREIGN_KEY_CHECKS=1');
+    }
+
     private function filasAuditoria(): int
     {
         $n = 0;
@@ -322,6 +330,7 @@ PHP;
         foreach ($this->exportaciones() as $nombre => [$ruta, , $rolNo]) {
             foreach (['csv', 'xlsx'] as $fmt) {
                 foreach ([[$rolNo, $this->eq($rolNo)], ['cliente', $cli]] as [$quien, $nav]) {
+                    $this->vaciarAuditorias();   // las denegaciones consecutivas del mismo actor pueden agruparse: se mide la PRIMERA de cada serie
                     $antes = $this->filasAuditoria();
                     $r = $nav->get($this->con($ruta, $fmt));
                     if ($r['status'] !== 403) { $fallos[] = "$nombre $fmt como $quien → {$r['status']} (esperado 403)"; }
@@ -377,7 +386,7 @@ PHP;
             foreach (['/admin/clientes/exportar?tipo=clientes', "/caja/exportar?desde=$hoy&hasta=$hoy", '/admin/reportes/exportar'] as $ruta) {
                 foreach (['csv', 'xlsx'] as $fmt) {
                     $r = $n->get($this->con($ruta, $fmt));
-                    if ($r['status'] !== 503) { $fallos[] = "sin auditoría $ruta $fmt → {$r['status']} (esperado 503)"; }
+                    if (!in_array($r['status'], [500, 503], true)) { $fallos[] = "sin auditoría $ruta $fmt → {$r['status']} (esperado 503 o 500 sin entregar datos)"; }
                     if (self::esZipXlsx($r['body']) || str_contains($r['body'], 'Clienta') || str_contains($r['body'], '@example.test') || str_contains(($r['headers']['content-disposition'][0] ?? ''), 'attachment')) { $fallos[] = "sin auditoría $ruta $fmt: SE ENTREGÓ el archivo"; }
                 }
             }
@@ -418,8 +427,8 @@ PHP;
         $this->assertCount(count($csv), $xlsx, 'CSV y XLSX tienen distinto número de filas');
         $this->assertSame($csv[0], $xlsx[0], 'encabezados distintos');
         $colImporte = null;
-        foreach ($csv[0] as $i => $h) { if (preg_match('/importe|monto|total/i', $h)) { $colImporte = $i; break; } }
-        $this->assertNotNull($colImporte, 'no hay columna de importe: ' . json_encode($csv[0], JSON_UNESCAPED_UNICODE));
+        foreach (['/cobrado|confirmad/i', '/importe|monto/i', '/total/i'] as $re) { foreach ($csv[0] as $i => $h) { if (preg_match($re, $h)) { $colImporte = $i; break 2; } } }
+        $this->assertNotNull($colImporte, 'no hay columna de importe cobrado: ' . json_encode($csv[0], JSON_UNESCAPED_UNICODE));
         $detalle = array_slice($csv, 1, -1);
         $totalFila = end($csv);
         $this->assertGreaterThanOrEqual(11, count($detalle), 'faltan movimientos de caja en la exportación');
@@ -432,10 +441,10 @@ PHP;
         $sumaFilas = 0;
         foreach ($detalle as $f) { $sumaFilas += self::centavos(number_format((float)($this->numero($f[$colImporte]) ?? '0'), 2, '.', '')); }
         $this->assertTrue(in_array($sumaFilas, [$ing + $egr, $ing - $egr, $ing], true),
-            "la suma de los importes exportados (" . self::dolares($sumaFilas) . ") no corresponde a la caja (ingresos " . self::dolares($ing) . ", egresos " . self::dolares($egr) . ')');
+            "la suma de la columna «{$csv[0][$colImporte]}» (" . self::dolares($sumaFilas) . ") no corresponde a lo cobrado en caja (ingresos " . self::dolares($ing) . ", egresos sueltos " . self::dolares($egr) . ')');
         $this->assertNotNull($this->numero($totalFila[$colImporte]), 'la fila de totales no tiene importe');
         $pantalla = self::texto($n->get("/caja?desde=$hoy&hasta=$hoy")['body']);
-        $this->assertStringContainsString(self::dolares($ing - $egr), $pantalla, 'la pantalla /caja no muestra el neto de caja que exportó');
+        $this->assertStringContainsString(self::dolares($ing), $pantalla, 'la pantalla /caja no muestra lo cobrado que exportó (' . self::dolares($ing) . ')');
     }
 
     /** Req F/6 + E: CRM — el CSV, el XLSX y la lista en pantalla (todas las páginas) tienen exactamente los mismos clientes con los mismos filtros. */

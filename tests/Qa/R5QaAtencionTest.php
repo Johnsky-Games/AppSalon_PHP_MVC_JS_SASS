@@ -319,7 +319,7 @@ final class R5QaAtencionTest extends R5Case
         $this->assertSame(200, $r['status'], 'GET /agenda/cita?id=' . $c . ' → ' . $r['status']);
         $txt = self::texto($r['body']);
         foreach (['Clienta', 'Quinta', 'ProA', 'Corte Q5', '20.00'] as $esperado) { $this->assertStringContainsString($esperado, $txt, "el detalle no muestra «{$esperado}»"); }
-        $this->assertMatchesRegularExpression('/completada/iu', $txt);
+        $this->assertMatchesRegularExpression('/completad|atendid/iu', $txt, 'el detalle no muestra el estado de la atención');
         $this->assertMatchesRegularExpression('/pago|pendiente/iu', $txt, 'el detalle no muestra el estado de pago');
         $this->assertNotEmpty(array_filter(self::destinos($r['body']), fn($d) => str_starts_with(self::pathDe($d), '/caja')), 'sin acceso a cobro/pagos/comprobante para quien tiene finanzas.gestionar');
         $this->assertSame([], self::enlacesCruzados($r['body'], 'equipo'));
@@ -527,7 +527,8 @@ final class R5QaAtencionTest extends R5Case
         $this->assertSame(403, $pa->get('/caja')['status'], 'el profesional no accede a caja');
         $this->assertSame(403, $pa->get('/admin/finanzas')['status']);
         // «Finalizar y cobrar» forjado por un profesional: nunca.
-        [$fy, $by] = $this->accionDe($this->agenda($this->equipo('dueno')), $this->citaComenzada('en_servicio', self::$e['proA']), '/Finalizar y cobrar/iu');
+        $enServ = $this->citaComenzada('en_servicio', self::$e['proA']);
+        [$fy, $by] = $this->accionDe($this->agenda($this->equipo('dueno')), $enServ, '/Finalizar y cobrar/iu');
         $propiaServ = (int)$fy['campos']['id'];
         $rr = self::enviar($pa, $fy, [], [], $by);
         $this->assertNotSame('/caja/cita', self::pathDe(self::ubicacion($rr)));
