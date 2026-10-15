@@ -8,17 +8,17 @@ $analitica = !empty($acceso['analitica']);
 $puedeExportar = !empty($acceso['exportar']);
 $catalogos = $catalogos ?? ['servicios' => [], 'profesionales' => []];
 $listado = $panel['listado'] ?? null;
+$script = '<script src="/build/js/crm.js" defer></script>';
 $rutaBase = '/admin/clientes';
 $pct = static fn(?float $v): string => $v === null ? 'Sin datos' : number_format($v, 1, '.', '') . ' %';
 $entero = static fn($v): string => (string)(int)$v;
 $fechaCorta = static fn($d): string => $d ? substr((string)$d, 0, 10) : '—';
-$claves = ['q', 'desde', 'hasta', 'alta_desde', 'alta_hasta', 'profesional_id', 'servicio_id', 'segmento', 'membresia', 'consentimiento', 'dias_activo', 'orden', 'dir', 'por_pagina'];
 /** Query string con los filtros vigentes; $extra reemplaza claves (p. ej. la página). */
-$consulta = static function (array $extra = []) use ($f, $claves): string {
-    $datos = [];
-    foreach ($claves as $k) { if (isset($f[$k]) && $f[$k] !== '' && $f[$k] !== null) { $datos[$k] = $f[$k]; } }
-    foreach ($extra as $k => $v) { if ($v === null) { unset($datos[$k]); } else { $datos[$k] = $v; } }
-    return http_build_query($datos);
+$consulta = static fn(array $extra = []): string => CrmService::consulta($f, $extra);
+/** Enlace «Ver listado» de una cifra: abre la lista real de esas personas con los filtros vigentes (solo con acceso nominal). */
+$verListado = static function (string $indicador, int $n, string $texto = '') use ($modo, $f): string {
+    if ($modo !== 'completo' || $n < 1) { return ''; }
+    return '<a class="crm-kpi__listado" href="/admin/clientes/listado?' . s(CrmService::consulta($f, ['indicador' => $indicador, 'pagina' => null])) . '">Ver listado de ' . s($texto !== '' ? $texto : ((string)$n . ' ' . ($n === 1 ? 'persona' : 'personas'))) . '</a>';
 };
 $dias = (int)($f['dias_activo'] ?? CrmService::DIAS_ACTIVO_DEFECTO);
 $hastaEf = $res['hasta_efectivo'] ?? ($f['hasta'] ?? '');
@@ -40,66 +40,15 @@ $hastaEf = $res['hasta_efectivo'] ?? ($f['hasta'] ?? '');
 <?php include __DIR__ . '/../templates/barra.php'; include __DIR__ . '/../templates/alertas.php'; ?>
 
 <?php if ($modo === 'propios'): ?>
-    <section class="crm-card" aria-labelledby="crm-propios-titulo">
-        <h2 id="crm-propios-titulo">Buscar entre tus clientes</h2>
-        <form class="crm-filtros" action="<?= s($rutaBase) ?>" method="GET" role="search">
-            <div class="campo"><label for="crm-q">Nombre, correo o teléfono</label><input id="crm-q" name="q" type="search" maxlength="80" value="<?= s($f['q']) ?>" autocomplete="off"></div>
-            <div class="campo"><label for="crm-pp">Por página</label><select id="crm-pp" name="por_pagina"><?php foreach (CrmService::POR_PAGINA as $n): ?><option value="<?= (int)$n ?>"<?= (int)$f['por_pagina'] === $n ? ' selected' : '' ?>><?= (int)$n ?></option><?php endforeach; ?></select></div>
-            <div class="crm-filtros__acciones"><button class="boton" type="submit">Buscar</button><a class="boton ui-button-quiet" href="<?= s($rutaBase) ?>">Limpiar</a></div>
-        </form>
-    </section>
-    <?php if (empty($panel['vinculado'])): ?>
-        <p class="crm-vacio" role="status">Tu cuenta aún no está vinculada a una ficha profesional, por eso no hay clientes que mostrar. Pide a la administración que enlace tu cuenta en «Equipo y Permisos».</p>
-    <?php elseif (empty($listado['filas'])): ?>
-        <p class="crm-vacio" role="status"><?= $f['q'] !== '' ? 'Ninguno de tus clientes coincide con la búsqueda.' : 'Todavía no tienes visitas completadas con clientes. Cuando completes una cita, la persona aparecerá aquí.' ?></p>
-    <?php else: ?>
-        <div class="crm-tabla" tabindex="0" role="region" aria-label="Tus clientes; desplaza horizontalmente para ver todas las columnas">
-            <table>
-                <caption class="crm-sr">Clientes atendidos por ti</caption>
-                <thead><tr><th scope="col">Cliente</th><th scope="col">Contacto operativo</th><th scope="col">Visitas contigo</th><th scope="col">Última visita contigo</th></tr></thead>
-                <tbody>
-                <?php foreach ($listado['filas'] as $r): ?>
-                    <tr>
-                        <th scope="row"><a href="/admin/clientes/ficha?id=<?= (int)$r['id'] ?>"><?= s(trim($r['nombre'] . ' ' . $r['apellido'])) ?></a></th>
-                        <td><?= s($r['email']) ?><small><?= s((string)$r['telefono']) ?></small></td>
-                        <td class="ui-table-number"><?= $entero($r['visitas']) ?></td>
-                        <td class="ui-table-date"><?= s($fechaCorta($r['ultima'])) ?></td>
-                    </tr>
-                <?php endforeach; ?>
-                </tbody>
-            </table>
-        </div>
-        <?php $pag = $listado; $noun = 'clientes'; include __DIR__ . '/_paginacion.php'; ?>
-    <?php endif; ?>
-    <p class="crm-nota">Esta vista muestra solo lo necesario para atender: no incluye gasto, consentimiento comercial ni formularios.</p>
+    <?php include __DIR__ . '/_propios.php'; ?>
 <?php else: ?>
 
-<section class="crm-card" aria-labelledby="crm-filtros-titulo">
-    <h2 id="crm-filtros-titulo"><?= $modo === 'completo' ? 'Buscar y filtrar' : 'Periodo del análisis' ?></h2>
-    <form class="crm-filtros" action="<?= s($rutaBase) ?>" method="GET"<?= $modo === 'completo' ? ' role="search"' : '' ?>>
-        <?php if ($modo === 'completo'): ?>
-        <div class="campo crm-ancho"><label for="crm-q">Nombre, correo o teléfono</label><input id="crm-q" name="q" type="search" maxlength="80" value="<?= s($f['q']) ?>" autocomplete="off"></div>
-        <?php endif; ?>
-        <div class="campo"><label for="crm-desde">Periodo desde</label><input id="crm-desde" name="desde" type="date" value="<?= s($f['desde']) ?>" max="<?= s($panel['hoy']) ?>"></div>
-        <div class="campo"><label for="crm-hasta">Periodo hasta</label><input id="crm-hasta" name="hasta" type="date" value="<?= s($f['hasta']) ?>" max="<?= s($panel['hoy']) ?>"></div>
-        <div class="campo"><label for="crm-dias">Días para «activo» (30–365)</label><input id="crm-dias" name="dias_activo" type="number" inputmode="numeric" min="<?= (int)CrmService::DIAS_ACTIVO_MIN ?>" max="<?= (int)CrmService::DIAS_ACTIVO_MAX ?>" value="<?= (int)$dias ?>"></div>
-        <?php if ($modo === 'completo'): ?>
-        <div class="campo"><label for="crm-alta-desde">Alta desde</label><input id="crm-alta-desde" name="alta_desde" type="date" value="<?= s((string)$f['alta_desde']) ?>"></div>
-        <div class="campo"><label for="crm-alta-hasta">Alta hasta</label><input id="crm-alta-hasta" name="alta_hasta" type="date" value="<?= s((string)$f['alta_hasta']) ?>"></div>
-        <div class="campo"><label for="crm-prof">Atendido por</label><select id="crm-prof" name="profesional_id"><option value="">Cualquier profesional</option><?php foreach ($catalogos['profesionales'] as $p): ?><option value="<?= (int)$p['id'] ?>"<?= (int)$f['profesional_id'] === (int)$p['id'] ? ' selected' : '' ?>><?= s($p['nombre'] . ((int)$p['activo'] === 1 ? '' : ' (inactivo)')) ?></option><?php endforeach; ?></select></div>
-        <div class="campo"><label for="crm-serv">Servicio recibido</label><select id="crm-serv" name="servicio_id"><option value="">Cualquier servicio</option><?php foreach ($catalogos['servicios'] as $sv): ?><option value="<?= (int)$sv['id'] ?>"<?= (int)$f['servicio_id'] === (int)$sv['id'] ? ' selected' : '' ?>><?= s($sv['nombre']) ?></option><?php endforeach; ?></select></div>
-        <div class="campo"><label for="crm-seg">Segmento</label><select id="crm-seg" name="segmento"><option value="">Todos</option><?php foreach (CrmService::SEGMENTOS as $k => $et): if ($k === 'vip' && !$analitica) { continue; } ?><option value="<?= s($k) ?>"<?= $f['segmento'] === $k ? ' selected' : '' ?>><?= s($et) ?></option><?php endforeach; ?></select></div>
-        <div class="campo"><label for="crm-mem">Membresía</label><select id="crm-mem" name="membresia"><option value="">Todas</option><?php foreach (CrmService::MEMBRESIAS as $k => $et): ?><option value="<?= s($k) ?>"<?= $f['membresia'] === $k ? ' selected' : '' ?>><?= s($et) ?></option><?php endforeach; ?></select></div>
-        <div class="campo"><label for="crm-con">Consentimiento comercial</label><select id="crm-con" name="consentimiento"><option value="">Todos</option><option value="si"<?= $f['consentimiento'] === 'si' ? ' selected' : '' ?>>Aceptó (cualquier versión)</option><option value="vigente"<?= $f['consentimiento'] === 'vigente' ? ' selected' : '' ?>>Aceptó la versión vigente</option><option value="anterior"<?= $f['consentimiento'] === 'anterior' ? ' selected' : '' ?>>Aceptó una versión anterior</option><option value="no"<?= $f['consentimiento'] === 'no' ? ' selected' : '' ?>>No aceptó</option></select></div>
-        <div class="campo"><label for="crm-orden">Ordenar por</label><select id="crm-orden" name="orden">
-            <?php foreach (['nombre' => 'Apellido y nombre', 'alta' => 'Fecha de alta', 'ultima' => 'Última visita', 'visitas' => 'Visitas del periodo', 'visitas_total' => 'Visitas totales'] + ($analitica ? ['gasto' => 'Gasto neto real'] : []) as $k => $et): ?><option value="<?= s($k) ?>"<?= $f['orden'] === $k ? ' selected' : '' ?>><?= s($et) ?></option><?php endforeach; ?></select></div>
-        <div class="campo"><label for="crm-dir">Dirección</label><select id="crm-dir" name="dir"><option value="asc"<?= $f['dir'] === 'asc' ? ' selected' : '' ?>>Ascendente</option><option value="desc"<?= $f['dir'] === 'desc' ? ' selected' : '' ?>>Descendente</option></select></div>
-        <div class="campo"><label for="crm-pp2">Por página</label><select id="crm-pp2" name="por_pagina"><?php foreach (CrmService::POR_PAGINA as $n): ?><option value="<?= (int)$n ?>"<?= (int)$f['por_pagina'] === $n ? ' selected' : '' ?>><?= (int)$n ?></option><?php endforeach; ?></select></div>
-        <?php endif; ?>
-        <div class="crm-filtros__acciones"><button class="boton" type="submit">Aplicar</button><a class="boton ui-button-quiet" href="<?= s($rutaBase) ?>">Restablecer</a></div>
-    </form>
-    <p class="crm-nota">Periodo analizado: <strong><?= s($f['desde']) ?></strong> a <strong><?= s($hastaEf) ?></strong> (nunca después de hoy, <?= s($panel['hoy']) ?>, hora de Guayaquil). Los indicadores y gráficos describen a <em>todos</em> los clientes y no cambian con los filtros del listado.</p>
-</section>
+<details class="crm-card crm-filtros-panel"<?= $errores || !$panel['filtros_activos'] ? ' open' : '' ?>>
+    <summary><h2 class="crm-filtros-panel__titulo" id="crm-filtros-titulo"><?= $modo === 'completo' ? 'Buscar y filtrar' : 'Periodo del análisis' ?></h2></summary>
+    <?php $panelHoy = $panel['hoy']; include __DIR__ . '/_formulario_filtros.php'; ?>
+    <p class="crm-nota">Periodo analizado: <strong><?= s($f['desde']) ?></strong> a <strong><?= s($hastaEf) ?></strong> (nunca después de hoy, <?= s($panel['hoy']) ?>, hora de Guayaquil). <strong>Todo lo que ves en esta página (indicadores, segmentos, gráficos y listado) describe al mismo conjunto de clientes: el que cumple los filtros.</strong> Sin filtros son todos los clientes.</p>
+</details>
+<?php $chips = $panel['filtros_activos']; $total = (int)($res['clientes_total'] ?? 0); $sustantivo = 'clientes'; include __DIR__ . '/_filtros_activos.php'; ?>
 
 <section aria-labelledby="crm-ind-titulo" class="crm-seccion">
     <h2 id="crm-ind-titulo">Indicadores</h2>
@@ -108,27 +57,32 @@ $hastaEf = $res['hasta_efectivo'] ?? ($f['hasta'] ?? '');
             <h3 class="crm-kpi__titulo">Clientes totales</h3>
             <p class="crm-kpi__valor"><?= $entero($res['clientes_total']) ?></p>
             <p class="crm-kpi__nota">Membresías: <?= $entero($res['membresias']['activo']) ?> activas · <?= $entero($res['membresias']['suspendido']) ?> suspendidas · <?= $entero($res['membresias']['sin_registro']) ?> cuentas legadas sin registro. No incluye cuentas solo laborales.</p>
+            <p class="crm-kpi__enlaces"><?= $verListado('totales', (int)$res['clientes_total']) ?> <?= $verListado('membresia_activo', (int)$res['membresias']['activo'], 'las activas') ?> <?= $verListado('membresia_suspendido', (int)$res['membresias']['suspendido'], 'las suspendidas') ?> <?= $verListado('membresia_sin_registro', (int)$res['membresias']['sin_registro'], 'las cuentas legadas') ?></p>
         </article>
         <article class="crm-kpi">
             <h3 class="crm-kpi__titulo">Altas en el periodo</h3>
             <p class="crm-kpi__valor"><?= $entero($res['nuevos']) ?></p>
             <p class="crm-kpi__nota">Clientes con fecha de alta dentro del periodo. Su primera visita completada ocurrió en el periodo para <?= $entero($res['primera_visita_en_rango']) ?> clientes (es otro dato: puede ser de una alta anterior).</p>
+            <p class="crm-kpi__enlaces"><?= $verListado('altas', (int)$res['nuevos']) ?></p>
         </article>
         <article class="crm-kpi">
             <h3 class="crm-kpi__titulo">Clientes activos (<?= (int)$dias ?> días)</h3>
             <p class="crm-kpi__valor"><?= $entero($res['activos']) ?></p>
             <p class="crm-kpi__nota"><?= s($pct($res['pct_activos'])) ?> de <?= $entero($res['clientes_total']) ?> clientes tuvo al menos una visita completada en los últimos <?= (int)$dias ?> días hasta hoy.</p>
+            <p class="crm-kpi__enlaces"><?= $verListado('activos', (int)$res['activos']) ?></p>
         </article>
         <article class="crm-kpi">
             <h3 class="crm-kpi__titulo">Visitas completadas</h3>
             <p class="crm-kpi__valor"><?= $entero($res['visitas_rango']) ?></p>
             <p class="crm-kpi__nota">En el periodo, de <?= $entero($res['con_visita_rango']) ?> clientes distintos. Frecuencia media: <?= $res['frecuencia_media'] === null ? 'sin datos' : s(number_format($res['frecuencia_media'], 2, '.', '')) . ' visitas por cliente con visita' ?>. Las canceladas y las no asistidas no son visitas.</p>
+            <p class="crm-kpi__enlaces"><?= $verListado('con_visita', (int)$res['con_visita_rango'], 'los ' . $entero($res['con_visita_rango']) . ' clientes con visita') ?></p>
         </article>
         <?php if ($analitica): ?>
         <article class="crm-kpi">
             <h3 class="crm-kpi__titulo">Repetición en el periodo</h3>
             <p class="crm-kpi__valor"><?= s($pct($res['pct_repiten'])) ?></p>
             <p class="crm-kpi__nota"><?= $entero($res['repiten_rango']) ?> de <?= $entero($res['con_visita_rango']) ?> clientes con visita en el periodo tuvieron dos o más visitas completadas en él.</p>
+            <p class="crm-kpi__enlaces"><?= $verListado('repiten', (int)$res['repiten_rango']) ?></p>
         </article>
         <?php endif; ?>
         <article class="crm-kpi">
@@ -155,6 +109,19 @@ $hastaEf = $res['hasta_efectivo'] ?? ($f['hasta'] ?? '');
             <h3 class="crm-kpi__titulo">Consentimiento comercial</h3>
             <p class="crm-kpi__valor"><?= $entero($res['con_consentimiento']) ?></p>
             <p class="crm-kpi__nota">Clientes que aceptaron recibir promociones por correo, de <?= $entero($res['clientes_total']) ?>. No aceptar es el estado por defecto. De ellos, <?= $entero($res['con_consentimiento_vigente']) ?> aceptaron la versión vigente del texto y <?= $entero($res['con_consentimiento_anterior']) ?> una versión anterior (esos no entran en la lista comercial hasta que reconfirmen).</p>
+            <p class="crm-kpi__enlaces"><?= $verListado('consentimiento_si', (int)$res['con_consentimiento'], 'las ' . $entero($res['con_consentimiento']) . ' otorgadas') ?> <?= $verListado('consentimiento_vigente', (int)$res['con_consentimiento_vigente'], 'las del texto vigente') ?> <?= $verListado('consentimiento_anterior', (int)$res['con_consentimiento_anterior'], 'las de un texto anterior') ?></p>
+        </article>
+        <article class="crm-kpi">
+            <h3 class="crm-kpi__titulo">Suscripción a comunicaciones comerciales</h3>
+            <p class="crm-kpi__valor"><?= $entero($res['comunicaciones']['otorgado']) ?></p>
+            <p class="crm-kpi__nota">Otorgado: <?= $entero($res['comunicaciones']['otorgado']) ?> · Revocado (retiraron su consentimiento): <?= $entero($res['comunicaciones']['revocado']) ?> · Sin decisión (nunca decidieron): <?= $entero($res['comunicaciones']['sin_decision']) ?>. Es el consentimiento a recibir promociones por correo; este sistema no tiene suscripciones de pago.</p>
+            <p class="crm-kpi__enlaces"><?= $verListado('consentimiento_si', (int)$res['comunicaciones']['otorgado'], 'las otorgadas') ?> <?= $verListado('comunicaciones_revocado', (int)$res['comunicaciones']['revocado'], 'las revocadas') ?> <?= $verListado('comunicaciones_sin_decision', (int)$res['comunicaciones']['sin_decision'], 'las sin decisión') ?></p>
+        </article>
+        <article class="crm-kpi">
+            <h3 class="crm-kpi__titulo">Cuentas sin confirmar</h3>
+            <p class="crm-kpi__valor"><?= $entero($res['cuenta_sin_confirmar']) ?></p>
+            <p class="crm-kpi__nota">Clientes que aún no confirmaron su correo (<?= $entero($res['cuenta_confirmada']) ?> sí lo hicieron). Sin confirmar no entran en la lista comercial.</p>
+            <p class="crm-kpi__enlaces"><?= $verListado('cuenta_sin_confirmar', (int)$res['cuenta_sin_confirmar']) ?></p>
         </article>
     </div>
 
@@ -165,6 +132,12 @@ $hastaEf = $res['hasta_efectivo'] ?? ($f['hasta'] ?? '');
             <h3 class="crm-kpi__titulo">Gasto neto real</h3>
             <p class="crm-kpi__valor"><?= s(CrmService::dinero($g['neto_real'])) ?></p>
             <p class="crm-kpi__nota">Cobros reales <?= s(CrmService::dinero($g['cobros_real'])) ?> menos devoluciones <?= s(CrmService::dinero($g['devoluciones_real'])) ?>. Cada cobro cuenta en su fecha de cobro y cada devolución en su fecha de reembolso, aunque sea de otro mes.</p>
+        </article>
+        <article class="crm-kpi crm-kpi--dinero">
+            <h3 class="crm-kpi__titulo">Saldo pendiente de cobro</h3>
+            <p class="crm-kpi__valor"><?= s(CrmService::dinero((int)$res['saldo_total'])) ?></p>
+            <p class="crm-kpi__nota">De <?= $entero($res['con_saldo']) ?> clientes con citas atendidas aún no cobradas (total de sus servicios menos cobros reales confirmados). No depende del periodo: es lo que está por cobrar hoy.</p>
+            <p class="crm-kpi__enlaces"><?= $verListado('con_saldo', (int)$res['con_saldo']) ?></p>
         </article>
         <article class="crm-kpi crm-kpi--dinero">
             <h3 class="crm-kpi__titulo">Ticket promedio por cobro</h3>
@@ -222,11 +195,11 @@ $hastaEf = $res['hasta_efectivo'] ?? ($f['hasta'] ?? '');
     <?php if (!$analitica): ?><p class="crm-nota">Los segmentos que dependen del gasto solo los calcula la analítica; en esta vista esas personas aparecen como Nuevo o Activo.</p><?php endif; ?>
     <div class="crm-tabla" tabindex="0" role="region" aria-label="Clientes por segmento; desplaza horizontalmente si no caben las columnas">
         <table>
-            <caption class="crm-sr">Número de clientes por segmento</caption>
+            <caption class="crm-sr">Número de clientes por segmento (con los filtros activos)</caption>
             <thead><tr><th scope="col">Segmento</th><th scope="col">Clientes</th><?php if ($modo === 'completo'): ?><th scope="col">Listado</th><?php endif; ?></tr></thead>
             <tbody>
             <?php foreach ($panel['segmentos'] as $sg): ?>
-                <tr><th scope="row"><?= s($sg['etiqueta']) ?></th><td class="ui-table-number"><?= $entero($sg['valor']) ?></td><?php if ($modo === 'completo'): ?><td><a href="<?= s($rutaBase . '?' . $consulta(['segmento' => $sg['clave'], 'pagina' => null])) ?>">Ver clientes <?= s(mb_strtolower($sg['etiqueta'])) ?></a></td><?php endif; ?></tr>
+                <tr><th scope="row"><?= s($sg['etiqueta']) ?></th><td class="ui-table-number"><?= $entero($sg['valor']) ?></td><?php if ($modo === 'completo'): ?><td><?php if ((int)$sg['valor'] > 0): ?><a href="/admin/clientes/listado?<?= s($consulta(['segmento' => $sg['clave'], 'pagina' => null, 'indicador' => null])) ?>">Ver listado: <?= $entero($sg['valor']) ?> <?= s(mb_strtolower($sg['etiqueta'])) ?><span class="crm-sr"> (abre la lista de clientes de este segmento)</span></a><?php else: ?><span class="crm-vacio-celda">Ninguno con estos filtros</span><?php endif; ?></td><?php endif; ?></tr>
             <?php endforeach; ?>
             </tbody>
         </table>
@@ -275,43 +248,15 @@ $hastaEf = $res['hasta_efectivo'] ?? ($f['hasta'] ?? '');
 <section aria-labelledby="crm-lista-titulo" class="crm-seccion">
     <div class="crm-encabezado-lista">
         <h2 id="crm-lista-titulo">Listado de clientes</h2>
-        <?php if ($puedeExportar): ?>
-        <div class="crm-exportar">
-            <a class="boton" href="/admin/clientes/exportar?<?= s($consulta(['tipo' => 'clientes', 'pagina' => null])) ?>">Exportar clientes (CSV)</a>
-            <a class="boton boton-secundario" href="/admin/clientes/exportar?<?= s($consulta(['tipo' => 'comercial', 'pagina' => null])) ?>">Exportar lista comercial (CSV)</a>
-        </div>
-        <?php endif; ?>
+        <div class="crm-exportar"><a class="boton ui-button-quiet" href="/admin/clientes/listado?<?= s($consulta(['pagina' => null])) ?>">Abrir como página completa</a></div>
     </div>
-    <?php if ($puedeExportar): ?><p class="crm-nota">La exportación respeta los filtros actuales, hasta <?= (int)CrmService::EXPORT_MAX_FILAS ?> filas, y nunca incluye respuestas de formularios. La <strong>lista comercial</strong> solo trae a quienes aceptaron promociones, con cuenta confirmada y membresía no suspendida: vuelve a validar el consentimiento antes de enviar.</p><?php endif; ?>
     <?php if ($listado['total'] === 0): ?>
-        <p class="crm-vacio" role="status"><?php if ((int)$res['clientes_total'] === 0): ?>Aún no hay clientes registrados. Cuando alguien cree una cuenta o reserve una cita, aparecerá aquí.<?php else: ?>Ningún cliente coincide con los filtros. <a href="<?= s($rutaBase) ?>">Restablecer filtros</a>.<?php endif; ?></p>
+        <p class="crm-vacio" role="status"><?php if ((int)$res['clientes_total'] === 0 && !$panel['filtros_activos']): ?>Aún no hay clientes registrados. Cuando alguien cree una cuenta o reserve una cita, aparecerá aquí.<?php else: ?>Ningún cliente coincide con los filtros. <a href="<?= s($rutaBase) ?>">Limpiar filtros</a>.<?php endif; ?></p>
     <?php else: ?>
-    <div class="crm-tabla" tabindex="0" role="region" aria-label="Listado de clientes; desplaza horizontalmente para ver todas las columnas">
-        <table class="crm-tabla-clientes">
-            <caption class="crm-sr">Clientes, <?= s((string)$listado['primero']) ?> a <?= s((string)$listado['ultimo']) ?> de <?= s((string)$listado['total']) ?></caption>
-            <thead><tr>
-                <th scope="col">Cliente</th><th scope="col">Contacto</th><th scope="col">Membresía</th><th scope="col">Segmento</th>
-                <th scope="col">Visitas del periodo</th><th scope="col">Última visita</th><th scope="col">Consentimiento comercial</th>
-                <?php if ($analitica): ?><th scope="col">Gasto neto real</th><?php endif; ?>
-            </tr></thead>
-            <tbody>
-            <?php foreach ($listado['filas'] as $r): ?>
-                <tr>
-                    <th scope="row"><a href="/admin/clientes/ficha?id=<?= (int)$r['id'] ?>"><?= s(trim($r['nombre'] . ' ' . $r['apellido'])) ?></a><?php if ($r['rol_efectivo'] !== 'cliente'): ?><small>También tiene acceso laboral</small><?php endif; ?></th>
-                    <td><?= s($r['email']) ?><small><?= s((string)$r['telefono']) ?></small></td>
-                    <td><?= s(CrmService::MEMBRESIAS[$r['membresia']] ?? $r['membresia']) ?><small>Alta: <?= s($fechaCorta($r['alta'])) ?></small></td>
-                    <td><span class="crm-etiqueta crm-seg--<?= s($r['segmento']) ?>"><?= s(CrmService::SEGMENTOS[$r['segmento']] ?? $r['segmento']) ?></span></td>
-                    <td class="ui-table-number"><?= $entero($r['visitas_rango']) ?><small>Total: <?= $entero($r['visitas_total']) ?></small></td>
-                    <td class="ui-table-date"><?= $r['ultima_visita'] === null ? 'Sin visitas' : s($r['ultima_visita']) ?><?php if ($r['recencia'] !== null): ?><small>hace <?= $entero($r['recencia']) ?> días</small><?php endif; ?></td>
-                    <td><?= (int)$r['consentimiento'] === 1 ? 'Aceptó' : 'No aceptó' ?><?php if ((int)$r['consentimiento_anterior'] === 1): ?> <span class="crm-etiqueta crm-etiqueta--aviso" title="Aceptó una versión del texto que ya no está vigente">Versión anterior (v<?= (int)$r['consentimiento_version'] ?>)</span><?php elseif ((int)$r['consentimiento'] === 1 && (int)$r['consentimiento_version_historica'] === 1): ?><small>Versión 1 · histórica</small><?php endif; ?></td>
-                    <?php if ($analitica): ?><td class="ui-table-number"><?= s(CrmService::dinero((int)$r['cobros_real'] - (int)$r['dev_real'])) ?><?php if ((int)$r['cobros_sim'] !== 0 || (int)$r['dev_sim'] !== 0): ?><small>Simulado: <?= s(CrmService::dinero((int)$r['cobros_sim'] - (int)$r['dev_sim'])) ?></small><?php endif; ?></td><?php endif; ?>
-                </tr>
-            <?php endforeach; ?>
-            </tbody>
-        </table>
-    </div>
-    <?php $pag = $listado; $noun = 'clientes'; include __DIR__ . '/_paginacion.php'; ?>
+        <?php $descripcion = 'Clientes'; include __DIR__ . '/_tabla_clientes.php'; ?>
+        <?php $pag = $listado; $noun = 'clientes'; include __DIR__ . '/_paginacion.php'; ?>
     <?php endif; ?>
+    <?php include __DIR__ . '/_descargas.php'; ?>
 </section>
 <?php endif; ?>
 

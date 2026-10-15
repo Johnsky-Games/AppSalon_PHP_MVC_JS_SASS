@@ -38,7 +38,8 @@ final class XlsxEscritor implements EscritorTabla
         $z->abrirEntrada('xl/worksheets/sheet1.xml');
         $cols = '';
         foreach ($columnas as $i => $c) {
-            $ancho = max(12, min(48, (int)round(mb_strlen($c['titulo']) * 1.3) + 2));
+            $minimo = ['texto' => 18, 'fecha' => 13, 'fechahora' => 18, 'dinero' => 14, 'entero' => 11, 'decimal' => 12, 'porcentaje' => 12][$c['tipo']] ?? 12;
+            $ancho = !empty($c['ancho']) ? (int)$c['ancho'] : max($minimo, min(48, (int)round(mb_strlen($c['titulo']) * 1.15) + 2));
             $cols .= '<col min="' . ($i + 1) . '" max="' . ($i + 1) . '" width="' . $ancho . '" customWidth="1"/>';
         }
         $z->escribirEntrada($x . '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"/><cols>' . $cols . '</cols><sheetData>');
@@ -67,6 +68,12 @@ final class XlsxEscritor implements EscritorTabla
             elseif (array_key_exists($c['clave'], $valores)) { $cel .= $this->celda($ref, $c['tipo'], $valores[$c['clave']], true); }
         }
         $this->zip->escribirEntrada('<row r="' . $this->fila . '">' . $cel . '</row>');
+    }
+
+    public function nota(string $texto): void
+    {
+        $this->fila++;
+        $this->zip->escribirEntrada('<row r="' . $this->fila . '">' . self::texto(self::ref(0, $this->fila), $texto, 8) . '</row>');
     }
 
     public function cerrar(): void

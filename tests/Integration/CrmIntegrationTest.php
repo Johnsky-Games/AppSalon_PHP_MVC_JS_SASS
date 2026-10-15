@@ -189,7 +189,7 @@ final class CrmIntegrationTest extends TestCase
         fwrite($fp, substr($cuerpo, 3)); rewind($fp);
         $cab = fgetcsv($fp);
         $out = [];
-        while (($f = fgetcsv($fp)) !== false) { if ($f === [null]) { continue; } $fila = array_combine($cab, $f); $out[] = $fila; }
+        while (($f = fgetcsv($fp)) !== false) { if ($f === [null]) { continue; } if ($f[0] === 'Total' || str_starts_with((string)$f[0], 'AVISO:')) { continue; } /* totales y aviso de truncado del Exportador (ronda 5): se prueban aparte */ $fila = array_combine($cab, $f); $out[] = $fila; }
         fclose($fp);
         return $out;
     }
@@ -786,7 +786,7 @@ final class CrmIntegrationTest extends TestCase
         $this->assertSame(200, $e['http']);
         $filas = $this->csv($e['cuerpo']);
         $this->assertSame([(string)$acepta], array_column($filas, 'ID'));
-        $this->assertSame(['ID', 'Nombre', 'Apellido', 'Correo', 'Consentimiento desde'], array_keys($filas[0]));
+        $this->assertSame(['ID', 'Nombre', 'Apellido', 'Correo', 'Consentimiento desde', 'Versión del consentimiento'], array_keys($filas[0]));
         // La exportación operativa sí lista a todos los clientes que coinciden, con su indicador de consentimiento.
         $todos = $this->csv($this->exportar(['tipo' => 'clientes', 'q' => $this->tag])['cuerpo']);
         $porId = array_column($todos, null, 'ID');

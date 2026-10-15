@@ -88,7 +88,7 @@ final class R2bCrmAuditoriaTest extends R2bCase
         $this->assertSame('propietario', $x['actor_rol']);
         $this->assertSame(hash('sha256', $r['body']), $x['contenido_sha256'], 'el hash debe ser el del archivo entregado byte a byte');
         $csv = self::csv($r['body']);
-        $this->assertSame(count($csv) - 1, (int)$x['filas'], 'filas auditadas = filas de datos entregadas');
+        $this->assertSame(count($csv) - 2, (int)$x['filas'], 'filas auditadas = filas de datos entregadas (sin encabezado ni la fila final Total)');
         $this->assertSame($csv[0], json_decode($x['columnas_lista'], true));
         $this->assertSame(count($csv[0]), (int)$x['columnas_n']);
         $this->assertSame(0, (int)$x['truncado']);

@@ -37,6 +37,11 @@ final class CsvEscritor implements EscritorTabla
         $this->linea($celdas);
     }
 
+    public function nota(string $texto): void
+    {
+        $this->linea(array_merge([Neutralizacion::textoCsv($texto)], array_fill(0, max(0, count($this->columnas) - 1), '')));
+    }
+
     public function cerrar(): void {}
 
     public function filasEscritas(): int { return $this->filas; }

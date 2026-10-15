@@ -1548,4 +1548,76 @@ class ReporteService
 
         return $contenido;
     }
+
+    // ---------------------------------------------------------------- exportación tabular (ronda 5)
+
+    public const BLOQUES_EXPORTACION = ['completo' => 'Reporte completo (varias secciones, solo CSV)', 'reservas' => 'Listado detallado de reservas', 'movimientos' => 'Movimientos financieros'];
+
+    private static function centavos(mixed $v): int { return (int)round(((float)$v) * 100); }
+
+    /**
+     * Bloque tabular plano del reporte para Exportador (CSV o XLSX). Las filas salen de las MISMAS listas que pinta la pantalla
+     * (`reservas`, `movimientos_financieros`) y la fila «Total» de totalesBloque(), que la pantalla muestra bajo la tabla.
+     * @return array{columnas:array,filas:array<int,array<string,mixed>>,totales:array<string,mixed>,hoja:string}
+     */
+    public function tablaExportacion(array $reporte, string $bloque): array
+    {
+        if ($bloque === 'reservas') {
+            $columnas = [
+                ['clave' => 'id', 'titulo' => 'Cita ID', 'tipo' => 'entero'], ['clave' => 'fecha', 'titulo' => 'Fecha', 'tipo' => 'fecha'], ['clave' => 'horario', 'titulo' => 'Horario'],
+                ['clave' => 'cliente', 'titulo' => 'Cliente', 'ancho' => 26], ['clave' => 'email', 'titulo' => 'Email Cliente', 'ancho' => 32], ['clave' => 'profesional', 'titulo' => 'Profesional', 'ancho' => 22],
+                ['clave' => 'estado', 'titulo' => 'Estado Cita'], ['clave' => 'servicios', 'titulo' => 'Servicios (Snapshot Historico)', 'ancho' => 44], ['clave' => 'duracion', 'titulo' => 'Duracion Cita (min)', 'tipo' => 'entero'],
+                ['clave' => 'total_cita', 'titulo' => 'Importe Total Cita (USD)', 'tipo' => 'dinero'], ['clave' => 'reservado', 'titulo' => 'Importe Reservado Filtrado (USD)', 'tipo' => 'dinero'],
+                ['clave' => 'pagado', 'titulo' => 'Ingreso Pagado (USD)', 'tipo' => 'dinero'], ['clave' => 'estado_pago', 'titulo' => 'Estado de Pago'],
+            ];
+            $filas = [];
+            foreach ($reporte['reservas'] ?? [] as $r) {
+                $filas[] = ['id' => (int)($r['id'] ?? 0), 'fecha' => (string)($r['fecha'] ?? ''), 'horario' => (string)($r['horario'] ?? ''), 'cliente' => (string)($r['cliente'] ?? ''),
+                    'email' => (string)($r['cliente_email'] ?? ''), 'profesional' => (string)($r['profesional_nombre'] ?? ''), 'estado' => (string)($r['etiqueta_estado_cita'] ?? 'Confirmada'),
+                    'servicios' => (string)($r['servicios_resumen'] ?? ''), 'duracion' => (int)($r['duracion_total_minutos'] ?? 0), 'total_cita' => self::centavos($r['importe_total_cita'] ?? 0),
+                    'reservado' => self::centavos($r['importe_reservado'] ?? 0), 'pagado' => self::centavos($r['ingreso_pagado'] ?? 0), 'estado_pago' => (string)($r['etiqueta_estado_pago'] ?? '')];
+            }
+            return ['columnas' => $columnas, 'filas' => $filas, 'totales' => $this->totalesBloque($reporte, 'reservas'), 'hoja' => 'Reservas'];
+        }
+        if ($bloque === 'movimientos') {
+            $columnas = [
+                ['clave' => 'pago_id', 'titulo' => 'Pago ID', 'tipo' => 'entero'], ['clave' => 'referencia', 'titulo' => 'Referencia Pago', 'ancho' => 26], ['clave' => 'tipo', 'titulo' => 'Tipo Movimiento'],
+                ['clave' => 'proveedor', 'titulo' => 'Proveedor'], ['clave' => 'simulado', 'titulo' => 'Es Simulado'], ['clave' => 'monto', 'titulo' => 'Monto (USD)', 'tipo' => 'dinero'],
+                ['clave' => 'estado', 'titulo' => 'Estado Pago'], ['clave' => 'fecha_cobro', 'titulo' => 'Fecha Cobro'], ['clave' => 'fecha_reembolso', 'titulo' => 'Fecha Reembolso'],
+                ['clave' => 'cobro_periodo', 'titulo' => 'Importe Cobro Periodo (USD)', 'tipo' => 'dinero'], ['clave' => 'reembolso_periodo', 'titulo' => 'Importe Reembolso Periodo (USD)', 'tipo' => 'dinero'],
+                ['clave' => 'neto_periodo', 'titulo' => 'Neto Periodo (USD)', 'tipo' => 'dinero'], ['clave' => 'cita_id', 'titulo' => 'Cita Referencia ID', 'tipo' => 'entero'],
+                ['clave' => 'cita_estado', 'titulo' => 'Estado Cita'], ['clave' => 'cita_fecha', 'titulo' => 'Fecha Servicio'], ['clave' => 'profesional', 'titulo' => 'Profesional'],
+                ['clave' => 'cliente', 'titulo' => 'Cliente'], ['clave' => 'servicios', 'titulo' => 'Servicios Historicos', 'ancho' => 44],
+            ];
+            $filas = [];
+            foreach ($reporte['movimientos_financieros'] ?? [] as $m) {
+                $serv = [];
+                foreach ($m['servicios'] ?? [] as $si) { $serv[] = sprintf('%s ($%s)', $si['nombre'], number_format((float)$si['precio'], 2, '.', '')); }
+                $filas[] = ['pago_id' => (int)($m['pago_id'] ?? 0), 'referencia' => (string)($m['referencia_pago'] ?? ''), 'tipo' => (string)($m['tipo_movimiento'] ?? strtoupper((string)($m['estado'] ?? ''))),
+                    'proveedor' => (string)($m['proveedor'] ?? ''), 'simulado' => !empty($m['es_simulado']) ? 'SI (Mock)' : 'NO (Real)', 'monto' => self::centavos($m['monto'] ?? 0),
+                    'estado' => (string)($m['estado'] ?? ''), 'fecha_cobro' => (string)($m['fecha_cobro'] ?? ''), 'fecha_reembolso' => (string)($m['fecha_reembolso'] ?? ''),
+                    'cobro_periodo' => self::centavos($m['importe_cobro_periodo'] ?? 0), 'reembolso_periodo' => self::centavos($m['importe_reembolso_periodo'] ?? 0), 'neto_periodo' => self::centavos($m['neto_periodo'] ?? 0),
+                    'cita_id' => (int)($m['cita_referencia_id'] ?? 0), 'cita_estado' => (string)($m['cita_estado'] ?? ''), 'cita_fecha' => (string)($m['cita_fecha'] ?? ''),
+                    'profesional' => (string)($m['profesional_nombre'] ?? ''), 'cliente' => (string)($m['cliente'] ?? ''), 'servicios' => implode(', ', $serv)];
+            }
+            return ['columnas' => $columnas, 'filas' => $filas, 'totales' => $this->totalesBloque($reporte, 'movimientos'), 'hoja' => 'Movimientos'];
+        }
+        throw new \InvalidArgumentException('Bloque de exportación no válido.');
+    }
+
+    /**
+     * Totales de un bloque (centavos), sumados de las mismas filas que muestra la pantalla; la vista y la fila «Total» del archivo
+     * usan esta función. @return array<string,int|string>
+     */
+    public function totalesBloque(array $reporte, string $bloque): array
+    {
+        if ($bloque === 'reservas') {
+            $n = 0; $total = 0; $res = 0; $pag = 0;
+            foreach ($reporte['reservas'] ?? [] as $r) { $n++; $total += self::centavos($r['importe_total_cita'] ?? 0); $res += self::centavos($r['importe_reservado'] ?? 0); $pag += self::centavos($r['ingreso_pagado'] ?? 0); }
+            return ['cliente' => $n . ' reservas', 'total_cita' => $total, 'reservado' => $res, 'pagado' => $pag, 'n' => $n];
+        }
+        $n = 0; $monto = 0; $cobro = 0; $reem = 0; $neto = 0;
+        foreach ($reporte['movimientos_financieros'] ?? [] as $m) { $n++; $monto += self::centavos($m['monto'] ?? 0); $cobro += self::centavos($m['importe_cobro_periodo'] ?? 0); $reem += self::centavos($m['importe_reembolso_periodo'] ?? 0); $neto += self::centavos($m['neto_periodo'] ?? 0); }
+        return ['cliente' => $n . ' movimientos', 'monto' => $monto, 'cobro_periodo' => $cobro, 'reembolso_periodo' => $reem, 'neto_periodo' => $neto, 'n' => $n];
+    }
 }

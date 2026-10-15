@@ -10,11 +10,15 @@ class CrecimientoController
     private static function service(): CrecimientoService { return new CrecimientoService(new CrecimientoRepository(ActiveRecord::getDB())); }
     public static function index(Router $router): void
     {
-        iniciar_sesion_segura(); exigir_permiso('marketing.gestionar'); $mensaje=''; $error=''; $respuestas=[];
+        iniciar_sesion_segura();
+        // Descarga directa sin permiso: 403 y queda anotado el intento (la autorización se comprueba aquí, no en el botón).
+        if($_SERVER['REQUEST_METHOD']==='POST' && ($_POST['accion']??'')==='segmento') { isAuth(); }
+        if($_SERVER['REQUEST_METHOD']==='POST' && ($_POST['accion']??'')==='segmento' && !puede('marketing.gestionar')) { self::auditarIntento('denegada','sin_permiso',(string)(is_string($_POST['formato']??null)?$_POST['formato']:'csv')); }
+        exigir_permiso('marketing.gestionar'); $mensaje=''; $error=''; $respuestas=[];
         try {
             if($_SERVER['REQUEST_METHOD']==='POST') {
                 if(!validar_csrf()){http_response_code(403); detener_ejecucion(403);}
-                if(($_POST['accion']??'')==='segmento') { self::csv(self::service()->segmento((string)($_POST['segmento']??'')),(string)($_POST['segmento']??'')); return; }
+                if(($_POST['accion']??'')==='segmento') { self::exportarContactos(); return; }
                 $mensaje=self::service()->accionAdmin((int)$_SESSION['id'],$_POST);
             }
             if(isset($_GET['formulario_id'])) {
@@ -41,22 +45,37 @@ class CrecimientoController
         catch(\Repositories\PersistenceException $e){http_response_code(500);$error='No se pudo completar la operación.';$datos=[];$ajustes=[];}
         $router->render('bienestar/index',compact('datos','ajustes','mensaje','error'));
     }
-    /** Exportación de campaña. Igual que las del CRM: se audita (append-only) ANTES de entregar; si no se puede registrar, no se entrega. */
-    private static function csv(array $filas, string $segmento = ''): void
+    private static function auditarIntento(string $resultado, string $motivo, string $formato, ?array $filtros = null): void
     {
-        $cabecera=['ID','Nombre','Apellido','Correo','Consentimiento'];
-        $out=fopen('php://temp','r+');fputcsv($out,$cabecera);
-        foreach($filas as $fila){fputcsv($out,array_map([\Services\ReporteService::class,'sanearCeldaCsv'],array_values($fila)));}
-        rewind($out);$contenido=(string)stream_get_contents($out);fclose($out);
         try {
-            $c=(new \Services\AuthorizationService())->contexto((int)($_SESSION['id']??0));
-            (new \Services\CrmAuditoriaService(new \Repositories\CrmAuditoriaRepository(ActiveRecord::getDB())))->registrar('campana','exitosa',null,['id'=>(int)($_SESSION['id']??0)?:null,'rol'=>$c['rol']??null],['segmento'=>$segmento],
-                ['columnas'=>$cabecera,'filas'=>count($filas),'truncado'=>count($filas)>=1000,'contenido'=>$contenido]);
+            (new \Services\CrmAuditoriaService(new \Repositories\CrmAuditoriaRepository(ActiveRecord::getDB())))->registrar('campana', $resultado, $motivo, \Services\ExportacionAuditoriaService::actorDeSesion(), $filtros, null, $formato);
+        } catch(\Throwable $e) { error_log('[CrecimientoController] no se pudo auditar un intento de exportación ('.$resultado.'): '.get_class($e)); }
+    }
+
+    /**
+     * Exportación de contactos con consentimiento vigente (`POST /admin/crecimiento`, accion=segmento, formato=csv|xlsx).
+     * Mismo flujo que el CRM: autorizar → validar (422 + auditoría) → generar → AUDITAR (append-only) → entregar; si no se puede registrar, no se entrega.
+     */
+    private static function exportarContactos(): void
+    {
+        $segmento=(string)($_POST['segmento']??'');
+        $formato=\Classes\Exportacion\Exportador::formatoDe($_POST['formato']??null);
+        if($formato===null) { self::auditarIntento('fallida','formato_invalido','invalido',['segmento'=>$segmento]); throw new \InvalidArgumentException('El formato de exportación no es válido: use csv o xlsx.'); }
+        try { $filas=self::service()->segmento($segmento); }
+        catch(\InvalidArgumentException $e) { self::auditarIntento('fallida','segmento_invalido',$formato); throw $e; }
+        catch(\Throwable $e) { self::auditarIntento('fallida','error_datos',$formato,['segmento'=>$segmento]); throw $e; }
+        $columnas=[['clave'=>'id','titulo'=>'ID','tipo'=>'entero'],['clave'=>'nombre','titulo'=>'Nombre'],['clave'=>'apellido','titulo'=>'Apellido'],['clave'=>'email','titulo'=>'Correo'],['clave'=>'consentimiento_en','titulo'=>'Consentimiento','tipo'=>'fechahora']];
+        $limite=1000;   // tope del repositorio (LIMIT 1000): si lo alcanza, puede haber más contactos y se avisa
+        $resultado=\Classes\Exportacion\Exportador::generar($formato,'segmento-consentido',$columnas,$filas,['nombre'=>count($filas).' contactos'],
+            ['hoja'=>'Contactos','truncado_conocido'=>count($filas)>=$limite,'aviso_truncado'=>'AVISO: la exportación admite hasta '.$limite.' contactos y este filtro puede tener más. Afine el segmento o exporte por partes.']);
+        try {
+            (new \Services\CrmAuditoriaService(new \Repositories\CrmAuditoriaRepository(ActiveRecord::getDB())))->registrar('campana','exitosa',null,\Services\ExportacionAuditoriaService::actorDeSesion(),['segmento'=>$segmento],
+                ['columnas'=>$resultado['columnas'],'filas'=>$resultado['filas'],'truncado'=>$resultado['truncado'],'sha256'=>$resultado['sha256'],'bytes'=>$resultado['bytes'],'formato'=>$formato],$formato);
         } catch(\Throwable $e) {
+            if(is_resource($resultado['flujo'])) { fclose($resultado['flujo']); }
             error_log('[CrecimientoController] exportación NO entregada: falló la auditoría ('.get_class($e).')');
             throw new \Classes\ServiceUnavailableException('No se pudo registrar la auditoría de la exportación; por seguridad el archivo no se entregó.',0,$e);
         }
-        header('Content-Type: text/csv; charset=utf-8');header('Content-Disposition: attachment; filename="segmento-consentido.csv"');header('Cache-Control: no-store');
-        echo $contenido;
+        \Classes\Exportacion\Exportador::entregar($resultado);
     }
 }
