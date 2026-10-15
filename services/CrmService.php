@@ -851,7 +851,7 @@ final class CrmService
             'tipo' => $tipo, 'columnas' => $columnas, 'filas' => $filas, 'totales' => $totales, 'universo' => $universo,
             'base' => ($comercial ? 'lista_comercial_' : 'clientes_') . $f['desde'] . '_a_' . min($f['hasta'], $hoy),
             'opciones' => ['max_filas' => $this->maxFilasExportacion, 'hoja' => $comercial ? 'Lista comercial' : 'Clientes',
-                'aviso_truncado' => 'AVISO: el filtro tiene ' . $universo['clientes'] . ' filas; la exportación se limitó a ' . $this->maxFilasExportacion . '. Afine los filtros para obtener el resto.'],
+                'aviso_truncado' => 'AVISO: exportación limitada a ' . $this->maxFilasExportacion . ' filas de ' . $universo['clientes'] . ' que tiene este filtro; afine los filtros para obtener el resto.'],
         ];
     }
 }
