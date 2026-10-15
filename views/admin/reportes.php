@@ -105,6 +105,11 @@ $queryExportar = http_build_query([
                 id="btn-exportar-csv"
                 class="boton boton-exportar-csv"
             >Exportar CSV</a>
+            <a href="/admin/reportes/exportar?<?php echo s($queryExportar . '&formato=csv&bloque=completo'); ?>" class="boton boton-secundario" data-reporte-descarga="completo-csv" title="Todas las secciones del reporte en un solo CSV (no es una tabla plana)">Reporte completo (CSV, varias secciones)</a>
+            <a href="/admin/reportes/exportar?<?php echo s($queryExportar . '&formato=csv&bloque=reservas'); ?>" class="boton boton-secundario" data-reporte-descarga="reservas-csv">Reservas (CSV)</a>
+            <a href="/admin/reportes/exportar?<?php echo s($queryExportar . '&formato=xlsx&bloque=reservas'); ?>" class="boton boton-secundario" data-reporte-descarga="reservas-xlsx">Reservas (Excel XLSX)</a>
+            <a href="/admin/reportes/exportar?<?php echo s($queryExportar . '&formato=csv&bloque=movimientos'); ?>" class="boton boton-secundario" data-reporte-descarga="movimientos-csv">Movimientos (CSV)</a>
+            <a href="/admin/reportes/exportar?<?php echo s($queryExportar . '&formato=xlsx&bloque=movimientos'); ?>" class="boton boton-secundario" data-reporte-descarga="movimientos-xlsx">Movimientos (Excel XLSX)</a>
         </div>
     </form>
 </div>
@@ -409,6 +414,9 @@ $escalaServiciosUi = empty($serviciosGraficaUi) ? 0 : max(array_map(static funct
             </tbody>
         </table>
     </div>
+    <?php $tm = $totalesMovimientos ?? []; if (!empty($tm)) { ?>
+    <p class="reportes-nota-pagos" id="totales-movimientos">Total de movimientos: <strong><?php echo s((string)$tm['n']); ?></strong> · monto $<?php echo s(number_format($tm['monto'] / 100, 2, '.', '')); ?> · cobros del periodo $<?php echo s(number_format($tm['cobro_periodo'] / 100, 2, '.', '')); ?> · reembolsos $<?php echo s(number_format($tm['reembolso_periodo'] / 100, 2, '.', '')); ?> · neto $<?php echo s(number_format($tm['neto_periodo'] / 100, 2, '.', '')); ?>. Coinciden con la fila «Total» de los archivos.</p>
+    <?php } ?>
 </section>
 <?php } ?>
 
@@ -457,5 +465,8 @@ $escalaServiciosUi = empty($serviciosGraficaUi) ? 0 : max(array_map(static funct
                 </li>
             <?php } ?>
         </ul>
+        <?php $tr = $totalesReservas ?? []; if (!empty($tr)) { ?>
+        <p class="reportes-nota-pagos" id="totales-listado-reservas">Total del listado: <strong><?php echo s((string)$tr['n']); ?></strong> reservas · importe total de las citas $<?php echo s(number_format($tr['total_cita'] / 100, 2, '.', '')); ?> · importe reservado $<?php echo s(number_format($tr['reservado'] / 100, 2, '.', '')); ?> · ingreso pagado $<?php echo s(number_format($tr['pagado'] / 100, 2, '.', '')); ?>. Son las mismas cifras de la fila «Total» de los archivos descargados.</p>
+        <?php } ?>
     <?php } ?>
 </section>

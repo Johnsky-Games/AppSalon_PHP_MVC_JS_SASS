@@ -4,7 +4,10 @@ namespace Controllers;
 
 use Model\ActiveRecord;
 use MVC\Router;
+use Classes\Exportacion\Exportador;
+use Repositories\ExportacionAuditoriaRepository;
 use Repositories\ReporteRepository;
+use Services\ExportacionAuditoriaService;
 use Services\ReporteService;
 
 /**
@@ -94,25 +97,51 @@ class AdminReporteController
             'resumenServicios' => $resultado['resumen_servicios'] ?? [],
             'reservas' => $resultado['reservas'] ?? [],
             'movimientosFinancieros' => $resultado['movimientos_financieros'] ?? [],
+            'totalesReservas' => self::obtenerReporteService()->totalesBloque($resultado, 'reservas'),
+            'totalesMovimientos' => self::obtenerReporteService()->totalesBloque($resultado, 'movimientos'),
         ]);
     }
 
     /**
-     * Exporta en formato CSV seguro los datos del reporte filtrado (`GET /admin/reportes/exportar`).
+     * Exporta el reporte filtrado (`GET /admin/reportes/exportar?formato=csv|xlsx&bloque=completo|reservas|movimientos`).
+     *  - csv + completo (por omisión): el CSV de VARIAS secciones de siempre (no es una tabla plana; no se ofrece en Excel).
+     *  - csv|xlsx + reservas|movimientos: tabla plana por Classes\Exportacion\Exportador, con fila «Total» y el mismo detalle que la pantalla.
+     * Orden: autenticar → autorizar en la DESCARGA (403 + auditoría) → validar (422 + auditoría) → generar → AUDITAR → entregar.
      */
     public static function exportarCsv(Router $router): void
     {
         iniciar_sesion_segura();
-        exigir_permiso('reportes.ver');
+        isAuth();
+        $auditoria = self::auditoria();
+        $actor = ExportacionAuditoriaService::actorDeSesion();
+        $formato = Exportador::formatoDe($_GET['formato'] ?? null);
+        $bloqueCrudo = $_GET['bloque'] ?? ($formato === 'xlsx' ? 'reservas' : 'completo');
+        $bloque = is_string($bloqueCrudo) && isset(ReporteService::BLOQUES_EXPORTACION[$bloqueCrudo]) ? $bloqueCrudo : null;
+        $origen = 'reportes.' . ($bloque ?? 'invalido');
+        $formatoAud = $formato ?? 'invalido';
+        $filtrosAud = static fn(array $r): array => array_intersect_key($r['filtros'] ?? [], array_flip(['fecha_inicio', 'fecha_fin', 'criterio_fecha', 'profesional_id', 'servicio_id']));
+
+        if (!puede('reportes.ver')) {
+            self::auditar($auditoria, $origen, $formatoAud, $actor, null, ['resultado' => 'denegada', 'motivo' => 'sin_permiso']);
+            exigir_permiso('reportes.ver');   // responde 403 y termina
+            return;
+        }
+        if ($formato === null || $bloque === null || ($formato === 'xlsx' && $bloque === 'completo')) {
+            self::auditar($auditoria, $origen, $formatoAud, $actor, null, ['resultado' => 'fallida', 'motivo' => $formato === null ? 'formato_invalido' : ($bloque === null ? 'bloque_invalido' : 'xlsx_no_tabular')]);
+            \Classes\ErrorResponse::render(422, ['mensaje' => $formato === null
+                ? 'El formato de exportación no es válido: use csv o xlsx.'
+                : ($bloque === null ? 'El bloque de exportación no es válido: use completo, reservas o movimientos.'
+                    : 'El reporte completo tiene varias secciones y solo se ofrece en CSV; para Excel elija el listado de reservas o los movimientos financieros.')]);
+            detener_ejecucion(422);
+            return;
+        }
 
         $servicio = self::obtenerReporteService();
         $resultado = self::ocultarDatosDeClientesSiCorresponde($servicio->consultarReporte($_GET));
         $httpCode = (int)($resultado['http_code'] ?? 200);
 
-        if (
-            $resultado['status'] === ReporteService::STATUS_INVALID
-            || $resultado['status'] === ReporteService::STATUS_ERROR
-        ) {
+        if ($resultado['status'] === ReporteService::STATUS_INVALID || $resultado['status'] === ReporteService::STATUS_ERROR) {
+            self::auditar($auditoria, $origen, $formato, $actor, $filtrosAud($resultado), ['resultado' => 'fallida', 'motivo' => $resultado['status'] === ReporteService::STATUS_INVALID ? 'filtros_invalidos' : 'error_datos']);
             http_response_code($httpCode);
             $router->render('admin/reportes', [
                 'nombre' => $_SESSION['nombre'] ?? '',
@@ -126,30 +155,46 @@ class AdminReporteController
                 'resumenServicios' => $resultado['resumen_servicios'] ?? [],
                 'reservas' => $resultado['reservas'] ?? [],
                 'movimientosFinancieros' => $resultado['movimientos_financieros'] ?? [],
+                'totalesReservas' => [], 'totalesMovimientos' => [],
             ]);
             return;
         }
 
         $fechaInicio = preg_replace('/[^0-9\-]/', '', (string)($resultado['filtros']['fecha_inicio'] ?? 'inicio'));
         $fechaFin = preg_replace('/[^0-9\-]/', '', (string)($resultado['filtros']['fecha_fin'] ?? 'fin'));
-        $nombreArchivo = sprintf('reporte_reservas_%s_a_%s.csv', $fechaInicio, $fechaFin);
-
-        $headers = [
-            'Content-Type' => 'text/csv; charset=UTF-8',
-            'Content-Disposition' => 'attachment; filename="' . $nombreArchivo . '"',
-            'X-Content-Type-Options' => 'nosniff',
-            'Cache-Control' => 'no-store, no-cache, must-revalidate',
-        ];
-        self::$ultimosHeadersExportacion = $headers;
-
-        http_response_code(200);
-        if (!headers_sent()) {
-            foreach ($headers as $nombre => $valor) {
-                header($nombre . ': ' . $valor);
-            }
+        $base = sprintf('reporte_%s_%s_a_%s', $bloque === 'completo' ? 'reservas' : $bloque, $fechaInicio, $fechaFin);
+        if ($bloque === 'completo') {
+            // Varias secciones: se conserva tal cual (documentado); solo se envuelve para auditarlo y entregarlo igual que el resto.
+            $archivo = Exportador::desdeContenido($servicio->generarCsv($resultado), 'csv', $base, count($resultado['reservas'] ?? []),
+                ['Cita ID', 'Fecha', 'Horario', 'Cliente', 'Email Cliente', 'Profesional', 'Estado Cita', 'Servicios (Snapshot Historico)', 'Duracion Cita (min)', 'Importe Total Cita (USD)', 'Importe Reservado Filtrado (USD)', 'Ingreso Pagado (USD)', 'Estado de Pago']);
+        } else {
+            $tabla = $servicio->tablaExportacion($resultado, $bloque);
+            $archivo = Exportador::generar($formato, $base, $tabla['columnas'], $tabla['filas'], $tabla['totales'], ['hoja' => $tabla['hoja']]);
         }
-
-        echo $servicio->generarCsv($resultado);
+        try {
+            $auditoria->registrar($origen, $formato, $actor, $filtrosAud($resultado), $archivo + ['resultado' => 'exitosa']);
+        } catch (\Throwable $e) {
+            if (is_resource($archivo['flujo'])) { fclose($archivo['flujo']); }
+            error_log('[AdminReporteController] exportación NO entregada: falló la auditoría (' . get_class($e) . ')');
+            throw new \Classes\ServiceUnavailableException('No se pudo registrar la auditoría de la exportación; por seguridad el archivo no se entregó.', 0, $e);
+        }
+        self::$ultimosHeadersExportacion = Exportador::entregar($archivo);
         detener_ejecucion(200);
+    }
+
+    private static ?ExportacionAuditoriaService $auditoriaServicio = null;
+
+    public static function setAuditoriaService(?ExportacionAuditoriaService $s): void { self::$auditoriaServicio = $s; }
+
+    private static function auditoria(): ExportacionAuditoriaService
+    {
+        return self::$auditoriaServicio ?? new ExportacionAuditoriaService(new ExportacionAuditoriaRepository(ActiveRecord::getDB()));
+    }
+
+    /** Registra un intento denegado o fallido SIN alterar la respuesta 403/422 que ya corresponde. */
+    private static function auditar(ExportacionAuditoriaService $a, string $origen, string $formato, array $actor, ?array $filtros, array $resultado): void
+    {
+        try { $a->registrar($origen, $formato, $actor, $filtros, $resultado); }
+        catch (\Throwable $e) { error_log('[AdminReporteController] no se pudo auditar un intento de exportación (' . $resultado['resultado'] . '): ' . get_class($e)); }
     }
 }

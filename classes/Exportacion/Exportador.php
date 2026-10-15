@@ -28,7 +28,7 @@ final class Exportador
      * @param array<int,array{clave:string,titulo:string,tipo?:string}> $columnas
      * @param iterable<array<string,mixed>> $filas  generador recomendado (memoria acotada)
      * @param array<string,mixed>|null $totales     valores por clave de columna; se escribe una fila «Total»
-     * @param array{max_filas?:int,hoja?:string,ahora?:\DateTimeImmutable,aviso_truncado?:string} $opciones
+     * @param array{max_filas?:int,hoja?:string,ahora?:\DateTimeImmutable,aviso_truncado?:string,truncado_conocido?:bool} $opciones
      * @return array{flujo:resource,formato:string,mime:string,archivo:string,filas:int,bytes:int,sha256:string,truncado:bool,columnas:string[],limite:int}
      */
     public static function generar(string $formato, string $nombreBase, array $columnas, iterable $filas, ?array $totales = null, array $opciones = []): array
@@ -54,6 +54,8 @@ final class Exportador
                 $w->fila($fila);
                 $n++;
             }
+            // `truncado_conocido`: el origen ya limitó las filas (p. ej. un LIMIT aguas arriba) y puede haber más: se avisa igual que si lo limitara este exportador.
+            if (!$truncado && !empty($opciones['truncado_conocido'])) { $truncado = true; }
             if ($totales !== null && !$truncado) { $w->totales('Total', $totales); }
             // Truncado: nunca se declara como completo. Aviso dentro del archivo (última fila), nombre «_parcial» y, al entregar, cabecera X-Exportacion-Truncada.
             if ($truncado) { $w->nota((string)($opciones['aviso_truncado'] ?? ('AVISO: exportación limitada a ' . $max . ' filas; afine los filtros para obtener el resto.'))); }
@@ -72,6 +74,24 @@ final class Exportador
             'sha256' => hash_final($h), 'truncado' => $truncado, 'columnas' => array_column($cols, 'titulo'),
             'archivo' => self::nombreArchivo($nombreBase . ($truncado ? '_parcial' : ''), $formato), 'limite' => $max,
         ];
+    }
+
+
+    /**
+     * Envuelve un contenido ya renderizado (p. ej. el CSV de varias secciones de los reportes, que NO es una tabla plana) en el mismo
+     * arreglo que devuelve generar(), para que pase por la misma auditoría previa y por entregar(). No lo convierte a Excel.
+     *
+     * @param string[] $columnas encabezados que se auditan (los del bloque principal)
+     */
+    public static function desdeContenido(string $contenido, string $formato, string $nombreBase, int $filas, array $columnas = []): array
+    {
+        if (!isset(self::FORMATOS[$formato])) { throw new \InvalidArgumentException('Formato de exportación no válido.'); }
+        $flujo = fopen('php://temp/maxmemory:' . self::MEMORIA_TEMPORAL, 'w+b');
+        if ($flujo === false) { throw new \RuntimeException('No se pudo preparar la exportación.'); }
+        fwrite($flujo, $contenido);
+        rewind($flujo);
+        return ['flujo' => $flujo, 'formato' => $formato, 'mime' => self::FORMATOS[$formato], 'filas' => $filas, 'bytes' => strlen($contenido), 'sha256' => hash('sha256', $contenido),
+            'truncado' => false, 'columnas' => array_values($columnas), 'archivo' => self::nombreArchivo($nombreBase, $formato), 'limite' => $filas];
     }
 
     /** Envía el archivo generado y cierra el flujo. En pruebas (CLI sin cabeceras observables) registra las cabeceras en $GLOBALS. */
