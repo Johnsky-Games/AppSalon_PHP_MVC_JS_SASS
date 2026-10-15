@@ -108,6 +108,7 @@ final class ExportadorTest extends TestCase
     public function test_memoria_acotada_con_muchas_filas(): void
     {
         $gen = (static function () { for ($i = 1; $i <= 30000; $i++) { yield ['id' => $i, 'n' => "Cliente $i", 'm' => $i, 'f' => '2026-10-15']; } })();
+        if (function_exists('memory_reset_peak_usage')) { memory_reset_peak_usage(); }   // el pico de otras pruebas no cuenta
         $antes = memory_get_usage();
         $r = Exportador::generar('xlsx', 'grande', self::COLS, $gen);
         $this->assertSame(30000, $r['filas']);
