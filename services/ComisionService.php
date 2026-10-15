@@ -42,6 +42,30 @@ final class ComisionService
         if ($fila['estado']!=='liquidada') { return; }
         $this->repo->consulta("INSERT INTO comisiones_movimientos (profesional_id,profesional_nombre,pago_id,pago_referencia,tipo,base_centavos,porcentaje_pb,monto_centavos,origen_id,registrado_en) VALUES (?,?,?,?,'reversa',?,?,?,?,?)",'isisiiiis',[$fila['profesional_id'],$fila['profesional_nombre'],$pago,$fila['pago_referencia'],(int)$fila['base_centavos'],(int)$fila['porcentaje_pb'],-(int)$fila['monto_centavos'],(int)$fila['id'],OperacionRepository::ahora()]);
     }
+    /**
+     * Devolución POR IMPORTE (parcial o total) de un pago, dentro de la transacción de la devolución (cita → pago → profesional).
+     * La comisión se revierte en proporción a lo devuelto, con redondeo acumulado (la suma de las reversas nunca excede el devengo):
+     *  · devolución total de una sola vez de un devengo aún sin liquidar → se anula (comportamiento histórico);
+     *  · en cualquier otro caso se anexa una reversa negativa pendiente (se compensa con comisiones futuras o con lo no abonado).
+     */
+    public function revertirParcial(int $pago,int $devolucionId,int $montoPago,int $devueltoAntes,int $devueltoAhora): void
+    {
+        if ($montoPago<=0 || $devueltoAhora<=$devueltoAntes || $devueltoAhora>$montoPago || $devolucionId<=0) { throw new \InvalidArgumentException('Devolución fuera de rango.'); }
+        $fila=$this->repo->consulta("SELECT * FROM comisiones_movimientos WHERE pago_id=? AND tipo='devengo'",'i',[$pago])[0] ?? null;
+        if (!$fila) { return; }
+        if ($fila['profesional_id']) { $this->repo->consulta('SELECT id FROM profesionales WHERE id=? FOR UPDATE','i',[(int)$fila['profesional_id']]); $this->repo->consulta('SELECT profesional_id FROM comisiones_config WHERE profesional_id=? FOR UPDATE','i',[(int)$fila['profesional_id']]); }
+        $fila=$this->repo->consulta('SELECT * FROM comisiones_movimientos WHERE id=? FOR UPDATE','i',[(int)$fila['id']])[0];
+        if ($fila['estado']==='anulada') { return; }
+        if ($devueltoAntes===0 && $devueltoAhora===$montoPago && $fila['estado']==='pendiente') {
+            $this->repo->consulta("UPDATE comisiones_movimientos SET estado='anulada' WHERE id=?",'i',[(int)$fila['id']]);
+            return;
+        }
+        $acumulado=CobroCalculo::proporcional((int)$fila['monto_centavos'],$devueltoAhora,$montoPago);
+        $previo=-(int)($this->repo->consulta("SELECT COALESCE(SUM(monto_centavos),0) s FROM comisiones_movimientos WHERE origen_id=? AND tipo='reversa'",'i',[(int)$fila['id']])[0]['s'] ?? 0);
+        $reversa=$acumulado-$previo;
+        if ($reversa<=0) { return; }
+        $this->repo->consulta("INSERT INTO comisiones_movimientos (profesional_id,profesional_nombre,pago_id,pago_referencia,tipo,base_centavos,porcentaje_pb,monto_centavos,origen_id,devolucion_id,registrado_en) VALUES (?,?,?,?,'reversa',?,?,?,?,?,?)",'isisiiiiis',[$fila['profesional_id'],$fila['profesional_nombre'],$pago,$fila['pago_referencia'],$devueltoAhora-$devueltoAntes,(int)$fila['porcentaje_pb'],-$reversa,(int)$fila['id'],$devolucionId,OperacionRepository::ahora()]);
+    }
     public function liquidar(int $actor,array $datos): array
     {
         $prof=filter_var($datos['profesional_id'] ?? null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]]);
