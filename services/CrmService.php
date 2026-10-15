@@ -157,6 +157,10 @@ final class CrmService
 
     private CrmRepository $repo;
     private ?\DateTimeImmutable $ahora;
+    private int $maxFilasExportacion = self::EXPORT_MAX_FILAS;
+
+    /** Tope de filas por archivo (por omisión EXPORT_MAX_FILAS). Existe para pruebas de truncado y para ajustarlo sin tocar el código de exportación. */
+    public function setMaxFilasExportacion(int $max): void { $this->maxFilasExportacion = max(1, $max); }
 
     public function __construct(CrmRepository $repo, ?\DateTimeImmutable $ahora = null)
     {
@@ -846,8 +850,8 @@ final class CrmService
         return [
             'tipo' => $tipo, 'columnas' => $columnas, 'filas' => $filas, 'totales' => $totales, 'universo' => $universo,
             'base' => ($comercial ? 'lista_comercial_' : 'clientes_') . $f['desde'] . '_a_' . min($f['hasta'], $hoy),
-            'opciones' => ['max_filas' => self::EXPORT_MAX_FILAS, 'hoja' => $comercial ? 'Lista comercial' : 'Clientes',
-                'aviso_truncado' => 'AVISO: el filtro tiene ' . $universo['clientes'] . ' filas; la exportación se limitó a ' . self::EXPORT_MAX_FILAS . '. Afine los filtros para obtener el resto.'],
+            'opciones' => ['max_filas' => $this->maxFilasExportacion, 'hoja' => $comercial ? 'Lista comercial' : 'Clientes',
+                'aviso_truncado' => 'AVISO: el filtro tiene ' . $universo['clientes'] . ' filas; la exportación se limitó a ' . $this->maxFilasExportacion . '. Afine los filtros para obtener el resto.'],
         ];
     }
 }
