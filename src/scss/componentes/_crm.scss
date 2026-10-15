@@ -137,6 +137,7 @@
 
 // ------------------------------------------------------------ tablas
 .crm-tabla {
+  position: relative; /* contiene los textos solo-lectores (.crm-sr, absolutos) dentro del área desplazable: sin esto desbordan la página */
   width: 100%; max-width: 100%; min-width: 0; overflow-x: auto; overscroll-behavior-inline: contain;
   background: var(--ui-surface, #fff); border: 1px solid var(--ui-border, #e2e9e7); border-radius: 1.4rem;
   &:focus-visible { outline: 3px solid var(--ui-accent, #16766c); outline-offset: 2px; }
