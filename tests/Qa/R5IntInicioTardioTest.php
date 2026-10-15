@@ -80,4 +80,40 @@ final class R5IntInicioTardioTest extends R5Case
         $this->assertSame((int)self::$e['dueno']['id'], (int)$cmp['emitido_por']);
         $this->assertSame($fecha, self::q('SELECT fecha FROM citas WHERE id=?', [$cita])[0]['fecha'], 'la fecha original de la cita sigue intacta tras cobrar');
     }
+
+    /** Ausencia registrada tarde, finalización por otro actor y fecha original conservada en la bitácora. */
+    public function test_ausencia_tarde_y_fin_por_otro_actor_conservan_actor_hora_real_y_fecha_original(): void
+    {
+        $fecha = self::gye('-400 days')->format('Y-m-d');
+        $n = self::entrar(self::$base, self::$e['dueno']);
+        $g = self::entrar(self::$base, self::$e['gerente']);
+        $pro = self::$e['proA']['profesional_id'];
+
+        // Cita muy antigua: ausencia tardía
+        $a = self::crearCita(['cliente' => self::$e['cliente']['id'], 'pro' => $pro, 'fecha' => $fecha, 'hora' => '09:00:00']);
+        $csrf = Navegador::csrfDe($n->get("/agenda?desde=$fecha&hasta=$fecha")['body']);
+        $r = $n->post('/agenda/estado', ['csrf_token' => $csrf, 'id' => $a, 'estado' => 'no_asistio', 'volver' => 'agenda', 'r_desde' => $fecha, 'r_hasta' => $fecha]);
+        $this->assertSame(302, $r['status']);
+        $c = self::q('SELECT * FROM citas WHERE id=?', [$a])[0];
+        $this->assertSame('no_asistio', $c['estado']);
+        $this->assertSame($fecha, $c['fecha'], 'la fecha original no cambia');
+        $this->assertSame((int)self::$e['dueno']['id'], (int)$c['ausencia_por']);
+        $this->assertLessThan(120, self::enSegundos((string)$c['ausencia_at']));
+        $this->assertStringStartsNotWith($fecha, (string)$c['ausencia_at']);
+
+        // Inicia el propietario, finaliza otra persona (gerente): cada campo conserva su actor
+        $b = self::crearCita(['cliente' => self::$e['cliente']['id'], 'pro' => $pro, 'fecha' => $fecha, 'hora' => '11:00:00']);
+        $this->assertSame(302, $n->post('/agenda/estado', ['csrf_token' => $csrf, 'id' => $b, 'estado' => 'en_servicio', 'volver' => 'agenda', 'r_desde' => $fecha, 'r_hasta' => $fecha])['status']);
+        $csrfG = Navegador::csrfDe($g->get("/agenda?desde=$fecha&hasta=$fecha")['body']);
+        $this->assertSame(302, $g->post('/agenda/estado', ['csrf_token' => $csrfG, 'id' => $b, 'estado' => 'completada', 'volver' => 'agenda', 'r_desde' => $fecha, 'r_hasta' => $fecha])['status']);
+        $c = self::q('SELECT * FROM citas WHERE id=?', [$b])[0];
+        $this->assertSame((int)self::$e['dueno']['id'], (int)$c['atencion_inicio_por']);
+        $this->assertSame((int)self::$e['gerente']['id'], (int)$c['atencion_fin_por'], 'quien finaliza es otra persona y queda registrada');
+        $this->assertSame($fecha, $c['fecha']);
+        $ev = self::q('SELECT * FROM agenda_eventos WHERE citaId=? ORDER BY id', [$b]);
+        $this->assertCount(2, $ev);
+        $this->assertSame((int)self::$e['gerente']['id'], (int)$ev[1]['actorId']);
+        foreach ($ev as $e) { $this->assertStringStartsNotWith($fecha, (string)$e['creado_en'], 'el evento no se retrodata'); }
+        $this->assertStringContainsString($fecha, (string)$ev[0]['antes_json'] . (string)$ev[0]['despues_json'], 'la bitácora conserva la fecha original de la cita');
+    }
 }

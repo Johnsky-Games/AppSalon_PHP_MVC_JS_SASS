@@ -17,7 +17,7 @@ require_once __DIR__ . '/QaCase.php';
 abstract class R5Case extends QaCase
 {
     public const PUERTO_MIN = 8150;
-    public const PUERTO_MAX = 8159;
+    public const PUERTO_MAX = 8199;
     public const SMTP_PUERTO = 2590;
     public const ZONA = 'America/Guayaquil';
 
@@ -32,16 +32,17 @@ abstract class R5Case extends QaCase
 
     // ====================================================================================================== servidor
 
-    /** Servidor HTTP real (php -S con 8 procesos) en 8150-8159. Una URL por clave y clase. */
+    /** Servidor HTTP real (php -S con 8 procesos) en 8199-8150 (descendente). Una URL por clave y clase. */
     protected static function servidorQ5(string $clave = 'q5', array $env = []): string
     {
         if (isset(self::$srvQ5[$clave])) { return self::$srvQ5[$clave]['url']; }
         $port = 0;
-        for ($c = self::PUERTO_MIN; $c <= self::PUERTO_MAX && $port === 0; $c++) {
+        // De arriba hacia abajo: QaCase (clases antiguas) busca desde 8150 hacia arriba y, con orden aleatorio, agotaba un rango compartido.
+        for ($c = self::PUERTO_MAX; $c >= self::PUERTO_MIN && $port === 0; $c--) {
             $s = @stream_socket_server("tcp://127.0.0.1:$c", $en, $es);
             if ($s) { fclose($s); $port = $c; }
         }
-        if ($port === 0) { throw new \RuntimeException('Sin puertos HTTP libres en 8150-8159'); }
+        if ($port === 0) { throw new \RuntimeException('Sin puertos HTTP libres en 8150-8199'); }
         if (!self::$smtpQ5) { self::iniciarSmtp(self::SMTP_PUERTO); self::$smtpQ5 = true; }
         $log = sys_get_temp_dir() . '/q5_web_' . $port . '.log';
         $sess = sys_get_temp_dir() . '/q5_sess_' . $port;
@@ -68,10 +69,33 @@ abstract class R5Case extends QaCase
     protected static function pararServidorQ5(string $clave = 'q5'): void
     {
         if (isset(self::$srvQ5[$clave])) {
-            @proc_terminate(self::$srvQ5[$clave]['proc']);
-            @proc_close(self::$srvQ5[$clave]['proc']);
+            $srv = self::$srvQ5[$clave];
+            $pid = (int)(proc_get_status($srv['proc'])['pid'] ?? 0);
+            // `php -S` con PHP_CLI_SERVER_WORKERS crea procesos hijos que sobreviven a la señal del padre y retienen el puerto
+            // (en CI agotaban 8150-8159 para las clases siguientes): se termina todo el árbol y se espera a que el puerto quede libre.
+            $arbol = $pid > 0 ? self::descendientesQ5($pid) : [];
+            @proc_terminate($srv['proc']);
+            foreach ($arbol as $h) { @exec('kill -TERM ' . (int)$h . ' 2>/dev/null'); }
+            @proc_close($srv['proc']);
+            $puerto = (int)substr(strrchr($srv['url'], ':'), 1);
+            for ($i = 0; $i < 40; $i++) {
+                $s = @stream_socket_server("tcp://127.0.0.1:$puerto", $en, $es);
+                if ($s) { fclose($s); break; }
+                if ($i === 20) { foreach ($arbol as $h) { @exec('kill -KILL ' . (int)$h . ' 2>/dev/null'); } }
+                usleep(100000);
+            }
             unset(self::$srvQ5[$clave]);
         }
+    }
+
+    /** @return list<int> PIDs descendientes (hijos, nietos…) de un proceso. */
+    private static function descendientesQ5(int $pid): array
+    {
+        $salida = [];
+        @exec('pgrep -P ' . $pid . ' 2>/dev/null', $salida);
+        $todos = [];
+        foreach ($salida as $h) { $h = (int)$h; if ($h > 0) { $todos[] = $h; foreach (self::descendientesQ5($h) as $n) { $todos[] = $n; } } }
+        return $todos;
     }
 
     protected static function logQ5(string $clave = 'q5'): string

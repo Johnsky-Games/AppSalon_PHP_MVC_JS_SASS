@@ -636,6 +636,24 @@ final class R5QaCobroTest extends R5Case
         $this->conciliado();
     }
 
+    /** Escrita por el integrador (cubre el hueco que halló la reverificación del QA): dos devoluciones parciales sucesivas descuentan las reversas previas. */
+    public function test_C4_dos_devoluciones_parciales_sucesivas_revierten_la_comision_sin_duplicar(): void
+    {
+        $c = $this->cita([['Servicio dos devol', '40.00']]);
+        $n = $this->eq('dueno');
+        $this->aceptado($this->cobrar($n, $c, ['monto' => 4000, 'metodo' => 'efectivo', 'recibido' => 4000]), 'cobro total $40');
+        $this->aceptado($this->devolver($n, $c, 1000), 'devolución $10');
+        $this->aceptado($this->devolver($n, $c, 1000, 'Segunda devolución QA'), 'devolución $10 (segunda)');
+        $f = self::resumenFinanciero($c);
+        $this->assertSame(2000, $f['neto']);
+        $neta = (int)self::escalar("SELECT COALESCE(SUM(m.monto_centavos),0) FROM comisiones_movimientos m JOIN pagos p ON p.id=m.pago_id WHERE p.cita_id=? AND m.estado<>'anulada'", [$c]);
+        $this->assertSame(200, $neta, 'comisión neta = 10 % de los $20.00 retenidos tras dos devoluciones');
+        $this->aceptado($this->devolver($n, $c, 2000, 'Devolución final QA'), 'devolución del resto');
+        $neta = (int)self::escalar("SELECT COALESCE(SUM(m.monto_centavos),0) FROM comisiones_movimientos m JOIN pagos p ON p.id=m.pago_id WHERE p.cita_id=? AND m.estado<>'anulada'", [$c]);
+        $this->assertSame(0, $neta, 'devuelto todo, la comisión neta es 0 (sin reversas de más)');
+        $this->conciliado();
+    }
+
     /** Req C3 (criterio QA, comisiones): 10 pagos parciales de $0.15 sobre $1.50 con comisión del 10 % no pierden céntimos por redondeo: Σ comisión = 10 % del cobrado ±1 centavo. */
     public function test_C3_redondeo_de_comision_no_deriva_con_pagos_parciales(): void
     {
