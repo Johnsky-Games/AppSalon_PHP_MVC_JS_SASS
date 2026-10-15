@@ -394,6 +394,16 @@ class APIController
     }
 
     /**
+     * Error de un envío de formulario (no JSON) con «Volver» al mismo portal: el destino sale del catálogo (campos `volver`/`r_*` del
+     * formulario o el predeterminado del portal), nunca del `Referer`. HTML aunque la ruta sea /api (contrato del formulario legado).
+     */
+    private static function errorHtml(int $codigo, string $mensaje, string $porDefecto): void
+    {
+        [$volver, $clave] = destino_volver_con_clave($porDefecto);
+        \Classes\ErrorResponse::render($codigo, ['format' => 'html', 'mensaje' => $mensaje, 'volver' => $volver, 'volver_etiqueta' => etiqueta_destino($clave)]);
+    }
+
+    /**
      * Endpoint para cancelación lógica de citas:
      * Valida autenticación y CSRF en el controlador, y delega a CitaService::cancelarCita.
      */
@@ -408,6 +418,23 @@ class APIController
             $usuarioIdAutenticado = $_SESSION['id'] ?? null;
             $esAdmin = puede('agenda.gestionar');
             $esJsonExplicito = self::solicitaRespuestaJsonExplicita();
+            // Destino por portal (catálogo central; sin Referer): el equipo vuelve a las citas del día, el cliente a sus citas.
+            $porDefecto = portal_sesion() === 'equipo' ? 'admin_citas' : 'cliente_citas';
+
+            // Una sesión del equipo solo cancela citas con agenda.gestionar. Sus citas personales (si también es clienta) se gestionan
+            // desde el portal de clientes: cada portal ve y modifica solo lo suyo.
+            if (portal_sesion() === 'equipo' && !$esAdmin) {
+                $mensajePortal = 'Tu sesión es la del portal del equipo y no incluye cancelar citas. Las citas personales se gestionan desde el portal de clientes.';
+                if ($esJsonExplicito) {
+                    http_response_code(403);
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode(['resultado' => false, 'status' => 'forbidden', 'codigo' => 'portal_incorrecto', 'error' => $mensajePortal], JSON_UNESCAPED_UNICODE);
+                } else {
+                    self::errorHtml(403, $mensajePortal, $porDefecto);
+                }
+                detener_ejecucion(403);
+                return;
+            }
 
             $motivo = $_POST['motivo'] ?? ($_POST['motivo_cancelacion'] ?? null);
             $resultado = self::obtenerCitaService()->cancelarCita(
@@ -431,8 +458,8 @@ class APIController
                     detener_ejecucion($httpCode);
                     return;
                 }
-                header('Location: ' . inicio_portal());
-                detener_ejecucion(302);
+                self::errorHtml($httpCode, (string)($resultado['error'] ?? 'Identificador de cita inválido.'), $porDefecto);
+                detener_ejecucion($httpCode);
                 return;
             }
 
@@ -449,8 +476,8 @@ class APIController
                     detener_ejecucion(404);
                     return;
                 }
-                header('Location: ' . destino_retorno_seguro());
-                detener_ejecucion(302);
+                self::errorHtml(404, (string)($resultado['error'] ?? 'La cita solicitada no existe.'), $porDefecto);
+                detener_ejecucion(404);
                 return;
             }
 
@@ -468,7 +495,7 @@ class APIController
                         'error' => $resultado['error'] ?? 'No tienes autorización para eliminar esta cita'
                     ]);
                 } else {
-                    \Classes\ErrorResponse::render(403, ['format' => 'html']);
+                    self::errorHtml(403, 'No tienes autorización para cancelar esta cita.', $porDefecto);
                 }
                 detener_ejecucion(403);
                 return;
@@ -484,7 +511,7 @@ class APIController
                         'error' => $mensajeError
                     ]);
                 } else {
-                    \Classes\ErrorResponse::render(500, ['format' => 'html']);
+                    self::errorHtml(500, 'No fue posible cancelar la cita. Revisa su estado antes de intentarlo de nuevo.', $porDefecto);
                 }
                 detener_ejecucion(500);
                 return;
@@ -503,8 +530,7 @@ class APIController
                 return;
             }
 
-            $destino = destino_retorno_seguro();
-            header('Location: ' . $destino);
+            header('Location: ' . destino_volver($porDefecto));
             detener_ejecucion(302);
             return;
         }

@@ -20,31 +20,7 @@
             <span class="ui-error-label">TU ESPACIO DE BIENESTAR</span>
         </header>
         <main id="contenido-principal" class="ui-error-main" tabindex="-1">
-            <section class="ui-error-card" aria-labelledby="error-title">
-                <div class="ui-error-art" aria-hidden="true">
-                    <span class="ui-error-orbit"></span>
-                    <span class="ui-error-number"><?php echo $errorStatus; ?></span>
-                    <span class="ui-error-art-caption">Un nuevo camino<br>para continuar.</span>
-                    <span class="ui-error-spark">✦</span>
-                </div>
-                <div class="ui-error-content">
-                    <p class="ui-eyebrow">ESTAMOS AQUÍ PARA AYUDARTE</p>
-                    <h1 id="error-title"><?php echo $errorEscape($errorDetails['title']); ?></h1>
-                    <p class="ui-error-description"><?php echo $errorEscape($errorDescription); ?></p>
-                    <p class="ui-error-hint"><?php echo $errorEscape($errorDetails['hint']); ?></p>
-                    <div class="ui-state-actions">
-                        <a class="boton" href="<?php echo $errorEscape($errorHome); ?>"><?php echo $errorStatus === 401 ? 'Iniciar sesión' : 'Volver al inicio'; ?></a>
-                        <?php if ($errorStatus === 410): ?>
-                        <a class="boton ui-button-quiet" href="/olvide">Solicitar un enlace</a>
-                        <?php elseif (!empty($_SESSION['login']) && $errorHome !== '/perfil'): ?>
-                        <a class="boton ui-button-quiet" href="/perfil">Ir a mi perfil</a>
-                        <?php endif; ?>
-                    </div>
-                    <?php if ($errorReference !== ''): ?>
-                    <p class="ui-error-reference">Referencia de ayuda: <span><?php echo $errorEscape($errorReference); ?></span></p>
-                    <?php endif; ?>
-                </div>
-            </section>
+            <?php include __DIR__ . '/tarjeta.php'; ?>
         </main>
         <footer class="ui-error-footer">
             <span><?php echo $errorEscape($errorCompany['nombre']); ?></span>

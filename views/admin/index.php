@@ -20,11 +20,14 @@ foreach ($citas as $filaUi) {
     <article class="ui-card ui-stat"><p>Clientes en agenda</p><strong><?php echo count($clientesUnicosUi); ?></strong><small>Clientes únicos por correo</small></article>
     <article class="ui-card ui-stat"><p>Importe de servicios</p><strong>$<?php echo s(number_format($importeAgendaUi, 2, '.', '')); ?></strong><small>Importe listado; no equivale a cobros</small></article>
 </div>
+<?php $accesosRapidos = array_filter([['profesionales', 'Gestionar equipo'], ['servicios', 'Ver servicios'], ['reportes', 'Explorar reportes'], ['caja', 'Ir a caja']], static fn(array $a): bool => destino_portal($a[0]) !== '' && ($a[0] !== 'caja' || destino_ruta_registrada('/caja'))); ?>
+<?php if ($accesosRapidos): ?>
 <nav class="ui-quick-links" aria-label="Accesos de administración">
-    <a class="boton" href="/profesionales">Gestionar equipo <span aria-hidden="true">↗</span></a>
-    <a class="boton" href="/servicios">Ver servicios <span aria-hidden="true">↗</span></a>
-    <a class="boton" href="/admin/reportes">Explorar reportes <span aria-hidden="true">↗</span></a>
+    <?php foreach ($accesosRapidos as [$claveAcceso, $textoAcceso]): ?>
+    <a class="boton" href="<?php echo s(destino_portal($claveAcceso)); ?>"><?php echo s($textoAcceso); ?> <span aria-hidden="true">↗</span></a>
+    <?php endforeach; ?>
 </nav>
+<?php endif; ?>
 <h2 class="ui-section-title">Buscar Citas</h2>
 <p class="ui-form-help">Elige una fecha para consultar las citas y sus servicios.</p>
 <div class="busqueda ui-card">
@@ -89,6 +92,7 @@ foreach ($citas as $filaUi) {
             <form action="/api/eliminar" method="POST">
                 <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
                 <input type="hidden" name="id" value="<?php echo s((string)$cita->id); ?>">
+                <?php echo campos_retorno('admin_citas', ['fecha' => $fecha ?? '']); ?>
                 <input type="submit" class="boton-eliminar" value="Eliminar">
             </form>
         </li>

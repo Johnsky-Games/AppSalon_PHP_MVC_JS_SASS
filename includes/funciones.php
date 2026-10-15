@@ -128,7 +128,7 @@ function isAuth(): void
     $loginDestino = '/';
     if (($_SESSION['login'] ?? false) === true) {
         $contexto = (new \Services\AuthorizationService())->contexto((int)($_SESSION['id'] ?? 0));
-        $loginDestino = ($_SESSION['portal'] ?? '') === 'equipo' ? '/equipo/login' : '/';
+        $loginDestino = destino_portal(($_SESSION['portal'] ?? '') === 'equipo' ? 'login_equipo' : 'login_cliente');
         // La membresía del portal debe seguir vigente: una sesión de equipo exige rol laboral activo.
         $portalSesion = $contexto ? portal_sesion($contexto) : 'cliente';
         if (!$contexto || !\Services\AuthorizationService::sesionVigente($contexto, $portalSesion) || (int)$contexto['confirmado'] !== 1 ||
@@ -146,6 +146,9 @@ function isAuth(): void
             echo json_encode(['resultado' => false, 'error' => 'No autenticado']);
             detener_ejecucion(401);
         } else {
+            // La pantalla pedida (solo del catálogo, solo GET) se conserva para después del inicio de sesión del portal que corresponda.
+            $intencion = destino_intencion_actual();
+            if ($intencion !== null) { $_SESSION['destino_tras_login'] = $intencion; }
             redirigir($_SESSION['portal_aviso'] ?? $loginDestino);
         }
     }
@@ -170,7 +173,7 @@ function isAdmin(): void
             echo json_encode(['resultado' => false, 'error' => 'Acceso denegado']);
             detener_ejecucion(403);
         } else {
-            \Classes\ErrorResponse::render(403, ['mensaje' => 'Tu cuenta no tiene acceso a esta sección. Si lo necesitas, solicita autorización a la administración del salón.']);
+            \Classes\ErrorResponse::render(403, ['mensaje' => mensaje_acceso_denegado('Tu cuenta no tiene acceso a esta sección. Si lo necesitas, solicita autorización a la administración del salón.')] + opciones_volver_portal());
             detener_ejecucion(403);
         }
     }
@@ -270,20 +273,30 @@ function portal_sesion(?array $contexto = null): string
     return $c && $c['rol'] !== 'cliente' ? 'equipo' : 'cliente';
 }
 
-/** Página de inicio según el portal de la sesión (logo y redirecciones coherentes). */
+/**
+ * Página de inicio según el portal de la sesión (logo, «Volver al inicio» y redirecciones coherentes). Cada rol tiene el suyo: un
+ * profesional no puede abrir /admin y finanzas no abre la agenda. Una sesión de equipo cuya membresía laboral ya no está vigente
+ * conduce al acceso del equipo (nunca a una pantalla del cliente).
+ */
 function inicio_portal(): string
 {
     if (($_SESSION['login'] ?? false) !== true) { return '/'; }
     if (portal_sesion() === 'equipo') {
-        return match (rol_actual()) { 'profesional' => '/agenda', 'finanzas' => '/admin/finanzas', default => '/admin' };
+        $rol = rol_actual();
+        if ($rol === 'cliente') { return '/equipo/login'; }
+        return match ($rol) { 'profesional' => '/agenda', 'finanzas' => '/admin/finanzas', default => '/admin' };
     }
     return '/cita';
 }
 
 /**
- * Destino de retorno tras un envío de formulario. Solo se acepta el `Referer` si es del MISMO origen
- * (host y puerto de la petición o de APP_URL); se reduce a ruta+consulta para impedir redirecciones abiertas
- * (CWE-601). Cualquier otro caso devuelve el inicio del portal de la sesión, nunca una ruta que deniegue al rol.
+ * HEREDADA (R2 · DEF-R2-03). Destino de retorno a partir del `Referer` del MISMO origen, reducido a ruta+consulta (CWE-601).
+ * Ya no la usa ningún controlador: desde la ronda 5 todo retorno sale del catálogo (`destino_volver()` / `campos_retorno()`), que
+ * además valida portal y permiso. Se conserva únicamente por compatibilidad de la API pública y de su prueba de regresión
+ * (tests/Unit/DestinoRetornoSeguroTest.php); no debe usarse en código nuevo porque el `Referer` lo controla el navegador, puede
+ * faltar (políticas de privacidad) y no distingue portales.
+ *
+ * @deprecated usar destino_volver()
  */
 function destino_retorno_seguro(?string $referer = null): string
 {
@@ -313,7 +326,7 @@ function exigir_permiso(string $permiso): void
         header('Content-Type: application/json; charset=utf-8');
         echo json_encode(['resultado' => false, 'error' => 'No tienes permiso para esta operación']);
     } else {
-        \Classes\ErrorResponse::render(403, ['mensaje' => 'Tu cuenta no tiene permiso para realizar esta operación. Consulta con la administración del salón si necesitas acceso.']);
+        \Classes\ErrorResponse::render(403, ['mensaje' => mensaje_acceso_denegado('Tu cuenta no tiene permiso para realizar esta operación. Consulta con la administración del salón si necesitas acceso.')] + opciones_volver_portal());
     }
     detener_ejecucion(403);
 }
@@ -331,5 +344,6 @@ function profesional_actual_id(): ?int
     return $c && portal_sesion($c) === 'equipo' && \Services\AuthorizationService::sesionVigente($c, 'equipo') && $c['profesional_id'] !== null ? (int)$c['profesional_id'] : null;
 }
 
-// Destinos centrales por portal y permiso (ronda 5).
+// Destinos centrales por portal y permiso (ronda 5) y guardias de portal.
 require_once __DIR__ . '/destinos.php';
+require_once __DIR__ . '/portales.php';
