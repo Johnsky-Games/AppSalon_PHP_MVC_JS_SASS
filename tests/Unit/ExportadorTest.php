@@ -114,4 +114,52 @@ final class ExportadorTest extends TestCase
         $this->assertLessThan(12 * 1048576, memory_get_peak_usage() - $antes + 1);
         fclose($r['flujo']);
     }
+
+    public function test_r5_truncado_visible_en_nombre_cabecera_y_ultima_fila_en_csv_y_xlsx(): void
+    {
+        foreach (['csv', 'xlsx'] as $f) {
+            $r = Exportador::generar($f, 'x', self::COLS, self::filas(), ['id' => 9], ['max_filas' => 2, 'aviso_truncado' => 'AVISO: parcial']);
+            $this->assertTrue($r['truncado']);
+            $this->assertSame("x_parcial.$f", $r['archivo']);
+            $c = stream_get_contents($r['flujo']);
+            $this->assertStringContainsString('AVISO: parcial', $f === 'csv' ? $c : self::descomprimir($c)['xl/worksheets/sheet1.xml']);
+            $h = Exportador::entregar($r, false);
+            $this->assertSame('1', $h['X-Exportacion-Truncada']);
+            $this->assertSame('2', $h['X-Exportacion-Filas']);
+        }
+        $r = Exportador::generar('csv', 'y', self::COLS, self::filas(), null, ['truncado_conocido' => true]);
+        $this->assertTrue($r['truncado'], 'el origen ya limitó las filas: se avisa aunque no se supere el máximo');
+        fclose($r['flujo']);
+        $r = Exportador::generar('csv', 'z', self::COLS, self::filas());
+        $this->assertFalse($r['truncado']);
+        $this->assertSame('0', Exportador::entregar($r, false)['X-Exportacion-Truncada']);
+    }
+
+    public function test_r5_formulas_tras_espacios_o_controles_iniciales_tambien_se_neutralizan(): void
+    {
+        foreach (['  =1+1', " \t=cmd", "\f=x", ' @SUM(1)', '   -5', ' +1'] as $t) {
+            $this->assertStringStartsWith("'", Neutralizacion::textoCsv($t), json_encode($t));
+        }
+        $this->assertSame('Ana  Pérez', Neutralizacion::textoCsv('Ana  Pérez'));
+        $this->assertSame('Río - Sur', Neutralizacion::textoCsv('Río - Sur'));
+    }
+
+    public function test_r5_contenido_ya_renderizado_pasa_por_el_mismo_circuito(): void
+    {
+        $r = Exportador::desdeContenido("a,b\r\n1,2\r\n", 'csv', '../../reporte x', 1, ['a', 'b']);
+        $this->assertSame('reporte_x.csv', $r['archivo']);
+        $this->assertSame(hash('sha256', "a,b\r\n1,2\r\n"), $r['sha256']);
+        $this->assertSame(10, $r["bytes"]);
+        $this->assertSame("a,b\r\n1,2\r\n", stream_get_contents($r['flujo']));
+        $this->expectException(\InvalidArgumentException::class);
+        Exportador::desdeContenido('x', 'pdf', 'x', 0);
+    }
+
+    public function test_r5_un_fallo_a_mitad_no_deja_flujos_abiertos(): void
+    {
+        $gen = (static function () { yield ['id' => 1, 'n' => 'a', 'm' => 1, 'f' => null]; throw new \RuntimeException('base caída'); })();
+        $antes = count(get_resources('stream'));
+        try { Exportador::generar('xlsx', 'x', self::COLS, $gen); $this->fail('debía propagar'); } catch (\RuntimeException $e) { $this->assertSame('base caída', $e->getMessage()); }
+        $this->assertSame($antes, count(get_resources('stream')), 'el flujo temporal se cerró');
+    }
 }
