@@ -1565,8 +1565,8 @@ class ReporteService
         if ($bloque === 'reservas') {
             $columnas = [
                 ['clave' => 'id', 'titulo' => 'Cita ID', 'tipo' => 'entero'], ['clave' => 'fecha', 'titulo' => 'Fecha', 'tipo' => 'fecha'], ['clave' => 'horario', 'titulo' => 'Horario'],
-                ['clave' => 'cliente', 'titulo' => 'Cliente'], ['clave' => 'email', 'titulo' => 'Email Cliente'], ['clave' => 'profesional', 'titulo' => 'Profesional'],
-                ['clave' => 'estado', 'titulo' => 'Estado Cita'], ['clave' => 'servicios', 'titulo' => 'Servicios (Snapshot Historico)'], ['clave' => 'duracion', 'titulo' => 'Duracion Cita (min)', 'tipo' => 'entero'],
+                ['clave' => 'cliente', 'titulo' => 'Cliente', 'ancho' => 26], ['clave' => 'email', 'titulo' => 'Email Cliente', 'ancho' => 32], ['clave' => 'profesional', 'titulo' => 'Profesional', 'ancho' => 22],
+                ['clave' => 'estado', 'titulo' => 'Estado Cita'], ['clave' => 'servicios', 'titulo' => 'Servicios (Snapshot Historico)', 'ancho' => 44], ['clave' => 'duracion', 'titulo' => 'Duracion Cita (min)', 'tipo' => 'entero'],
                 ['clave' => 'total_cita', 'titulo' => 'Importe Total Cita (USD)', 'tipo' => 'dinero'], ['clave' => 'reservado', 'titulo' => 'Importe Reservado Filtrado (USD)', 'tipo' => 'dinero'],
                 ['clave' => 'pagado', 'titulo' => 'Ingreso Pagado (USD)', 'tipo' => 'dinero'], ['clave' => 'estado_pago', 'titulo' => 'Estado de Pago'],
             ];
@@ -1581,13 +1581,13 @@ class ReporteService
         }
         if ($bloque === 'movimientos') {
             $columnas = [
-                ['clave' => 'pago_id', 'titulo' => 'Pago ID', 'tipo' => 'entero'], ['clave' => 'referencia', 'titulo' => 'Referencia Pago'], ['clave' => 'tipo', 'titulo' => 'Tipo Movimiento'],
+                ['clave' => 'pago_id', 'titulo' => 'Pago ID', 'tipo' => 'entero'], ['clave' => 'referencia', 'titulo' => 'Referencia Pago', 'ancho' => 26], ['clave' => 'tipo', 'titulo' => 'Tipo Movimiento'],
                 ['clave' => 'proveedor', 'titulo' => 'Proveedor'], ['clave' => 'simulado', 'titulo' => 'Es Simulado'], ['clave' => 'monto', 'titulo' => 'Monto (USD)', 'tipo' => 'dinero'],
                 ['clave' => 'estado', 'titulo' => 'Estado Pago'], ['clave' => 'fecha_cobro', 'titulo' => 'Fecha Cobro'], ['clave' => 'fecha_reembolso', 'titulo' => 'Fecha Reembolso'],
                 ['clave' => 'cobro_periodo', 'titulo' => 'Importe Cobro Periodo (USD)', 'tipo' => 'dinero'], ['clave' => 'reembolso_periodo', 'titulo' => 'Importe Reembolso Periodo (USD)', 'tipo' => 'dinero'],
                 ['clave' => 'neto_periodo', 'titulo' => 'Neto Periodo (USD)', 'tipo' => 'dinero'], ['clave' => 'cita_id', 'titulo' => 'Cita Referencia ID', 'tipo' => 'entero'],
                 ['clave' => 'cita_estado', 'titulo' => 'Estado Cita'], ['clave' => 'cita_fecha', 'titulo' => 'Fecha Servicio'], ['clave' => 'profesional', 'titulo' => 'Profesional'],
-                ['clave' => 'cliente', 'titulo' => 'Cliente'], ['clave' => 'servicios', 'titulo' => 'Servicios Historicos'],
+                ['clave' => 'cliente', 'titulo' => 'Cliente'], ['clave' => 'servicios', 'titulo' => 'Servicios Historicos', 'ancho' => 44],
             ];
             $filas = [];
             foreach ($reporte['movimientos_financieros'] ?? [] as $m) {

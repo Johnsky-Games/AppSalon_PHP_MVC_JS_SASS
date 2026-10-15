@@ -38,7 +38,8 @@ final class XlsxEscritor implements EscritorTabla
         $z->abrirEntrada('xl/worksheets/sheet1.xml');
         $cols = '';
         foreach ($columnas as $i => $c) {
-            $ancho = max(12, min(48, (int)round(mb_strlen($c['titulo']) * 1.3) + 2));
+            $minimo = ['texto' => 18, 'fecha' => 13, 'fechahora' => 18, 'dinero' => 14, 'entero' => 11, 'decimal' => 12, 'porcentaje' => 12][$c['tipo']] ?? 12;
+            $ancho = !empty($c['ancho']) ? (int)$c['ancho'] : max($minimo, min(48, (int)round(mb_strlen($c['titulo']) * 1.15) + 2));
             $cols .= '<col min="' . ($i + 1) . '" max="' . ($i + 1) . '" width="' . $ancho . '" customWidth="1"/>';
         }
         $z->escribirEntrada($x . '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"/><cols>' . $cols . '</cols><sheetData>');

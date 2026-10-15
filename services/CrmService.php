@@ -790,19 +790,19 @@ final class CrmService
 
         if ($comercial) {
             $columnas = [
-                ['clave' => 'id', 'titulo' => 'ID', 'tipo' => 'entero'], ['clave' => 'nombre', 'titulo' => 'Nombre'], ['clave' => 'apellido', 'titulo' => 'Apellido'],
-                ['clave' => 'email', 'titulo' => 'Correo'], ['clave' => 'consentimiento_en', 'titulo' => 'Consentimiento desde', 'tipo' => 'fechahora'],
+                ['clave' => 'id', 'titulo' => 'ID', 'tipo' => 'entero'], ['clave' => 'nombre', 'titulo' => 'Nombre', 'ancho' => 20], ['clave' => 'apellido', 'titulo' => 'Apellido', 'ancho' => 20],
+                ['clave' => 'email', 'titulo' => 'Correo', 'ancho' => 34], ['clave' => 'consentimiento_en', 'titulo' => 'Consentimiento desde', 'tipo' => 'fechahora'],
                 ['clave' => 'consentimiento_version', 'titulo' => 'Versión del consentimiento', 'tipo' => 'entero'],
             ];
             $totales = ['nombre' => $universo['clientes'] . ' contactos'];
         } else {
             $columnas = [
-                ['clave' => 'id', 'titulo' => 'ID', 'tipo' => 'entero'], ['clave' => 'nombre', 'titulo' => 'Nombre'], ['clave' => 'apellido', 'titulo' => 'Apellido'],
-                ['clave' => 'email', 'titulo' => 'Correo'], ['clave' => 'telefono', 'titulo' => 'Teléfono'], ['clave' => 'membresia', 'titulo' => 'Estado de membresía'],
+                ['clave' => 'id', 'titulo' => 'ID', 'tipo' => 'entero'], ['clave' => 'nombre', 'titulo' => 'Nombre', 'ancho' => 20], ['clave' => 'apellido', 'titulo' => 'Apellido', 'ancho' => 20],
+                ['clave' => 'email', 'titulo' => 'Correo', 'ancho' => 34], ['clave' => 'telefono', 'titulo' => 'Teléfono'], ['clave' => 'membresia', 'titulo' => 'Estado de membresía'],
                 ['clave' => 'origen', 'titulo' => 'Origen'], ['clave' => 'alta', 'titulo' => 'Fecha de alta', 'tipo' => 'fecha'], ['clave' => 'confirmado', 'titulo' => 'Cuenta confirmada'],
                 ['clave' => 'consentimiento', 'titulo' => 'Consentimiento comercial'], ['clave' => 'consentimiento_en', 'titulo' => 'Fecha de consentimiento', 'tipo' => 'fechahora'],
                 ['clave' => 'consentimiento_version', 'titulo' => 'Versión del consentimiento', 'tipo' => 'entero'], ['clave' => 'consentimiento_anterior', 'titulo' => 'Consentimiento con versión anterior'],
-                ['clave' => 'comunicaciones', 'titulo' => 'Comunicaciones comerciales (estado)'], ['clave' => 'revocado_en', 'titulo' => 'Fecha de revocación', 'tipo' => 'fecha'],
+                ['clave' => 'comunicaciones', 'titulo' => 'Comunicaciones comerciales (estado)', 'ancho' => 36], ['clave' => 'revocado_en', 'titulo' => 'Fecha de revocación', 'tipo' => 'fecha'],
                 ['clave' => 'visitas_total', 'titulo' => 'Visitas completadas (total)', 'tipo' => 'entero'], ['clave' => 'visitas_rango', 'titulo' => 'Visitas completadas (periodo y filtros)', 'tipo' => 'entero'],
                 ['clave' => 'primera_visita', 'titulo' => 'Primera visita', 'tipo' => 'fecha'], ['clave' => 'ultima_visita', 'titulo' => 'Última visita', 'tipo' => 'fecha'],
                 ['clave' => 'recencia', 'titulo' => 'Días desde la última visita', 'tipo' => 'entero'], ['clave' => 'proxima_cita', 'titulo' => 'Próxima cita', 'tipo' => 'fecha'],

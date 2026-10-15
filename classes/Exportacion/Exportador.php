@@ -25,7 +25,7 @@ final class Exportador
     }
 
     /**
-     * @param array<int,array{clave:string,titulo:string,tipo?:string}> $columnas
+     * @param array<int,array{clave:string,titulo:string,tipo?:string,ancho?:int}> $columnas  (ancho: caracteres de la columna en XLSX; por omisión según el tipo y el título)
      * @param iterable<array<string,mixed>> $filas  generador recomendado (memoria acotada)
      * @param array<string,mixed>|null $totales     valores por clave de columna; se escribe una fila «Total»
      * @param array{max_filas?:int,hoja?:string,ahora?:\DateTimeImmutable,aviso_truncado?:string,truncado_conocido?:bool} $opciones
@@ -38,7 +38,7 @@ final class Exportador
         foreach ($columnas as $c) {
             $tipo = $c['tipo'] ?? 'texto';
             if (!in_array($tipo, ['texto', 'entero', 'dinero', 'decimal', 'porcentaje', 'fecha', 'fechahora'], true)) { throw new \InvalidArgumentException('Tipo de columna no válido.'); }
-            $cols[] = ['clave' => (string)$c['clave'], 'titulo' => (string)$c['titulo'], 'tipo' => $tipo];
+            $cols[] = ['clave' => (string)$c['clave'], 'titulo' => (string)$c['titulo'], 'tipo' => $tipo, 'ancho' => isset($c['ancho']) ? max(8, min(80, (int)$c['ancho'])) : null];
         }
         if (!$cols) { throw new \InvalidArgumentException('La exportación necesita al menos una columna.'); }
         $max = (int)($opciones['max_filas'] ?? self::MAX_FILAS_PREDETERMINADO);
