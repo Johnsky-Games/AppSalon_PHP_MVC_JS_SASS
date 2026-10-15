@@ -35,7 +35,7 @@ Rama `claude/blissful-hopper-f5k7a0` (sin merge a `main`, sin despliegue, sin PR
 
 ## 4. Resultados por suite (sin sumar)
 
-Se detallan con SHA en §8. Resumen de lo comprobado en la rama integrada (nube): PHPUnit por defecto 1058 pruebas; QA completo (`tests/Qa`) 879 pruebas con 0 omitidas; clases `R5Qa*` (116 pruebas) en verde; CSV y XLSX generados validados con openpyxl 3.1.5 y LibreOffice. El E2E de navegador con Chromium cubre el clic en «Iniciar atención», «Finalizar y cobrar», modales y descargas.
+Se detallan con SHA en §8. Resumen de lo comprobado en la rama integrada (nube): PHPUnit por defecto 1073 pruebas; QA completo (`tests/Qa`) 889 pruebas con 0 omitidas; clases `R5Qa*` (116 pruebas) en verde; CSV y XLSX generados validados con openpyxl 3.1.5 y LibreOffice. El E2E de navegador con Chromium cubre el clic en «Iniciar atención», «Finalizar y cobrar», modales y descargas.
 
 ## 5. Ejemplos ficticios
 
@@ -54,4 +54,14 @@ Ver `docs/R5_QA_INDEPENDIENTE.md` (hallazgos reales corregidos, tabla de pruebas
 
 ## 8. Rama, SHA y CI
 
-Se completa al cerrar la ronda (ver el mensaje final y `docs/R5_CHECKPOINT.md` si existe).
+Rama `claude/blissful-hopper-f5k7a0` (sin merge a `main`, sin despliegue, sin PR).
+
+| SHA | Qué es | Resultado real |
+|---|---|---|
+| `89952f0` | Primer CI con lectores XLSX | Pasó PHPUnit y el QA de navegador; no validó los cambios posteriores |
+| `9ec7eaf` | Auditoría de enlaces de correo | CI **falló** en PHPUnit: interbloqueo real en cobros simultáneos de citas distintas (bloqueos de hueco en `idx_pagos_cita_id`) |
+| `b2aaef9` | Corrección (`READ COMMITTED` en las operaciones de caja) | Local: QA 887 OK, 0 omitidas |
+| `33605ff` | Ajuste de dos pruebas de concurrencia | CI **falló** solo en QA: «Sin puertos HTTP libres» (las clases QA antiguas y las R5 competían por 8150-8159 con orden aleatorio); PHPUnit completo pasó |
+| `88c963f` y posteriores (solo documentación y un script) | Puertos R5 de 8199 hacia abajo; cierre de servidores con su árbol; pruebas del integrador adicionales | **Local (nube, PHP 8.3, MySQL 8.0.46): PHPUnit 1073 pruebas OK; QA 889 pruebas OK, 0 omitidas.** El CI del SHA final se informa en el mensaje de cierre (un documento no puede contener el resultado del CI de su propio commit) |
+
+Cambios de expectativas de pruebas y su justificación: `docs/R5_QA_INDEPENDIENTE.md` §3. Pruebas del integrador (no independientes) y su reverificación: §3 bis.

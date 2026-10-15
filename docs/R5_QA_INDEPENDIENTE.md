@@ -63,8 +63,8 @@ Huecos que halló y que el integrador cerró después con pruebas propias (**no 
 
 ## 4. Resultados (SHA y entorno)
 
-* Rama integrada local (`/tmp/wt/int`, PHP 8.3 y MySQL 8.0.46): PHPUnit por defecto 1058 pruebas OK (tras corregir 3 pruebas heredadas); QA completo 879 pruebas, 0 omitidas, 2 fallos que se corrigieron (cita de días anteriores y una carrera de Chromium); `R5Qa*` completas en verde.
-* CI de `683d663`: PHPUnit OK (PHP 8.2); el paso de QA falló solo por faltar openpyxl/LibreOffice en el runner y por la carrera de Chromium (corregidos en `89952f0`). El CI de `89952f0` y del SHA final se indica en `docs/ENTREGA_RONDA5.md`.
+* Local (`/tmp/wt/int`, PHP 8.3, MySQL 8.0.46) sobre el código con las correcciones de cobro y de puertos (`88c963f` + documentación): PHPUnit por defecto **1073 pruebas OK**; QA completo (`tests/Qa`, Chromium real, openpyxl y LibreOffice) **889 pruebas OK, 0 omitidas**.
+* CI: `9ec7eaf` falló en PHPUnit (interbloqueo real, corregido); `33605ff` pasó PHPUnit y falló en QA por agotamiento de puertos (corregido en `88c963f`). El CI del SHA final está en `docs/ENTREGA_RONDA5.md` §8 / mensaje de cierre.
 
 ## 5. Decisión pendiente (no aceptada por el usuario)
 
