@@ -269,7 +269,7 @@ abstract class R5Case extends QaCase
         $r = [];
         foreach ($x->query('//form') as $f) {
             /** @var \DOMElement $f */
-            $campos = []; $selects = []; $botones = [];
+            $campos = []; $selects = []; $botones = []; $etiquetas = [];
             foreach ($x->query('.//input|.//select|.//textarea|.//button', $f) as $c) {
                 /** @var \DOMElement $c */
                 $tag = $c->tagName; $name = $c->getAttribute('name'); $type = strtolower($c->getAttribute('type'));
@@ -286,6 +286,7 @@ abstract class R5Case extends QaCase
                         /** @var \DOMElement $o */
                         $v = $o->hasAttribute('value') ? $o->getAttribute('value') : trim($o->textContent);
                         $opts[] = $v;
+                        $etiquetas[$name][$v] = trim(preg_replace('/\s+/', ' ', $o->textContent));
                         if ($o->hasAttribute('selected')) { $sel = $v; }
                     }
                     $selects[$name] = $opts;
@@ -301,7 +302,7 @@ abstract class R5Case extends QaCase
             }
             $inner = '';
             foreach ($f->childNodes as $ch) { $inner .= $f->ownerDocument->saveHTML($ch); }
-            $r[] = ['action' => html_entity_decode($f->getAttribute('action')), 'method' => strtoupper($f->getAttribute('method') ?: 'GET'), 'campos' => $campos, 'selects' => $selects, 'botones' => $botones, 'html' => $inner];
+            $r[] = ['action' => html_entity_decode($f->getAttribute('action')), 'method' => strtoupper($f->getAttribute('method') ?: 'GET'), 'campos' => $campos, 'selects' => $selects, 'etiquetas' => $etiquetas, 'botones' => $botones, 'html' => $inner];
         }
         return $r;
     }
