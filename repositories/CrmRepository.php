@@ -8,27 +8,40 @@ use mysqli;
  * Lecturas del CRM de clientes. Solo ejecuta SELECT preparados: las entradas llegan validadas por
  * CrmService (fechas en formato AAAA-MM-DD, enteros, listas blancas). Los importes viajan en centavos enteros.
  *
- * Definiciones de dominio que este repositorio materializa en SQL (documentadas en docs/CRM_CLIENTES.md):
+ * UN SOLO UNIVERSO (ronda 5): la lista, el conteo, los indicadores, la distribución por segmentos, los gráficos, los totales y
+ * la exportación parten de la MISMA construcción: desde() + donde() con los mismos filtros `$f` (ver universo()). Las consultas
+ * agregadas se unen al conjunto de ids de ese universo (universoIds()) en vez de reconstruir sus propias condiciones; así un
+ * filtro nuevo se añade en un único sitio y nunca puede divergir entre pantalla, indicador y archivo.
+ *
+ * Definiciones de dominio que este repositorio materializa en SQL (documentadas en docs/CRM_CLIENTES.md y docs/R5_CRM_FILTROS.md):
  *  - Cliente: fila en `clientes`, o cuenta legada sin fila cuyo rol efectivo sea cliente (misma regla que
  *    AuthorizationService::contexto()), o cuenta con alguna cita. Una cuenta solo laboral sin ninguna de las tres no cuenta.
  *  - Visita: cita en estado `completada` con fecha <= hoy (hoy se calcula en America/Guayaquil y llega por parámetro).
  *  - Cobro real: pago `completado`/`reembolsado` cuyo proveedor no es `mock`, en su fecha de cobro
  *    (COALESCE(pagado_at, created_at)); devolución: pago `reembolsado` en su fecha de reembolso
  *    (COALESCE(reembolsado_at, pagado_at, created_at)). Mismo criterio que ReporteService.
+ *  - Comunicaciones comerciales: otorgado (perfil con marketing_email=1 y fecha), revocado (no otorgado y la ÚLTIMA decisión del
+ *    historial es un retiro) o sin decisión (nunca decidió). No es una suscripción de pago: no existe tal entidad.
+ *  - Saldo pendiente: citas atendidas (`completada`) cuyo estado de pago aún no es pagado/reembolsado; importe = total de sus
+ *    servicios (precio histórico) menos los cobros reales confirmados de esa cita, nunca negativo.
  */
 final class CrmRepository
 {
     /** Condición SQL de pertenencia al universo de clientes (alias u, a, cl definidos por el FROM). */
     public const CLIENTE_SQL = "(cl.usuario_id IS NOT NULL OR COALESCE(a.rol,IF(u.admin=1,'propietario','cliente'))='cliente' OR EXISTS(SELECT 1 FROM citas cx WHERE cx.usuarioId=u.id))";
+    /** Estados de pago de una cita atendida que dejan saldo por cobrar. */
+    public const ESTADOS_PAGO_CON_SALDO = ['pendiente', 'parcial', 'por_verificar'];
 
     /** Ordenamientos permitidos: clave pública => expresión SQL. */
     private const ORDENES = [
         'nombre' => 'u.apellido %d, u.nombre %d',
         'alta' => 'cl.creado_en %d',
         'ultima' => 'v.ultima %d',
+        'proxima' => 'ISNULL(px.proxima), px.proxima %d',
         'visitas' => 'COALESCE(vr.n,0) %d',
         'visitas_total' => 'COALESCE(v.visitas_total,0) %d',
         'gasto' => '(COALESCE(g.cobros_real,0)-COALESCE(g.dev_real,0)) %d',
+        'saldo' => 'COALESCE(sd.saldo,0) %d',
     ];
 
     private mysqli $db;
@@ -156,6 +169,19 @@ final class CrmRepository
         );
     }
 
+    /** Saldo pendiente por usuario (centavos) de citas atendidas hasta hoy. Columnas: usuarioId, saldo, citas_saldo. */
+    private function saldoPorUsuario(string $hoy): array
+    {
+        $estados = "'" . implode("','", self::ESTADOS_PAGO_CON_SALDO) . "'";   // constantes del código, nunca entrada del usuario
+        return self::f(
+            'SELECT ci.usuarioId,CAST(SUM(GREATEST(0,tt.total-COALESCE(pp.pagado,0))) AS SIGNED) saldo,COUNT(*) citas_saldo FROM citas ci '
+            . 'INNER JOIN (SELECT citaId,SUM(ROUND(precio_servicio*100)) total FROM citasservicios GROUP BY citaId) tt ON tt.citaId=ci.id '
+            . "LEFT JOIN (SELECT COALESCE(cita_id,cita_referencia_id) cid,SUM(ROUND(monto*100)) pagado FROM pagos WHERE estado='completado' AND COALESCE(NULLIF(TRIM(proveedor),''),'mock')<>'mock' GROUP BY cid) pp ON pp.cid=ci.id "
+            . "WHERE ci.estado='completada' AND ci.fecha<=? AND ci.estado_pago IN ({$estados}) GROUP BY ci.usuarioId",
+            's', [$hoy]
+        );
+    }
+
     /**
      * Expresión CASE de segmento mutuamente excluyente. Orden de evaluación: vip, nuevo, activo, en_riesgo, inactivo.
      * @param array $c contexto: hoy, dias_activo, dias_nuevo, vip_ids
@@ -174,7 +200,28 @@ final class CrmRepository
         return self::f($sql, $t, $p);
     }
 
-    /** FROM con las uniones necesarias. $need: v (visitas históricas), vr (visitas del rango/filtro), g (gasto del rango). */
+    // ---------------------------------------------------------------- el universo único
+
+    /**
+     * Uniones que exigen los filtros activos (más las que pida quien consulta). Claves: v (visitas históricas), vr (visitas del
+     * periodo y filtros), g (gasto del periodo), px (próxima cita), sd (saldo pendiente), rv (último retiro de consentimiento).
+     * @return array{v:bool,vr:bool,g:bool,px:bool,sd:bool,rv:bool}
+     */
+    public static function necesidades(array $f, array $extra = []): array
+    {
+        $n = [
+            'v' => !empty($f['segmento']) || !empty($f['actividad']) || !empty($f['ultima_desde']) || !empty($f['ultima_hasta']),
+            'vr' => !empty($f['profesional_id']) || !empty($f['servicio_id']) || ($f['visitas_min'] ?? null) !== null || ($f['visitas_max'] ?? null) !== null,
+            'g' => ($f['gasto_min'] ?? null) !== null || ($f['gasto_max'] ?? null) !== null,
+            'px' => !empty($f['proxima']) || !empty($f['proxima_desde']) || !empty($f['proxima_hasta']),
+            'sd' => !empty($f['saldo']),
+            'rv' => in_array((string)($f['consentimiento'] ?? ''), ['revocado', 'sin_decision'], true),
+        ];
+        foreach ($extra as $k => $v) { $n[$k] = !empty($n[$k]) || !empty($v); }
+        return $n;
+    }
+
+    /** FROM con las uniones necesarias. $need: v, vr, g, px, sd, rv (ver necesidades()). */
     private function desde(array $c, array $f, array $need): array
     {
         $partes = [self::f(' FROM usuarios u LEFT JOIN usuario_accesos a ON a.usuario_id=u.id LEFT JOIN clientes cl ON cl.usuario_id=u.id LEFT JOIN perfiles_usuario pf ON pf.usuarioId=u.id LEFT JOIN consentimiento_versiones cvv ON cvv.id=COALESCE(pf.consentimiento_marketing_version_id,' . (int)$this->versionesConsentimiento()['v1'] . ')')];
@@ -196,6 +243,17 @@ final class CrmRepository
             $partes[] = $this->gastoPorUsuario($c['desde'], $c['hasta']);
             $partes[] = self::f(') g ON g.usuario=u.id');
         }
+        if (!empty($need['px'])) {
+            $partes[] = self::f(" LEFT JOIN (SELECT usuarioId,MIN(fecha) proxima FROM citas WHERE estado IN ('confirmada','en_servicio') AND fecha>=? GROUP BY usuarioId) px ON px.usuarioId=u.id", 's', [$c['hoy']]);
+        }
+        if (!empty($need['sd'])) {
+            $partes[] = self::f(' LEFT JOIN (');
+            $partes[] = $this->saldoPorUsuario($c['hoy']);
+            $partes[] = self::f(') sd ON sd.usuarioId=u.id');
+        }
+        if (!empty($need['rv'])) {
+            $partes[] = self::f(' LEFT JOIN (SELECT h.usuario_id FROM consentimientos_historial h INNER JOIN (SELECT usuario_id,MAX(id) mid FROM consentimientos_historial WHERE proposito=? GROUP BY usuario_id) ul ON ul.mid=h.id WHERE h.valor=0) rv ON rv.usuario_id=u.id', 's', [$this->propositoConsentimiento]);
+        }
         return self::unir(...$partes);
     }
 
@@ -216,19 +274,50 @@ final class CrmRepository
         if (!empty($f['alta_desde'])) { $sql .= ' AND cl.creado_en>=?'; $t .= 's'; $p[] = $f['alta_desde'] . ' 00:00:00'; }
         if (!empty($f['alta_hasta'])) { $sql .= ' AND cl.creado_en<?'; $t .= 's'; $p[] = self::sigDia($f['alta_hasta']) . ' 00:00:00'; }
         if (!empty($f['profesional_id']) || !empty($f['servicio_id'])) { $sql .= ' AND COALESCE(vr.n,0)>0'; }
+        // Cuenta: correo confirmado o no (usuarios.confirmado).
+        $cuenta = (string)($f['cuenta'] ?? '');
+        if ($cuenta === 'confirmada') { $sql .= ' AND u.confirmado=1'; }
+        elseif ($cuenta === 'sin_confirmar') { $sql .= ' AND u.confirmado=0'; }
+        // Membresía de cliente (clientes.estado). No es una suscripción de pago.
         $membresia = (string)($f['membresia'] ?? '');
         if ($membresia === 'sin_registro') { $sql .= ' AND cl.usuario_id IS NULL'; }
         elseif ($membresia === 'activo' || $membresia === 'suspendido') { $sql .= ' AND cl.estado=?'; $t .= 's'; $p[] = $membresia; }
         $con = $this->sqlConsentimiento();
         $acepta = $con['acepta'];
-        // si = aceptó (cualquier versión) · vigente = aceptó el texto en vigor · anterior = aceptó una versión que ya no rige · no = no aceptó.
+        // si = otorgado (cualquier versión) · vigente = otorgado con el texto en vigor · anterior = otorgado con una versión que ya no rige
+        // · no = no otorgado (revocado o sin decisión) · revocado = su última decisión fue un retiro · sin_decision = nunca decidió.
         $consentimiento = (string)($f['consentimiento'] ?? '');
         if ($consentimiento === 'si') { $sql .= " AND ({$acepta})"; }
         elseif ($consentimiento === 'vigente') { $sql .= " AND {$con['vigente']}"; }
         elseif ($consentimiento === 'anterior') { $sql .= " AND {$con['anterior']}"; }
         elseif ($consentimiento === 'no') { $sql .= " AND NOT ({$acepta})"; }
+        elseif ($consentimiento === 'revocado') { $sql .= " AND NOT ({$acepta}) AND rv.usuario_id IS NOT NULL"; }
+        elseif ($consentimiento === 'sin_decision') { $sql .= " AND NOT ({$acepta}) AND rv.usuario_id IS NULL"; }
         // Política de campañas: la lista comercial solo incluye consentimientos de la versión VIGENTE del texto.
         if (!empty($f['comercial'])) { $sql .= " AND {$con['vigente']} AND u.confirmado=1 AND (cl.estado IS NULL OR cl.estado<>'suspendido')"; }
+        // Actividad comercial por visitas completadas (hasta hoy): reciente / inactivo por periodo / nunca atendido.
+        $actividad = (string)($f['actividad'] ?? '');
+        if ($actividad === 'reciente') { $sql .= ' AND v.ultima IS NOT NULL AND DATEDIFF(?,v.ultima)<=?'; $t .= 'si'; array_push($p, $c['hoy'], (int)$c['dias_activo']); }
+        elseif ($actividad === 'inactivo') { $sql .= ' AND v.ultima IS NOT NULL AND DATEDIFF(?,v.ultima)>?'; $t .= 'si'; array_push($p, $c['hoy'], (int)$c['dias_activo']); }
+        elseif ($actividad === 'nunca') { $sql .= ' AND v.ultima IS NULL'; }
+        if (!empty($f['ultima_desde'])) { $sql .= ' AND v.ultima>=?'; $t .= 's'; $p[] = $f['ultima_desde']; }
+        if (!empty($f['ultima_hasta'])) { $sql .= ' AND v.ultima<=?'; $t .= 's'; $p[] = $f['ultima_hasta']; }
+        // Próxima cita: la primera cita futura (hoy incluido) en estado confirmada o en servicio.
+        $proxima = (string)($f['proxima'] ?? '');
+        if ($proxima === 'con') { $sql .= ' AND px.proxima IS NOT NULL'; }
+        elseif ($proxima === 'sin') { $sql .= ' AND px.proxima IS NULL'; }
+        if (!empty($f['proxima_desde'])) { $sql .= ' AND px.proxima>=?'; $t .= 's'; $p[] = $f['proxima_desde']; }
+        if (!empty($f['proxima_hasta'])) { $sql .= ' AND px.proxima<=?'; $t .= 's'; $p[] = $f['proxima_hasta']; }
+        // Frecuencia: visitas completadas en el periodo (con el profesional y servicio elegidos, si los hay).
+        if (($f['visitas_min'] ?? null) !== null) { $sql .= ' AND COALESCE(vr.n,0)>=?'; $t .= 'i'; $p[] = (int)$f['visitas_min']; }
+        if (($f['visitas_max'] ?? null) !== null) { $sql .= ' AND COALESCE(vr.n,0)<=?'; $t .= 'i'; $p[] = (int)$f['visitas_max']; }
+        // Gasto neto real del periodo (centavos).
+        if (($f['gasto_min'] ?? null) !== null) { $sql .= ' AND (COALESCE(g.cobros_real,0)-COALESCE(g.dev_real,0))>=?'; $t .= 'i'; $p[] = (int)$f['gasto_min']; }
+        if (($f['gasto_max'] ?? null) !== null) { $sql .= ' AND (COALESCE(g.cobros_real,0)-COALESCE(g.dev_real,0))<=?'; $t .= 'i'; $p[] = (int)$f['gasto_max']; }
+        // Saldo pendiente de citas atendidas.
+        $saldo = (string)($f['saldo'] ?? '');
+        if ($saldo === 'con') { $sql .= ' AND COALESCE(sd.saldo,0)>0'; }
+        elseif ($saldo === 'sin') { $sql .= ' AND COALESCE(sd.saldo,0)=0'; }
         $partes = [self::f($sql, $t, $p)];
         if (!empty($f['segmento'])) {
             $partes[] = self::f(' AND (');
@@ -238,54 +327,102 @@ final class CrmRepository
         return self::unir(...$partes);
     }
 
+    /**
+     * El universo de un conjunto de filtros: FROM + WHERE (sin SELECT). Lo usan listar(), contar(), totales(), indicadores(),
+     * universoIds() y todos los agregados. `$extra` pide uniones adicionales (v, vr, g, px, sd, rv) además de las de los filtros.
+     * @return array{0:string,1:string,2:array}
+     */
+    private function universo(array $c, array $f, array $extra = []): array
+    {
+        return self::unir($this->desde($c, $f, self::necesidades($f, $extra)), $this->donde($c, $f));
+    }
+
+    /** `SELECT u.id` del universo: los agregados se unen a esto con `INNER JOIN (…) uni ON uni.id = …`. @return array{0:string,1:string,2:array} */
+    private function universoIds(array $c, array $f): array
+    {
+        return self::unir(self::f('SELECT u.id'), $this->universo($c, $f));
+    }
+
     // ---------------------------------------------------------------- listado
 
     public function contar(array $c, array $f): int
     {
-        $need = ['v' => !empty($f['segmento']), 'vr' => !empty($f['profesional_id']) || !empty($f['servicio_id']), 'g' => false];
-        [$sql, $t, $p] = self::unir(self::f('SELECT COUNT(*) n'), $this->desde($c, $f, $need), $this->donde($c, $f));
+        [$sql, $t, $p] = self::unir(self::f('SELECT COUNT(*) n'), $this->universo($c, $f));
         return (int)($this->filas($sql, $t, $p)[0]['n'] ?? 0);
     }
 
     /**
-     * Filas del listado de una página. Con $c['analitica'] añade importes (centavos) del rango; sin él no los consulta.
+     * Totales del universo (los mismos que ve la persona en pantalla y que cierran el archivo exportado):
+     * clientes, visitas del periodo y, con $c['analitica'], gasto neto real y saldo pendiente (centavos).
+     * @return array{clientes:int,visitas:int,cobros_real:?int,dev_real:?int,neto_sim:?int,gasto_neto:?int,saldo:?int}
+     */
+    public function totales(array $c, array $f): array
+    {
+        $analitica = !empty($c['analitica']);
+        $select = 'SELECT COUNT(*) n,COALESCE(SUM(COALESCE(vr.n,0)),0) visitas'
+            . ($analitica ? ',COALESCE(SUM(COALESCE(g.cobros_real,0)),0) cobros,COALESCE(SUM(COALESCE(g.dev_real,0)),0) dev,COALESCE(SUM(COALESCE(g.cobros_sim,0)-COALESCE(g.dev_sim,0)),0) neto_sim,COALESCE(SUM(COALESCE(sd.saldo,0)),0) saldo' : '');
+        [$sql, $t, $p] = self::unir(self::f($select), $this->universo($c, $f, ['vr' => true, 'g' => $analitica, 'sd' => $analitica]));
+        $r = $this->filas($sql, $t, $p)[0] ?? [];
+        return ['clientes' => (int)($r['n'] ?? 0), 'visitas' => (int)($r['visitas'] ?? 0),
+            'cobros_real' => $analitica ? (int)($r['cobros'] ?? 0) : null, 'dev_real' => $analitica ? (int)($r['dev'] ?? 0) : null,
+            'neto_sim' => $analitica ? (int)($r['neto_sim'] ?? 0) : null,
+            'gasto_neto' => $analitica ? (int)($r['cobros'] ?? 0) - (int)($r['dev'] ?? 0) : null, 'saldo' => $analitica ? (int)($r['saldo'] ?? 0) : null];
+    }
+
+    /**
+     * Filas del listado de una página. Con $c['analitica'] añade importes (centavos) del rango y saldo; sin él no los consulta.
      * @return array<int,array<string,mixed>>
      */
     public function listar(array $c, array $f, int $limite, int $offset): array
     {
         $limite = max(1, min(5000, $limite)); $offset = max(0, $offset);
         $analitica = !empty($c['analitica']);
+        $con = $this->sqlConsentimiento();
         $columnas = "SELECT u.id,u.nombre,u.apellido,u.email,u.telefono,u.confirmado,COALESCE(a.rol,IF(u.admin=1,'propietario','cliente')) rol_efectivo,"
             . "COALESCE(cl.estado,'sin_registro') membresia,cl.origen,cl.suspendido_motivo,cl.creado_en alta,"
             . "IF(COALESCE(pf.marketing_email,0)=1 AND pf.consentimiento_marketing_at IS NOT NULL,1,0) consentimiento,pf.consentimiento_marketing_at consentimiento_en,"
             . "IF(COALESCE(pf.marketing_email,0)=1 AND pf.consentimiento_marketing_at IS NOT NULL,cvv.version,NULL) consentimiento_version,"
             . "IF(COALESCE(pf.marketing_email,0)=1 AND pf.consentimiento_marketing_at IS NOT NULL,cvv.es_historica,NULL) consentimiento_version_historica,"
-            . "IF(" . $this->sqlConsentimiento()['anterior'] . ",1,0) consentimiento_anterior,"
+            . "IF(" . $con['anterior'] . ",1,0) consentimiento_anterior,"
+            . "IF(" . $con['acepta'] . ",'otorgado',IF(rv.usuario_id IS NOT NULL,'revocado','sin_decision')) comunicaciones,rv.revocado_en,rv.revocado_version,"
+            . "px.proxima proxima_cita,"
             . "COALESCE(v.visitas_total,0) visitas_total,v.primera primera_visita,v.ultima ultima_visita,IF(v.ultima IS NULL,NULL,DATEDIFF(?,v.ultima)) recencia,COALESCE(vr.n,0) visitas_rango,";
         $gasto = $analitica
-            ? ",COALESCE(g.cobros_real,0) cobros_real,COALESCE(g.dev_real,0) dev_real,COALESCE(g.cobros_sim,0) cobros_sim,COALESCE(g.dev_sim,0) dev_sim,COALESCE(g.n_cobros_real,0) n_cobros_real"
+            ? ",COALESCE(g.cobros_real,0) cobros_real,COALESCE(g.dev_real,0) dev_real,COALESCE(g.cobros_sim,0) cobros_sim,COALESCE(g.dev_sim,0) dev_sim,COALESCE(g.n_cobros_real,0) n_cobros_real,COALESCE(sd.saldo,0) saldo,COALESCE(sd.citas_saldo,0) citas_saldo"
             : '';
         $dir = strtoupper((string)($f['dir'] ?? 'ASC')) === 'DESC' ? 'DESC' : 'ASC';
-        $orden = self::ORDENES[$f['orden'] ?? 'nombre'] ?? self::ORDENES['nombre'];
-        if (!$analitica && ($f['orden'] ?? '') === 'gasto') { $orden = self::ORDENES['nombre']; }
-        $orden = str_replace('%d', $dir, $orden);
-        [$sql, $t, $p] = self::unir(
+        $ordenClave = (string)($f['orden'] ?? 'nombre');
+        if (!$analitica && in_array($ordenClave, ['gasto', 'saldo'], true)) { $ordenClave = 'nombre'; }
+        $orden = str_replace('%d', $dir, self::ORDENES[$ordenClave] ?? self::ORDENES['nombre']);
+        // La unión del último retiro (rv) en el listado trae fecha y versión; el filtro por consentimiento usa la misma unión mínima.
+        $partes = [
             self::f($columnas, 's', [$c['hoy']]),
             $this->segmentoSql($c),
             self::f(' segmento' . $gasto),
-            $this->desde($c, $f, ['v' => true, 'vr' => true, 'g' => $analitica]),
+            $this->desdeListado($c, $f, ['v' => true, 'vr' => true, 'g' => $analitica, 'px' => true, 'sd' => $analitica]),
             $this->donde($c, $f),
-            self::f(" ORDER BY {$orden}, u.id ASC LIMIT ? OFFSET ?", 'ii', [$limite, $offset])
-        );
+            self::f(" ORDER BY {$orden}, u.id ASC LIMIT ? OFFSET ?", 'ii', [$limite, $offset]),
+        ];
+        [$sql, $t, $p] = self::unir(...$partes);
         return $this->filas($sql, $t, $p);
     }
 
-    // ---------------------------------------------------------------- indicadores agregados
-
-    /** Totales de la base de clientes y del rango. Ignora filtros de texto: describe a todos los clientes. @return array<string,mixed> */
-    public function indicadores(array $c): array
+    /** FROM del listado: el del universo más la unión de retiro completa (con fecha y versión). */
+    private function desdeListado(array $c, array $f, array $extra): array
     {
-        $f = ['profesional_id' => null, 'servicio_id' => null];
+        $need = self::necesidades($f, $extra);
+        $need['rv'] = false;   // la unión simple de rv se sustituye por la completa de abajo (mismo alias)
+        return self::unir(
+            $this->desde($c, $f, $need),
+            self::f(' LEFT JOIN (SELECT h.usuario_id,h.ocurrido_en revocado_en,cv2.version revocado_version FROM consentimientos_historial h INNER JOIN (SELECT usuario_id,MAX(id) mid FROM consentimientos_historial WHERE proposito=? GROUP BY usuario_id) ul ON ul.mid=h.id AND h.valor=0 LEFT JOIN consentimiento_versiones cv2 ON cv2.id=h.version_id) rv ON rv.usuario_id=u.id', 's', [$this->propositoConsentimiento])
+        );
+    }
+
+    // ---------------------------------------------------------------- indicadores agregados (mismo universo)
+
+    /** Totales de la base de clientes y del periodo, DEL UNIVERSO FILTRADO. @return array<string,mixed> */
+    public function indicadores(array $c, array $f = []): array
+    {
         [$sql, $t, $p] = self::unir(
             self::f('SELECT COUNT(*) total,COALESCE(SUM(cl.estado=\'activo\'),0) m_activa,COALESCE(SUM(cl.estado=\'suspendido\'),0) m_suspendida,COALESCE(SUM(cl.usuario_id IS NULL),0) m_sin_registro,'
                 . 'COALESCE(SUM(COALESCE(pf.marketing_email,0)=1 AND pf.consentimiento_marketing_at IS NOT NULL),0) con_consentimiento,'
@@ -294,103 +431,163 @@ final class CrmRepository
                 . 'COALESCE(SUM(v.primera BETWEEN ? AND ?),0) primera_visita_en_rango,'
                 . 'COALESCE(SUM(v.ultima IS NOT NULL AND DATEDIFF(?,v.ultima)<=?),0) activos,'
                 . 'COALESCE(SUM(vr.n>0),0) con_visita_rango,COALESCE(SUM(vr.n>=2),0) repiten_rango,COALESCE(SUM(vr.n),0) visitas_rango,'
-                . 'COALESCE(SUM(v.ultima IS NOT NULL),0) con_historial,AVG(IF(v.ultima IS NULL,NULL,DATEDIFF(?,v.ultima))) recencia_media',
+                . 'COALESCE(SUM(v.ultima IS NOT NULL),0) con_historial,AVG(IF(v.ultima IS NULL,NULL,DATEDIFF(?,v.ultima))) recencia_media,'
+                . 'COALESCE(SUM(u.confirmado=1),0) cuenta_confirmada,COALESCE(SUM(u.confirmado=0),0) cuenta_sin_confirmar'
+                . (!empty($c['analitica']) ? ',COALESCE(SUM(COALESCE(sd.saldo,0)>0),0) con_saldo,COALESCE(SUM(sd.saldo),0) saldo_total' : ''),
                 'sssssis', [$c['desde'] . ' 00:00:00', self::sigDia($c['hasta']) . ' 00:00:00', $c['desde'], $c['hasta'], $c['hoy'], (int)$c['dias_activo'], $c['hoy']]),
-            $this->desde($c, $f, ['v' => true, 'vr' => true, 'g' => false]),
-            $this->donde($c, $f)
+            $this->universo($c, $f, ['v' => true, 'vr' => true, 'sd' => !empty($c['analitica'])])
         );
         return $this->filas($sql, $t, $p)[0] ?? [];
     }
 
-    /** Citas del rango (hasta hoy) por estado, de clientes. @return array<string,int> */
-    public function citasPorEstado(array $c): array
+    /**
+     * Cuántos clientes del universo (sin el filtro de comunicaciones) están en cada estado: otorgado / revocado / sin decisión.
+     * Un clic en cada cifra abre el mismo listado. @return array{otorgado:int,revocado:int,sin_decision:int}
+     */
+    public function comunicacionesPorEstado(array $c, array $f): array
     {
-        $filas = $this->filas('SELECT ci.estado,COUNT(*) n FROM citas ci INNER JOIN usuarios u ON u.id=ci.usuarioId WHERE ci.fecha BETWEEN ? AND ? GROUP BY ci.estado', 'ss', [$c['desde'], $c['hasta']]);
+        $f['consentimiento'] = null;
+        [$sql, $t, $p] = self::unir(
+            self::f('SELECT COALESCE(SUM(' . $this->sqlConsentimiento()['acepta'] . '),0) otorgado,COALESCE(SUM(NOT (' . $this->sqlConsentimiento()['acepta'] . ') AND rv.usuario_id IS NOT NULL),0) revocado,'
+                . 'COALESCE(SUM(NOT (' . $this->sqlConsentimiento()['acepta'] . ') AND rv.usuario_id IS NULL),0) sin_decision'),
+            $this->universo($c, $f, ['rv' => true])
+        );
+        $r = $this->filas($sql, $t, $p)[0] ?? [];
+        return ['otorgado' => (int)($r['otorgado'] ?? 0), 'revocado' => (int)($r['revocado'] ?? 0), 'sin_decision' => (int)($r['sin_decision'] ?? 0)];
+    }
+
+    /** Citas del periodo (hasta hoy) por estado, de los clientes del universo. @return array<string,int> */
+    public function citasPorEstado(array $c, array $f = []): array
+    {
+        [$sql, $t, $p] = self::unir(
+            self::f('SELECT ci.estado,COUNT(*) n FROM citas ci INNER JOIN ('),
+            $this->universoIds($c, $f),
+            self::f(') uni ON uni.id=ci.usuarioId WHERE ci.fecha BETWEEN ? AND ? GROUP BY ci.estado', 'ss', [$c['desde'], $c['hasta']])
+        );
+        $filas = $this->filas($sql, $t, $p);
         return array_column(array_map(static fn(array $r): array => ['estado' => (string)$r['estado'], 'n' => (int)$r['n']], $filas), 'n', 'estado');
     }
 
     /** @return array<string,int> mes (AAAA-MM) => altas */
-    public function altasPorMes(array $c): array
+    public function altasPorMes(array $c, array $f = []): array
     {
-        $filas = $this->filas("SELECT DATE_FORMAT(creado_en,'%Y-%m') mes,COUNT(*) n FROM clientes WHERE creado_en>=? AND creado_en<? GROUP BY mes ORDER BY mes", 'ss', [$c['desde'] . ' 00:00:00', self::sigDia($c['hasta']) . ' 00:00:00']);
-        return array_column($filas, 'n', 'mes');
+        [$sql, $t, $p] = self::unir(
+            self::f("SELECT DATE_FORMAT(cl.creado_en,'%Y-%m') mes,COUNT(*) n FROM clientes cl INNER JOIN ("),
+            $this->universoIds($c, $f),
+            self::f(') uni ON uni.id=cl.usuario_id WHERE cl.creado_en>=? AND cl.creado_en<? GROUP BY mes ORDER BY mes', 'ss', [$c['desde'] . ' 00:00:00', self::sigDia($c['hasta']) . ' 00:00:00'])
+        );
+        return array_column($this->filas($sql, $t, $p), 'n', 'mes');
     }
 
     /** @return array<string,array{visitas:int,clientes:int}> */
-    public function visitasPorMes(array $c): array
+    public function visitasPorMes(array $c, array $f = []): array
     {
-        $filas = $this->filas("SELECT DATE_FORMAT(ci.fecha,'%Y-%m') mes,COUNT(*) visitas,COUNT(DISTINCT ci.usuarioId) clientes FROM citas ci INNER JOIN usuarios u ON u.id=ci.usuarioId WHERE ci.estado='completada' AND ci.fecha BETWEEN ? AND ? GROUP BY mes ORDER BY mes", 'ss', [$c['desde'], $c['hasta']]);
+        [$sql, $t, $p] = self::unir(
+            self::f("SELECT DATE_FORMAT(ci.fecha,'%Y-%m') mes,COUNT(*) visitas,COUNT(DISTINCT ci.usuarioId) clientes FROM citas ci INNER JOIN ("),
+            $this->universoIds($c, $f),
+            self::f(") uni ON uni.id=ci.usuarioId WHERE ci.estado='completada' AND ci.fecha BETWEEN ? AND ? GROUP BY mes ORDER BY mes", 'ss', [$c['desde'], $c['hasta']])
+        );
         $r = [];
-        foreach ($filas as $fila) { $r[$fila['mes']] = ['visitas' => (int)$fila['visitas'], 'clientes' => (int)$fila['clientes']]; }
+        foreach ($this->filas($sql, $t, $p) as $fila) { $r[$fila['mes']] = ['visitas' => (int)$fila['visitas'], 'clientes' => (int)$fila['clientes']]; }
         return $r;
     }
 
-    /** Cobros y devoluciones REALES por mes de su propio evento (centavos). @return array<string,array{cobros:int,devoluciones:int}> */
-    public function cobrosPorMes(array $c): array
+    /** Cobros y devoluciones REALES por mes de su propio evento (centavos), de los clientes del universo. @return array<string,array{cobros:int,devoluciones:int}> */
+    public function cobrosPorMes(array $c, array $f = []): array
     {
         [$sql, $t, $p] = self::unir(
             self::f("SELECT DATE_FORMAT(t.fecha_evento,'%Y-%m') mes,SUM(IF(t.tipo='C',t.c,0)) cobros,SUM(IF(t.tipo='R',t.c,0)) devoluciones FROM ("),
             $this->eventosPagos($c['desde'], $c['hasta']),
-            self::f(') t INNER JOIN usuarios u ON u.id=t.usuario LEFT JOIN usuario_accesos a ON a.usuario_id=u.id LEFT JOIN clientes cl ON cl.usuario_id=u.id WHERE t.mock=0 AND ' . self::CLIENTE_SQL . ' GROUP BY mes ORDER BY mes')
+            self::f(') t INNER JOIN ('),
+            $this->universoIds($c, $f),
+            self::f(') uni ON uni.id=t.usuario WHERE t.mock=0 GROUP BY mes ORDER BY mes')
         );
         $r = [];
         foreach ($this->filas($sql, $t, $p) as $fila) { $r[$fila['mes']] = ['cobros' => (int)$fila['cobros'], 'devoluciones' => (int)$fila['devoluciones']]; }
         return $r;
     }
 
-    /** Totales de gasto del rango de todos los clientes (centavos). @return array<string,int> */
-    public function gastoAgregado(array $c): array
+    /** Totales de gasto del periodo de los clientes del universo (centavos). @return array<string,int> */
+    public function gastoAgregado(array $c, array $f = []): array
     {
         [$sql, $t, $p] = self::unir(
             self::f('SELECT COALESCE(SUM(g.cobros_real),0) cobros_real,COALESCE(SUM(g.dev_real),0) dev_real,COALESCE(SUM(g.cobros_sim),0) cobros_sim,COALESCE(SUM(g.dev_sim),0) dev_sim,COALESCE(SUM(g.n_cobros_real),0) n_cobros_real,COALESCE(SUM(g.cobros_real>0 OR g.dev_real>0),0) clientes_con_gasto FROM ('),
             $this->gastoPorUsuario($c['desde'], $c['hasta']),
-            self::f(') g INNER JOIN usuarios u ON u.id=g.usuario LEFT JOIN usuario_accesos a ON a.usuario_id=u.id LEFT JOIN clientes cl ON cl.usuario_id=u.id WHERE ' . self::CLIENTE_SQL)
+            self::f(') g INNER JOIN ('),
+            $this->universoIds($c, $f),
+            self::f(') uni ON uni.id=g.usuario')
         );
         $fila = $this->filas($sql, $t, $p)[0] ?? [];
         return array_map('intval', $fila + ['cobros_real' => 0, 'dev_real' => 0, 'cobros_sim' => 0, 'dev_sim' => 0, 'n_cobros_real' => 0, 'clientes_con_gasto' => 0]);
     }
 
-    /** Distribución de clientes por segmento a la fecha de hoy. @return array<string,int> */
-    public function distribucionSegmentos(array $c): array
+    /**
+     * Distribución de clientes por segmento a la fecha de hoy, dentro del universo SIN el filtro de segmento (cada cifra es lo que
+     * mostraría el listado al elegir ese segmento con los demás filtros). @return array<string,int>
+     */
+    public function distribucionSegmentos(array $c, array $f = []): array
     {
+        $f['segmento'] = null;
         [$sql, $t, $p] = self::unir(
             self::f('SELECT '), $this->segmentoSql($c), self::f(' segmento,COUNT(*) n'),
-            $this->desde($c, [], ['v' => true]), $this->donde($c, []), self::f(' GROUP BY segmento')
+            $this->universo($c, $f, ['v' => true]), self::f(' GROUP BY segmento')
         );
         return array_map('intval', array_column($this->filas($sql, $t, $p), 'n', 'segmento'));
     }
 
-    /** Prestaciones completadas por servicio en el rango (máx. $limite). */
-    public function serviciosMasUsados(array $c, int $limite = 8): array
+    /** Prestaciones completadas por servicio en el periodo (máx. $limite) de los clientes del universo. */
+    public function serviciosMasUsados(array $c, int $limite = 8, array $f = []): array
     {
         $limite = max(1, min(50, $limite));
-        return $this->filas("SELECT cs.servicioId servicio_id,COALESCE(MAX(s.nombre),MAX(cs.nombre_servicio),'Servicio eliminado') nombre,COUNT(*) prestaciones,COUNT(DISTINCT ci.usuarioId) clientes "
-            . "FROM citasservicios cs INNER JOIN citas ci ON ci.id=cs.citaId INNER JOIN usuarios u ON u.id=ci.usuarioId LEFT JOIN servicios s ON s.id=cs.servicioId "
-            . "WHERE ci.estado='completada' AND ci.fecha BETWEEN ? AND ? GROUP BY cs.servicioId ORDER BY prestaciones DESC,nombre ASC LIMIT ?", 'ssi', [$c['desde'], $c['hasta'], $limite]);
+        [$sql, $t, $p] = self::unir(
+            self::f("SELECT cs.servicioId servicio_id,COALESCE(MAX(s.nombre),MAX(cs.nombre_servicio),'Servicio eliminado') nombre,COUNT(*) prestaciones,COUNT(DISTINCT ci.usuarioId) clientes "
+                . "FROM citasservicios cs INNER JOIN citas ci ON ci.id=cs.citaId INNER JOIN ("),
+            $this->universoIds($c, $f),
+            self::f(") uni ON uni.id=ci.usuarioId LEFT JOIN servicios s ON s.id=cs.servicioId WHERE ci.estado='completada' AND ci.fecha BETWEEN ? AND ? GROUP BY cs.servicioId ORDER BY prestaciones DESC,nombre ASC LIMIT ?", 'ssi', [$c['desde'], $c['hasta'], $limite])
+        );
+        return $this->filas($sql, $t, $p);
     }
 
     /**
      * Cohortes por mes de PRIMERA visita completada (<= hoy): clientes y cuántos tuvieron otra visita completada
-     * en un día posterior dentro de $ventana días (sin contar nada posterior a hoy).
+     * en un día posterior dentro de $ventana días (sin contar nada posterior a hoy). Solo clientes del universo.
      */
-    public function cohortes(array $c, int $ventana, int $maxMeses = 12): array
+    public function cohortes(array $c, int $ventana, int $maxMeses = 12, array $f = []): array
     {
         $ventana = max(1, $ventana); $maxMeses = max(1, min(60, $maxMeses));
-        return $this->filas("SELECT DATE_FORMAT(x.primera,'%Y-%m') cohorte,COUNT(*) clientes,"
-            . "COALESCE(SUM(EXISTS(SELECT 1 FROM citas c2 WHERE c2.usuarioId=x.usuarioId AND c2.estado='completada' AND c2.fecha>x.primera AND c2.fecha<=LEAST(DATE_ADD(x.primera,INTERVAL ? DAY),CAST(? AS DATE)))),0) repiten "
-            . "FROM (SELECT usuarioId,MIN(fecha) primera FROM citas WHERE estado='completada' AND fecha<=? GROUP BY usuarioId HAVING MIN(fecha) BETWEEN ? AND ?) x "
-            . "INNER JOIN usuarios u ON u.id=x.usuarioId GROUP BY cohorte ORDER BY cohorte DESC LIMIT ?",
-            'issssi', [$ventana, $c['hoy'], $c['hoy'], $c['desde'], $c['hasta'], $maxMeses]);
+        [$sql, $t, $p] = self::unir(
+            self::f("SELECT DATE_FORMAT(x.primera,'%Y-%m') cohorte,COUNT(*) clientes,"
+                . "COALESCE(SUM(EXISTS(SELECT 1 FROM citas c2 WHERE c2.usuarioId=x.usuarioId AND c2.estado='completada' AND c2.fecha>x.primera AND c2.fecha<=LEAST(DATE_ADD(x.primera,INTERVAL ? DAY),CAST(? AS DATE)))),0) repiten "
+                . "FROM (SELECT usuarioId,MIN(fecha) primera FROM citas WHERE estado='completada' AND fecha<=? GROUP BY usuarioId HAVING MIN(fecha) BETWEEN ? AND ?) x "
+                . "INNER JOIN (", 'issss', [$ventana, $c['hoy'], $c['hoy'], $c['desde'], $c['hasta']]),
+            $this->universoIds($c, $f),
+            self::f(') uni ON uni.id=x.usuarioId GROUP BY cohorte ORDER BY cohorte DESC LIMIT ?', 'i', [$maxMeses])
+        );
+        return $this->filas($sql, $t, $p);
     }
 
     /** @return array{puntos:int,canjes_pendientes:int,canjes_entregados:int,clientes_con_puntos:int} */
-    public function fidelidadAgregada(): array
+    public function fidelidadAgregada(array $c = [], array $f = []): array
     {
-        $r = $this->filas("SELECT COALESCE(SUM(fm.puntos),0) puntos,COALESCE(SUM(fm.tipo='canje' AND fm.canje_estado='pendiente'),0) pendientes,COALESCE(SUM(fm.tipo='canje' AND fm.canje_estado='entregado'),0) entregados "
-            . "FROM fidelidad_movimientos fm INNER JOIN usuarios u ON u.id=fm.usuario_id")[0] ?? [];
-        $con = $this->filas('SELECT COUNT(*) n FROM (SELECT usuario_id FROM fidelidad_movimientos GROUP BY usuario_id HAVING SUM(puntos)>0) x')[0]['n'] ?? 0;
+        if (!$c) {
+            $r = $this->filas("SELECT COALESCE(SUM(fm.puntos),0) puntos,COALESCE(SUM(fm.tipo='canje' AND fm.canje_estado='pendiente'),0) pendientes,COALESCE(SUM(fm.tipo='canje' AND fm.canje_estado='entregado'),0) entregados "
+                . "FROM fidelidad_movimientos fm INNER JOIN usuarios u ON u.id=fm.usuario_id")[0] ?? [];
+            $con = $this->filas('SELECT COUNT(*) n FROM (SELECT usuario_id FROM fidelidad_movimientos GROUP BY usuario_id HAVING SUM(puntos)>0) x')[0]['n'] ?? 0;
+        } else {
+            [$sql, $t, $p] = self::unir(
+                self::f("SELECT COALESCE(SUM(fm.puntos),0) puntos,COALESCE(SUM(fm.tipo='canje' AND fm.canje_estado='pendiente'),0) pendientes,COALESCE(SUM(fm.tipo='canje' AND fm.canje_estado='entregado'),0) entregados FROM fidelidad_movimientos fm INNER JOIN ("),
+                $this->universoIds($c, $f), self::f(') uni ON uni.id=fm.usuario_id')
+            );
+            $r = $this->filas($sql, $t, $p)[0] ?? [];
+            [$sql, $t, $p] = self::unir(
+                self::f('SELECT COUNT(*) n FROM (SELECT fm.usuario_id FROM fidelidad_movimientos fm INNER JOIN ('),
+                $this->universoIds($c, $f), self::f(') uni ON uni.id=fm.usuario_id GROUP BY fm.usuario_id HAVING SUM(fm.puntos)>0) x')
+            );
+            $con = $this->filas($sql, $t, $p)[0]['n'] ?? 0;
+        }
         return ['puntos' => (int)($r['puntos'] ?? 0), 'canjes_pendientes' => (int)($r['pendientes'] ?? 0), 'canjes_entregados' => (int)($r['entregados'] ?? 0), 'clientes_con_puntos' => (int)$con];
     }
+
 
     /**
      * Población RFM: clientes con >= 1 visita completada en la ventana. Recencia (días), frecuencia (visitas en la ventana)

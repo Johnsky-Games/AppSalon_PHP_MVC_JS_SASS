@@ -45,7 +45,115 @@ final class CrmService
         'confirmada' => 'Confirmada', 'en_servicio' => 'En servicio', 'completada' => 'Completada',
         'no_asistio' => 'No asistió', 'cancelada' => 'Cancelada',
     ];
-    private const ORDENES = ['nombre', 'alta', 'ultima', 'visitas', 'visitas_total', 'gasto'];
+    private const ORDENES = ['nombre', 'alta', 'ultima', 'proxima', 'visitas', 'visitas_total', 'gasto', 'saldo'];
+    /** Orden que solo ve quien tiene analítica (importes). */
+    private const ORDENES_ANALITICA = ['gasto', 'saldo'];
+
+    // ---- catálogos de los filtros nuevos (ronda 5). Cada clave y cada valor tienen su definición visible en la pantalla.
+    /** Cuenta = correo confirmado (usuarios.confirmado). */
+    public const CUENTAS = ['confirmada' => 'Confirmada', 'sin_confirmar' => 'Sin confirmar'];
+    /** Comunicaciones comerciales = consentimiento a promociones por correo. NO es una suscripción de pago. */
+    public const COMUNICACIONES = ['otorgado' => 'Otorgado', 'revocado' => 'Revocado', 'sin_decision' => 'Sin decisión'];
+    /** Valores del filtro «consentimiento» (la clave se conserva por compatibilidad con enlaces y pruebas anteriores). */
+    public const CONSENTIMIENTOS = [
+        'si' => 'Otorgado (cualquier versión del texto)', 'vigente' => 'Otorgado con la versión vigente del texto', 'anterior' => 'Otorgado con una versión anterior del texto',
+        'no' => 'No otorgado (revocado o sin decisión)', 'revocado' => 'Revocado (su última decisión fue retirarlo)', 'sin_decision' => 'Sin decisión (nunca decidió)',
+    ];
+    public const ACTIVIDADES = ['reciente' => 'Reciente', 'inactivo' => 'Inactivo por periodo', 'nunca' => 'Nunca atendido'];
+    public const PROXIMAS = ['con' => 'Con próxima cita', 'sin' => 'Sin próxima cita'];
+    public const SALDOS = ['con' => 'Con saldo pendiente', 'sin' => 'Sin saldo pendiente'];
+    public const ORDENES_ETIQUETAS = [
+        'nombre' => 'Apellido y nombre', 'alta' => 'Fecha de alta', 'ultima' => 'Última visita', 'proxima' => 'Próxima cita',
+        'visitas' => 'Visitas del periodo', 'visitas_total' => 'Visitas totales', 'gasto' => 'Gasto neto real', 'saldo' => 'Saldo pendiente',
+    ];
+
+    /**
+     * Indicadores con listado: cada cifra de la pantalla que cuenta CLIENTES se explica con el listado de esos mismos clientes
+     * (`/admin/clientes/listado?indicador=…`). `filtros` son los que el listado impone sobre el universo filtrado vigente; `dato` es
+     * la ruta de la cifra en el panel (para comprobar que cifra y listado coinciden); `analitica` = solo con ese permiso.
+     */
+    public const INDICADORES = [
+        'totales' => ['etiqueta' => 'Clientes totales', 'dato' => 'clientes_total', 'analitica' => false,
+            'explica' => 'Todos los clientes del universo filtrado.'],
+        'altas' => ['etiqueta' => 'Altas en el periodo', 'dato' => 'nuevos', 'analitica' => false,
+            'explica' => 'Clientes cuya fecha de alta cae dentro del periodo analizado.'],
+        'activos' => ['etiqueta' => 'Clientes activos', 'dato' => 'activos', 'analitica' => false,
+            'explica' => 'Clientes con al menos una visita completada en la ventana de días de actividad.'],
+        'con_visita' => ['etiqueta' => 'Clientes con visita en el periodo', 'dato' => 'con_visita_rango', 'analitica' => false,
+            'explica' => 'Clientes con al menos una visita completada dentro del periodo (y del profesional o servicio elegidos).'],
+        'repiten' => ['etiqueta' => 'Clientes que repiten en el periodo', 'dato' => 'repiten_rango', 'analitica' => true,
+            'explica' => 'Clientes con dos o más visitas completadas dentro del periodo.'],
+        'membresia_activo' => ['etiqueta' => 'Membresías activas', 'dato' => 'membresias.activo', 'analitica' => false,
+            'explica' => 'Clientes cuya membresía (clientes.estado) está activa.'],
+        'membresia_suspendido' => ['etiqueta' => 'Membresías suspendidas', 'dato' => 'membresias.suspendido', 'analitica' => false,
+            'explica' => 'Clientes cuya membresía (clientes.estado) está suspendida.'],
+        'membresia_sin_registro' => ['etiqueta' => 'Cuentas legadas sin registro de membresía', 'dato' => 'membresias.sin_registro', 'analitica' => false,
+            'explica' => 'Cuentas con rol de cliente que no tienen fila de membresía.'],
+        'consentimiento_si' => ['etiqueta' => 'Comunicaciones comerciales otorgadas', 'dato' => 'con_consentimiento', 'analitica' => false,
+            'explica' => 'Clientes que aceptaron recibir promociones por correo (cualquier versión del texto).'],
+        'consentimiento_vigente' => ['etiqueta' => 'Comunicaciones otorgadas con el texto vigente', 'dato' => 'con_consentimiento_vigente', 'analitica' => false,
+            'explica' => 'Clientes que aceptaron la versión del texto que hoy rige: los únicos que entran en la lista comercial.'],
+        'consentimiento_anterior' => ['etiqueta' => 'Comunicaciones otorgadas con un texto anterior', 'dato' => 'con_consentimiento_anterior', 'analitica' => false,
+            'explica' => 'Clientes que aceptaron una versión que ya no rige: no entran en la lista comercial hasta reconfirmar.'],
+        'comunicaciones_revocado' => ['etiqueta' => 'Comunicaciones revocadas', 'dato' => 'comunicaciones.revocado', 'analitica' => false,
+            'explica' => 'Clientes que retiraron su consentimiento: su última decisión registrada fue un retiro.'],
+        'comunicaciones_sin_decision' => ['etiqueta' => 'Comunicaciones sin decisión', 'dato' => 'comunicaciones.sin_decision', 'analitica' => false,
+            'explica' => 'Clientes que nunca aceptaron ni retiraron el consentimiento.'],
+        'cuenta_sin_confirmar' => ['etiqueta' => 'Cuentas sin confirmar', 'dato' => 'cuenta_sin_confirmar', 'analitica' => false,
+            'explica' => 'Clientes que aún no confirmaron su correo.'],
+        'con_saldo' => ['etiqueta' => 'Clientes con saldo pendiente', 'dato' => 'con_saldo', 'analitica' => true,
+            'explica' => 'Clientes con citas atendidas que todavía tienen importe por cobrar.'],
+    ];
+
+    /** Claves de la consulta que describen el universo y su presentación; todas se conservan al paginar, ordenar y exportar. */
+    public const CLAVES_CONSULTA = ['q', 'desde', 'hasta', 'alta_desde', 'alta_hasta', 'profesional_id', 'servicio_id', 'segmento', 'membresia', 'consentimiento', 'cuenta', 'actividad',
+        'ultima_desde', 'ultima_hasta', 'proxima', 'proxima_desde', 'proxima_hasta', 'visitas_min', 'visitas_max', 'gasto_min', 'gasto_max', 'saldo', 'dias_activo', 'orden', 'dir', 'por_pagina', 'indicador'];
+
+    /**
+     * Query string con los filtros vigentes (los mismos que producen la lista) para enlaces de paginación, orden, exportación y
+     * «Ver listado». `$extra` reemplaza claves; un valor null la quita. Los importes (guardados en centavos) vuelven a dólares.
+     * @param array<string,mixed> $f filtros normalizados
+     * @param array<string,mixed> $extra
+     */
+    public static function consulta(array $f, array $extra = []): string
+    {
+        $datos = [];
+        foreach (self::CLAVES_CONSULTA as $k) {
+            $v = $f[$k] ?? null;
+            if ($v === null || $v === '') { continue; }
+            if (($k === 'gasto_min' || $k === 'gasto_max') && is_int($v)) { $v = number_format($v / 100, 2, '.', ''); }
+            $datos[$k] = $v;
+        }
+        foreach ($extra as $k => $v) { if ($v === null) { unset($datos[$k]); } else { $datos[$k] = $v; } }
+        return http_build_query($datos);
+    }
+
+    /** Claves de filtro que impone cada indicador (el resto de indicadores no toca nada más). */
+    private const CLAVES_INDICADOR = [
+        'altas' => ['alta_desde', 'alta_hasta'], 'activos' => ['actividad'], 'con_visita' => ['visitas_min'], 'repiten' => ['visitas_min'],
+        'membresia_activo' => ['membresia'], 'membresia_suspendido' => ['membresia'], 'membresia_sin_registro' => ['membresia'],
+        'consentimiento_si' => ['consentimiento'], 'consentimiento_vigente' => ['consentimiento'], 'consentimiento_anterior' => ['consentimiento'],
+        'comunicaciones_revocado' => ['consentimiento'], 'comunicaciones_sin_decision' => ['consentimiento'], 'cuenta_sin_confirmar' => ['cuenta'], 'con_saldo' => ['saldo'],
+    ];
+
+    /** Definición visible de cada filtro (se muestra en la pantalla y se prueba que no falte ninguna). */
+    public const DEFINICIONES = [
+        'q' => 'Busca por nombre, apellido, correo o teléfono (hasta 80 caracteres).',
+        'cuenta' => 'Cuenta: «Confirmada» = la persona ya confirmó su correo y puede entrar; «Sin confirmar» = creó o recibió la cuenta pero aún no la activa.',
+        'membresia' => 'Membresía de cliente: estado de la ficha de cliente (activa o suspendida). No es una suscripción de pago: este sistema no cobra suscripciones.',
+        'consentimiento' => 'Comunicaciones comerciales: consentimiento para recibir promociones por correo. «Otorgado» muestra la versión del texto aceptada y la fecha; «Revocado» = su última decisión fue retirarlo; «Sin decisión» = nunca decidió. Es lo único que en esta pantalla se llama «suscripción»: la suscripción a comunicaciones comerciales.',
+        'actividad' => 'Actividad comercial según visitas completadas: «Reciente» = última visita dentro de la ventana de días de actividad; «Inactivo por periodo» = tuvo visitas, pero la última es más antigua que esa ventana; «Nunca atendido» = ninguna visita completada.',
+        'segmento' => 'Segmento: cada cliente cae en uno solo de los segmentos de la tabla «Segmentos y reglas». Las reglas están más abajo.',
+        'alta' => 'Fecha de alta: cuándo se creó su membresía de cliente.',
+        'ultima' => 'Última visita: fecha de su última cita completada (hasta hoy).',
+        'proxima' => 'Próxima cita: la primera cita futura (hoy incluido) en estado confirmada o en servicio.',
+        'profesional' => 'Atendido por: clientes con al menos una visita completada con esa persona dentro del periodo.',
+        'servicio' => 'Servicio recibido: clientes con al menos una visita completada con ese servicio dentro del periodo.',
+        'frecuencia' => 'Frecuencia: número de visitas completadas dentro del periodo analizado (con el profesional y servicio elegidos, si los hay).',
+        'gasto' => 'Gasto: cobros reales menos devoluciones del periodo, en dólares; excluye la pasarela simulada. Solo lo ve quien tiene permiso de analítica.',
+        'saldo' => 'Saldo pendiente: importe de citas ya atendidas que aún no están cobradas (total de sus servicios menos cobros reales confirmados). Solo lo ve quien tiene permiso de analítica.',
+        'periodo' => 'Periodo: rango de fechas que usan las visitas del periodo, la frecuencia, el gasto y los gráficos (nunca después de hoy).',
+    ];
 
     private CrmRepository $repo;
     private ?\DateTimeImmutable $ahora;
@@ -170,22 +278,97 @@ final class CrmService
         if (empty($acceso['analitica'])) { $segmentos = array_values(array_diff($segmentos, ['vip'])); }
         $segmento = $lista('segmento', 'El segmento', $segmentos);
         $membresia = $lista('membresia', 'El estado de membresía', array_keys(self::MEMBRESIAS));
-        $consentimiento = $lista('consentimiento', 'El filtro de consentimiento comercial', ['si', 'vigente', 'anterior', 'no']);
+        $consentimiento = $lista('consentimiento', 'El filtro de comunicaciones comerciales', array_keys(self::CONSENTIMIENTOS));
+        $cuenta = $lista('cuenta', 'El estado de la cuenta', array_keys(self::CUENTAS));
+        $actividad = $lista('actividad', 'La actividad comercial', array_keys(self::ACTIVIDADES));
+        $proxima = $lista('proxima', 'El filtro de próxima cita', array_keys(self::PROXIMAS));
         $diasActivo = $entero('dias_activo', 'La ventana de clientes activos', self::DIAS_ACTIVO_MIN, self::DIAS_ACTIVO_MAX) ?? self::DIAS_ACTIVO_DEFECTO;
 
-        $ordenesPermitidos = !empty($acceso['analitica']) ? self::ORDENES : array_values(array_diff(self::ORDENES, ['gasto']));
+        $ultimaDesde = $fecha('ultima_desde', 'La fecha inicial de última visita');
+        $ultimaHasta = $fecha('ultima_hasta', 'La fecha final de última visita');
+        if ($ultimaDesde !== null && $ultimaHasta !== null && $ultimaDesde > $ultimaHasta) { $errores[] = 'La fecha inicial de última visita no puede ser posterior a la final.'; $ultimaDesde = $ultimaHasta = null; }
+        $proximaDesde = $fecha('proxima_desde', 'La fecha inicial de próxima cita');
+        $proximaHasta = $fecha('proxima_hasta', 'La fecha final de próxima cita');
+        if ($proximaDesde !== null && $proximaHasta !== null && $proximaDesde > $proximaHasta) { $errores[] = 'La fecha inicial de próxima cita no puede ser posterior a la final.'; $proximaDesde = $proximaHasta = null; }
+        $visitasMin = $entero('visitas_min', 'Las visitas mínimas', 0, 9999);
+        $visitasMax = $entero('visitas_max', 'Las visitas máximas', 0, 9999);
+        if ($visitasMin !== null && $visitasMax !== null && $visitasMin > $visitasMax) { $errores[] = 'Las visitas mínimas no pueden superar a las máximas.'; $visitasMin = $visitasMax = null; }
+
+        // Importes (gasto y saldo): solo con permiso de analítica. Sin él se rechazan (422) y NO se aplican ni se ignoran en silencio.
+        $dinero = function (string $clave, string $etiqueta) use ($texto, &$errores, $acceso): ?int {
+            $v = $texto($clave);
+            if ($v === null) { return null; }
+            if (empty($acceso['analitica'])) { $errores[] = "{$etiqueta} no está disponible para su rol."; return null; }
+            if (!preg_match('/^(\d{1,7})(?:[.,](\d{1,2}))?$/', $v, $m)) { $errores[] = "{$etiqueta} debe ser un importe en dólares, por ejemplo 25 o 25.50."; return null; }
+            return (int)$m[1] * 100 + (int)str_pad($m[2] ?? '0', 2, '0');
+        };
+        $gastoMin = $dinero('gasto_min', 'El gasto mínimo');
+        $gastoMax = $dinero('gasto_max', 'El gasto máximo');
+        if ($gastoMin !== null && $gastoMax !== null && $gastoMin > $gastoMax) { $errores[] = 'El gasto mínimo no puede superar al máximo.'; $gastoMin = $gastoMax = null; }
+        $saldo = $lista('saldo', 'El filtro de saldo pendiente', array_keys(self::SALDOS));
+        if ($saldo !== null && empty($acceso['analitica'])) { $errores[] = 'El filtro de saldo pendiente no está disponible para su rol.'; $saldo = null; }
+
+        $ordenesPermitidos = !empty($acceso['analitica']) ? self::ORDENES : array_values(array_diff(self::ORDENES, self::ORDENES_ANALITICA));
         $orden = $lista('orden', 'El orden', $ordenesPermitidos) ?? 'nombre';
         $dir = $lista('dir', 'La dirección del orden', ['asc', 'desc']) ?? 'asc';
         $porPagina = $entero('por_pagina', 'El tamaño de página', 1, 100);
         if ($porPagina !== null && !in_array($porPagina, self::POR_PAGINA, true)) { $errores[] = 'El tamaño de página debe ser ' . implode(', ', self::POR_PAGINA) . '.'; $porPagina = null; }
         $pagina = $entero('pagina', 'La página', 1, 1000000) ?? 1;
+        $indicadoresPermitidos = array_keys(array_filter(self::INDICADORES, static fn(array $i): bool => !$i['analitica'] || !empty($acceso['analitica'])));
+        $indicador = $lista('indicador', 'El indicador', $indicadoresPermitidos);
 
-        return ['filtros' => [
+        $filtros = [
             'q' => $q, 'desde' => $desde, 'hasta' => $hasta, 'alta_desde' => $altaDesde, 'alta_hasta' => $altaHasta,
             'profesional_id' => $profesional, 'servicio_id' => $servicio, 'segmento' => $segmento, 'membresia' => $membresia,
-            'consentimiento' => $consentimiento, 'dias_activo' => $diasActivo, 'orden' => $orden, 'dir' => $dir,
+            'consentimiento' => $consentimiento, 'cuenta' => $cuenta, 'actividad' => $actividad,
+            'ultima_desde' => $ultimaDesde, 'ultima_hasta' => $ultimaHasta, 'proxima' => $proxima, 'proxima_desde' => $proximaDesde, 'proxima_hasta' => $proximaHasta,
+            'visitas_min' => $visitasMin, 'visitas_max' => $visitasMax, 'gasto_min' => $gastoMin, 'gasto_max' => $gastoMax, 'saldo' => $saldo,
+            'dias_activo' => $diasActivo, 'orden' => $orden, 'dir' => $dir,
             'pagina' => $pagina, 'por_pagina' => $porPagina ?? self::POR_PAGINA_DEFECTO,
-        ], 'errores' => array_values(array_unique($errores))];
+            'indicador' => $indicador,
+        ];
+        return ['filtros' => self::aplicarIndicador($filtros, $hoy->format('Y-m-d')), 'errores' => array_values(array_unique($errores))];
+    }
+
+    /**
+     * Impone sobre los filtros los que define el indicador elegido. El servidor es quien decide: la URL no puede pedir un título
+     * («Clientes activos») con otro contenido. Los demás filtros (búsqueda, profesional, periodo…) se conservan: el listado explica
+     * la cifra del universo filtrado vigente.
+     * @param array<string,mixed> $f
+     * @return array<string,mixed>
+     */
+    public static function aplicarIndicador(array $f, string $hoy): array
+    {
+        $i = (string)($f['indicador'] ?? '');
+        $f['previos'] = [];
+        if ($i === '' || !isset(self::INDICADORES[$i])) { $f['indicador'] = null; return $f; }
+        // Valores que traía la consulta en las claves que el indicador va a imponer: permiten «Volver al panel» sin perderlos.
+        foreach (self::CLAVES_INDICADOR[$i] ?? [] as $k) { $f['previos'][$k] = $f[$k] ?? null; }
+        switch ($i) {
+            case 'altas': $f['alta_desde'] = $f['desde']; $f['alta_hasta'] = min((string)$f['hasta'], $hoy); break;
+            case 'activos': $f['actividad'] = 'reciente'; break;
+            case 'con_visita': $f['visitas_min'] = max(1, (int)($f['visitas_min'] ?? 1)); break;
+            case 'repiten': $f['visitas_min'] = max(2, (int)($f['visitas_min'] ?? 2)); break;
+            case 'membresia_activo': $f['membresia'] = 'activo'; break;
+            case 'membresia_suspendido': $f['membresia'] = 'suspendido'; break;
+            case 'membresia_sin_registro': $f['membresia'] = 'sin_registro'; break;
+            case 'consentimiento_si': $f['consentimiento'] = 'si'; break;
+            case 'consentimiento_vigente': $f['consentimiento'] = 'vigente'; break;
+            case 'consentimiento_anterior': $f['consentimiento'] = 'anterior'; break;
+            case 'comunicaciones_revocado': $f['consentimiento'] = 'revocado'; break;
+            case 'comunicaciones_sin_decision': $f['consentimiento'] = 'sin_decision'; break;
+            case 'cuenta_sin_confirmar': $f['cuenta'] = 'sin_confirmar'; break;
+            case 'con_saldo': $f['saldo'] = 'con'; break;
+        }
+        return $f;
+    }
+
+    /** Filtros de la consulta SIN lo que impuso el indicador (para volver al panel con los filtros originales). */
+    public static function sinIndicador(array $f): array
+    {
+        foreach ($f['previos'] ?? [] as $k => $v) { $f[$k] = $v; }
+        $f['indicador'] = null;
+        return $f;
     }
 
     // ---------------------------------------------------------------- RFM (función pura, verificable)
@@ -285,18 +468,24 @@ final class CrmService
 
         $rfm = !empty($acceso['analitica']) ? $this->rfm($hoy, (int)$f['dias_activo']) : null;
         $c = $this->contexto($f, $acceso, $rfm['vip_ids'] ?? []);
-        $ind = $this->repo->indicadores($c);
-        $citas = $this->repo->citasPorEstado($c);
+        // UN SOLO UNIVERSO: indicadores, citas, gráficos, segmentos, totales y listado parten de los mismos filtros `$f`.
+        $ind = $this->repo->indicadores($c, $f);
+        $citas = $this->repo->citasPorEstado($c, $f);
         $totalCitas = array_sum($citas);
         $conocidas = (int)($citas['completada'] ?? 0) + (int)($citas['cancelada'] ?? 0) + (int)($citas['no_asistio'] ?? 0) + (int)($citas['confirmada'] ?? 0) + (int)($citas['en_servicio'] ?? 0);
         $total = (int)($ind['total'] ?? 0);
         $conVisita = (int)($ind['con_visita_rango'] ?? 0);
         $visitas = (int)($ind['visitas_rango'] ?? 0);
-        $fid = $this->repo->fidelidadAgregada();
+        $fid = $this->repo->fidelidadAgregada($c, $f);
 
         $resumen = [
             'clientes_total' => $total,
             'membresias' => ['activo' => (int)($ind['m_activa'] ?? 0), 'suspendido' => (int)($ind['m_suspendida'] ?? 0), 'sin_registro' => (int)($ind['m_sin_registro'] ?? 0)],
+            'cuenta_confirmada' => (int)($ind['cuenta_confirmada'] ?? 0),
+            'cuenta_sin_confirmar' => (int)($ind['cuenta_sin_confirmar'] ?? 0),
+            'comunicaciones' => $this->repo->comunicacionesPorEstado($c, $f),
+            'con_saldo' => !empty($acceso['analitica']) ? (int)($ind['con_saldo'] ?? 0) : null,
+            'saldo_total' => !empty($acceso['analitica']) ? (int)($ind['saldo_total'] ?? 0) : null,
             'con_consentimiento' => (int)($ind['con_consentimiento'] ?? 0),
             'con_consentimiento_vigente' => (int)($ind['con_consentimiento_vigente'] ?? 0),
             'con_consentimiento_anterior' => (int)($ind['con_consentimiento_anterior'] ?? 0),
@@ -321,8 +510,8 @@ final class CrmService
         ];
 
         $meses = self::meses($c['desde'], $c['hasta']);
-        $altas = $this->repo->altasPorMes($c);
-        $visitasMes = $this->repo->visitasPorMes($c);
+        $altas = $this->repo->altasPorMes($c, $f);
+        $visitasMes = $this->repo->visitasPorMes($c, $f);
         $series = [
             'altas' => array_map(static fn($m) => ['etiqueta' => $m, 'valor' => (int)($altas[$m] ?? 0)], $meses),
             'visitas' => array_map(static fn($m) => ['etiqueta' => $m, 'valor' => (int)($visitasMes[$m]['visitas'] ?? 0), 'clientes' => (int)($visitasMes[$m]['clientes'] ?? 0)], $meses),
@@ -333,18 +522,18 @@ final class CrmService
             $resumen['pct_repiten'] = null;
         }
         if (!empty($acceso['analitica'])) {
-            $g = $this->repo->gastoAgregado($c);
+            $g = $this->repo->gastoAgregado($c, $f);
             $neto = $g['cobros_real'] - $g['dev_real'];
             $resumen['gasto'] = [
                 'cobros_real' => $g['cobros_real'], 'devoluciones_real' => $g['dev_real'], 'neto_real' => $neto, 'n_cobros_real' => $g['n_cobros_real'],
                 'ticket_por_cobro' => $g['n_cobros_real'] > 0 ? (int)round($g['cobros_real'] / $g['n_cobros_real']) : null,
                 'neto_simulado' => $g['cobros_sim'] - $g['dev_sim'], 'clientes_con_gasto' => $g['clientes_con_gasto'],
             ];
-            $cobros = $this->repo->cobrosPorMes($c);
+            $cobros = $this->repo->cobrosPorMes($c, $f);
             $series['cobros'] = array_map(static fn($m) => ['etiqueta' => $m, 'valor' => (int)($cobros[$m]['cobros'] ?? 0), 'devoluciones' => (int)($cobros[$m]['devoluciones'] ?? 0)], $meses);
         }
 
-        $dist = $this->repo->distribucionSegmentos($c);
+        $dist = $this->repo->distribucionSegmentos($c, $f);
         $segmentos = [];
         foreach (self::SEGMENTOS as $clave => $etiqueta) {
             if ($clave === 'vip' && empty($acceso['analitica'])) { continue; }
@@ -352,7 +541,7 @@ final class CrmService
         }
 
         // Retención y cohortes pertenecen a la analítica: sin ese permiso ni siquiera se consultan.
-        $cohortes = !empty($acceso['analitica']) ? array_reverse($this->repo->cohortes($c, self::VENTANA_RETENCION_DIAS, 12)) : [];
+        $cohortes = !empty($acceso['analitica']) ? array_reverse($this->repo->cohortes($c, self::VENTANA_RETENCION_DIAS, 12, $f)) : [];
         $cohortes = array_map(function (array $r) use ($hoy): array {
             $finMes = (new \DateTimeImmutable($r['cohorte'] . '-01'))->modify('last day of this month');
             return ['cohorte' => $r['cohorte'], 'clientes' => (int)$r['clientes'], 'repiten' => (int)$r['repiten'],
@@ -362,13 +551,86 @@ final class CrmService
 
         $listado = null;
         if ($modo === 'completo') {
-            $totalFilas = $this->repo->contar($c, $f);
-            $pag = self::paginar($totalFilas, (int)$f['pagina'], (int)$f['por_pagina']);
-            $listado = $pag + ['filas' => $totalFilas > 0 ? $this->repo->listar($c, $f, $pag['por_pagina'], $pag['offset']) : []];
+            $listado = $this->paginaListado($c, $f);
         }
 
-        return ['modo' => $modo, 'hoy' => $hoy, 'filtros' => $f, 'resumen' => $resumen, 'series' => $series, 'segmentos' => $segmentos,
-            'servicios' => $this->repo->serviciosMasUsados($c, 8), 'cohortes' => $cohortes, 'rfm' => $rfm, 'listado' => $listado];
+        return ['modo' => $modo, 'hoy' => $hoy, 'filtros' => $f, 'filtros_activos' => $this->filtrosActivos($f, $this->repo->catalogos(), $acceso), 'resumen' => $resumen, 'series' => $series, 'segmentos' => $segmentos,
+            'servicios' => $this->repo->serviciosMasUsados($c, 8, $f), 'cohortes' => $cohortes, 'rfm' => $rfm, 'listado' => $listado];
+    }
+
+    /**
+     * Una página del listado y los totales del MISMO universo (conteo, visitas, gasto y saldo). La pantalla, el archivo exportado
+     * y las pruebas leen estas mismas cifras.
+     * @return array<string,mixed>
+     */
+    private function paginaListado(array $c, array $f): array
+    {
+        $totales = $this->repo->totales($c, $f);
+        $pag = self::paginar($totales['clientes'], (int)$f['pagina'], (int)$f['por_pagina']);
+        // Lista comercial con los mismos filtros: cuántos contactos tendría el archivo (solo el texto vigente, cuenta confirmada y membresía no suspendida).
+        $comercial = $this->repo->contar($c, $f + ['comercial' => true]);
+        return $pag + ['filas' => $totales['clientes'] > 0 ? $this->repo->listar($c, $f, $pag['por_pagina'], $pag['offset']) : [], 'totales' => $totales, 'comercial_total' => $comercial];
+    }
+
+    /**
+     * Datos de `GET /admin/clientes/listado`: la lista real que explica un indicador, un segmento o cualquier combinación de filtros.
+     * Modo completo = clientes.ver (datos personales); modo propios = solo sus clientes; sin ninguno de los dos, no hay listado.
+     * @return array<string,mixed>
+     */
+    public function listado(array $f, array $acceso, ?int $profesionalId = null): array
+    {
+        $modo = self::modo($acceso);
+        if ($modo !== 'completo' && $modo !== 'propios') { throw new \DomainException('Sin permiso para ver listados nominales de clientes.'); }
+        $hoy = $this->hoy()->format('Y-m-d');
+        if ($modo === 'propios') { return $this->panelProfesional($f, $profesionalId, $hoy) + ['filtros_activos' => $this->filtrosActivos($f, [], $acceso)]; }
+        $rfm = !empty($acceso['analitica']) ? $this->rfm($hoy, (int)$f['dias_activo']) : null;
+        $c = $this->contexto($f, $acceso, $rfm['vip_ids'] ?? []);
+        $catalogos = $this->repo->catalogos();
+        $ind = $f['indicador'] !== null ? (self::INDICADORES[$f['indicador']] ?? null) : null;
+        return ['modo' => 'completo', 'hoy' => $hoy, 'filtros' => $f, 'listado' => $this->paginaListado($c, $f), 'filtros_activos' => $this->filtrosActivos($f, $catalogos, $acceso),
+            'indicador' => $ind !== null ? ['clave' => $f['indicador']] + $ind : null, 'hasta_efectivo' => $c['hasta']];
+    }
+
+    /**
+     * Filtros activos para mostrarlos como chips: etiqueta, valor legible y las claves de consulta que los quitan.
+     * El periodo y la ventana de actividad solo aparecen si difieren de sus valores por defecto.
+     * @param array<string,array> $catalogos ['servicios'=>[..], 'profesionales'=>[..]]
+     * @return array<int,array{clave:string,etiqueta:string,valor:string,quitar:string[]}>
+     */
+    public function filtrosActivos(array $f, array $catalogos, array $acceso): array
+    {
+        $chips = [];
+        $add = static function (string $clave, string $etiqueta, string $valor, array $quitar) use (&$chips): void { $chips[] = ['clave' => $clave, 'etiqueta' => $etiqueta, 'valor' => $valor, 'quitar' => $quitar]; };
+        $hoy = $this->hoy();
+        $defDesde = $hoy->modify('first day of this month')->modify('-11 months')->format('Y-m-d');
+        $defHasta = $hoy->format('Y-m-d');
+        $nombre = static function (array $lista, int $id): string { foreach ($lista as $x) { if ((int)$x['id'] === $id) { return (string)$x['nombre']; } } return '#' . $id; };
+        if (($f['indicador'] ?? null) !== null && isset(self::INDICADORES[$f['indicador']])) { $add('indicador', 'Indicador', self::INDICADORES[$f['indicador']]['etiqueta'], ['indicador']); }
+        if ((string)($f['q'] ?? '') !== '') { $add('q', 'Búsqueda', (string)$f['q'], ['q']); }
+        if (($f['desde'] ?? $defDesde) !== $defDesde || ($f['hasta'] ?? $defHasta) !== $defHasta) { $add('periodo', 'Periodo', ($f['desde'] ?? '') . ' a ' . ($f['hasta'] ?? ''), ['desde', 'hasta']); }
+        if ((int)($f['dias_activo'] ?? self::DIAS_ACTIVO_DEFECTO) !== self::DIAS_ACTIVO_DEFECTO) { $add('dias_activo', 'Ventana de actividad', (int)$f['dias_activo'] . ' días', ['dias_activo']); }
+        $rango = static fn(?string $d, ?string $h): string => ($d !== null ? 'desde ' . $d : '') . ($d !== null && $h !== null ? ' ' : '') . ($h !== null ? 'hasta ' . $h : '');
+        if (!empty($f['alta_desde']) || !empty($f['alta_hasta'])) { $add('alta', 'Alta', $rango($f['alta_desde'] ?? null, $f['alta_hasta'] ?? null), ['alta_desde', 'alta_hasta']); }
+        if (!empty($f['profesional_id'])) { $add('profesional_id', 'Atendido por', $nombre($catalogos['profesionales'] ?? [], (int)$f['profesional_id']), ['profesional_id']); }
+        if (!empty($f['servicio_id'])) { $add('servicio_id', 'Servicio recibido', $nombre($catalogos['servicios'] ?? [], (int)$f['servicio_id']), ['servicio_id']); }
+        if (!empty($f['segmento'])) { $add('segmento', 'Segmento', self::SEGMENTOS[$f['segmento']] ?? '', ['segmento']); }
+        if (!empty($f['cuenta'])) { $add('cuenta', 'Cuenta', self::CUENTAS[$f['cuenta']] ?? '', ['cuenta']); }
+        if (!empty($f['membresia'])) { $add('membresia', 'Membresía', self::MEMBRESIAS[$f['membresia']] ?? '', ['membresia']); }
+        if (!empty($f['consentimiento'])) { $add('consentimiento', 'Comunicaciones comerciales', self::CONSENTIMIENTOS[$f['consentimiento']] ?? '', ['consentimiento']); }
+        if (!empty($f['actividad'])) { $add('actividad', 'Actividad comercial', (self::ACTIVIDADES[$f['actividad']] ?? '') . ($f['actividad'] === 'nunca' ? '' : ' (' . (int)($f['dias_activo'] ?? self::DIAS_ACTIVO_DEFECTO) . ' días)'), ['actividad']); }
+        if (!empty($f['ultima_desde']) || !empty($f['ultima_hasta'])) { $add('ultima', 'Última visita', $rango($f['ultima_desde'] ?? null, $f['ultima_hasta'] ?? null), ['ultima_desde', 'ultima_hasta']); }
+        if (!empty($f['proxima'])) { $add('proxima', 'Próxima cita', self::PROXIMAS[$f['proxima']] ?? '', ['proxima']); }
+        if (!empty($f['proxima_desde']) || !empty($f['proxima_hasta'])) { $add('proxima_fecha', 'Fecha de próxima cita', $rango($f['proxima_desde'] ?? null, $f['proxima_hasta'] ?? null), ['proxima_desde', 'proxima_hasta']); }
+        if (($f['visitas_min'] ?? null) !== null || ($f['visitas_max'] ?? null) !== null) {
+            $add('visitas', 'Visitas en el periodo', (($f['visitas_min'] ?? null) !== null ? 'mín. ' . (int)$f['visitas_min'] : '') . (($f['visitas_min'] ?? null) !== null && ($f['visitas_max'] ?? null) !== null ? ' · ' : '') . (($f['visitas_max'] ?? null) !== null ? 'máx. ' . (int)$f['visitas_max'] : ''), ['visitas_min', 'visitas_max']);
+        }
+        if (!empty($acceso['analitica'])) {
+            if (($f['gasto_min'] ?? null) !== null || ($f['gasto_max'] ?? null) !== null) {
+                $add('gasto', 'Gasto neto real', (($f['gasto_min'] ?? null) !== null ? 'mín. ' . self::dinero((int)$f['gasto_min']) : '') . (($f['gasto_min'] ?? null) !== null && ($f['gasto_max'] ?? null) !== null ? ' · ' : '') . (($f['gasto_max'] ?? null) !== null ? 'máx. ' . self::dinero((int)$f['gasto_max']) : ''), ['gasto_min', 'gasto_max']);
+            }
+            if (!empty($f['saldo'])) { $add('saldo', 'Saldo pendiente', self::SALDOS[$f['saldo']] ?? '', ['saldo']); }
+        }
+        return $chips;
     }
 
     private function panelProfesional(array $f, ?int $profesionalId, string $hoy): array
@@ -478,71 +740,114 @@ final class CrmService
         return array_slice($ev, 0, self::MAX_EVENTOS_CRONOLOGIA);
     }
 
-    // ---------------------------------------------------------------- exportación CSV
+    // ---------------------------------------------------------------- exportación (CSV y XLSX por Classes\Exportacion\Exportador)
+
+    /** Estado de comunicaciones comerciales de una fila del listado, con versión y fecha, en texto para pantalla y archivo. */
+    public static function textoComunicaciones(array $r): string
+    {
+        $estado = (string)($r['comunicaciones'] ?? ((int)($r['consentimiento'] ?? 0) === 1 ? 'otorgado' : 'sin_decision'));
+        if ($estado === 'otorgado') {
+            return 'Otorgado' . ($r['consentimiento_version'] !== null && $r['consentimiento_version'] !== '' ? ' (texto v' . (int)$r['consentimiento_version'] . ')' : '') . ($r['consentimiento_en'] ? ' el ' . substr((string)$r['consentimiento_en'], 0, 10) : '');
+        }
+        if ($estado === 'revocado') {
+            return 'Revocado' . (isset($r['revocado_version']) && $r['revocado_version'] !== null ? ' (texto v' . (int)$r['revocado_version'] . ')' : '') . (!empty($r['revocado_en']) ? ' el ' . self::fechaLocalDeUtc((string)$r['revocado_en']) : '');
+        }
+        return 'Sin decisión';
+    }
+
+    /** Fecha (AAAA-MM-DD) en America/Guayaquil de un instante guardado en UTC. */
+    public static function fechaLocalDeUtc(string $utc): string
+    {
+        try { return (new \DateTimeImmutable($utc, new \DateTimeZone('UTC')))->setTimezone(new \DateTimeZone(self::TIMEZONE))->format('Y-m-d'); }
+        catch (\Throwable) { return substr($utc, 0, 10); }
+    }
 
     /**
-     * Genera el CSV. `$tipo` 'clientes' (operativo, sin datos privados de formularios) o 'comercial' (solo quienes
-     * aceptaron comunicaciones, con cuenta confirmada y membresía no suspendida). Cada celda pasa por
-     * ReporteService::sanearCeldaCsv (neutralización de fórmulas), sin duplicar esa lógica.
-     * @return array{contenido:string,filas:int,truncado:bool,archivo:string,columnas:string[]}
+     * Plan de una exportación: columnas tipadas, un GENERADOR de filas (memoria acotada: lotes de 1000), la fila de totales y las
+     * opciones para Exportador::generar(). Usa el mismo universo que el listado (repo->listar/totales con los mismos `$f`).
+     * `$tipo` 'clientes' (operativo, sin datos privados de formularios) o 'comercial' (solo quienes otorgaron el texto vigente,
+     * con cuenta confirmada y membresía no suspendida). Nunca incluye respuestas de formularios.
+     *
+     * @return array{columnas:array,filas:\Generator,totales:array,base:string,opciones:array,universo:array,tipo:string}
      */
-    public function exportar(array $f, array $acceso, string $tipo): array
+    public function prepararExportacion(array $f, array $acceso, string $tipo): array
     {
         if (!in_array($tipo, ['clientes', 'comercial'], true)) { throw new \InvalidArgumentException('Tipo de exportación no válido.'); }
         if (empty($acceso['ver'])) { throw new \DomainException('Sin permisos de clientes.'); }
         $hoy = $this->hoy()->format('Y-m-d');
-        $analitica = !empty($acceso['analitica']) && $tipo === 'clientes';
-        $rfm = !empty($acceso['analitica']) ? $this->rfm($hoy, (int)$f['dias_activo']) : null;
+        $comercial = $tipo === 'comercial';
+        $analitica = !empty($acceso['analitica']) && !$comercial;
+        $rfm = !empty($acceso['analitica']) && !$comercial ? $this->rfm($hoy, (int)$f['dias_activo']) : null;
         $c = $this->contexto($f, $acceso, $rfm['vip_ids'] ?? []);
         $c['analitica'] = $analitica;
-        $f['comercial'] = $tipo === 'comercial';
+        $f['comercial'] = $comercial;
         $f['pagina'] = 1;
+        $universo = $this->repo->totales($c, $f);
 
-        $fp = fopen('php://temp', 'r+');
-        if ($fp === false) { throw new \RuntimeException('No se pudo preparar la exportación.'); }
-        fwrite($fp, "\xEF\xBB\xBF");
-        $escribir = static function (array $celdas) use ($fp): void {
-            fputcsv($fp, array_map([ReporteService::class, 'sanearCeldaCsv'], $celdas));
-        };
-        $dinero = static fn(int $cents): string => number_format($cents / 100, 2, '.', '');
-        if ($tipo === 'comercial') {
-            $cab = ['ID', 'Nombre', 'Apellido', 'Correo', 'Consentimiento desde'];
-            $escribir($cab);
+        if ($comercial) {
+            $columnas = [
+                ['clave' => 'id', 'titulo' => 'ID', 'tipo' => 'entero'], ['clave' => 'nombre', 'titulo' => 'Nombre'], ['clave' => 'apellido', 'titulo' => 'Apellido'],
+                ['clave' => 'email', 'titulo' => 'Correo'], ['clave' => 'consentimiento_en', 'titulo' => 'Consentimiento desde', 'tipo' => 'fechahora'],
+                ['clave' => 'consentimiento_version', 'titulo' => 'Versión del consentimiento', 'tipo' => 'entero'],
+            ];
+            $totales = ['nombre' => $universo['clientes'] . ' contactos'];
         } else {
-            $cab = ['ID', 'Nombre', 'Apellido', 'Correo', 'Teléfono', 'Estado de membresía', 'Origen', 'Fecha de alta', 'Cuenta confirmada', 'Consentimiento comercial', 'Fecha de consentimiento',
-                'Versión del consentimiento', 'Consentimiento con versión anterior',
-                'Visitas completadas (total)', 'Visitas completadas (periodo y filtros)', 'Primera visita', 'Última visita', 'Días desde la última visita', 'Segmento'];
-            if ($analitica) { array_push($cab, 'Cobros reales (USD)', 'Devoluciones reales (USD)', 'Gasto neto real (USD)', 'Neto simulado (USD, no es ingreso)'); }
-            $escribir($cab);
-        }
-        $filas = 0; $truncado = false; $lote = 2500; $offset = 0;
-        while (true) {
-            $pagina = $this->repo->listar($c, $f, $lote, $offset);
-            foreach ($pagina as $r) {
-                if ($filas >= self::EXPORT_MAX_FILAS) { $truncado = true; break 2; }
-                if ($tipo === 'comercial') {
-                    $escribir([(int)$r['id'], $r['nombre'], $r['apellido'], $r['email'], (string)$r['consentimiento_en']]);
-                } else {
-                    $fila = [(int)$r['id'], $r['nombre'], $r['apellido'], $r['email'], (string)$r['telefono'], self::MEMBRESIAS[$r['membresia']] ?? $r['membresia'], (string)$r['origen'], (string)$r['alta'],
-                        (int)$r['confirmado'] === 1 ? 'Sí' : 'No', (int)$r['consentimiento'] === 1 ? 'Sí' : 'No', (string)$r['consentimiento_en'],
-                        $r['consentimiento_version'] === null ? '' : (int)$r['consentimiento_version'], (int)$r['consentimiento_anterior'] === 1 ? 'Sí' : 'No',
-                        (int)$r['visitas_total'], (int)$r['visitas_rango'], (string)$r['primera_visita'], (string)$r['ultima_visita'], $r['recencia'] === null ? '' : (int)$r['recencia'],
-                        self::SEGMENTOS[$r['segmento']] ?? $r['segmento']];
-                    if ($analitica) {
-                        array_push($fila, $dinero((int)$r['cobros_real']), $dinero((int)$r['dev_real']), $dinero((int)$r['cobros_real'] - (int)$r['dev_real']), $dinero((int)$r['cobros_sim'] - (int)$r['dev_sim']));
-                    }
-                    $escribir($fila);
-                }
-                $filas++;
+            $columnas = [
+                ['clave' => 'id', 'titulo' => 'ID', 'tipo' => 'entero'], ['clave' => 'nombre', 'titulo' => 'Nombre'], ['clave' => 'apellido', 'titulo' => 'Apellido'],
+                ['clave' => 'email', 'titulo' => 'Correo'], ['clave' => 'telefono', 'titulo' => 'Teléfono'], ['clave' => 'membresia', 'titulo' => 'Estado de membresía'],
+                ['clave' => 'origen', 'titulo' => 'Origen'], ['clave' => 'alta', 'titulo' => 'Fecha de alta', 'tipo' => 'fecha'], ['clave' => 'confirmado', 'titulo' => 'Cuenta confirmada'],
+                ['clave' => 'consentimiento', 'titulo' => 'Consentimiento comercial'], ['clave' => 'consentimiento_en', 'titulo' => 'Fecha de consentimiento', 'tipo' => 'fechahora'],
+                ['clave' => 'consentimiento_version', 'titulo' => 'Versión del consentimiento', 'tipo' => 'entero'], ['clave' => 'consentimiento_anterior', 'titulo' => 'Consentimiento con versión anterior'],
+                ['clave' => 'comunicaciones', 'titulo' => 'Comunicaciones comerciales (estado)'], ['clave' => 'revocado_en', 'titulo' => 'Fecha de revocación', 'tipo' => 'fecha'],
+                ['clave' => 'visitas_total', 'titulo' => 'Visitas completadas (total)', 'tipo' => 'entero'], ['clave' => 'visitas_rango', 'titulo' => 'Visitas completadas (periodo y filtros)', 'tipo' => 'entero'],
+                ['clave' => 'primera_visita', 'titulo' => 'Primera visita', 'tipo' => 'fecha'], ['clave' => 'ultima_visita', 'titulo' => 'Última visita', 'tipo' => 'fecha'],
+                ['clave' => 'recencia', 'titulo' => 'Días desde la última visita', 'tipo' => 'entero'], ['clave' => 'proxima_cita', 'titulo' => 'Próxima cita', 'tipo' => 'fecha'],
+                ['clave' => 'segmento', 'titulo' => 'Segmento'],
+            ];
+            if ($analitica) {
+                array_push($columnas, ['clave' => 'cobros_real', 'titulo' => 'Cobros reales (USD)', 'tipo' => 'dinero'], ['clave' => 'dev_real', 'titulo' => 'Devoluciones reales (USD)', 'tipo' => 'dinero'],
+                    ['clave' => 'gasto_neto', 'titulo' => 'Gasto neto real (USD)', 'tipo' => 'dinero'], ['clave' => 'neto_sim', 'titulo' => 'Neto simulado (USD, no es ingreso)', 'tipo' => 'dinero'],
+                    ['clave' => 'saldo', 'titulo' => 'Saldo pendiente (USD)', 'tipo' => 'dinero']);
             }
-            if (count($pagina) < $lote) { break; }
-            $offset += $lote;
+            $totales = ['nombre' => $universo['clientes'] . ' clientes', 'visitas_rango' => $universo['visitas']];
+            if ($analitica) { $totales += ['cobros_real' => $universo['cobros_real'], 'dev_real' => $universo['dev_real'], 'gasto_neto' => $universo['gasto_neto'], 'neto_sim' => $universo['neto_sim'], 'saldo' => $universo['saldo']]; }
         }
-        if ($truncado) { $escribir(['AVISO: exportación limitada a ' . self::EXPORT_MAX_FILAS . ' filas; afine los filtros para obtener el resto.']); }
-        rewind($fp);
-        $contenido = (string)stream_get_contents($fp);
-        fclose($fp);
-        $archivo = ($tipo === 'comercial' ? 'lista_comercial_' : 'clientes_') . $f['desde'] . '_a_' . min($f['hasta'], $hoy) . '.csv';
-        return ['contenido' => $contenido, 'filas' => $filas, 'truncado' => $truncado, 'archivo' => $archivo, 'columnas' => $cab];
+
+        $repo = $this->repo;
+        $filas = (static function () use ($repo, $c, $f, $comercial, $analitica): \Generator {
+            $lote = 1000; $offset = 0;
+            while (true) {
+                $pagina = $repo->listar($c, $f, $lote, $offset);
+                foreach ($pagina as $r) {
+                    $fecha = static fn($v): string => $v === null || $v === '' ? '' : substr((string)$v, 0, 10);
+                    if ($comercial) {
+                        yield ['id' => (int)$r['id'], 'nombre' => $r['nombre'], 'apellido' => $r['apellido'], 'email' => $r['email'], 'consentimiento_en' => (string)$r['consentimiento_en'],
+                            'consentimiento_version' => $r['consentimiento_version'] === null ? '' : (int)$r['consentimiento_version']];
+                        continue;
+                    }
+                    $fila = ['id' => (int)$r['id'], 'nombre' => $r['nombre'], 'apellido' => $r['apellido'], 'email' => $r['email'], 'telefono' => (string)$r['telefono'],
+                        'membresia' => self::MEMBRESIAS[$r['membresia']] ?? $r['membresia'], 'origen' => (string)$r['origen'], 'alta' => $fecha($r['alta']),
+                        'confirmado' => (int)$r['confirmado'] === 1 ? 'Sí' : 'No', 'consentimiento' => (int)$r['consentimiento'] === 1 ? 'Sí' : 'No',
+                        'consentimiento_en' => (string)$r['consentimiento_en'], 'consentimiento_version' => $r['consentimiento_version'] === null ? '' : (int)$r['consentimiento_version'],
+                        'consentimiento_anterior' => (int)$r['consentimiento_anterior'] === 1 ? 'Sí' : 'No', 'comunicaciones' => self::textoComunicaciones($r),
+                        'revocado_en' => $r['revocado_en'] ? self::fechaLocalDeUtc((string)$r['revocado_en']) : '',
+                        'visitas_total' => (int)$r['visitas_total'], 'visitas_rango' => (int)$r['visitas_rango'], 'primera_visita' => $fecha($r['primera_visita']), 'ultima_visita' => $fecha($r['ultima_visita']),
+                        'recencia' => $r['recencia'] === null ? '' : (int)$r['recencia'], 'proxima_cita' => $fecha($r['proxima_cita']), 'segmento' => self::SEGMENTOS[$r['segmento']] ?? $r['segmento']];
+                    if ($analitica) {
+                        $fila += ['cobros_real' => (int)$r['cobros_real'], 'dev_real' => (int)$r['dev_real'], 'gasto_neto' => (int)$r['cobros_real'] - (int)$r['dev_real'],
+                            'neto_sim' => (int)$r['cobros_sim'] - (int)$r['dev_sim'], 'saldo' => (int)$r['saldo']];
+                    }
+                    yield $fila;
+                }
+                if (count($pagina) < $lote) { break; }
+                $offset += $lote;
+            }
+        })();
+        return [
+            'tipo' => $tipo, 'columnas' => $columnas, 'filas' => $filas, 'totales' => $totales, 'universo' => $universo,
+            'base' => ($comercial ? 'lista_comercial_' : 'clientes_') . $f['desde'] . '_a_' . min($f['hasta'], $hoy),
+            'opciones' => ['max_filas' => self::EXPORT_MAX_FILAS, 'hoja' => $comercial ? 'Lista comercial' : 'Clientes',
+                'aviso_truncado' => 'AVISO: el filtro tiene ' . $universo['clientes'] . ' filas; la exportación se limitó a ' . self::EXPORT_MAX_FILAS . '. Afine los filtros para obtener el resto.'],
+        ];
     }
 }

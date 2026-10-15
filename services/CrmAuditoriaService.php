@@ -20,7 +20,8 @@ final class CrmAuditoriaService
     public const POR_PAGINA = [25, 50, 100];
     public const TIMEZONE = 'America/Guayaquil';
     /** Filtros de la exportación que no son datos personales y se guardan tal cual. */
-    private const FILTROS_LITERALES = ['desde', 'hasta', 'alta_desde', 'alta_hasta', 'profesional_id', 'servicio_id', 'segmento', 'membresia', 'consentimiento', 'dias_activo', 'orden', 'dir'];
+    private const FILTROS_LITERALES = ['desde', 'hasta', 'alta_desde', 'alta_hasta', 'profesional_id', 'servicio_id', 'segmento', 'membresia', 'consentimiento', 'dias_activo', 'orden', 'dir',
+        'cuenta', 'actividad', 'ultima_desde', 'ultima_hasta', 'proxima', 'proxima_desde', 'proxima_hasta', 'visitas_min', 'visitas_max', 'gasto_min', 'gasto_max', 'saldo', 'indicador'];
 
     public function __construct(private CrmAuditoriaRepository $repo, private ?ConsentimientoRepository $consentimientos = null) {}
 
@@ -49,9 +50,10 @@ final class CrmAuditoriaService
      * (en un éxito, NO se entrega el archivo).
      *
      * @param array{id:?int,rol:?string} $actor
-     * @param array{columnas:string[],filas:int,truncado:bool,contenido:string}|null $exportacion solo en éxito
+     * @param array{columnas:string[],filas:int,truncado:bool,sha256?:string,contenido?:string,bytes?:int}|null $exportacion solo en éxito (sha256 de Exportador::generar o, en el CSV heredado, el contenido)
+     * @param string|null $formato csv | xlsx (otro valor o null: el de $exportacion['formato'] o csv; un valor no válido se guarda como «invalido»)
      */
-    public function registrar(string $tipo, string $resultado, ?string $motivo, array $actor, ?array $filtros, ?array $exportacion = null): int
+    public function registrar(string $tipo, string $resultado, ?string $motivo, array $actor, ?array $filtros, ?array $exportacion = null, ?string $formato = null): int
     {
         if (!isset(self::RESULTADOS[$resultado])) { throw new \InvalidArgumentException('Resultado de auditoría no válido.'); }
         if (!isset(self::TIPOS[$tipo])) { $tipo = 'invalido'; }
@@ -66,16 +68,18 @@ final class CrmAuditoriaService
                 if ($obtenido && $this->repo->hayDenegadaReciente($actorId, $tipo, $motivo, self::VENTANA_AGRUPAR_DENEGADAS_MIN)) {
                     return 0;
                 }
-                return $this->registrarFila($tipo, $resultado, $motivo, $actor, $filtros, $exportacion);
+                return $this->registrarFila($tipo, $resultado, $motivo, $actor, $filtros, $exportacion, $formato);
             } finally {
                 if ($obtenido) { $this->repo->soltarCandado($candado); }
             }
         }
-        return $this->registrarFila($tipo, $resultado, $motivo, $actor, $filtros, $exportacion);
+        return $this->registrarFila($tipo, $resultado, $motivo, $actor, $filtros, $exportacion, $formato);
     }
 
-    private function registrarFila(string $tipo, string $resultado, ?string $motivo, array $actor, ?array $filtros, ?array $exportacion): int
+    private function registrarFila(string $tipo, string $resultado, ?string $motivo, array $actor, ?array $filtros, ?array $exportacion, ?string $formato = null): int
     {
+        $formato = $formato ?? (string)($exportacion['formato'] ?? 'csv');
+        if (!isset(\Classes\Exportacion\Exportador::FORMATOS[$formato])) { $formato = 'invalido'; }
         $fil = $filtros !== null ? self::filtrosParaAuditoria($filtros) : null;
         $versionId = null; $politica = null;
         if ($resultado === 'exitosa') {
@@ -86,7 +90,7 @@ final class CrmAuditoriaService
         $columnas = $exportacion['columnas'] ?? null;
         return $this->repo->registrar([
             'actor_usuario_id' => $actor['id'] ?? null, 'actor_rol' => $actor['rol'] ?? null,
-            'formato' => 'csv', 'tipo' => $tipo, 'resultado' => $resultado, 'motivo' => $motivo,
+            'formato' => $formato, 'tipo' => $tipo, 'resultado' => $resultado, 'motivo' => $motivo,
             'filtros_json' => $fil !== null ? json_encode($fil, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) : null,
             'filtros_hash' => $filtros !== null ? AuditoriaHuella::texto('filtros|' . json_encode(self::canonico($filtros), JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)) : null,
             'filas' => $exportacion['filas'] ?? null,
@@ -94,7 +98,7 @@ final class CrmAuditoriaService
             'columnas_lista' => $columnas !== null ? json_encode(array_values($columnas), JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR) : null,
             'truncado' => !empty($exportacion['truncado']) ? 1 : 0,
             'consentimiento_version_id' => $versionId, 'consentimiento_politica' => $politica,
-            'contenido_sha256' => isset($exportacion['contenido']) ? hash('sha256', $exportacion['contenido']) : null,
+            'contenido_sha256' => isset($exportacion['sha256']) && is_string($exportacion['sha256']) && preg_match('/^[a-f0-9]{64}$/', $exportacion['sha256']) ? $exportacion['sha256'] : (isset($exportacion['contenido']) ? hash('sha256', $exportacion['contenido']) : null),
             'ip_hash' => AuditoriaHuella::ip(AuditoriaHuella::ipDeSolicitud()),
         ]);
     }
