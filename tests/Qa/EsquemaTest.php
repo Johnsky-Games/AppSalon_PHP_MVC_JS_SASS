@@ -426,7 +426,8 @@ final class EsquemaTest extends R2bCase
         $db->close();
         // CAMBIO DE CONTRATO (rondas 019-022): +7 tablas (resguardo_016, reasignaciones, decisiones de homónimos x2, auditoría CRM, versiones e historial de consentimiento).
         // CAMBIO DE CONTRATO (ronda 5, migraciones 023-026): +7 tablas (cobros/verificación y su historial, comprobantes y numeración, auditoría general de exportaciones…).
-        $this->assertSame(49, $n, 'tablas del esquema migrado (incluye migraciones y equipo_mutex)');
+        // CAMBIO DE CONTRATO (regularización de citas antiguas, migración 027): +1 tabla (citas_regularizaciones).
+        $this->assertSame(50, $n, 'tablas del esquema migrado (incluye migraciones y equipo_mutex)');
         // La documentación citaba 30 (tras la 015) y el encabezado de backup_db.php "13 tablas": ya no describen la realidad.
         $this->assertFalse(str_contains((string)file_get_contents(self::RAIZ . '/scripts/backup_db.php'), '13 tablas en total'), 'documentación obsoleta en scripts/backup_db.php: dice "13 tablas en total" y el esquema migrado tiene 35');
     }

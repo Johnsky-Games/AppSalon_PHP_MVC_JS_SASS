@@ -112,7 +112,10 @@ trait MatrizHttp
         self::$D['servicio_borrable'] = self::servicio('Servicio Borrable', 9.00);
         // Cita confirmada de AYER del profesional con la clienta propia (la agenda permite pasar a «en servicio» solo si ya empezó).
         $ayer = (new \DateTimeImmutable('now', new \DateTimeZone('America/Guayaquil')))->modify('-1 day')->format('Y-m-d');
-        self::$D['cita_estado'] = $crearCita((int)self::$P['cliente']['id'], (int)self::$P['profesional']['profesional_id'], $ayer, 'confirmada');
+        // Decisión sobre citas de días anteriores: una cita de AYER ya no se inicia de forma ordinaria. Para el escenario con efecto se usa una de
+        // HOY a las 00:00 (la ventana de inicio abre a las 23:00 de la víspera y cierra a las 24:00 del día de la cita).
+        self::$D['cita_estado'] = $crearCita((int)self::$P['cliente']['id'], (int)self::$P['profesional']['profesional_id'], $hoy, 'confirmada');
+        self::q("UPDATE citas SET hora='00:00:00', hora_inicio='00:00:00', hora_fin='00:30:00' WHERE id=?", [self::$D['cita_estado']]);
         self::$D['cita_reembolso'] = $crearCita((int)self::$P['cliente']['id'], (int)self::$P['profesional']['profesional_id'], $ayer, 'completada', 'REF-EFECTO-REEMBOLSO', '30.00');
         // El reenvío de invitaciones está limitado a 1/minuto: se envejece la invitación sembrada para que el escenario ejerza el camino feliz.
         self::q('UPDATE colaborador_invitaciones SET creada_en=DATE_SUB(creada_en, INTERVAL 10 MINUTE) WHERE colaborador_id=?', [self::$D['col_por_reenviar']]);

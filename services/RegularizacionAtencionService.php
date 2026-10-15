@@ -101,7 +101,7 @@ final class RegularizacionAtencionService
             // Compare-and-set: además del bloqueo, la escritura exige que el estado siga siendo el leído.
             $this->repo->consulta('UPDATE citas SET estado=\'completada\', atencion_efectiva_at=?, regularizada_por=?, regularizada_at=? WHERE id=? AND estado=?',
                 'sisis', [$efectiva['txt'], $actor, $ahoraTxt, $citaId, $cita['estado']]);
-            if ($this->repo->db->affected_rows !== 1) { throw new AtencionRechazada('La cita cambió mientras se procesaba. Ábrala de nuevo para ver su estado actual.', 409); }
+            if ($this->filasCambiadas() !== 1) { throw new AtencionRechazada('La cita cambió mientras se procesaba. Ábrala de nuevo para ver su estado actual.', 409); }
             // Si había una solicitud abierta, esta decisión la resuelve; si no, se registra la regularización directa.
             $abierta = $this->repo->consulta("SELECT id FROM citas_regularizaciones WHERE cita_id=? AND estado='solicitada' FOR UPDATE", 'i', [$citaId])[0] ?? null;
             if ($abierta) {
@@ -145,7 +145,7 @@ final class RegularizacionAtencionService
             $ahoraTxt = $ahora->format('Y-m-d H:i:s');
             $this->repo->consulta("UPDATE citas_regularizaciones SET estado='rechazada', resuelta_por=?, resuelta_at=?, motivo_resolucion=? WHERE id=? AND estado='solicitada'",
                 'issi', [$actor, $ahoraTxt, $motivo, $regId]);
-            if ($this->repo->db->affected_rows !== 1) { throw new AtencionRechazada('La solicitud cambió mientras se procesaba.', 409); }
+            if ($this->filasCambiadas() !== 1) { throw new AtencionRechazada('La solicitud cambió mientras se procesaba.', 409); }
             $this->evento($citaId, $actor, 'regularizacion_rechazo', ['estado' => $cita['estado']], ['regularizacion_id' => $regId, 'motivo' => $motivo], $ahoraTxt);
             return ['recurso_tipo' => 'regularizacion', 'recurso_id' => $regId, 'datos' => ['cita_id' => $citaId]];
         });
@@ -188,6 +188,12 @@ final class RegularizacionAtencionService
         if (!ReglaAtencion::esPendienteRevision($estado, (string)$cita['fecha'], $ahora)) {
             throw new AtencionRechazada('Solo se regulariza la atención de citas de días anteriores; para la cita de hoy use el flujo ordinario de la agenda.', 422);
         }
+    }
+
+    /** Filas que cambió la sentencia de escritura inmediatamente anterior (comparación-y-cambio). */
+    private function filasCambiadas(): int
+    {
+        return (int)($this->repo->consulta('SELECT ROW_COUNT() n')[0]['n'] ?? 0);
     }
 
     private function inicioDelDia(string $fecha): \DateTimeImmutable
@@ -247,7 +253,7 @@ final class RegularizacionAtencionService
      */
     private function efectiva(mixed $v, \DateTimeImmutable $ahora): array
     {
-        if (!is_string($v) || !preg_match('/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})$/D', trim($v), $m)) {
+        if (!is_string($v) || !preg_match('/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})$/D', $v, $m)) {
             throw new AtencionRechazada('Indique la fecha y la hora en que se atendió (formato AAAA-MM-DD HH:MM).', 422);
         }
         $zona = new \DateTimeZone(ReglaAtencion::ZONA);

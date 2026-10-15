@@ -35,6 +35,7 @@ $consulta = static function (array $extra = []) use ($filtros): string {
 <?php endforeach; ?></tbody></table></div></section>
 <?php endif; ?>
 
+<p class="ui-help caja-nota-fechas">Las fechas filtran por el <strong>día de la cita</strong>. Una cita antigua (por ejemplo, una atención regularizada) se cobra hoy y conserva la fecha real de su cobro: el efectivo del día está en <a href="/admin/finanzas">Finanzas</a> (movimientos de caja por fecha real).</p>
 <form class="formulario ops-filter caja-filtros" method="GET" action="/caja" aria-label="Filtros de caja">
 <div class="campo"><label for="caja-desde">Desde</label><input id="caja-desde" name="desde" type="date" value="<?php echo s($filtros['desde']); ?>"></div>
 <div class="campo"><label for="caja-hasta">Hasta</label><input id="caja-hasta" name="hasta" type="date" value="<?php echo s($filtros['hasta']); ?>"></div>

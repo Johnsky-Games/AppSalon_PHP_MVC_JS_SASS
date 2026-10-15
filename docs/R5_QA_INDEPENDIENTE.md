@@ -38,7 +38,7 @@ Los hizo el líder al integrar, tras reproducir cada fallo; se listan para revis
 | `C4 devolución parcial y total` | Las reversas de comisión son negativas: se suma `devengo + reversa` | Error de signo en la prueba |
 | `K5 filtros activos` | Se exige que no exista el **bloque de filtros activos** sin filtros aplicados | El formulario conserva siempre su propio «Limpiar filtros» |
 | `X5 caja` | Los totales se contrastan con toda la caja del día (SQL), no con lo sembrado | La base de la clase acumula días de otras pruebas |
-| `E cita de días anteriores` | Pasa de «no se puede iniciar» a «se registra con retraso y queda auditada» | **Decisión pendiente, ver §5** |
+| `E cita de días anteriores` | (1.ª versión) «se registra con retraso»; **decisión del usuario:** vuelve a «no se inicia de forma ordinaria» (422, sin escribir) y se reprograma o regulariza. Mismo cambio en `R5DevAgendaTest`, `ReglaAtencionTest` y `R5AtencionCitaIntegrationTest` | Decisión del usuario, §5 |
 | E2E de navegador (`tests/browser_e2e_test.js`, ADMIN-05) | La liberación del horario tras eliminar una cita se lee con una **sesión de cliente** (contexto aparte); además se exige que la sesión del equipo reciba 403 en `/api/disponibilidad` (desde una página auxiliar, para que ese 403 esperado no cuente como error de consola) | `/api/disponibilidad` es API del portal de clientes; antes la leía la sesión del equipo, que ahora se rechaza por diseño |
 | Navegación (`tests/ui_navigation_test.js`) | El escenario simulado carga el catálogo real `includes/destinos.php`; el propietario ve 14 enlaces (nueva sección Caja) y finanzas ve `/caja` | El menú del equipo sale de `navegacion_portal()` y Caja es sección nueva de la ronda |
 | Pruebas heredadas (matriz de autorización, redirecciones R2B, reversión de migraciones 022, esquema, R4) | Actualizadas a los contratos nuevos (anónimo→`/equipo/login`, equipo en pantallas del cliente→redirección/403, destino de cancelación, migraciones 023–026, bitácora de exportaciones, tabla de revisión de caja) | Cambios de contrato intencionados de la ronda, no relajaciones |
@@ -70,6 +70,30 @@ Huecos que halló y que el integrador cerró después con pruebas propias (**no 
 * CI previos que fallaron y por qué: `9ec7eaf` (interbloqueo real en cobros simultáneos), `33605ff` (puertos del arnés de QA), `3d6152f` (E2E de Apache: contratos de la ronda y `noindex`). Detalle en `docs/ENTREGA_RONDA5.md` §8.
 * Reverificación independiente de las pruebas del integrador: §3 bis.
 
-## 5. Decisión pendiente (no aceptada por el usuario)
+## 5. Citas de días anteriores: decisión del usuario y su QA
 
-**Iniciar la atención de citas de días anteriores.** El contrato inicial cerraba la ventana al terminar el día de la cita (solo quedaba «registrar ausencia»). Se cambió a «sin cierre, con retraso y auditada» para que una cita olvidada pueda atenderse y cobrarse; **el usuario aún no lo ha aceptado**. Para volver a cerrar la ventana basta restaurar la rama `evaluarInicio` de `classes/ReglaAtencion.php` (rama `ventana_cerrada`) y las pruebas `ReglaAtencionTest`, `R5AtencionCitaIntegrationTest`, `R5DevAgendaTest` y `R5QaAtencionTest::test_E_cita_de_dias_anteriores…`.
+El usuario decidió: sin inicio ordinario de una cita de un día anterior (reprogramar o **regularizar**), regularización exclusiva de propietario y gerente, el profesional solo solicita, nada se retrodata y las citas antiguas quedan «pendientes de revisión». Contrato: `docs/R5_REGULARIZACION.md`.
+
+**QA independiente (clases `R5bQa*`, escritas desde el contrato, HTTP real y Chromium):**
+
+| Requisito | Clase | Pruebas |
+|---|---|---|
+| Permisos por rol, portal, POST forjados, datos hostiles | `R5bQaPermisosTest` | 11 |
+| Auditoría (quién/cuándo/efectiva), concurrencia real con procesos | `R5bQaAuditoriaTest` | 11 |
+| Consistencia financiera (cobro con fecha real, comisión, liquidación cerrada, reportes servicio vs cobro, devolución) | `R5bQaFinanzasTest` | 6 |
+| Pendientes de revisión (definición, alcance, aviso, sin escrituras al mirar) | `R5bQaPendientesTest` | 6 |
+| Navegador (modal, «procesando» con estado real, sin desbordes 320–1440 px, foco) | `R5bQaNavegadorTest` | 6 |
+
+**Hallazgos reales del QA sobre el primer WIP (todos corregidos):**
+
+| Hallazgo | Corrección |
+|---|---|
+| Regularizar y rechazar respondían siempre 409: `affected_rows` leído tras cerrar el statement valía -1 | Comparación-y-cambio con `ROW_COUNT()` |
+| Un éxito se mostraba como 500: el `catch (\Throwable)` capturaba la excepción de redirección | El controlador deja pasar `AppTerminationException` |
+| Un propietario con doble membresía en el portal de clientes podía regularizar (el servicio ignoraba el portal) | El controlador exige el permiso con `exigir_permiso` (portal-aware) antes del CSRF |
+| Fecha efectiva con byte NUL aceptada (`trim` lo eliminaba) | La fecha se valida sin recortar |
+| `/caja` filtraba por día de la cita mientras el contrato decía «día del cobro» | Contrato precisado: `/caja` es la lista de citas por cobrar (día de la cita, la pantalla lo avisa) y el efectivo del día real se concilia en **Finanzas**; la prueba `test_F_caja_por_dia_real` se ajustó a ese contrato (**cambio de expectativa del integrador, a reverificar por el QA**) |
+
+**Pruebas del integrador (NO independientes):** `R5RegularizacionIntegrationTest` (19), `R5RegularizacionConcurrenciaIntegrationTest` (6, procesos reales: dos regularizaciones, mismo formulario dos veces, regularizar vs ausencia, vs finalizar, solicitud vs regularización directa, dos rechazos), pruebas unitarias de `esPendienteRevision` y los ajustes de contrato de la matriz de autorización (3 rutas POST + `/agenda/pendientes` + permisos), `EsquemaTest` (50 tablas) y `MatrizHttp`.
+
+**Observación sobre `finalizar` vs regularizar:** si la regularización gana, «Finalizar» encuentra la cita ya completada y responde idempotente («Estado ya actualizado») sin escribir; la prueba exige una única escritura.

@@ -170,17 +170,18 @@ final class R5DevAgendaTest extends R5DevAgendaCase
         foreach (self::enlaces($r['body']) as $href) { $this->assertStringNotContainsString('/mis-citas', $href); }
     }
 
-    public function test_cita_de_un_dia_anterior_sin_iniciar_se_puede_registrar_con_retraso_y_tambien_la_ausencia(): void
+    public function test_cita_de_un_dia_anterior_no_se_inicia_pero_si_admite_registrar_la_ausencia(): void
     {
+        // Cambio de expectativa por la decisión del usuario sobre citas de días anteriores (docs/R5_REGULARIZACION.md).
         $n = $this->dueno();
         $c = $this->cita(self::diaNegocio(-1), '10:00:00');
         $d = $this->cita(self::diaNegocio(-1), '11:00:00');
         $pag = $n->get('/agenda?desde=' . self::diaNegocio(-1) . '&hasta=' . self::diaNegocio(0));
-        $this->assertNotNull(self::formulario($pag['body'], $c, 'en_servicio'), 'sin cierre de ventana: se puede iniciar con retraso');
-        $this->assertNotNull($ausencia = self::formulario($pag['body'], $d, 'no_asistio'), 'una cita pasada también admite registrar la ausencia');
+        $this->assertNull(self::formulario($pag['body'], $c, 'en_servicio'), 'no hay inicio ordinario de una cita de un día anterior');
+        $this->assertNotNull($ausencia = self::formulario($pag['body'], $d, 'no_asistio'), 'una cita pasada sigue admitiendo registrar la ausencia (con su propia fecha real)');
         $r = self::postEstado($n, $c, 'en_servicio');
-        $this->assertSame(302, $r['status']);
-        $this->assertSame('en_servicio', self::escalar('SELECT estado FROM citas WHERE id=?', [$c]));
+        $this->assertSame(422, $r['status']);
+        $this->assertSame('confirmada', self::escalar('SELECT estado FROM citas WHERE id=?', [$c]));
         $this->assertSame(302, $this->enviarFormulario($n, $ausencia)['status']);
         $this->assertSame('no_asistio', self::escalar('SELECT estado FROM citas WHERE id=?', [$d]));
     }

@@ -77,7 +77,7 @@ class Fase5InterfazReservasIntegrationTest extends TestCase
         self::$db->query('TRUNCATE TABLE usuarios');
         // Con las claves foráneas desactivadas el TRUNCATE no se propaga: las filas huérfanas de otras pruebas (accesos,
         // membresías, colaboradores) se reasignarían a los nuevos usuarios que reutilizan los ids 1, 2, 3…
-        foreach (['usuario_accesos', 'clientes', 'colaborador_invitaciones', 'colaboradores'] as $huerfana) {
+        foreach (['usuario_accesos', 'clientes', 'colaborador_invitaciones', 'colaboradores', 'citas_regularizaciones'] as $huerfana) {
             self::$db->query("DELETE FROM {$huerfana}");
         }
         self::$db->query('SET FOREIGN_KEY_CHECKS = 1');

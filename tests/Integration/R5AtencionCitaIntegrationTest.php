@@ -124,11 +124,20 @@ final class R5AtencionCitaIntegrationTest extends TestCase
         $this->assertTrue($this->mover($id, 'en_servicio', '2030-01-07 12:00:00')['resultado'], 'exactamente 60 minutos antes');
     }
 
-    public function testFronteraDelDiaSinCierreYUnaCitaDeMadrugadaSeAbreLaVispera(): void
+    public function testLaVentanaCierraAlTerminarElDiaYUnaCitaDeMadrugadaSeAbreLaVispera(): void
     {
         $ayer = $this->cita('2030-01-06', '23:30');
-        // Sin cierre de ventana: pasada la medianoche todavía se puede registrar (con retraso, con su fecha real en la auditoría).
-        $this->assertTrue($this->mover($ayer, 'en_servicio', '2030-01-07 00:00:00')['resultado']);
+        // Decisión del usuario: una cita de un día anterior NO se inicia de forma ordinaria (se reprograma o se regulariza).
+        $r = $this->mover($ayer, 'en_servicio', '2030-01-07 00:00:00');
+        $this->assertFalse($r['resultado']);
+        $this->assertSame(422, $r['httpCode']);
+        $this->assertStringContainsString('reprográmala', $r['error']);
+        $this->assertSame('confirmada', $this->fila($ayer)['estado']);
+        $this->assertNull($this->fila($ayer)['atencion_inicio_at']);
+        $this->assertSame([], $this->eventos($ayer), 'el rechazo no escribe nada');
+        // Hasta el último segundo del día de la cita sí.
+        $mismoDia = $this->cita('2030-01-07', '23:30');
+        $this->assertTrue($this->mover($mismoDia, 'en_servicio', '2030-01-07 23:59:59')['resultado']);
 
         $madrugada = $this->cita('2030-01-08', '00:30');
         $this->assertSame(422, $this->mover($madrugada, 'en_servicio', '2030-01-07 23:29:59')['httpCode']);
@@ -331,9 +340,9 @@ final class R5AtencionCitaIntegrationTest extends TestCase
     private function permisos(string $rol): array
     {
         return match ($rol) {
-            'propietario', 'gerente' => ['gestiona' => true, 'propia' => false, 'finanzas' => true],
+            'propietario', 'gerente' => ['gestiona' => true, 'propia' => false, 'finanzas' => true, 'regularizar' => true, 'solicitar' => false],
             'recepcion' => ['gestiona' => true, 'propia' => false, 'finanzas' => false],
-            'profesional' => ['gestiona' => false, 'propia' => true, 'finanzas' => false],
+            'profesional' => ['gestiona' => false, 'propia' => true, 'finanzas' => false, 'solicitar' => true],
             'finanzas' => ['gestiona' => false, 'propia' => false, 'finanzas' => true],
             default => ['gestiona' => false, 'propia' => false, 'finanzas' => false],
         };
@@ -362,7 +371,8 @@ final class R5AtencionCitaIntegrationTest extends TestCase
         }
         // finanzas sin agenda y alguien sin permisos: ninguna acción de atención
         $this->assertSame([], AgendaAtencionService::accionesDe($cita('en_servicio', '11:00:00'), $ahora, $this->permisos('finanzas'))['operar']);
-        $this->assertSame(['operar' => [], 'finanzas' => [], 'reprogramar' => false], AgendaAtencionService::accionesDe($cita('confirmada', '11:00:00'), $ahora, $this->permisos('cliente')));
+        $this->assertSame(['operar' => [], 'finanzas' => [], 'reprogramar' => false, 'pendiente_revision' => false, 'regularizar' => false, 'solicitar' => false, 'solicitud_abierta' => 0],
+            AgendaAtencionService::accionesDe($cita('confirmada', '11:00:00'), $ahora, $this->permisos('cliente')));
         // terminales: sin acciones de atención
         foreach (['completada', 'no_asistio', 'cancelada'] as $t) {
             $this->assertSame([], AgendaAtencionService::accionesDe($cita($t, '11:00:00'), $ahora, $this->permisos('propietario'))['operar'], $t);

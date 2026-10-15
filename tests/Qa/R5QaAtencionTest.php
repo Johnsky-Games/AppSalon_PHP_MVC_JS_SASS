@@ -442,20 +442,22 @@ final class R5QaAtencionTest extends R5Case
      * Req E (decisión del líder, ronda 5): una cita confirmada de DÍAS ANTERIORES que nadie inició se puede registrar CON RETRASO (si no, jamás
      * podría atenderse ni cobrarse). No es silencioso: el evento deja quién y CUÁNDO (fecha real de hoy), distinta de la fecha de la cita.
      */
-    public function test_E_cita_de_dias_anteriores_se_registra_con_retraso_y_queda_auditada(): void
+    public function test_E_cita_de_dias_anteriores_no_se_inicia_de_forma_ordinaria(): void
     {
+        // DECISIÓN DEL USUARIO (regularización, docs/R5_REGULARIZACION.md): sin inicio ordinario de una cita de un día anterior;
+        // se reprograma o la regulariza el propietario/gerente. (Cambio de expectativa respecto de la versión «con retraso».)
         $n = $this->equipo('dueno');
         $donante = $this->citaComenzada();
         $ayer = self::crearCita(['cliente' => self::$e['cliente']['id'], 'pro' => self::$e['proA']['profesional_id'], 'fecha' => self::gye('-1 day')->format('Y-m-d'), 'hora' => '10:00:00']);
         $pag = $this->agenda($n);
         $t = self::tarjeta($pag['body'], $ayer);
         $this->assertNotNull($t);
-        $this->assertTrue(self::accion($t, '/Iniciar atenci[óo]n/iu') !== null, 'una cita pasada sin iniciar debe poder registrarse con retraso');
+        $this->assertNull(self::accion($t, '/Iniciar atenci[óo]n/iu'), 'una cita de un día anterior no ofrece un formulario de inicio');
+        $this->assertMatchesRegularExpression('/repro?gr[aá]mala|reprogram/iu', self::texto($t), 'el botón deshabilitado explica qué hacer');
         $r = $this->postForjado($n, $donante, $ayer, 'en_servicio');
-        $this->assertContains($r['status'], [200, 302, 303], 'status ' . $r['status']);
-        $this->assertSame('en_servicio', $this->estado($ayer));
-        $ev = $this->eventos($ayer);
-        $this->assertCount(1, $ev);
+        $this->assertSame(422, $r['status'], 'el servidor también lo rechaza');
+        $this->assertSame('confirmada', $this->estado($ayer));
+        $this->assertCount(0, $this->eventos($ayer), 'el rechazo no escribe nada');
     }
 
     /**

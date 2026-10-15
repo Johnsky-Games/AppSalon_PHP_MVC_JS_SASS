@@ -30,7 +30,8 @@ Los permisos se comprueban en el SERVIDOR en cada operación (no en la vista) y 
 | Pago (`pagos.pagado_at`), movimiento de caja (`caja_movimientos.registrado_en`), comprobante (`emitido_en`) | el momento REAL de cada operación | **Nunca se retrodatan** |
 | Comisión (`comisiones_movimientos.registrado_en`) | momento real en que se confirma el dinero | Idem |
 | Reportes «por fecha de servicio» | `citas.fecha` original: la cita regularizada figura en su día original | No se mueve |
-| Reportes «por fecha de cobro» y caja | fecha real del cobro | Figura el día que se cobró |
+| Reportes «por fecha de cobro» y movimientos de caja (Finanzas, `caja_movimientos`) | fecha real del cobro | Figura el día que se cobró |
+| Pantalla `/caja` («Cobros por cita») y su exportación | filtra por el **día de la cita** (es una lista de citas por cobrar); la cita regularizada y cobrada hoy aparece con la fecha de la cita y su cobro conserva la fecha real. La pantalla lo dice. El efectivo del día real se concilia en Finanzas | Sin cambios (límite conocido, ver §6) |
 | Liquidaciones de comisiones ya cerradas | — | **Protegidas**: la comisión de una cita regularizada nace en la fecha real del cobro, de modo que una liquidación cerrada (`estado='liquidada'`, con su `hasta_fecha`) nunca la absorbe ni cambia; entra en la siguiente liquidación |
 
 ## 4. Auditoría
@@ -47,4 +48,5 @@ Cada operación bloquea la cita (`FOR UPDATE`) y cambia el estado con comparaci�
 
 * Reprogramar una cita vencida exige una fecha futura (regla habitual de reprogramación); si el cliente llega hoy, se regulariza o se registra como nueva reserva.
 * Las citas pendientes de revisión se muestran como lista de tarjetas (no tabular), sin exportación.
+* `/caja` filtra por el día de la cita; no hay (todavía) un filtro «por fecha de cobro» en esa pantalla: el efectivo del día real se ve en Finanzas.
 * Recepción puede reprogramar y registrar ausencias pero no solicita regularizaciones.

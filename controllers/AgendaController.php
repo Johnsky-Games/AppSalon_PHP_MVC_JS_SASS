@@ -92,7 +92,10 @@ class AgendaController
     /** Regularización de la atención: la autorización y las reglas viven en el servicio; aquí solo se traducen a la respuesta. */
     private static function regularizacion(string $operacion): void
     {
-        iniciar_sesion_segura(); isAuth(); exigir_csrf();
+        iniciar_sesion_segura(); isAuth();
+        // El permiso se exige ANTES que el CSRF (como el resto de rutas protegidas) y el servicio lo vuelve a comprobar con el rol vigente.
+        exigir_permiso($operacion === 'solicitar' ? 'agenda.solicitar_regularizacion' : 'agenda.regularizar');
+        exigir_csrf();
         if (isset($_POST['volver']) && !is_string($_POST['volver'])) { unset($_POST['volver']); }
         $servicio = new RegularizacionAtencionService();
         $actor = (int)$_SESSION['id'];
@@ -111,6 +114,8 @@ class AgendaController
             }
             $_SESSION['agenda_aviso'] = ['tipo' => 'exito', 'texto' => $mensaje];
             redirigir(destino_volver('agenda')); return;
+        } catch (\AppTerminationException $e) {
+            throw $e; // la redirección de éxito termina la ejecución con esta excepción: no es un error
         } catch (AtencionRechazada $e) {
             $codigo = $e->http();
             responder_error_operacion($codigo, $e->getMessage(), 'agenda');

@@ -34,8 +34,9 @@ final class ReglaAtencionTest extends TestCase
             'a la hora exacta' => ['2030-01-08 11:00:00', '11:00:00', true, null],
             'ya comenzada' => ['2030-01-08 15:30:00', '11:00:00', true, null],
             'ultimo segundo del dia' => ['2030-01-08 23:59:59', '11:00:00', true, null],
-            'primer segundo del dia siguiente' => ['2030-01-09 00:00:00', '11:00:00', true, null],   // sin cierre: registro con retraso
-            'dia siguiente por la tarde' => ['2030-01-09 14:00:00', '11:00:00', true, null],
+            // Decisión del usuario: sin inicio ordinario de una cita de un día anterior (se reprograma o se regulariza).
+            'primer segundo del dia siguiente' => ['2030-01-09 00:00:00', '11:00:00', false, 'dia_anterior'],
+            'dia siguiente por la tarde' => ['2030-01-09 14:00:00', '11:00:00', false, 'dia_anterior'],
             'vispera' => ['2030-01-07 12:00:00', '11:00:00', false, 'antes_de_ventana'],
             // La hora puede llegar con segundos o sin ellos.
             'hora corta HH:MM' => ['2030-01-08 10:00:00', '11:00', true, null],
@@ -69,9 +70,14 @@ final class ReglaAtencionTest extends TestCase
         // Cita a las 00:00 exactas: desde las 23:00 del día anterior.
         $this->assertFalse(ReglaAtencion::evaluarInicio('2030-01-08', '00:00:00', self::ahora('2030-01-07 22:59:59'))['permitido']);
         $this->assertTrue(ReglaAtencion::evaluarInicio('2030-01-08', '00:00:00', self::ahora('2030-01-07 23:00:00'))['permitido']);
-        // Sin cierre de ventana: pasada la medianoche todavía se puede registrar con retraso.
+        // La ventana cierra a las 24:00 del día de la cita: pasada la medianoche ya no hay inicio ordinario.
         $this->assertTrue(ReglaAtencion::evaluarInicio('2030-01-08', '23:30:00', self::ahora('2030-01-08 23:59:59'))['permitido']);
-        $this->assertTrue(ReglaAtencion::evaluarInicio('2030-01-08', '23:30:00', self::ahora('2030-01-09 00:00:00'))['permitido']);
+        $cerrada = ReglaAtencion::evaluarInicio('2030-01-08', '23:30:00', self::ahora('2030-01-09 00:00:00'));
+        $this->assertFalse($cerrada['permitido']);
+        $this->assertSame('dia_anterior', $cerrada['motivo']);
+        $this->assertStringContainsString('08/01/2030', $cerrada['mensaje']);
+        $this->assertStringContainsString('reprográmala', $cerrada['mensaje']);
+        $this->assertStringContainsString('regulariza', $cerrada['mensaje']);
     }
 
     public function test_la_zona_es_la_del_negocio_aunque_el_instante_llegue_en_otra(): void
@@ -81,9 +87,36 @@ final class ReglaAtencionTest extends TestCase
         $this->assertFalse(ReglaAtencion::evaluarInicio('2030-01-08', '11:00:00', self::ahora('2030-01-08 14:59:59', 'UTC'))['permitido']);
         // 04:59:59 UTC del día 9 == 23:59:59 del día 8 en Guayaquil: todavía es el día de la cita; 05:00:00 UTC ya no.
         $this->assertTrue(ReglaAtencion::evaluarInicio('2030-01-08', '11:00:00', self::ahora('2030-01-09 04:59:59', 'UTC'))['permitido']);
-        $this->assertTrue(ReglaAtencion::evaluarInicio('2030-01-08', '11:00:00', self::ahora('2030-01-09 05:00:00', 'UTC'))['permitido'], 'sin cierre: también el día siguiente');
+        $this->assertSame('dia_anterior', ReglaAtencion::evaluarInicio('2030-01-08', '11:00:00', self::ahora('2030-01-09 05:00:00', 'UTC'))['motivo'], 'ya es el día siguiente en el negocio');
         // Y desde otra zona con cambio de fecha (Asia/Tokio va 14 h por delante de Guayaquil).
         $this->assertSame('antes_de_ventana', ReglaAtencion::evaluarInicio('2030-01-08', '11:00:00', self::ahora('2030-01-08 23:30:00', 'Asia/Tokyo'))['motivo']);
+    }
+
+    /** @return array<string,array{string,string,string,bool}> */
+    public static function pendientesDeRevision(): array
+    {
+        return [
+            'confirmada de ayer' => ['confirmada', '2030-01-07', '2030-01-08 00:00:00', true],
+            'en servicio de hace dias' => ['en_servicio', '2030-01-01', '2030-01-08 09:00:00', true],
+            'confirmada de hoy' => ['confirmada', '2030-01-08', '2030-01-08 23:59:59', false],
+            'confirmada futura' => ['confirmada', '2030-01-09', '2030-01-08 10:00:00', false],
+            'completada antigua' => ['completada', '2030-01-01', '2030-01-08 10:00:00', false],
+            'no asistio antigua' => ['no_asistio', '2030-01-01', '2030-01-08 10:00:00', false],
+            'cancelada antigua' => ['cancelada', '2030-01-01', '2030-01-08 10:00:00', false],
+        ];
+    }
+
+    #[DataProvider('pendientesDeRevision')]
+    public function test_pendiente_de_revision_es_solo_lo_sin_resolver_de_un_dia_anterior(string $estado, string $fecha, string $ahora, bool $esperado): void
+    {
+        $this->assertSame($esperado, ReglaAtencion::esPendienteRevision($estado, $fecha, self::ahora($ahora)));
+    }
+
+    public function test_pendiente_de_revision_usa_el_dia_del_negocio_y_no_el_utc(): void
+    {
+        // 04:59 UTC del día 9 sigue siendo el día 8 en Guayaquil; 05:00 UTC ya es el 9.
+        $this->assertFalse(ReglaAtencion::esPendienteRevision('confirmada', '2030-01-08', self::ahora('2030-01-09 04:59:59', 'UTC')));
+        $this->assertTrue(ReglaAtencion::esPendienteRevision('confirmada', '2030-01-08', self::ahora('2030-01-09 05:00:00', 'UTC')));
     }
 
     public function test_ausencia_solo_desde_la_hora_de_la_cita(): void
@@ -141,7 +174,8 @@ final class ReglaAtencionTest extends TestCase
         $this->assertSame([false, 422], [$r['ok'], $r['httpCode']]);
         $this->assertStringContainsString('disponible desde las 14:00', $r['error']);
         $r = ReglaAtencion::validarTransicion('confirmada', 'en_servicio', '2030-01-07', '15:00:00', $ahora);
-        $this->assertSame([true, 200], [$r['ok'], $r['httpCode']], 'una cita de un día anterior sin iniciar se puede registrar con retraso');
+        $this->assertSame([false, 422, 'dia_anterior'], [$r['ok'], $r['httpCode'], $r['motivo']], 'una cita de un día anterior no se inicia de forma ordinaria');
+        $this->assertStringContainsString('reprográmala', $r['error']);
         $r = ReglaAtencion::validarTransicion('confirmada', 'no_asistio', '2030-01-08', '15:00:00', $ahora);
         $this->assertSame([false, 422], [$r['ok'], $r['httpCode']]);
         $r = ReglaAtencion::validarTransicion('completada', 'en_servicio', '2030-01-08', '07:00:00', $ahora);

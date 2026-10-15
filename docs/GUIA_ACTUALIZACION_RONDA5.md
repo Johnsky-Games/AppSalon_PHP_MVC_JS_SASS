@@ -14,7 +14,7 @@ No se borran volúmenes, no se reemplaza `includes/.env`, no se envían correos 
 | Clientes (fallos D/E) | Sin filtros de estado/consentimiento; «Listado» sin lista | Filtros combinables con chips y «Limpiar filtros»; «Listado» abre la lista real con descarga |
 | Exportaciones (fallo F) | Solo CSV | CSV **y** Excel (XLSX real) en CRM, caja y reportes, auditadas |
 
-Migraciones nuevas: **023** atención de citas (quién y cuándo inició/finalizó), **024** cobros y verificación, **025** comprobantes internos (correlativos), **026** auditoría general de exportaciones. Todas con reversión segura (se niegan si perderían datos de negocio).
+Migraciones nuevas: **027** regularización de la atención (columnas `citas.atencion_efectiva_at/regularizada_por/regularizada_at` y tabla `citas_regularizaciones`; reversión segura que se niega si hay regularizaciones), **023** atención de citas (quién y cuándo inició/finalizó), **024** cobros y verificación, **025** comprobantes internos (correlativos), **026** auditoría general de exportaciones. Todas con reversión segura (se niegan si perderían datos de negocio).
 
 ## 2. Actualizar (con respaldo previo)
 
@@ -23,9 +23,9 @@ git fetch origin --prune
 git switch claude/blissful-hopper-f5k7a0 && git pull --ff-only       # si hay cambios locales en conflicto, DETENTE y consulta
 $COMPOSE build web
 $COMPOSE exec web php scripts/backup_db.php --gzip --output=storage/respaldos/antes-ronda5.sql.gz
-$COMPOSE run --rm instalador php scripts/instalar.php --migrar       # aplica 023-026 sobre la base existente
+$COMPOSE run --rm instalador php scripts/instalar.php --migrar       # aplica 023-027 sobre la base existente
 $COMPOSE up -d db web notificaciones
-$COMPOSE exec web php database/migrador.php status                   # 026 aplicada
+$COMPOSE exec web php database/migrador.php status                   # 027 aplicada
 $COMPOSE exec web php scripts/instalar.php --comprobar               # «Esquema al día.»
 ```
 
@@ -36,7 +36,7 @@ $COMPOSE exec web php scripts/instalar.php --comprobar               # «Esquema
 1. Entra por `/equipo/login` como propietario. En **Agenda**, una cita de hoy ya comenzada muestra «Iniciar atención»; una de mañana lo muestra deshabilitado con «Disponible desde las HH:MM». Pulsa «Iniciar atención»: vuelves a la agenda con el mismo período y la cita queda «En servicio».
 2. «Finalizar y cobrar»: llegas al cobro **de esa cita** (cliente, servicios, total, saldo). Cobra en efectivo con cambio; se genera el comprobante. Comprueba que dice «no es factura autorizada por el SRI».
 3. Registra una transferencia: queda **por verificar**; no suma a caja. Con **otra** cuenta con permiso de finanzas, verifícala (la misma persona que la registró no puede, salvo el propietario).
-4. Con una cita de días anteriores sin iniciar: puedes iniciarla con retraso (**decisión pendiente tuya**, ver `ENTREGA_RONDA5.md`).
+4. Con una cita confirmada de un día anterior: «Iniciar atención» aparece deshabilitado con el motivo; en **Agenda → Revisar pendientes** (`/agenda/pendientes`) puedes reprogramarla o, como propietario/gerente, «Regularizar atención» en su detalle (motivo y fecha/hora efectiva no futura). Como profesional, solo puedes «Solicitar regularización» de tus citas. Comprueba en el historial de la cita quién regularizó y cuándo, y que la fecha de la cita no cambió.
 5. Con la misma persona en el portal de clientes (`/cliente/login`), abre `/caja`: 403 con «Volver» a su portal. Con sesión de equipo, abre `/mis-citas`: te lleva al inicio del equipo con un aviso.
 6. Clientes: filtra por membresía suspendida y por consentimiento; usa «Limpiar filtros»; abre un «Listado»; descarga CSV y XLSX y ábrelos en Excel.
 

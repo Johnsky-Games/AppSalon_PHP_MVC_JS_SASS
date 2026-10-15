@@ -52,6 +52,10 @@ Identificador correlativo único (`CI-000001`…), fecha, cita, cliente, profesi
 
 Cita de $40,00. Anticipo en efectivo de $15,00 (recibe $20,00, cambio $5,00) → estado **parcial**, saldo $25,00, comisión 10 % = $1,50. Transferencia de $25,00 con referencia → **por verificar** (saldo disponible $0, pero aún no es dinero). Otra persona la verifica → **pagado**; caja suma $40,00 y la comisión total queda en $4,00. Se devuelven $10,00 → **parcial**, saldo $10,00, comisión neta $3,00. Cada paso genera su comprobante.
 
+## 8 bis. Fechas y citas regularizadas
+
+Cobrar una cita cuya atención se regularizó no retrodata nada: pago, caja, comprobante y comisión llevan la fecha REAL del cobro. `/caja` filtra por el día de la cita (lo dice la pantalla); el efectivo por fecha real se concilia en Finanzas. Ver `docs/R5_REGULARIZACION.md` §3.
+
 ## 9. Límites y pendientes
 
 Factura fiscal electrónica; adjuntar comprobante de transferencia; permiso específico para que recepción cobre; conciliación contra extractos bancarios reales (hoy la verificación es manual).

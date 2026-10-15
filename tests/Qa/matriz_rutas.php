@@ -61,6 +61,10 @@ return [
     ['m' => 'GET',  'p' => '/pago/resultado',        'g' => 'sesion', 'ok' => [422, 'html']],
     ['m' => 'POST', 'p' => '/agenda/estado',         'g' => 'sesion', 'orden' => 'auth', 'csrf' => 'exigir', 'ok' => [422, 'html', 'No se pudo actualizar la cita']],
     ['m' => 'POST', 'p' => '/agenda/reprogramar',    'g' => 'sesion', 'orden' => 'auth', 'csrf' => 'exigir', 'ok' => [422, 'html', 'No se pudo actualizar la cita']],
+    // Regularización de la atención de citas de días anteriores (decisión del usuario, docs/R5_REGULARIZACION.md): permiso antes que CSRF.
+    ['m' => 'POST', 'p' => '/agenda/regularizar',          'g' => 'permiso', 'roles' => ['propietario', 'gerente'], 'orden' => 'auth', 'csrf' => 'exigir', 'ok' => [422, 'html']],
+    ['m' => 'POST', 'p' => '/agenda/regularizar/rechazar', 'g' => 'permiso', 'roles' => ['propietario', 'gerente'], 'orden' => 'auth', 'csrf' => 'exigir', 'ok' => [422, 'html']],
+    ['m' => 'POST', 'p' => '/agenda/regularizar/solicitar', 'g' => 'permiso', 'roles' => ['propietario', 'profesional'], 'orden' => 'auth', 'csrf' => 'exigir', 'ok' => [422, 'html']],
     ['m' => 'GET',  'p' => '/api/profesionales',     'g' => 'sesion', 'ok' => [200, 'json', ['status' => 'ok', 'codigo' => 'profesionales_listados', 'resultado' => true]],
         'unauth_json' => ['resultado' => false, 'status' => 'unauthorized', 'codigo' => 'no_autenticado', 'profesionales' => [], 'profesionales_compatibles' => [], 'error' => 'No autenticado']],
     ['m' => 'GET',  'p' => '/api/disponibilidad',    'g' => 'sesion', 'ok' => [422, 'json', ['status' => 'invalid', 'codigo' => 'solicitud_invalida', 'resultado' => false, 'disponible' => false, 'intervalos' => []]],
@@ -79,6 +83,7 @@ return [
     // ------------------------------------------------------------- por permiso (exigir_permiso)
     ['m' => 'GET',  'p' => '/admin',                 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion'], 'ok' => [200, 'html']],
     ['m' => 'GET',  'p' => '/agenda',                'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'profesional'], 'ok' => [200, 'html']],
+    ['m' => 'GET',  'p' => '/agenda/pendientes',     'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'profesional'], 'ok' => [200, 'html']],
     ['m' => 'GET',  'p' => '/servicios',             'g' => 'permiso', 'roles' => ['propietario', 'gerente'], 'ok' => [200, 'html']],
     ['m' => 'GET',  'p' => '/servicios/crear',       'g' => 'permiso', 'roles' => ['propietario', 'gerente'], 'ok' => [200, 'html']],
     ['m' => 'POST', 'p' => '/servicios/crear',       'g' => 'permiso', 'roles' => ['propietario', 'gerente'], 'orden' => 'auth', 'csrf' => 'exigir', 'ok' => [200, 'html']],

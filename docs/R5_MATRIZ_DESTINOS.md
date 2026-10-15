@@ -11,7 +11,7 @@ Un mismo usuario puede tener membresía de cliente y laboral, pero **el portal d
 
 ## 2. Catálogo (clave → ruta, portal, permiso)
 
-Equipo: `agenda` `/agenda`, `agenda_cita` `/agenda/cita` (agenda.gestionar o agenda.ver_propia) · `admin_citas` `/admin` · `caja` `/caja`, `caja_cita` `/caja/cita`, `caja_comprobante` `/caja/comprobante`, `finanzas` `/admin/finanzas` (finanzas.gestionar) · `clientes_nuevo` · `servicios`, `servicio_nuevo` · `profesionales`, `profesional_horarios` · `equipo`, `equipo_ficha`, `equipo_reasignar` · `inventario` · `reportes` · `crecimiento` · `ajustes` · `inicio_equipo`.
+Equipo: `agenda` `/agenda`, `agenda_cita` `/agenda/cita` y `agenda_pendientes` `/agenda/pendientes` (agenda.gestionar o agenda.ver_propia) · `admin_citas` `/admin` · `caja` `/caja`, `caja_cita` `/caja/cita`, `caja_comprobante` `/caja/comprobante`, `finanzas` `/admin/finanzas` (finanzas.gestionar) · `clientes_nuevo` · `servicios`, `servicio_nuevo` · `profesionales`, `profesional_horarios` · `equipo`, `equipo_ficha`, `equipo_reasignar` · `inventario` · `reportes` · `crecimiento` · `ajustes` · `inicio_equipo`.
 Cliente: `cliente_reservar` `/cita` · `cliente_citas` `/mis-citas` · `cliente_bienestar` `/mi-bienestar`.
 Compartido: `perfil` (ambos portales). Públicos: `login_cliente` `/`, `login_equipo` `/equipo/login`.
 Una clave de otro portal, desconocida o sin permiso devuelve `''` y el llamador usa el inicio de su portal.
@@ -34,6 +34,7 @@ Anónimo en pantallas exclusivas del equipo (`/agenda`, `/caja`, `/admin…`, `/
 
 | Operación | Éxito | Error (403/404/409/422/500/503) |
 |---|---|---|
+| Regularizar / solicitar / rechazar regularización | `/agenda/cita?id=N` con el período | Página de error del equipo (permiso antes que CSRF; 403/404/409/422) |
 | Iniciar / finalizar / ausencia (agenda) | `/agenda` con el mismo período (`desde`, `hasta`) | Página de error **dentro del layout del equipo**, «Volver a la agenda» con el período; nunca `/mis-citas` |
 | «Finalizar y cobrar» | `/caja/cita?id=N` con el período (cubierto por el E2E de navegador `R5QaNavegadorTest`) | Si el cobro no procede, la cita queda atendida con saldo pendiente y se reintenta desde la caja |
 | Cobro, devolución, verificar/rechazar | `/caja/cita?id=N` | Error en layout con «Volver al cobro» (probado: exceso de saldo muestra el mensaje concreto en una alerta persistente) |
