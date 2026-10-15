@@ -102,7 +102,9 @@ class Router
             header('Content-Type: text/html; charset=utf-8');
             // Toda pantalla renderizada es privada o contiene enlaces/tokens: nunca se cachea. Antes lo daba, por efecto lateral, el inicio
             // de sesión del menú; ahora se declara explícitamente (también en páginas anónimas como /mensaje).
-            header('Cache-Control: no-store, no-cache, must-revalidate');
+            $yaDeclarada = false;
+            foreach (headers_list() as $h) { if (stripos($h, 'Cache-Control:') === 0) { $yaDeclarada = true; break; } }
+            if (!$yaDeclarada) { header('Cache-Control: no-store, no-cache, must-revalidate'); }
         }
         $bufferLevel = ob_get_level();
         ob_start();

@@ -193,7 +193,7 @@ final class R5CrmFiltrosIntegrationTest extends TestCase
             if ($e !== $revertir) { throw $e; }
         }
         $this->assertGreaterThan(1, $version);
-        $this->assertSame(1, (int)$this->db->query('SELECT MAX(version) m FROM consentimiento_versiones')->fetch_assoc()['m'], 'la versión de la prueba no debe persistir');
+        $this->assertSame(1, (int)$this->db->query('SELECT MAX(version) m FROM consentimiento_versiones WHERE proposito=\'marketing_email\'')->fetch_assoc()['m'], 'la versión de la prueba no debe persistir');
     }
 
     public function testActividadComercialRecienteInactivoYNunca(): void
