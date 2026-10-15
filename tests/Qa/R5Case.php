@@ -579,7 +579,7 @@ PY;
         $p = proc_open(['python3', '-I', '-c', $py, $tmp], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
         $out = stream_get_contents($pipes[1]); $err = stream_get_contents($pipes[2]);
         $code = proc_close($p); @unlink($tmp);
-        if ($code !== 0) { throw new \RuntimeException('openpyxl no pudo abrir el archivo: ' . trim($err)); }
+        if ($code !== 0) { throw new \RuntimeException('openpyxl no pudo abrir el archivo: ' . trim((string)array_slice(explode("\n", trim($err)), -1)[0])); }
         return json_decode($out, true);
     }
 
