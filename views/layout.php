@@ -24,6 +24,7 @@ $uiAviso = $uiAutenticado && function_exists('consumir_aviso_portal') ? consumir
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#123b42">
+    <?php if (!empty($uiNoIndex)) : ?><meta name="robots" content="noindex, nofollow"><?php endif; ?>
     <title><?php echo s($uiNombreComercial); ?> · Tu espacio de bienestar</title>
     <link rel="icon" href="/build/img/avatar-professional.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/build/vendor/sweetalert2.min.css">

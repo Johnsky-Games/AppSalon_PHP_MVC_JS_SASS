@@ -239,6 +239,18 @@ final class R5PortalesDestinosTest extends TestCase
         $this->limpiarUsuarios();
     }
 
+    public function testLaPaginaDeErrorDentroDelLayoutNuncaSeIndexa(): void
+    {
+        foreach (['equipo' => 'recepcion', 'cliente' => 'cliente'] as $portal => $rol) {
+            $this->sesion($portal, $rol);
+            foreach ([403, 404, 409, 422] as $codigo) {
+                $salida = $this->capturar(static function () use ($codigo) { ErrorResponse::render($codigo, []); });
+                $this->assertStringContainsString('<meta name="robots" content="noindex, nofollow">', $salida, "$portal/$codigo");
+            }
+            $this->limpiarUsuarios();
+        }
+    }
+
     public function testElInicioDelErrorSeCalculaPorElPortalNoPorElRolGuardado(): void
     {
         // Sesión de equipo SIN `rol` en la sesión (como una abierta antes de que el login lo escribiera): antes caía en /perfil.

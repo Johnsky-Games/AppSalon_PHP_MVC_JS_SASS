@@ -160,6 +160,7 @@ final class ErrorResponse
     {
         $nivel = ob_get_level();
         try {
+            $variables['uiNoIndex'] = true; // una página de error nunca se indexa (igual que views/errores/layout.php)
             extract($variables, EXTR_SKIP);
             ob_start();
             echo '<div class="nav-equipo-error">';

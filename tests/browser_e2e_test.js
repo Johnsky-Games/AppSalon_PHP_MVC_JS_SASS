@@ -1236,12 +1236,40 @@ async function runBrowserTests() {
         }
 
         // Verificar que tras eliminar la cita con profesional en /api/eliminar, el intervalo 10:00-11:00 se libera en GET /api/disponibilidad
-        const dispTrasEliminar = await page.evaluate(async (fecha) => {
-            const r = await fetch(`/api/disponibilidad?profesionalId=1&fecha=${encodeURIComponent(fecha)}&servicios=1,2`, {
-                headers: { 'Accept': 'application/json' }
-            });
-            return { status: r.status, body: await r.json() };
-        }, validDate);
+        // Ronda 5: /api/disponibilidad es una API del portal de clientes (una sesión del equipo recibe 403 portal_incorrecto).
+        // La liberación se comprueba, por tanto, desde una sesión de cliente en un contexto de navegador aparte.
+        const ctxCliente = await browser.createBrowserContext();
+        let dispTrasEliminar;
+        try {
+            const paginaCliente = await ctxCliente.newPage();
+            await paginaCliente.goto(`${BASE_URL}/`, { waitUntil: 'networkidle0' });
+            await paginaCliente.waitForSelector('input[name="email"]', { timeout: 5000 });
+            await paginaCliente.type('input[name="email"]', 'carlos@correo.com');
+            await paginaCliente.type('input[name="password"]', 'Password123!');
+            await Promise.all([
+                paginaCliente.waitForNavigation({ waitUntil: 'networkidle0' }),
+                paginaCliente.click('input[type="submit"]')
+            ]);
+            // Página auxiliar (misma sesión del equipo, sin los observadores de consola de la página principal): el 403 es el resultado esperado.
+            const paginaEquipo = await browser.newPage();
+            await paginaEquipo.goto(`${BASE_URL}/admin`, { waitUntil: 'networkidle0' });
+            const equipoRechazado = await paginaEquipo.evaluate(async (fecha) => {
+                const r = await fetch(`/api/disponibilidad?profesionalId=1&fecha=${encodeURIComponent(fecha)}&servicios=1,2`, { headers: { 'Accept': 'application/json' } });
+                return r.status;
+            }, validDate);
+            await paginaEquipo.close();
+            if (equipoRechazado !== 403) {
+                throw new Error(`La sesión del equipo debía recibir 403 en /api/disponibilidad (portal del cliente) y recibió ${equipoRechazado}`);
+            }
+            dispTrasEliminar = await paginaCliente.evaluate(async (fecha) => {
+                const r = await fetch(`/api/disponibilidad?profesionalId=1&fecha=${encodeURIComponent(fecha)}&servicios=1,2`, {
+                    headers: { 'Accept': 'application/json' }
+                });
+                return { status: r.status, body: await r.json() };
+            }, validDate);
+        } finally {
+            await ctxCliente.close();
+        }
         const paresTrasEliminar = Array.isArray(dispTrasEliminar.body.intervalos)
             ? dispTrasEliminar.body.intervalos.map(i => `${i.inicio}-${i.fin}`)
             : [];

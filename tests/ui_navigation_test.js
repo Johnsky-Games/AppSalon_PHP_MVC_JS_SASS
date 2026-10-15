@@ -32,6 +32,7 @@ namespace {
     function portal_sesion(): string { return getenv('NAV_ROLE') === 'cliente' ? 'cliente' : 'equipo'; }
     function inicio_portal(): string { return portal_sesion() === 'cliente' ? '/cita' : (['profesional' => '/agenda', 'finanzas' => '/admin/finanzas'][getenv('NAV_ROLE')] ?? '/admin'); }
     function puede(string $permission): bool { return in_array($permission, \\Services\\AuthorizationService::ROLES[rol_actual()] ?? [], true); }
+    require getenv('NAV_ROOT') . '/includes/destinos.php'; // catálogo real de destinos: el menú del equipo sale de navegacion_portal()
     $contenido = '<header class="ui-page-header"><h1 class="nombre-pagina">Tu jornada</h1><p>Revisa la agenda y organiza la atención.</p></header><section class="ui-card"><h2>Próximos pasos</h2><a href="#contenido-principal" id="fixture-main-link">Continuar en el contenido</a></section>';
     require getenv('NAV_ROOT') . '/views/layout.php';
 }`;
@@ -67,7 +68,7 @@ const server = http.createServer((request, response) => {
             await page.goto(`${baseUrl}/admin/ajustes`, { waitUntil: 'load' });
             if (screenshotDir) await page.screenshot({ path: path.join(screenshotDir, `navigation-${width}-${height}.png`), fullPage: true });
             assert.equal(await page.$eval('.ui-brand > span:last-child', node => node.firstChild.textContent), companyName);
-            assert.equal(await page.$$eval('.ui-nav-link', links => links.length), 13, 'El propietario conserva todos sus enlaces (incluye Clientes)');
+            assert.equal(await page.$$eval('.ui-nav-link', links => links.length), 14, 'El propietario conserva todos sus enlaces (incluye Clientes y la sección Caja de la ronda 5)');
             assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, `Sin desbordamiento horizontal a ${width}×${height}`);
             if (width <= 1024) {
                 assert.equal(await page.$eval('#ui-navigation-panel', node => node.hidden), true, 'Panel móvil inicialmente cerrado');
@@ -104,7 +105,7 @@ const server = http.createServer((request, response) => {
             ['cliente', ['/cita', '/mis-citas', '/perfil', '/mi-bienestar'], '/cita'],
             ['profesional', ['/agenda', '/admin/clientes', '/perfil'], '/agenda'],
             ['recepcion', ['/admin', '/agenda', '/admin/clientes', '/perfil'], '/admin'],
-            ['finanzas', ['/admin/finanzas', '/admin/inventario', '/admin/reportes', '/admin/clientes', '/perfil'], '/admin/finanzas']
+            ['finanzas', ['/caja', '/admin/finanzas', '/admin/inventario', '/admin/reportes', '/admin/clientes', '/perfil'], '/admin/finanzas']
         ]) {
             await page.goto(`${baseUrl}/perfil?role=${role}`, { waitUntil: 'load' });
             assert.deepEqual(await page.$$eval('.ui-nav-link', links => links.map(link => link.getAttribute('href'))), routes, `El rol ${role} ve sus accesos permitidos`);
