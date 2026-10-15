@@ -477,6 +477,12 @@ PHP;
         foreach (self::q("SELECT p.id, p.monto, (SELECT COALESCE(SUM(monto_centavos),0) FROM caja_movimientos m WHERE m.pago_id=p.id AND m.tipo='ingreso') ing FROM pagos p WHERE p.proveedor='manual' AND p.estado IN ('completado','reembolsado')") as $r) {
             if (self::centavos((string)$r['monto']) !== (int)$r['ing']) { $v[] = "pago {$r['id']} monto {$r['monto']} ≠ ingreso de caja {$r['ing']} centavos"; }
         }
+        // 3b) Todo pago de una cita pertenece al cliente de ESA cita, apunta a una sola cita y tiene importe positivo.
+        foreach (self::q("SELECT p.id, p.usuario_id, p.cita_id, p.cita_referencia_id, p.monto, c.usuarioId FROM pagos p JOIN citas c ON c.id=p.cita_referencia_id") as $r) {
+            if ((int)$r['usuario_id'] !== (int)$r['usuarioId']) { $v[] = "pago {$r['id']} imputado al cliente {$r['usuario_id']} pero la cita {$r['cita_referencia_id']} es del cliente {$r['usuarioId']}"; }
+            if ($r['cita_id'] !== null && (int)$r['cita_id'] !== (int)$r['cita_referencia_id']) { $v[] = "pago {$r['id']}: cita_id {$r['cita_id']} ≠ cita_referencia_id {$r['cita_referencia_id']}"; }
+            if (self::centavos((string)$r['monto']) <= 0) { $v[] = "pago {$r['id']} con importe no positivo {$r['monto']}"; }
+        }
         // 4) Por cita: ni sobrecobro ni saldo negativo; estado financiero coherente con la caja neta.
         foreach (self::q("SELECT DISTINCT p.cita_referencia_id id FROM pagos p WHERE p.cita_referencia_id IS NOT NULL") as $r) {
             $c = (int)$r['id'];
