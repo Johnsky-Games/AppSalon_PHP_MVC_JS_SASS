@@ -54,7 +54,7 @@ UPDATE pagos p INNER JOIN usuarios u ON u.id = CAST(JSON_UNQUOTE(JSON_EXTRACT(p.
 -- ---------------------------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS cobros_devoluciones (
  id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
- pago_id INT NOT NULL,
+ pago_id INT NULL COMMENT 'SET NULL si el pago se elimina: la devolución es evidencia y sobrevive (igual que caja_movimientos)',
  cita_id INT NULL,
  monto_centavos BIGINT NOT NULL,
  metodo VARCHAR(30) NULL,
@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS cobros_devoluciones (
  registrado_en DATETIME NOT NULL,
  INDEX idx_cobros_dev_pago (pago_id),
  INDEX idx_cobros_dev_cita (cita_id),
- CONSTRAINT fk_cobros_dev_pago FOREIGN KEY (pago_id) REFERENCES pagos (id) ON DELETE RESTRICT,
+ CONSTRAINT fk_cobros_dev_pago FOREIGN KEY (pago_id) REFERENCES pagos (id) ON DELETE SET NULL,
  CONSTRAINT fk_cobros_dev_actor FOREIGN KEY (actor_id) REFERENCES usuarios (id) ON DELETE SET NULL,
  CONSTRAINT ck_cobros_dev_monto CHECK (monto_centavos > 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
