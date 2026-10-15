@@ -278,7 +278,7 @@ final class CrmService
         if (empty($acceso['analitica'])) { $segmentos = array_values(array_diff($segmentos, ['vip'])); }
         $segmento = $lista('segmento', 'El segmento', $segmentos);
         $membresia = $lista('membresia', 'El estado de membresía', array_keys(self::MEMBRESIAS));
-        $consentimiento = $lista('consentimiento', 'El filtro de comunicaciones comerciales', array_keys(self::CONSENTIMIENTOS));
+        $consentimiento = $lista('consentimiento', 'El filtro de consentimiento (comunicaciones comerciales)', array_keys(self::CONSENTIMIENTOS));
         $cuenta = $lista('cuenta', 'El estado de la cuenta', array_keys(self::CUENTAS));
         $actividad = $lista('actividad', 'La actividad comercial', array_keys(self::ACTIVIDADES));
         $proxima = $lista('proxima', 'El filtro de próxima cita', array_keys(self::PROXIMAS));

@@ -12,7 +12,10 @@ final class Neutralizacion
     public static function textoCsv(mixed $valor): string
     {
         $t = self::limpio($valor);
-        if ($t !== '' && in_array($t[0], ['=', '+', '-', '@', "\t", "\r", "\n"], true)) { return "'" . $t; }
+        if ($t === '') { return $t; }
+        // También el primer carácter visible tras espacios/tabuladores iniciales (algunos lectores recortan antes de evaluar).
+        $visible = ltrim($t, " \t\r\n\x0B\f");
+        if (in_array($t[0], ['=', '+', '-', '@', "\t", "\r", "\n", "\f", "\x0B"], true) || ($visible !== '' && in_array($visible[0], ['=', '+', '-', '@'], true))) { return "'" . $t; }
         return $t;
     }
 
