@@ -82,6 +82,15 @@ final class ExportadorTest extends TestCase
         $this->assertSame(3, $r['filas']);
     }
 
+    public function test_celda_de_texto_mayor_que_el_limite_de_excel_se_recorta(): void
+    {
+        $largo = str_repeat('á', 40000);
+        $r = Exportador::generar('xlsx', 'x', [['clave' => 'n', 'titulo' => 'N']], [['n' => $largo]]);
+        $p = self::descomprimir(stream_get_contents($r['flujo']));
+        preg_match('~<t xml:space="preserve">(á+…?)</t>~u', $p['xl/worksheets/sheet1.xml'], $m);
+        $this->assertSame(32767, mb_strlen($m[1]));
+    }
+
     public function test_fechas_de_excel_y_limites(): void
     {
         $this->assertSame('46310', XlsxEscritor::serial('2026-10-15'));

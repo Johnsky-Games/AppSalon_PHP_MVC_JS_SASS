@@ -8,6 +8,7 @@ namespace Classes\Exportacion;
  */
 final class XlsxEscritor implements EscritorTabla
 {
+    public const MAX_CARACTERES_CELDA = 32767;
     public const MAX_FILAS = 1048575;   // el límite de Excel es 1 048 576 con el encabezado
     private EscritorZip $zip;
     /** @var array<int,array{clave:string,titulo:string,tipo:string}> */
@@ -105,7 +106,10 @@ final class XlsxEscritor implements EscritorTabla
     /** Cadena en línea (jamás fórmula). */
     private static function texto(string $ref, mixed $v, int $estilo): string
     {
-        $t = htmlspecialchars(Neutralizacion::textoXml($v), ENT_XML1 | ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        $t = Neutralizacion::textoXml($v);
+        // Excel admite como máximo 32 767 caracteres por celda; un texto mayor haría que el archivo no abra o se trunque en silencio.
+        if (mb_strlen($t) > self::MAX_CARACTERES_CELDA) { $t = mb_substr($t, 0, self::MAX_CARACTERES_CELDA - 1) . '…'; }
+        $t = htmlspecialchars($t, ENT_XML1 | ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
         return '<c r="' . $ref . '" s="' . $estilo . '" t="inlineStr"><is><t xml:space="preserve">' . $t . '</t></is></c>';
     }
 
