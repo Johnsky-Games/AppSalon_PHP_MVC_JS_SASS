@@ -42,9 +42,24 @@ Los hizo el líder al integrar, tras reproducir cada fallo; se listan para revis
 
 **Envío único y botón «procesando».** El script de navegador ejecuta, en el **mismo turno síncrono**, el primer clic, la lectura del estado inmediato y varios clics/`requestSubmit` adicionales; guarda el resultado en `sessionStorage` por si la navegación destruye el contexto y borra el valor previo antes de cada paso. Las pruebas exigen **a la vez** (a) estado de proceso (botón deshabilitado, `aria-busy` o texto «Registrando…») y (b) **exactamente 1 POST de red** al endpoint, contado con `page.on('request')`, no con el valor almacenado.
 
-## 3 bis. Pruebas del integrador (NO son revisión independiente)
+## 3 bis. Pruebas del integrador y su reverificación independiente
 
-Escritas por quien integró, para cerrar huecos que el QA no cubrió: `R5QaCobroTest::test_C3_cambio_de_tarifa…` y `::test_C4_pago_despues_de_devolucion_parcial…` (comisiones; viven en la clase del QA pero **las escribió el integrador**), el refuerzo del script de navegador (envío en un solo turno síncrono), `tests/Integration/R5EnlacesCorreoTest.php`, `tests/Qa/R5IntEnlacesCorreoHttpTest.php` y `tests/Qa/R5IntInicioTardioTest.php`. **Reverificación independiente pendiente:** se le pedirá al QA cuando pueda continuar (hoy limitado por cuota); hasta entonces no se etiquetan como revisadas por él.
+Escritas por quien integró (no por el QA), para cerrar huecos: `R5QaCobroTest::test_C3_cambio_de_tarifa…` y `::test_C4_pago_despues_de_devolucion_parcial…` (comisiones; viven en la clase del QA pero **las escribió el integrador**), el refuerzo del script de navegador, `tests/Integration/R5EnlacesCorreoTest.php`, `tests/Qa/R5IntEnlacesCorreoHttpTest.php` y `tests/Qa/R5IntInicioTardioTest.php`.
+
+**Reverificación hecha por el QA independiente sobre `33605ff`** (clon y BD propios, mutaciones aplicadas y revertidas):
+
+| Qué | Resultado |
+|---|---|
+| Aritmética de `C3_cambio_de_tarifa` y `C4_pago_despues_de_devolucion` | Correcta (100+200=300; devengo 300, reversa −100, nuevo devengo 100, neta 300) |
+| Mutación: redondeo por pago (sin acumulado) | La detecta `C3_redondeo` (no `C3_cambio_de_tarifa`: sus importes son exactos) |
+| Mutación: ignorar la tarifa configurada | La detecta `C3_cambio_de_tarifa` |
+| Mutación: no revertir en proporción | La detectan `C4_devolucion_parcial_y_total` y `C4_pago_despues_de_devolucion` |
+| Mutación: reversa sin descontar reversas previas | Solo la detectaba `C4_devolucion_parcial_y_total`; **hueco**: `C4_pago_despues_de_devolucion` hace una sola devolución |
+| Envío único en navegador | Cobro e «Iniciar atención» exigen a la vez estado de proceso y 1 POST (`page.on('request')`). **Límite:** con el JS vacío el POST sigue siendo 1 (el navegador cancela la primera navegación); quien discrimina es el estado de proceso, no el conteo |
+| `READ COMMITTED` en `CobroCitaService::ejecutar` | 11/11 pruebas de concurrencia; la exclusión por cita no se debilita (quitar los dos bloqueos rompe `C7`). Quitar solo `FOR UPDATE OF c` no rompe nada porque lo cubre el bloqueo de `pagos`: el bloqueo de cita aislado **no está cubierto**. No se probó con una transacción ya abierta |
+| Inicio tardío | `R5QaAtencionTest` 19/19 y `R5IntInicioTardioTest` pasan |
+
+Huecos que halló y que el integrador cerró después con pruebas propias (**no independientes**): `test_C4_dos_devoluciones_parciales_sucesivas…` (verificada con la mutación «reversa sin descontar previas»: falla), y en `R5IntInicioTardioTest` la ausencia tardía de una cita de hace más de un año, finalización por otra persona (`atencion_fin_por`) y fecha original conservada en `agenda_eventos`. Sin cubrir: profesional propio iniciando tarde.
 
 ## 4. Resultados (SHA y entorno)
 
