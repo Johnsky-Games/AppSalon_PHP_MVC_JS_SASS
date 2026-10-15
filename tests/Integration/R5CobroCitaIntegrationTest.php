@@ -295,4 +295,44 @@ final class R5CobroCitaIntegrationTest extends TestCase
         mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
         try { $this->db->query("DELETE FROM cobros_eventos WHERE cita_id=$cita"); } finally { mysqli_report(MYSQLI_REPORT_OFF); }
     }
+
+    public function testLaListaSqlYElDetallePhpCalculanLoMismoEnEscenariosMixtos(): void
+    {
+        $repo = new \Repositories\CajaRepository(new OperacionRepository($this->db));
+        $escenarios = [];
+        $a = $this->cita(['20.00', '15.50']); $this->cobrar($this->finanzas, $a, 'efectivo', '10.00'); $escenarios[] = $a;
+        $b = $this->cita(['40.00']); $x = $this->cobrar($this->finanzas, $b, 'transferencia', '25.00', ['referencia' => 'LST-' . bin2hex(random_bytes(3))]); $escenarios[] = $b;
+        $c = $this->cita(['40.00']); $y = $this->cobrar($this->finanzas, $c, 'efectivo', '40.00'); $this->svc->devolver($this->dueno, ['pago_id' => $y['pago_id'], 'monto' => '15.00', 'motivo' => 'Ajuste', 'idem_key' => R5CajaFixture::clave()]); $escenarios[] = $c;
+        $d = $this->cita(['12.00']); $z = $this->cobrar($this->finanzas, $d, 'efectivo', '12.00'); $this->svc->devolver($this->dueno, ['pago_id' => $z['pago_id'], 'monto' => 'saldo', 'motivo' => 'Total', 'idem_key' => R5CajaFixture::clave()]); $escenarios[] = $d;
+        $e = $this->cita(['25.00']); $ref = 'SIML-' . bin2hex(random_bytes(3));
+        $this->db->query("INSERT INTO pagos (cita_id,cita_referencia_id,usuario_id,referencia_pago,proveedor,monto,estado,metodo_pago,idempotency_key,pagado_at) VALUES ($e,$e,{$this->cliente},'$ref','mock',25.00,'completado','tarjeta_mock','k-$ref',NOW())"); $escenarios[] = $e;
+        $f = $this->cita(['30.00'], 'confirmada'); $w = $this->cobrar($this->finanzas, $f, 'efectivo', '10.00'); $this->db->query("UPDATE citas SET estado='cancelada' WHERE id=$f"); $escenarios[] = $f;
+        $filtros = ['desde' => '2030-01-01', 'hasta' => '2030-01-31', 'estado' => '', 'metodo' => '', 'profesional' => $this->prof, 'q' => '', 'pagina' => 1];
+        $filas = []; foreach ($repo->todas($filtros) as $fila) { $filas[$fila['id']] = $fila; }
+        $suma = ['total' => 0, 'cobrado' => 0, 'devuelto' => 0, 'pendiente' => 0, 'por_cobrar' => 0, 'anticipo_sin_resolver' => 0];
+        foreach ($escenarios as $id) {
+            $det = $this->svc->detalle($id); $fila = $filas[$id] ?? null;
+            self::assertNotNull($fila, "cita $id en el universo");
+            self::assertSame([$det['total_centavos'], $det['cobrado_centavos'], $det['devuelto_centavos'], $det['pendiente_verificacion_centavos'], $det['estado'], $det['por_cobrar_centavos'], $det['anticipo_sin_resolver_centavos']],
+                [$fila['total'], $fila['cobrado'], $fila['devuelto'], $fila['pendiente'], $fila['estado_pago'], $fila['por_cobrar'], $fila['anticipo_sin_resolver']], "cita $id");
+            if ($id !== $e) { self::assertSame($det['estado'], R5CajaFixture::escalar($this->db, "SELECT estado_pago FROM citas WHERE id=$id"), "estado persistido de $id"); } // $e: pago simulado insertado a mano, sin pasar por la pasarela
+        }
+        $tot = $repo->totales($filtros);
+        foreach ($filas as $fila) { foreach ($suma as $k => $_) { $suma[$k] += $fila[$k]; } }
+        self::assertSame($suma, array_intersect_key($tot, $suma), 'los indicadores son la suma exacta de las filas del mismo universo');
+        self::assertSame(count($filas), $tot['citas']);
+        // y los filtros reducen lista, filas y totales por igual
+        $solo = $filtros; $solo['estado'] = 'reembolsado';
+        self::assertSame([$d], array_column(iterator_to_array($repo->todas($solo), false), 'id'));
+        self::assertSame(1, $repo->totales($solo)['citas']);
+    }
+
+    public function testLaPasarelaNoCobraElTotalSiLaCitaTieneCobrosEnCaja(): void
+    {
+        $cita = $this->cita(['25.00'], 'confirmada');
+        $this->cobrar($this->finanzas, $cita, 'efectivo', '5.00');
+        $res = (new \Services\PagoService(new \Repositories\PagoRepository($this->db)))->iniciarPago($this->cliente, ['cita_id' => $cita]);
+        self::assertSame(409, $res['http_code']);
+        self::assertSame(1, (int)R5CajaFixture::escalar($this->db, "SELECT COUNT(*) FROM pagos WHERE cita_id=$cita"));
+    }
 }
