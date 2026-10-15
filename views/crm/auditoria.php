@@ -22,7 +22,9 @@ $resumenFiltros = static function (array $f): string {
     $partes = [];
     if (!empty($f['q_presente'])) { $partes[] = 'búsqueda de texto (' . (int)($f['q_longitud'] ?? 0) . ' caracteres, no se guarda el texto)'; }
     foreach (['desde' => 'Periodo desde', 'hasta' => 'hasta', 'alta_desde' => 'Alta desde', 'alta_hasta' => 'Alta hasta', 'profesional_id' => 'Profesional n.º', 'servicio_id' => 'Servicio n.º',
-        'segmento' => 'Segmento', 'membresia' => 'Membresía', 'consentimiento' => 'Consentimiento', 'dias_activo' => 'Días activo'] as $k => $et) {
+        'segmento' => 'Segmento', 'membresia' => 'Membresía', 'consentimiento' => 'Consentimiento', 'dias_activo' => 'Días activo', 'cuenta' => 'Cuenta', 'actividad' => 'Actividad',
+        'ultima_desde' => 'Última visita desde', 'ultima_hasta' => 'Última visita hasta', 'proxima' => 'Próxima cita', 'proxima_desde' => 'Próxima cita desde', 'proxima_hasta' => 'Próxima cita hasta',
+        'visitas_min' => 'Visitas mín.', 'visitas_max' => 'Visitas máx.', 'gasto_min' => 'Gasto mín. (centavos)', 'gasto_max' => 'Gasto máx. (centavos)', 'saldo' => 'Saldo', 'indicador' => 'Indicador'] as $k => $et) {
         if (isset($f[$k]) && $f[$k] !== '' && $f[$k] !== null) { $partes[] = $et . ' ' . $f[$k]; }
     }
     return $partes ? implode(' · ', $partes) : 'Sin filtros adicionales';
@@ -84,3 +86,31 @@ $resumenFiltros = static function (array $f): string {
     <?php endif; ?>
     <p class="crm-nota">Este registro es solo de anexado: la aplicación no tiene ninguna acción para editarlo o borrarlo y la base de datos rechaza esos cambios. Las exportaciones denegadas por falta de permiso también quedan anotadas.</p>
 </section>
+
+<?php if (is_array($otras ?? null) && !array_filter([$filtros['resultado'] ?? null, $filtros['tipo'] ?? null, $filtros['actor_id'] ?? null, $filtros['desde'] ?? null, $filtros['hasta'] ?? null])): /* los filtros de arriba son de la auditoría del CRM */ ?>
+<section class="crm-seccion" aria-labelledby="aud-otras-titulo">
+    <h2 id="aud-otras-titulo">Otras exportaciones (reportes, caja y demás secciones)</h2>
+    <?php if (!$otras): ?>
+        <p class="crm-vacio" role="status">Todavía no hay exportaciones de otras secciones registradas.</p>
+    <?php else: ?>
+    <div class="crm-tabla" tabindex="0" role="region" aria-label="Otras exportaciones; desplaza horizontalmente para ver todas las columnas">
+        <table>
+            <caption class="crm-sr">Últimas 25 exportaciones de otras secciones</caption>
+            <thead><tr><th scope="col">Cuándo (UTC)</th><th scope="col">Origen</th><th scope="col">Quién</th><th scope="col">Formato</th><th scope="col">Resultado</th><th scope="col">Filas</th></tr></thead>
+            <tbody>
+            <?php foreach ($otras as $o): ?>
+                <tr>
+                    <th scope="row"><?= s($fechaUtc($o['ocurrido_en'])) ?></th>
+                    <td><?= s((string)$o['origen']) ?></td>
+                    <td><?= $o['actor_usuario_id'] === null ? 'Sin identificar' : 'N.º ' . (int)$o['actor_usuario_id'] . ' · ' . s($etiquetaRol[$o['actor_rol'] ?? ''] ?? (string)$o['actor_rol']) ?></td>
+                    <td><?= s(strtoupper((string)$o['formato'])) ?></td>
+                    <td><span class="crm-etiqueta crm-res--<?= s($o['resultado']) ?>"><?= s(CrmAuditoriaService::RESULTADOS[$o['resultado']] ?? $o['resultado']) ?></span><?php if ($o['motivo']): ?><small><?= s(str_replace('_', ' ', (string)$o['motivo'])) ?></small><?php endif; ?></td>
+                    <td class="ui-table-number"><?= $o['filas'] === null ? '—' : (int)$o['filas'] ?><?= (int)$o['truncado'] === 1 ? '<small>truncada</small>' : '' ?></td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+    <?php endif; ?>
+</section>
+<?php endif; ?>

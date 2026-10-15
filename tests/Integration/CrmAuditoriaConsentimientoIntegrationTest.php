@@ -491,7 +491,7 @@ final class CrmAuditoriaConsentimientoIntegrationTest extends TestCase
         $_SERVER['REQUEST_METHOD'] = 'POST'; $_SERVER['REQUEST_URI'] = '/admin/crecimiento';
         $_POST = ['csrf_token' => 'aud-csrf', 'accion' => 'segmento', 'segmento' => 'todos'];
         $r = $this->invocar(fn() => \Controllers\CrecimientoController::index(new Router()));
-        $this->assertStringStartsWith('ID,Nombre,Apellido,Correo,Consentimiento', $r['cuerpo']);
+        $this->assertStringStartsWith("\xEF\xBB\xBFID,Nombre,Apellido,Correo,Consentimiento", $r['cuerpo'], 'CSV con BOM (Excel) desde la ronda 5, vía Exportador');
         $filas = $this->filasAuditoria($actor);
         $this->assertCount(1, $filas);
         $this->assertSame(['campana', 'exitosa', hash('sha256', $r['cuerpo']), 'solo_version_vigente'], [$filas[0]['tipo'], $filas[0]['resultado'], $filas[0]['contenido_sha256'], $filas[0]['consentimiento_politica']]);

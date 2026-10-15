@@ -245,7 +245,12 @@ final class CrmController
             throw self::noDisponible($e);
         }
         if ($validacion['errores']) { http_response_code(422); }
+        // Otras exportaciones (reportes, caja, contactos…) viven en la auditoría general (migración 026). Si aún no está aplicada, la página sigue funcionando.
+        $otras = null;
+        try { $otras = (new \Repositories\ExportacionAuditoriaRepository(ActiveRecord::getDB()))->listar(null, 25); }
+        catch (\Throwable $e) { error_log('[CrmController] auditoría general de exportaciones no disponible: ' . get_class($e)); }
         $router->render('crm/auditoria', [
+            'otras' => $otras,
             'filtros' => $validacion['filtros'], 'pag' => $resultado, 'errores' => $validacion['errores'],
             'alertas' => $validacion['errores'] ? ['error' => $validacion['errores']] : [],
         ]);
