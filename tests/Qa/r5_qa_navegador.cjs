@@ -173,13 +173,20 @@ const FN = {
           const leer = () => ({ disabled: b.disabled, busy: b.getAttribute('aria-busy'), texto: (b.textContent || b.value).trim(), formBusy: f.getAttribute('aria-busy') });
           b.click();
           const t0 = leer();
+          // La navegación puede destruir este contexto antes de devolver el resultado: el estado se guarda en sessionStorage (sobrevive a la navegación).
+          try { sessionStorage.setItem('__r5_envio', JSON.stringify({ t0, t1: t0 })); } catch (e) {}
           await new Promise(r => setTimeout(r, 40));
           let t1; try { t1 = leer(); } catch (e) { t1 = t0; }
+          try { sessionStorage.setItem('__r5_envio', JSON.stringify({ t0, t1 })); } catch (e) {}
           b.click(); b.click();
           if (f.requestSubmit) { try { f.requestSubmit(); } catch (e) {} }
           return { t0, t1 };
         }, selForm).catch(e => ({ error: String(e.message).slice(0, 150) }));
         await nav; await esperar(400);
+        if (r && r.error) {   // el contexto murió por la navegación: se recupera lo que la página dejó en sessionStorage
+          const g = await page.evaluate(() => { try { return JSON.parse(sessionStorage.getItem('__r5_envio') || 'null'); } catch (e) { return null; } }).catch(() => null);
+          if (g) { return Object.assign({ posts }, g); }
+        }
         return Object.assign({ posts }, r);
       } finally { page.off('request', contar); }
     };
