@@ -62,6 +62,9 @@ Rama `claude/blissful-hopper-f5k7a0` (sin merge a `main`, sin despliegue, sin PR
 | `9ec7eaf` | Auditoría de enlaces de correo | CI **falló** en PHPUnit: interbloqueo real en cobros simultáneos de citas distintas (bloqueos de hueco en `idx_pagos_cita_id`) |
 | `b2aaef9` | Corrección (`READ COMMITTED` en las operaciones de caja) | Local: QA 887 OK, 0 omitidas |
 | `33605ff` | Ajuste de dos pruebas de concurrencia | CI **falló** solo en QA: «Sin puertos HTTP libres» (las clases QA antiguas y las R5 competían por 8150-8159 con orden aleatorio); PHPUnit completo pasó |
-| `88c963f` y posteriores (solo documentación y un script) | Puertos R5 de 8199 hacia abajo; cierre de servidores con su árbol; pruebas del integrador adicionales | **Local (nube, PHP 8.3, MySQL 8.0.46): PHPUnit 1073 pruebas OK; QA 889 pruebas OK, 0 omitidas.** El CI del SHA final se informa en el mensaje de cierre (un documento no puede contener el resultado del CI de su propio commit) |
+| `3d6152f` | Puertos R5 de 8199 hacia abajo; cierre de servidores con su árbol; pruebas del integrador adicionales | CI **falló** solo en el E2E de Apache (primera vez que llegaba): `/api/disponibilidad` leída con sesión del equipo (ahora 403 por diseño), menú del equipo sin catálogo en la prueba de navegación y falta de `noindex` en errores dentro del layout. PHPUnit, QA e imagen Docker pasaron |
+| **`6b9ae6f`** | **Código validado: corrige lo anterior (`noindex` en errores, E2E y navegación ajustados)** | **CI run 71 en éxito completo:** PHPUnit (PHP 8.2, orden aleatorio), QA con openpyxl y LibreOffice, imagen Docker, E2E en Apache con SMTP simulado, respaldo y restauración SHA-256. **Local (nube, PHP 8.3, MySQL 8.0.46, bases nuevas): PHPUnit 1074 pruebas OK; QA 889 pruebas OK, 0 omitidas.** El E2E se ensayó además en emulación local (`php -S`, sin Apache): 8 etapas OK |
+
+Los commits posteriores a `6b9ae6f` son solo de documentación (no cambian código ni pruebas); su CI, si corre, no es una validación nueva del código.
 
 Cambios de expectativas de pruebas y su justificación: `docs/R5_QA_INDEPENDIENTE.md` §3. Pruebas del integrador (no independientes) y su reverificación: §3 bis.

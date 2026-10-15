@@ -66,8 +66,9 @@ Huecos que halló y que el integrador cerró después con pruebas propias (**no 
 
 ## 4. Resultados (SHA y entorno)
 
-* Local (`/tmp/wt/int`, PHP 8.3, MySQL 8.0.46) sobre el código con las correcciones de cobro y de puertos (`88c963f` + documentación): PHPUnit por defecto **1073 pruebas OK**; QA completo (`tests/Qa`, Chromium real, openpyxl y LibreOffice) **889 pruebas OK, 0 omitidas**.
-* CI: `9ec7eaf` falló en PHPUnit (interbloqueo real, corregido); `33605ff` pasó PHPUnit y falló en QA por agotamiento de puertos (corregido en `88c963f`). El CI del SHA final está en `docs/ENTREGA_RONDA5.md` §8 / mensaje de cierre.
+* Código validado: `6b9ae6f`. **CI (PHP 8.2, MySQL 8.0): éxito completo** (PHPUnit, QA, imagen Docker, E2E en Apache, respaldo y restauración). **Local (nube, PHP 8.3, MySQL 8.0.46):** PHPUnit 1074 pruebas OK; QA 889 pruebas OK, 0 omitidas (Chromium real, XLSX leídos con openpyxl y LibreOffice).
+* CI previos que fallaron y por qué: `9ec7eaf` (interbloqueo real en cobros simultáneos), `33605ff` (puertos del arnés de QA), `3d6152f` (E2E de Apache: contratos de la ronda y `noindex`). Detalle en `docs/ENTREGA_RONDA5.md` §8.
+* Reverificación independiente de las pruebas del integrador: §3 bis.
 
 ## 5. Decisión pendiente (no aceptada por el usuario)
 
