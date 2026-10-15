@@ -266,17 +266,17 @@ final class R5DevPortalesTest extends R5DevPortalesCase
     {
         $dueno = self::entrar(self::$base, 'equipo', self::$dueno);
         $csrf = Navegador::csrfDe($dueno->get('/admin')['body']);
-        // 404 con fecha conservada
+        // Cita inexistente con la fecha conservada: vuelve a las citas del día y la pantalla final explica qué pasó
         $r = $dueno->post('/api/eliminar', ['csrf_token' => $csrf, 'id' => '99999999', 'volver' => 'admin_citas', 'r_fecha' => '2030-03-04'], ['Accept: text/html', 'Referer: https://evil.example/x']);
-        $this->assertSame(404, $r['status']);
-        $this->assertStringContainsString('ui-error-card', $r['body']);
-        $this->assertMatchesRegularExpression('~href="/admin\?fecha=2030-03-04"[^>]*>Volver a las citas del día~', $r['body']);
-        $this->assertStringNotContainsString('evil.example', $r['body']);
-        $this->assertSame([], array_values(array_intersect(self::enlaces($r['body']), self::EXCLUSIVAS_CLIENTE)));
-        // 422
+        $this->assertSame([302, '/admin?fecha=2030-03-04'], [$r['status'], $r['location']]);
+        $fin = $dueno->get($r['location']);
+        $this->assertSame(200, $fin['status']);
+        $this->assertStringContainsString('La cita ya no existe', $fin['body']);
+        $this->assertStringNotContainsString('evil.example', $fin['body']);
+        // Identificador inválido
         $r = $dueno->post('/api/eliminar', ['csrf_token' => $csrf, 'id' => 'abc'], ['Accept: text/html']);
-        $this->assertSame(422, $r['status']);
-        $this->assertStringContainsString('href="/admin"', $r['body']);
+        $this->assertSame([302, '/admin'], [$r['status'], $r['location']]);
+        $this->assertStringContainsString('Identificador de cita inválido', $dueno->get('/admin')['body']);
         // 403: profesional (equipo) no cancela por el portal del equipo; tampoco su cita personal
         $pro = self::$roles['profesional'];
         self::conMembresiaCliente($pro['id']);
@@ -294,12 +294,15 @@ final class R5DevPortalesTest extends R5DevPortalesCase
         $c = self::entrar(self::$base, 'cliente', self::$cliente);
         $csrfC = Navegador::csrfDe($c->get('/perfil')['body']);
         $r = $c->post('/api/eliminar', ['csrf_token' => $csrfC, 'id' => '99999999'], ['Accept: text/html', 'Referer: https://evil.example/']);
-        $this->assertSame(404, $r['status']);
-        $this->assertMatchesRegularExpression('~href="/mis-citas"[^>]*>Volver a mis citas~', $r['body']);
-        foreach (self::enlaces($r['body']) as $href) { $this->assertFalse($this->esDelEquipo($href), $href); }
+        $this->assertSame([302, '/mis-citas'], [$r['status'], $r['location']]);
+        $fin = $c->get('/mis-citas');
+        $this->assertSame(200, $fin['status']);
+        $this->assertStringContainsString('La cita ya no existe', $fin['body']);
+        foreach (self::enlaces($fin['body']) as $href) { $this->assertFalse($this->esDelEquipo($href), $href); }
         $ajena = $this->cita(self::$dueno['id'], '2030-05-05');
         $r = $c->post('/api/eliminar', ['csrf_token' => $csrfC, 'id' => $ajena], ['Accept: text/html']);
-        $this->assertContains($r['status'], [403, 404]);
+        $this->assertSame(403, $r['status']);
+        $this->assertMatchesRegularExpression('~href="/mis-citas"[^>]*>Volver a mis citas~', $r['body']);
         $this->assertSame('confirmada', self::escalar('SELECT estado FROM citas WHERE id=?', [$ajena]));
         $mia = $this->cita(self::$cliente['id'], '2031-05-05');
         $r = $c->post('/api/eliminar', ['csrf_token' => $csrfC, 'id' => $mia], ['Accept: text/html', 'Referer: https://evil.example/']);

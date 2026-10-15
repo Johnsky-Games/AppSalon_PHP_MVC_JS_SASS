@@ -404,6 +404,30 @@ class APIController
     }
 
     /**
+     * Cita inexistente o identificador inválido en un formulario (página vieja): vuelve al destino del catálogo del portal con un
+     * aviso visible en la pantalla de destino (sin callejón y sin depender de un toast).
+     */
+    private static function redirigirConAviso(string $mensaje, string $porDefecto): void
+    {
+        aviso_portal($mensaje);
+        header('Location: ' . destino_volver($porDefecto));
+        detener_ejecucion(302);
+    }
+
+    /** ¿La cita existe y pertenece a la persona de la sesión? (consulta de solo lectura; un fallo cuenta como «no»). */
+    private static function esCitaPropia($idRaw, $usuarioId): bool
+    {
+        $id = filter_var($idRaw, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+        if (!$id) { return false; }
+        try {
+            $cita = (new \Repositories\CitaRepository())->findById($id);
+        } catch (\Throwable $e) {
+            return false;
+        }
+        return $cita !== null && (int)$cita->usuarioId === (int)$usuarioId;
+    }
+
+    /**
      * Endpoint para cancelación lógica de citas:
      * Valida autenticación y CSRF en el controlador, y delega a CitaService::cancelarCita.
      */
@@ -421,9 +445,9 @@ class APIController
             // Destino por portal (catálogo central; sin Referer): el equipo vuelve a las citas del día, el cliente a sus citas.
             $porDefecto = portal_sesion() === 'equipo' ? 'admin_citas' : 'cliente_citas';
 
-            // Una sesión del equipo solo cancela citas con agenda.gestionar. Sus citas personales (si también es clienta) se gestionan
-            // desde el portal de clientes: cada portal ve y modifica solo lo suyo.
-            if (portal_sesion() === 'equipo' && !$esAdmin) {
+            // Una sesión del equipo sin agenda.gestionar no cancela citas por esta vía: ni las ajenas (lo niega el servicio) ni sus citas
+            // personales si también es clienta, que se gestionan desde el portal de clientes (cada portal ve y modifica solo lo suyo).
+            if (portal_sesion() === 'equipo' && !$esAdmin && self::esCitaPropia($_POST['id'] ?? null, $usuarioIdAutenticado)) {
                 $mensajePortal = 'Tu sesión es la del portal del equipo y no incluye cancelar citas. Las citas personales se gestionan desde el portal de clientes.';
                 if ($esJsonExplicito) {
                     http_response_code(403);
@@ -458,8 +482,7 @@ class APIController
                     detener_ejecucion($httpCode);
                     return;
                 }
-                self::errorHtml($httpCode, (string)($resultado['error'] ?? 'Identificador de cita inválido.'), $porDefecto);
-                detener_ejecucion($httpCode);
+                self::redirigirConAviso((string)($resultado['error'] ?? 'Identificador de cita inválido.'), $porDefecto);
                 return;
             }
 
@@ -476,8 +499,7 @@ class APIController
                     detener_ejecucion(404);
                     return;
                 }
-                self::errorHtml(404, (string)($resultado['error'] ?? 'La cita solicitada no existe.'), $porDefecto);
-                detener_ejecucion(404);
+                self::redirigirConAviso('La cita ya no existe o fue retirada. Revisa el listado actualizado.', $porDefecto);
                 return;
             }
 

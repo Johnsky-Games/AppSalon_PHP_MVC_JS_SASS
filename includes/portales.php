@@ -29,7 +29,7 @@ function consumir_aviso_portal(): string
 function mensaje_acceso_denegado(string $generico): string
 {
     if (($_SESSION['login'] ?? false) === true && portal_sesion() === 'cliente') {
-        return 'Esta sección pertenece al portal del equipo del salón y tu sesión es la del portal de clientes. Para usarla, cierra sesión e ingresa por el acceso del equipo con una cuenta autorizada.';
+        return $generico . ' Esta sección pertenece al portal del equipo del salón y tu sesión es la del portal de clientes; para usarla, cierra sesión e ingresa por el acceso del equipo con una cuenta autorizada.';
     }
     return $generico;
 }
