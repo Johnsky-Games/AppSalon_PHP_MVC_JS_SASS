@@ -12,8 +12,9 @@ const out = { pasos: {}, consola: [] };
 const esperar = ms => new Promise(r => setTimeout(r, ms));
 
 async function paso(nombre, fn) {
+  if (process.env.QA_SOLO && !new RegExp(process.env.QA_SOLO).test(nombre)) { return; }
   try { const r = await fn(); out.pasos[nombre] = Object.assign({ ok: true }, r || {}); }
-  catch (e) { out.pasos[nombre] = { ok: false, error: String(e && e.message || e).slice(0, 600) }; }
+  catch (e) { out.pasos[nombre] = { ok: false, error: String(e && e.message || e).slice(0, 600), pila: String(e && e.stack || '').split('\n').slice(0, 4).join(' | ') }; }
 }
 
 // ---- utilidades de DOM ejecutadas en la página
@@ -157,51 +158,53 @@ const FN = {
       return { alertasInmediatas: info.alertas, alertasTras5s: despues, texto: info.texto };
     });
 
+    // Estado del botón de envío inmediatamente tras el primer clic y varios clics/envíos extra EN LA MISMA PÁGINA (sin esperar a la red): cuenta los POST reales.
+    const probarEnvio = async (selForm, rutaPost, preparar) => {
+      let posts = 0;
+      const contar = req => { if (req.method() === 'POST' && rutaPost.test(req.url())) posts++; };
+      page.on('request', contar);
+      try {
+        if (!(await page.$(selForm))) throw new Error('sin formulario ' + selForm);
+        if (preparar) await preparar();
+        const nav = page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 20000 }).catch(() => {});
+        const r = await page.evaluate(async sel => {
+          const f = document.querySelector(sel);
+          const b = f.querySelector('button[type=submit],input[type=submit],button:not([type])');
+          const leer = () => ({ disabled: b.disabled, busy: b.getAttribute('aria-busy'), texto: (b.textContent || b.value).trim(), formBusy: f.getAttribute('aria-busy') });
+          b.click();
+          const t0 = leer();
+          await new Promise(r => setTimeout(r, 40));
+          let t1; try { t1 = leer(); } catch (e) { t1 = t0; }
+          b.click(); b.click();
+          if (f.requestSubmit) { try { f.requestSubmit(); } catch (e) {} }
+          return { t0, t1 };
+        }, selForm).catch(e => ({ error: String(e.message).slice(0, 150) }));
+        await nav; await esperar(400);
+        return Object.assign({ posts }, r);
+      } finally { page.off('request', contar); }
+    };
+    const enProceso = e => !!e && !e.error && [e.t0, e.t1].some(t => t && (t.disabled || t.busy === 'true' || t.formBusy === 'true' || /procesando|enviando|guardando|registrando|iniciando|un momento/i.test(t.texto)));
+
     await paso('N_cobro_boton_en_proceso_y_un_solo_post', async () => {
       await ir(`/caja/cita?id=${cfg.citaCobro2}`);
-      let posts = 0; const vistos = [];
-      await page.setRequestInterception(true);
-      const manejador = async req => {
-        if (req.method() === 'POST' && /\/caja\/cita\/cobrar/.test(req.url())) { posts++; vistos.push(req.url()); await esperar(1500); }
-        req.continue().catch(() => {});
-      };
-      page.on('request', manejador);
-      try {
-        const sel = 'form[action*="/caja/cita/cobrar"]';
-        if (!(await page.$(sel))) throw new Error('sin formulario de cobro');
+      const sel = 'form[action*="/caja/cita/cobrar"]';
+      const r = await probarEnvio(sel, /\/caja\/cita\/cobrar/, async () => {
         const metodoN = await page.$eval(sel, f => { const m = [...f.elements].find(e => /metodo|medio|forma/i.test(e.name || '')); return m ? m.name : null; });
         if (metodoN) { const val = await page.$$eval(`${sel} [name="${metodoN}"] option`, o => (o.find(x => /efectivo/i.test(x.value + x.textContent)) || {}).value); if (val) await page.select(`${sel} [name="${metodoN}"]`, val); }
         const rec = await page.$eval(sel, f => { const m = [...f.elements].find(e => /recib|entreg/i.test(e.name || '')); return m ? m.name : null; });
         if (rec) await page.$eval(`${sel} [name="${rec}"]`, e => { e.value = '20.00'; });
         const monto = await page.$eval(sel, f => { const m = [...f.elements].find(e => /monto|importe|valor|cantidad/i.test(e.name || '') && !/recib|cambio|total|saldo/i.test(e.name || '')); return m ? m.name : null; });
         if (monto) await page.$eval(`${sel} [name="${monto}"]`, e => { e.value = '20.00'; });
-        const b = await page.$(`${sel} button[type=submit], ${sel} input[type=submit]`);
-        const nav = page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 20000 }).catch(() => {});
-        await b.click();
-        await esperar(250);
-        const estado = await page.evaluate(sel => { const b = document.querySelector(sel + ' button[type=submit], ' + sel + ' input[type=submit]'); return b ? { disabled: b.disabled, busy: b.getAttribute('aria-busy'), texto: (b.textContent || b.value).trim(), clase: b.className } : null; }, sel).catch(e => ({ error: String(e.message).slice(0, 120), disabled: false, busy: null, texto: '' }));
-        await page.evaluate(sel => { const b = document.querySelector(sel + ' button[type=submit], ' + sel + ' input[type=submit]'); if (b) { b.click(); b.click(); } const f = document.querySelector(sel); if (f && f.requestSubmit) { try { f.requestSubmit(); } catch (e) {} } }, sel).catch(() => {});
-        await nav; await esperar(300);
-        return { posts, estadoDuranteEnvio: estado };
-      } finally { page.off('request', manejador); await page.setRequestInterception(false); }
+      });
+      return { posts: r.posts, enProceso: enProceso(r), estado: r };
     });
 
     await paso('N_agenda_iniciar_boton_en_proceso', async () => {
       await ir(`/agenda?${periodo}`);
-      let posts = 0;
-      await page.setRequestInterception(true);
-      const manejador = async req => { if (req.method() === 'POST' && /\/agenda\/estado/.test(req.url())) { posts++; await esperar(1200); } req.continue().catch(() => {}); };
-      page.on('request', manejador);
-      try {
-        const { btn, card } = await accion(cfg.citaComenzadaTres, 'Iniciar atenci');
-        const nav = page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 20000 }).catch(() => {});
-        await btn.click();
-        await esperar(200);
-        const estado = await page.evaluate(c => { const b = [...c.querySelectorAll('button,input[type=submit]')].find(x => /Iniciar|Proces|Enviando|Guardando/i.test(x.textContent || x.value)); return b ? { disabled: b.disabled, busy: b.getAttribute('aria-busy'), texto: (b.textContent || b.value).trim() } : null; }, card).catch(e => ({ error: String(e.message).slice(0, 120), disabled: false, busy: null, texto: '' }));
-        await page.evaluate(c => { const b = c.querySelector('button,input[type=submit]'); if (b) { b.click(); b.click(); } }, card).catch(() => {});
-        await nav;
-        return { posts, estadoDuranteEnvio: estado };
-      } finally { page.off('request', manejador); await page.setRequestInterception(false); }
+      const idf = await page.evaluate((src, id) => { const c = eval('(' + src + ')')(id); if (!c) return null; const f = c.querySelector('form'); f.setAttribute('data-q5', 'iniciar'); return true; }, FN.tarjeta.toString(), String(cfg.citaComenzadaTres));
+      if (!idf) throw new Error('la agenda no muestra la cita #' + cfg.citaComenzadaTres);
+      const r = await probarEnvio('form[data-q5="iniciar"]', /\/agenda\/estado/);
+      return { posts: r.posts, enProceso: enProceso(r), estado: r };
     });
 
     // ===================================================================== Modales: foco, teclado, Escape y retorno al disparador

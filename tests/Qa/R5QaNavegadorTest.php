@@ -170,10 +170,8 @@ final class R5QaNavegadorTest extends R5Case
     public function test_N_cobro_boton_en_proceso_y_un_solo_envio(): void
     {
         $p = $this->paso('N_cobro_boton_en_proceso_y_un_solo_post');
-        $e = $p['estadoDuranteEnvio'];
-        $this->assertNotNull($e, 'no se encontró el botón de envío tras el clic');
-        $this->assertTrue($e['disabled'] || $e['busy'] === 'true' || preg_match('/procesando|enviando|guardando|registrando/i', $e['texto']) === 1, 'el botón no indica proceso: ' . json_encode($e));
-        $this->assertSame(1, $p['posts'], 'doble clic/envío generó ' . $p['posts'] . ' POST a /caja/cita/cobrar');
+        $this->assertTrue($p['enProceso'], 'el botón de cobro no indica estado de proceso tras el clic: ' . json_encode($p['estado']));
+        $this->assertSame(1, $p['posts'], 'varios clics/envíos generaron ' . $p['posts'] . ' POST a /caja/cita/cobrar');
         $this->assertLessThanOrEqual(1, (int)self::escalar('SELECT COUNT(*) FROM pagos WHERE cita_referencia_id=?', [self::$cfg['citaCobro2']]));
     }
 
@@ -181,9 +179,7 @@ final class R5QaNavegadorTest extends R5Case
     public function test_N_agenda_iniciar_boton_en_proceso_y_un_solo_envio(): void
     {
         $p = $this->paso('N_agenda_iniciar_boton_en_proceso');
-        $e = $p['estadoDuranteEnvio'];
-        $this->assertNotNull($e);
-        $this->assertTrue($e['disabled'] || $e['busy'] === 'true' || preg_match('/procesando|enviando|guardando|iniciando/i', $e['texto']) === 1, 'el botón no indica proceso: ' . json_encode($e));
+        $this->assertTrue($p['enProceso'], 'el botón «Iniciar atención» no indica estado de proceso tras el clic: ' . json_encode($p['estado']));
         $this->assertSame(1, $p['posts'], 'POSTs a /agenda/estado: ' . $p['posts']);
         $this->assertSame(1, (int)self::escalar('SELECT COUNT(*) FROM agenda_eventos WHERE citaId=?', [self::$cfg['citaComenzadaTres']]));
     }

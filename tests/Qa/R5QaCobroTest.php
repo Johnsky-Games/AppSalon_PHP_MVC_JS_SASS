@@ -570,6 +570,36 @@ final class R5QaCobroTest extends R5Case
         $this->conciliado();
     }
 
+    /** Req C6: la clave de operación de UNA cita no puede reutilizarse en OTRA cita (ni cobrarla): 409 y la segunda cita queda sin pagos. */
+    public function test_C6_misma_clave_en_otra_cita_es_409(): void
+    {
+        $a = $this->cita(); $b = $this->cita();
+        $n = $this->eq('dueno');
+        $fa = $this->formCobro($this->pantalla($n, $a));
+        $fb = $this->formCobro($this->pantalla($n, $b));
+        $clave = self::campo($fa, '/idempot|clave_op|operacion_id|token_op/i');
+        $this->assertNotNull($clave, 'el formulario de cobro no lleva clave de idempotencia');
+        $this->aceptado($this->cobrar($n, $a, ['monto' => 2000, 'metodo' => 'efectivo', 'recibido' => 2000], $fa), 'cobro de A');
+        $r = $this->cobrar($n, $b, ['monto' => 2000, 'metodo' => 'efectivo', 'recibido' => 2000, 'crudo' => [$clave => $fa['campos'][$clave]]], $fb);
+        $this->assertSame(409, $r['status'], 'la clave de A usada en B debe ser 409; fue ' . $r['status']);
+        $this->assertCount(0, $this->pagos($b), 'se cobró la cita B con la clave de A');
+        $this->assertCount(1, $this->pagos($a));
+        $this->conciliado();
+    }
+
+    /** Req C3 (criterio QA, comisiones): 10 pagos parciales de $0.15 sobre $1.50 con comisión del 10 % no pierden céntimos por redondeo: Σ comisión = 10 % del cobrado ±1 centavo. */
+    public function test_C3_redondeo_de_comision_no_deriva_con_pagos_parciales(): void
+    {
+        $c = $this->cita([['Servicio barato', '1.50']]);
+        $n = $this->eq('dueno');
+        for ($i = 0; $i < 10; $i++) { $this->aceptado($this->cobrar($n, $c, ['monto' => 15, 'metodo' => 'efectivo', 'recibido' => 15]), "pago parcial $i"); }
+        $f = self::resumenFinanciero($c);
+        $this->assertSame([150, 'pagado'], [$f['neto'], $f['estado_pago']]);
+        $com = (int)self::escalar("SELECT COALESCE(SUM(monto_centavos),0) FROM comisiones_movimientos WHERE tipo='devengo'");
+        $this->assertLessThanOrEqual(1, abs($com - 15), "la comisión acumulada ($com centavos) se desvía de 15 (10 % de \$1.50) por redondear cada pago por separado");
+        $this->conciliado();
+    }
+
     // ================================================================== C7 concurrencia real
 
     /** Cuerpo POST completo de un formulario (campos + cambios), para enviarlo desde otro proceso. */
