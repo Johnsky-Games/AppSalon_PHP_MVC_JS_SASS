@@ -63,6 +63,30 @@ final class AgendaAtencionService
     }
 
     /**
+     * Citas «pendientes de revisión» (sin resolver y de un día anterior) con sus acciones. El profesional solo ve las suyas.
+     * Nunca se marcan solas como atendidas ni como ausencias.
+     * @return array<int,array<string,mixed>>
+     */
+    public function pendientesRevision(int $actorId, array $permisos): array
+    {
+        $propios = !empty($permisos['gestiona']) ? null : $actorId;
+        $ahora = $this->ahora();
+        $tarjetas = [];
+        foreach ($this->citas->listarPendientesRevision($ahora->format('Y-m-d'), $propios) as $cita) {
+            if (empty($permisos['finanzas'])) { unset($cita['estado_pago']); }
+            $cita['acciones'] = self::accionesDe($cita, $ahora, $permisos);
+            $tarjetas[] = $cita;
+        }
+        return $tarjetas;
+    }
+
+    /** Cuántas citas esperan revisión (para el aviso de la agenda). */
+    public function contarPendientesRevision(int $actorId, array $permisos): int
+    {
+        return count($this->citas->listarPendientesRevision($this->ahora()->format('Y-m-d'), !empty($permisos['gestiona']) ? null : $actorId));
+    }
+
+    /**
      * Detalle de una cita o null si no existe o no es de la agenda de quien consulta (sin revelar cuál de las dos).
      * @return array<string,mixed>|null
      */
@@ -84,6 +108,7 @@ final class AgendaAtencionService
         foreach ($cita['historial'] as $i => $evento) {
             $cita['historial'][$i]['descripcion'] = self::describirEvento($evento);
         }
+        $cita['regularizaciones'] = (new RegularizacionAtencionService(null, $this->ahoraFijo))->deCita($id);
         return $cita;
     }
 
@@ -124,6 +149,11 @@ final class AgendaAtencionService
         }
         if ($estado === 'completada') { $lineas[] = $linea('Finalizó', $cita['atencion_fin_por_nombre'] ?? null, $cita['atencion_fin_at'] ?? null); }
         if ($estado === 'no_asistio') { $lineas[] = $linea('Ausencia registrada por', $cita['ausencia_por_nombre'] ?? null, $cita['ausencia_at'] ?? null); }
+        // Atención REGULARIZADA: la fecha de la cita no cambia; se muestran por separado cuándo ocurrió el servicio y quién y cuándo lo registró.
+        if (!empty($cita['regularizada_at'])) {
+            $lineas[] = 'Atención regularizada: el servicio ocurrió el ' . self::fechaHora($cita['atencion_efectiva_at'] ?? null);
+            $lineas[] = $linea('Regularizó', $cita['regularizada_por_nombre'] ?? null, $cita['regularizada_at']);
+        }
         return $lineas;
     }
 
@@ -140,7 +170,17 @@ final class AgendaAtencionService
             };
         }
         if ($evento['tipo'] === 'reprogramar') {
-            return 'Reprogramó la cita al ' . ($despues['fecha'] ?? '—') . ' ' . substr((string)($despues['hora'] ?? ''), 0, 5);
+            return 'Reprogramó la cita al ' . ($despues['fecha'] ?? '—') . ' ' . substr((string)($despues['hora'] ?? ''), 0, 5)
+                . (!empty($despues['desde_pendiente_revision']) ? ' (estaba pendiente de revisión)' : '');
+        }
+        if ($evento['tipo'] === 'regularizar') {
+            return 'Regularizó la atención (servicio ocurrido el ' . self::fechaHora($despues['atencion_efectiva_at'] ?? null) . '): ' . ($despues['motivo'] ?? '');
+        }
+        if ($evento['tipo'] === 'regularizacion_solicitud') {
+            return 'Solicitó regularizar la atención (servicio ocurrido el ' . self::fechaHora($despues['atencion_efectiva_propuesta'] ?? null) . '): ' . ($despues['motivo'] ?? '');
+        }
+        if ($evento['tipo'] === 'regularizacion_rechazo') {
+            return 'Rechazó la solicitud de regularización: ' . ($despues['motivo'] ?? '');
         }
         return 'Actualizó la cita';
     }
@@ -153,18 +193,25 @@ final class AgendaAtencionService
      *
      * `reprogramar`: solo la gestión y solo mientras la cita no ha comenzado (el servidor rechaza lo contrario).
      *
-     * @return array{operar:array<int,array<string,mixed>>,finanzas:array<int,array<string,string>>,reprogramar:bool}
+     * `pendiente_revision`: cita sin resolver de un día anterior. `regularizar`: propietario/gerente pueden regularizarla.
+     * `solicitar`: el profesional puede solicitar la regularización de su cita (no aprobarla). `solicitud_abierta`: id de la solicitud pendiente.
+     *
+     * @return array{operar:array<int,array<string,mixed>>,finanzas:array<int,array<string,string>>,reprogramar:bool,pendiente_revision:bool,regularizar:bool,solicitar:bool,solicitud_abierta:int}
      */
     public static function accionesDe(array $cita, \DateTimeImmutable $ahora, array $permisos): array
     {
         $estado = (string)($cita['estado'] ?? '');
         $operar = [];
         $reprogramar = false;
+        $pendiente = false;
         if (!empty($permisos['gestiona']) || !empty($permisos['propia'])) {
             $fecha = (string)$cita['fecha'];
             $hora = (string)(($cita['hora_inicio'] ?? '') ?: ($cita['hora'] ?? '00:00:00'));
             try {
-                $reprogramar = !empty($permisos['gestiona']) && $estado === 'confirmada' && $ahora < ReglaAtencion::inicioDeCita($fecha, $hora, new \DateTimeZone(ReglaAtencion::ZONA));
+                $pendiente = ReglaAtencion::esPendienteRevision($estado, $fecha, $ahora);
+                // Reprogramar: antes de que comience, o (solo gestión) si es una cita confirmada pendiente de revisión.
+                $reprogramar = !empty($permisos['gestiona']) && $estado === 'confirmada'
+                    && ($ahora < ReglaAtencion::inicioDeCita($fecha, $hora, new \DateTimeZone(ReglaAtencion::ZONA)) || $pendiente);
                 if ($estado === 'confirmada') { ReglaAtencion::evaluarInicio($fecha, $hora, $ahora); }
             } catch (\InvalidArgumentException) {
                 // Horario ilegible (dato corrupto): la tarjeta se muestra sin acciones en lugar de romper toda la agenda.
@@ -201,6 +248,11 @@ final class AgendaAtencionService
                 $finanzas[] = ['clave' => 'comprobante', 'destino' => 'caja_comprobante', 'texto' => 'Ver comprobante'];
             }
         }
-        return ['operar' => $operar, 'finanzas' => $finanzas, 'reprogramar' => $reprogramar];
+        $abierta = (int)($cita['solicitud_abierta_id'] ?? 0);
+        $regularizar = $pendiente && !empty($permisos['regularizar']);
+        // El profesional solicita pero no aprueba: quien puede regularizar no necesita solicitar; solo con agenda propia y sin solicitud abierta.
+        $solicitar = $pendiente && !$regularizar && !empty($permisos['solicitar']) && !empty($permisos['propia']) && $abierta === 0;
+        return ['operar' => $operar, 'finanzas' => $finanzas, 'reprogramar' => $reprogramar, 'pendiente_revision' => $pendiente,
+            'regularizar' => $regularizar, 'solicitar' => $solicitar, 'solicitud_abierta' => $abierta];
     }
 }

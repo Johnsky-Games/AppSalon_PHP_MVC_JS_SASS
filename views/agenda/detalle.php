@@ -16,7 +16,7 @@ $verFinanzas = !empty($permisos['finanzas']);
         <div>
             <p class="ui-eyebrow">Atención de la visita</p>
             <h1>Cita #<?php echo $citaId; ?> · <?php echo s($cita['cliente']); ?></h1>
-            <p><span class="agenda-estado agenda-estado--<?php echo s($cita['estado']); ?>"><?php echo s(ReglaAtencion::etiqueta($cita['estado'])); ?></span></p>
+            <p><span class="agenda-estado agenda-estado--<?php echo s($cita['estado']); ?>"><?php echo s(ReglaAtencion::etiqueta($cita['estado'])); ?></span><?php if (!empty($cita['acciones']['pendiente_revision'])): ?> <span class="agenda-estado agenda-estado--pendiente_revision">Pendiente de revisión</span><?php endif; ?></p>
         </div>
         <a class="boton ui-button-quiet" href="<?php echo s($volverAgenda); ?>">Volver a la agenda</a>
     </div>
@@ -67,9 +67,25 @@ $verFinanzas = !empty($permisos['finanzas']);
         <div class="agenda-acciones agenda-acciones--detalle">
             <?php include __DIR__ . '/_acciones.php'; ?>
             <?php if ($cita['acciones']['reprogramar']): include __DIR__ . '/reprogramar.php'; endif; ?>
-            <?php if (!$cita['acciones']['operar'] && !$cita['acciones']['finanzas'] && !$cita['acciones']['reprogramar']): ?><p class="agenda-ayuda">No hay acciones disponibles para una cita «<?php echo s(mb_strtolower(ReglaAtencion::etiqueta($cita['estado']))); ?>».</p><?php endif; ?>
+            <?php include __DIR__ . '/_regularizacion.php'; ?>
+            <?php if (!$cita['acciones']['operar'] && !$cita['acciones']['pendiente_revision'] && !$cita['acciones']['finanzas'] && !$cita['acciones']['reprogramar']): ?><p class="agenda-ayuda">No hay acciones disponibles para una cita «<?php echo s(mb_strtolower(ReglaAtencion::etiqueta($cita['estado']))); ?>».</p><?php endif; ?>
         </div>
     </section>
+
+    <?php if (!empty($cita['regularizaciones'])): ?>
+    <section class="ui-card" aria-labelledby="det-regularizacion">
+        <h2 id="det-regularizacion">Regularización de la atención</h2>
+        <ul class="agenda-regularizacion-historial">
+            <?php foreach ($cita['regularizaciones'] as $r): ?>
+            <li><strong><?php echo s(['solicitada' => 'Solicitud pendiente', 'aprobada' => 'Regularizada', 'rechazada' => 'Solicitud rechazada'][$r['estado']] ?? $r['estado']); ?></strong>
+                <?php if ($r['solicitada_por_nombre']): ?> · Solicitó <?php echo s($r['solicitada_por_nombre']); ?> el <?php echo s(AgendaAtencionService::fechaHora($r['solicitada_at'])); ?><?php endif; ?>
+                <?php if ($r['resuelta_por_nombre']): ?> · Decidió <?php echo s($r['resuelta_por_nombre']); ?> el <?php echo s(AgendaAtencionService::fechaHora($r['resuelta_at'])); ?><?php endif; ?>
+                <?php if ($r['atencion_efectiva_at']): ?> · Servicio ocurrido el <?php echo s(AgendaAtencionService::fechaHora($r['atencion_efectiva_at'])); ?><?php endif; ?>
+                · Motivo: <?php echo s($r['motivo_resolucion'] ?: $r['motivo_solicitud']); ?></li>
+            <?php endforeach; ?>
+        </ul>
+    </section>
+    <?php endif; ?>
 
     <section class="ui-card" aria-labelledby="det-historial">
         <h2 id="det-historial">Historial de la cita</h2>

@@ -1729,7 +1729,10 @@ class CitaRepository
                 $datosEvento = ['estado' => $nuevo, 'accion' => $accion];
             } elseif ($operacion === 'reprogramar') {
                 if ($anterior !== 'confirmada') { $db->rollback(); return $error(409, 'Sólo se reprograman citas confirmadas.'); }
-                if (($fila['fecha'] . ' ' . ($fila['hora_inicio'] ?: $fila['hora'])) <= $ahora) { $db->rollback(); return $error(422, 'La cita ya comenzó.'); }
+                // Una cita CONFIRMADA de un día anterior (pendiente de revisión) sí se reprograma, solo por la gestión: es el camino cuando el
+                // cliente llega otro día. El historial conserva el horario original (antes_json) y la fecha real del cambio (creado_en).
+                $pendienteRevision = $gestiona && (string)$fila['fecha'] < substr($ahora, 0, 10);
+                if (($fila['fecha'] . ' ' . ($fila['hora_inicio'] ?: $fila['hora'])) <= $ahora && !$pendienteRevision) { $db->rollback(); return $error(422, 'La cita ya comenzó.'); }
                 if (!$prof || (int)$prof['activo'] !== 1 || !(int)$fila['duracion_total_minutos']) { $db->rollback(); return $error(422, 'Esta cita histórica requiere gestión personalizada del salón.'); }
                 $fecha = $datos['fecha']; $hora = $datos['hora']; $dia = (int)$datos['dia'];
                 if ($fecha === $fila['fecha'] && $hora === substr($fila['hora_inicio'] ?: $fila['hora'], 0, 5)) { if (!$db->commit()) throw new PersistenceException('No se pudo confirmar la operación.'); return ['resultado' => true, 'httpCode' => 200, 'mensaje' => 'Horario ya actualizado.']; }
@@ -1747,7 +1750,7 @@ class CitaRepository
                 $fin = sprintf('%02d:%02d:00', intdiv($finMin, 60), $finMin % 60);
                 $stmt = $db->prepare('UPDATE citas SET fecha = ?, hora = ?, hora_inicio = ?, hora_fin = ? WHERE id = ?');
                 $stmt->bind_param('ssssi', $fecha, $hora, $hora, $fin, $id); if (!$stmt->execute()) throw new PersistenceException('Fallo de escritura de agenda.'); $stmt->close();
-                $despues = json_encode(['fecha' => $fecha, 'hora' => $hora, 'hora_fin' => $fin], JSON_THROW_ON_ERROR);
+                $despues = json_encode(['fecha' => $fecha, 'hora' => $hora, 'hora_fin' => $fin] + ($pendienteRevision ? ['desde_pendiente_revision' => true] : []), JSON_THROW_ON_ERROR);
                 // Outbox durable dentro de la misma transacción; no se envía SMTP bajo bloqueo.
                 $stmt = $db->prepare("UPDATE notificaciones_citas SET estado = 'descartada', ultimo_error = 'Horario reemplazado por reprogramación', proximo_intento_at = NULL WHERE cita_id = ? AND tipo IN ('recordatorio', 'confirmacion') AND estado IN ('pendiente', 'fallido', 'reintentando')");
                 $stmt->bind_param('i', $id); if (!$stmt->execute()) throw new PersistenceException('No se pudo reemplazar el recordatorio.'); $stmt->close();
@@ -1786,9 +1789,12 @@ class CitaRepository
         $db = $this->resolveDb();
         $sql = "SELECT c.*, CONCAT(u.nombre, ' ', u.apellido) cliente, p.nombre profesional_nombre,
                 (SELECT GROUP_CONCAT(COALESCE(cs.nombre_servicio, s.nombre) SEPARATOR ', ') FROM citasservicios cs LEFT JOIN servicios s ON s.id = cs.servicioId WHERE cs.citaId = c.id) servicios,
-                CONCAT(ui.nombre, ' ', ui.apellido) atencion_inicio_por_nombre, CONCAT(uf.nombre, ' ', uf.apellido) atencion_fin_por_nombre, CONCAT(ua.nombre, ' ', ua.apellido) ausencia_por_nombre
+                CONCAT(ui.nombre, ' ', ui.apellido) atencion_inicio_por_nombre, CONCAT(uf.nombre, ' ', uf.apellido) atencion_fin_por_nombre, CONCAT(ua.nombre, ' ', ua.apellido) ausencia_por_nombre,
+                CONCAT(ur.nombre, ' ', ur.apellido) regularizada_por_nombre,
+                (SELECT rg.id FROM citas_regularizaciones rg WHERE rg.cita_id = c.id AND rg.estado = 'solicitada' LIMIT 1) solicitud_abierta_id
                 FROM citas c JOIN usuarios u ON u.id = c.usuarioId LEFT JOIN profesionales p ON p.id = c.profesionalId
                 LEFT JOIN usuarios ui ON ui.id = c.atencion_inicio_por LEFT JOIN usuarios uf ON uf.id = c.atencion_fin_por LEFT JOIN usuarios ua ON ua.id = c.ausencia_por
+                LEFT JOIN usuarios ur ON ur.id = c.regularizada_por
                 WHERE c.fecha BETWEEN ? AND ?";
         $tipos = 'ss'; $valores = [$desde, $hasta];
         if ($profesionalUsuario !== null) { $sql .= ' AND p.usuarioId = ?'; $tipos .= 'i'; $valores[] = $profesionalUsuario; }
@@ -1802,6 +1808,31 @@ class CitaRepository
     }
 
     /**
+     * Citas «pendientes de revisión»: confirmadas o en servicio cuyo día ya pasó (`fecha` < $hoy). No se tocan ni se marcan solas.
+     * El alcance profesional se aplica en SQL. Orden: la más antigua primero.
+     * @return array<int,array<string,mixed>>
+     */
+    public function listarPendientesRevision(string $hoy, ?int $profesionalUsuario = null, int $limite = 500): array
+    {
+        $db = $this->resolveDb();
+        $sql = "SELECT c.*, CONCAT(u.nombre, ' ', u.apellido) cliente, p.nombre profesional_nombre,
+                (SELECT GROUP_CONCAT(COALESCE(cs.nombre_servicio, s.nombre) SEPARATOR ', ') FROM citasservicios cs LEFT JOIN servicios s ON s.id = cs.servicioId WHERE cs.citaId = c.id) servicios,
+                CONCAT(ui.nombre, ' ', ui.apellido) atencion_inicio_por_nombre,
+                (SELECT rg.id FROM citas_regularizaciones rg WHERE rg.cita_id = c.id AND rg.estado = 'solicitada' LIMIT 1) solicitud_abierta_id
+                FROM citas c JOIN usuarios u ON u.id = c.usuarioId LEFT JOIN profesionales p ON p.id = c.profesionalId
+                LEFT JOIN usuarios ui ON ui.id = c.atencion_inicio_por
+                WHERE c.estado IN ('confirmada', 'en_servicio') AND c.fecha < ?";
+        $tipos = 's'; $valores = [$hoy];
+        if ($profesionalUsuario !== null) { $sql .= ' AND p.usuarioId = ?'; $tipos .= 'i'; $valores[] = $profesionalUsuario; }
+        $sql .= ' ORDER BY c.fecha, c.hora, c.id LIMIT ' . max(1, min(500, $limite));
+        $stmt = $db->prepare($sql);
+        if (!$stmt) throw new PersistenceException('No se pudo consultar las citas pendientes de revisión.');
+        $stmt->bind_param($tipos, ...$valores);
+        if (!$stmt->execute()) throw new PersistenceException('No se pudo consultar las citas pendientes de revisión.');
+        $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC); $stmt->close(); return $rows;
+    }
+
+    /**
      * Detalle de una cita para el equipo. `$profesionalUsuario` limita a la agenda propia (null = toda la agenda): una cita ajena
      * es indistinguible de una inexistente (devuelve null). Los precios históricos solo se leen si `$conFinanzas`.
      *
@@ -1811,9 +1842,12 @@ class CitaRepository
     {
         $db = $this->resolveDb();
         $sql = "SELECT c.*, CONCAT(u.nombre, ' ', u.apellido) cliente, p.nombre profesional_nombre,
-                CONCAT(ui.nombre, ' ', ui.apellido) atencion_inicio_por_nombre, CONCAT(uf.nombre, ' ', uf.apellido) atencion_fin_por_nombre, CONCAT(ua.nombre, ' ', ua.apellido) ausencia_por_nombre
+                CONCAT(ui.nombre, ' ', ui.apellido) atencion_inicio_por_nombre, CONCAT(uf.nombre, ' ', uf.apellido) atencion_fin_por_nombre, CONCAT(ua.nombre, ' ', ua.apellido) ausencia_por_nombre,
+                CONCAT(ur.nombre, ' ', ur.apellido) regularizada_por_nombre,
+                (SELECT rg.id FROM citas_regularizaciones rg WHERE rg.cita_id = c.id AND rg.estado = 'solicitada' LIMIT 1) solicitud_abierta_id
                 FROM citas c JOIN usuarios u ON u.id = c.usuarioId LEFT JOIN profesionales p ON p.id = c.profesionalId
                 LEFT JOIN usuarios ui ON ui.id = c.atencion_inicio_por LEFT JOIN usuarios uf ON uf.id = c.atencion_fin_por LEFT JOIN usuarios ua ON ua.id = c.ausencia_por
+                LEFT JOIN usuarios ur ON ur.id = c.regularizada_por
                 WHERE c.id = ?" . ($profesionalUsuario !== null ? ' AND p.usuarioId = ?' : '');
         $stmt = $db->prepare($sql);
         if (!$stmt) throw new PersistenceException('No se pudo consultar la cita.');

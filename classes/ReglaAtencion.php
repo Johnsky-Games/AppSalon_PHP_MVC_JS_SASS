@@ -70,10 +70,12 @@ final class ReglaAtencion
     /**
      * Evalúa si «Iniciar atención» está disponible en $ahora.
      *
-     * Ventana: abierta desde (inicio − ADELANTO_INICIO_MINUTOS) inclusive y SIN cierre (se puede registrar con retraso; ver nota abajo).
+     * Ventana: abierta desde (inicio − ADELANTO_INICIO_MINUTOS) inclusive y hasta el FIN DEL DÍA de la cita. Una cita de un día
+     * anterior NO se inicia de forma ordinaria (decisión del usuario): si el cliente llega otro día se reprograma con las
+     * validaciones habituales de disponibilidad; si el servicio ya ocurrió y faltó registrarlo, la REGULARIZAN propietario o gerente.
      *
      * @return array{permitido:bool,motivo:?string,disponible_desde:\DateTimeImmutable,cierra:\DateTimeImmutable,mensaje:string}
-     *   motivo: null | 'antes_de_ventana'
+     *   motivo: null | 'antes_de_ventana' | 'dia_anterior'
      */
     public static function evaluarInicio(string $fecha, string $hora, \DateTimeImmutable $ahora): array
     {
@@ -86,9 +88,22 @@ final class ReglaAtencion
             return ['permitido' => false, 'motivo' => 'antes_de_ventana', 'disponible_desde' => $desde, 'cierra' => $cierra,
                 'mensaje' => 'Disponible desde las ' . $desde->format('H:i') . ($desde->format('Y-m-d') !== $inicio->format('Y-m-d') ? ' del ' . $desde->format('d/m') : '')];
         }
-        // Sin cierre: una cita confirmada que nadie inició (p. ej. días atrás) puede registrarse con retraso para atenderla y cobrarla.
-        // La trazabilidad no se pierde: el evento guarda quién y CUÁNDO lo hizo (fecha real), distinta de la fecha de la cita.
+        if ($ahora >= $cierra) {
+            return ['permitido' => false, 'motivo' => 'dia_anterior', 'disponible_desde' => $desde, 'cierra' => $cierra,
+                'mensaje' => 'La cita era del ' . $inicio->format('d/m/Y') . ': reprográmala, o regulariza la atención si el servicio sí ocurrió'];
+        }
         return ['permitido' => true, 'motivo' => null, 'disponible_desde' => $desde, 'cierra' => $cierra, 'mensaje' => ''];
+    }
+
+    /**
+     * ¿La cita está «pendiente de revisión»? Una cita sin resolver (confirmada o en servicio) cuyo día ya pasó. Nunca se marca sola como
+     * atendida ni como ausencia: alguien con permiso decide (reprogramar, regularizar o registrar la ausencia).
+     */
+    public static function esPendienteRevision(string $estado, string $fecha, \DateTimeImmutable $ahora): bool
+    {
+        if (!in_array($estado, ['confirmada', 'en_servicio'], true)) { return false; }
+        $hoy = $ahora->setTimezone(new \DateTimeZone(self::ZONA))->format('Y-m-d');
+        return $fecha < $hoy;
     }
 
     /**
@@ -108,7 +123,7 @@ final class ReglaAtencion
 
     /**
      * Valida una transición completa (estado + tiempo) para el servidor.
-     * @return array{ok:bool,httpCode:int,error:string}
+     * @return array{ok:bool,httpCode:int,error:string,motivo?:?string}
      */
     public static function validarTransicion(string $anterior, string $nuevo, string $fecha, string $hora, \DateTimeImmutable $ahora): array
     {
@@ -120,7 +135,7 @@ final class ReglaAtencion
             if (!$e['permitido']) {
                 return ['ok' => false, 'httpCode' => 422, 'error' => $e['motivo'] === 'antes_de_ventana'
                     ? 'La atención todavía no puede iniciarse: ' . lcfirst($e['mensaje']) . '.'
-                    : $e['mensaje'] . '.'];
+                    : $e['mensaje'] . '.', 'motivo' => $e['motivo']];
             }
         } elseif ($nuevo === 'no_asistio') {
             $e = self::evaluarAusencia($fecha, $hora, $ahora);

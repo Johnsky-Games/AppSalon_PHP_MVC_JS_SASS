@@ -33,6 +33,7 @@ function catalogo_destinos(): array
         // ----- Portal del equipo
         'agenda'            => ['equipo', '/agenda', ['agenda.gestionar', 'agenda.ver_propia'], $rango],
         'agenda_cita'       => ['equipo', '/agenda/cita', ['agenda.gestionar', 'agenda.ver_propia'], ['id' => 'id'] + $rango],
+        'agenda_pendientes' => ['equipo', '/agenda/pendientes', ['agenda.gestionar', 'agenda.ver_propia'], []],
         'admin_citas'       => ['equipo', '/admin', ['agenda.gestionar'], ['fecha' => 'fecha']],
         'caja'              => ['equipo', '/caja', ['finanzas.gestionar'], $rango + ['estado' => 'enum:pendiente,parcial,por_verificar,pagado,reembolsado', 'profesional' => 'id', 'metodo' => 'enum:efectivo,transferencia', 'q' => 'texto', 'pagina' => 'entero']],
         'caja_cita'         => ['equipo', '/caja/cita', ['finanzas.gestionar'], ['id' => 'id'] + $rango],

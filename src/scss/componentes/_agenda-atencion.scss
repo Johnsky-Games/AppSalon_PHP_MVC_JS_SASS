@@ -34,3 +34,16 @@
     .agenda-acciones--detalle { grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); }
 }
 @media (prefers-reduced-motion: reduce) { .agenda-integral .boton.is-busy { transition: none; } }
+
+// Citas pendientes de revisión y regularización de la atención (decisión sobre citas de días anteriores).
+.agenda-integral {
+    .agenda-estado--pendiente_revision { background: #fde8c8; color: #7a3b00; }
+    .agenda-aviso-pendientes { margin: 1.2rem 0 0; padding: 1.2rem 1.6rem; border-radius: 1.2rem; background: #fff6e5; border: 1px solid #f1d29a; font-size: 1.4rem; display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; justify-content: space-between; }
+    .agenda-regularizar { width: min(54rem, calc(100% - 3rem)); max-height: calc(100dvh - 4rem); overflow: auto; border: 0; border-radius: 1.6rem; padding: 2rem; box-shadow: 0 20px 60px #123b4240;
+        &::backdrop { background: #123b4299; }
+        label { display: grid; gap: .6rem; margin: 1rem 0; font-weight: 600; }
+        textarea, input[type="datetime-local"] { width: 100%; font: inherit; padding: 1rem; border: 1px solid #b9c9c4; border-radius: 1rem; }
+        textarea { min-height: 9rem; resize: vertical; }
+    }
+    .agenda-regularizacion-historial { list-style: none; margin: 1rem 0 0; padding: 0; display: grid; gap: .8rem; font-size: 1.4rem; }
+}

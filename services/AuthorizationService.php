@@ -8,15 +8,15 @@ use mysqli;
 /** Roles comprobados en servidor; nunca autoriza con el rol enviado por el navegador. */
 class AuthorizationService
 {
-    public const PERMISOS = ['equipo.gestionar','servicios.gestionar','profesionales.gestionar','perfiles.gestionar','agenda.gestionar','agenda.ver_propia',
+    public const PERMISOS = ['equipo.gestionar','servicios.gestionar','profesionales.gestionar','perfiles.gestionar','agenda.gestionar','agenda.ver_propia','agenda.regularizar','agenda.solicitar_regularizacion',
         'finanzas.gestionar','inventario.gestionar','marketing.gestionar','ajustes.gestionar','reportes.ver',
         // Fase identidades/CRM: alcance de datos de clientes y gestión de personal (RR. HH.).
         'clientes.ver','clientes.ver_propios','clientes.analitica','clientes.exportar','rh.gestionar'];
     public const ROLES = [
         'propietario' => self::PERMISOS,
-        'gerente' => ['servicios.gestionar','profesionales.gestionar','perfiles.gestionar','agenda.gestionar','finanzas.gestionar','inventario.gestionar','marketing.gestionar','ajustes.gestionar','reportes.ver','clientes.ver','clientes.analitica','clientes.exportar'],
+        'gerente' => ['servicios.gestionar','profesionales.gestionar','perfiles.gestionar','agenda.gestionar','agenda.regularizar','finanzas.gestionar','inventario.gestionar','marketing.gestionar','ajustes.gestionar','reportes.ver','clientes.ver','clientes.analitica','clientes.exportar'],
         'recepcion' => ['perfiles.gestionar','agenda.gestionar','clientes.ver'],
-        'profesional' => ['agenda.ver_propia','clientes.ver_propios'],
+        'profesional' => ['agenda.ver_propia','agenda.solicitar_regularizacion','clientes.ver_propios'],
         'finanzas' => ['finanzas.gestionar','inventario.gestionar','reportes.ver','clientes.analitica'],
         'cliente' => [],
     ];
