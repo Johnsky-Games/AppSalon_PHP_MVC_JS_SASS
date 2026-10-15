@@ -19,6 +19,9 @@ final class ReglaAtencion
     /** El cliente puede llegar antes de su hora: se permite iniciar hasta 60 minutos antes del inicio. */
     public const ADELANTO_INICIO_MINUTOS = 60;
 
+    /** Zona del negocio (la misma de Services\CitaService::TIMEZONE; se repite aquí para que esta regla no dependa de un servicio). */
+    public const ZONA = 'America/Guayaquil';
+
     public const ESTADOS_TERMINALES = ['completada', 'no_asistio', 'cancelada'];
 
     /** estado actual => estados de atención alcanzables */
@@ -59,7 +62,8 @@ final class ReglaAtencion
         $hora = substr(trim($hora), 0, 8);
         if (strlen($hora) === 5) { $hora .= ':00'; }
         $inicio = \DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', $fecha . ' ' . $hora, $zona);
-        if (!$inicio) { throw new \InvalidArgumentException('Fecha u hora de cita inválida.'); }
+        // createFromFormat acepta 2030-02-30 y lo desborda a marzo: se exige que la fecha leída sea exactamente la recibida.
+        if (!$inicio || $inicio->format('Y-m-d H:i:s') !== $fecha . ' ' . $hora) { throw new \InvalidArgumentException('Fecha u hora de cita inválida.'); }
         return $inicio;
     }
 
@@ -73,7 +77,8 @@ final class ReglaAtencion
      */
     public static function evaluarInicio(string $fecha, string $hora, \DateTimeImmutable $ahora): array
     {
-        $zona = $ahora->getTimezone();
+        $zona = new \DateTimeZone(self::ZONA);
+        $ahora = $ahora->setTimezone($zona); // un instante en UTC o en la zona del proceso se evalúa siempre en hora del negocio
         $inicio = self::inicioDeCita($fecha, $hora, $zona);
         $desde = $inicio->modify('-' . self::ADELANTO_INICIO_MINUTOS . ' minutes');
         $cierra = $inicio->setTime(0, 0)->modify('+1 day');
@@ -94,7 +99,9 @@ final class ReglaAtencion
      */
     public static function evaluarAusencia(string $fecha, string $hora, \DateTimeImmutable $ahora): array
     {
-        $inicio = self::inicioDeCita($fecha, $hora, $ahora->getTimezone());
+        $zona = new \DateTimeZone(self::ZONA);
+        $ahora = $ahora->setTimezone($zona);
+        $inicio = self::inicioDeCita($fecha, $hora, $zona);
         if ($ahora < $inicio) {
             return ['permitido' => false, 'motivo' => 'antes_de_hora', 'mensaje' => 'Disponible desde las ' . $inicio->format('H:i')];
         }

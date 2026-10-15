@@ -163,7 +163,13 @@ final class AgendaAtencionService
         if (!empty($permisos['gestiona']) || !empty($permisos['propia'])) {
             $fecha = (string)$cita['fecha'];
             $hora = (string)(($cita['hora_inicio'] ?? '') ?: ($cita['hora'] ?? '00:00:00'));
-            $reprogramar = !empty($permisos['gestiona']) && $estado === 'confirmada' && $ahora < ReglaAtencion::inicioDeCita($fecha, $hora, $ahora->getTimezone());
+            try {
+                $reprogramar = !empty($permisos['gestiona']) && $estado === 'confirmada' && $ahora < ReglaAtencion::inicioDeCita($fecha, $hora, new \DateTimeZone(ReglaAtencion::ZONA));
+                if ($estado === 'confirmada') { ReglaAtencion::evaluarInicio($fecha, $hora, $ahora); }
+            } catch (\InvalidArgumentException) {
+                // Horario ilegible (dato corrupto): la tarjeta se muestra sin acciones en lugar de romper toda la agenda.
+                $estado = 'horario_ilegible';
+            }
             if ($estado === 'confirmada') {
                 $inicio = ReglaAtencion::evaluarInicio($fecha, $hora, $ahora);
                 $operar[] = ['clave' => 'iniciar', 'estado' => 'en_servicio', 'texto' => 'Iniciar atención', 'habilitada' => $inicio['permitido'],
@@ -180,6 +186,7 @@ final class AgendaAtencionService
                 }
             }
         }
+        $estado = (string)($cita['estado'] ?? '');
         $finanzas = [];
         if (!empty($permisos['finanzas'])) {
             $pago = (string)($cita['estado_pago'] ?? 'pendiente');

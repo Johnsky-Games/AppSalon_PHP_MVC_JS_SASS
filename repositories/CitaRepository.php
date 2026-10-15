@@ -1663,6 +1663,13 @@ class CitaRepository
             throw new PersistenceException("Fallo en la capa de persistencia al consultar las citas del cliente.", 0, $e);
         }
     }
+    /**
+     * Solo para pruebas de concurrencia (patrón de Idempotencia::$observadorTrasReserva): se invoca con la cita ya bloqueada y leída,
+     * antes de validar y escribir, para ensanchar la ventana de carrera de forma determinista. Nulo en producción.
+     * @var (callable(): void)|null
+     */
+    public static $observadorTrasBloqueoAgenda = null;
+
     /** Operaciones de agenda: bloqueo de profesional antes de cita, igual que una reserva. */
     public function mutarAgenda(int $id, int $actorId, bool $gestiona, bool $profesionalPropio, string $operacion, array $datos, string $ahora): array
     {
@@ -1685,6 +1692,7 @@ class CitaRepository
             $fila = $stmt->get_result()->fetch_assoc(); $stmt->close();
             if (!$fila) { $db->rollback(); return $error(404, 'Cita no encontrada.'); }
             if ((string)$fila['profesionalId'] !== (string)$previa->profesionalId) { $db->rollback(); return $error(409, 'La cita cambió. Vuelve a intentarlo.'); }
+            if (self::$observadorTrasBloqueoAgenda !== null) { (self::$observadorTrasBloqueoAgenda)(); }
             $esCliente = (int)$fila['usuarioId'] === $actorId;
             $esProfesional = $profesionalPropio && $prof && (int)$prof['usuarioId'] === $actorId;
             if (!$gestiona && !(($operacion === 'reprogramar' && $esCliente) || ($operacion === 'estado' && $esProfesional))) {
