@@ -176,15 +176,24 @@ final class R5CrmFiltrosIntegrationTest extends TestCase
     public function testTextoAnteriorDistingueVersionesDeConsentimiento(): void
     {
         $p = $this->poblacion();
-        $v2 = (new ConsentimientoRepository($this->db))->publicar('Texto nuevo ' . $this->tag);
+        // La versión publicada es inmutable (trigger): se publica DENTRO de una transacción que siempre se revierte, para no dejar en la
+        // base compartida una versión «vigente» distinta de la 1 que rompería otras pruebas del CRM (orden aleatorio).
+        $revertir = new \RuntimeException('__revertir_prueba__');
+        $version = 0;
         try {
-            $this->assertSame([], $this->ids(['consentimiento' => 'vigente']), 'tras publicar un texto nuevo nadie tiene el vigente');
-            $this->assertSame($this->esperados($p, 'a'), $this->ids(['consentimiento' => 'anterior']));
-            $this->assertSame($this->esperados($p, 'a'), $this->ids(['consentimiento' => 'si']));
-        } finally {
-            $this->db->query('SET @x=1'); // las versiones son inmutables (trigger): la fila queda como versión posterior; las pruebas no dependen de ella
+            \Classes\Transaccion::ejecutar($this->db, function () use ($p, &$version, $revertir): void {
+                $v2 = (new ConsentimientoRepository($this->db))->publicar('Texto nuevo ' . $this->tag);
+                $version = (int)$v2['version'];
+                $this->assertSame([], $this->ids(['consentimiento' => 'vigente']), 'tras publicar un texto nuevo nadie tiene el vigente');
+                $this->assertSame($this->esperados($p, 'a'), $this->ids(['consentimiento' => 'anterior']));
+                $this->assertSame($this->esperados($p, 'a'), $this->ids(['consentimiento' => 'si']));
+                throw $revertir;
+            });
+        } catch (\RuntimeException $e) {
+            if ($e !== $revertir) { throw $e; }
         }
-        $this->assertGreaterThan(1, (int)$v2['version']);
+        $this->assertGreaterThan(1, $version);
+        $this->assertSame(1, (int)$this->db->query('SELECT MAX(version) m FROM consentimiento_versiones')->fetch_assoc()['m'], 'la versión de la prueba no debe persistir');
     }
 
     public function testActividadComercialRecienteInactivoYNunca(): void
