@@ -27,8 +27,13 @@ final class ComisionService
         $this->repo->consulta('SELECT id FROM profesionales WHERE id=? FOR UPDATE','i',[$prof]);
         $config=$this->repo->consulta('SELECT c.*,p.nombre FROM comisiones_config c JOIN profesionales p ON p.id=c.profesional_id WHERE c.profesional_id=? FOR UPDATE','i',[$prof])[0] ?? null;
         if (!$config) { return; }
-        $monto=self::calcular($base,(int)$config['porcentaje_pb']);
-        if (!$monto) { return; }
+        $pb=(int)$config['porcentaje_pb'];
+        // Redondeo ACUMULADO por cita: con pagos parciales, redondear cada pago por separado deriva (10 pagos de $0.15 al 10 % darían
+        // $0.20 en vez de $0.15). La comisión del pago es lo que falta para que el total devengado de esa cita y tarifa iguale
+        // el porcentaje sobre lo cobrado hasta ahora.
+        $previo=$this->repo->consulta("SELECT COALESCE(SUM(m.base_centavos),0) b,COALESCE(SUM(m.monto_centavos),0) c FROM comisiones_movimientos m JOIN pagos p ON p.id=m.pago_id WHERE m.tipo='devengo' AND m.profesional_id=? AND m.porcentaje_pb=? AND m.pago_id<>? AND p.cita_id=(SELECT cita_id FROM pagos WHERE id=?)",'iiii',[$prof,$pb,$pago,$pago])[0] ?? ['b'=>0,'c'=>0];
+        $monto=self::calcular((int)$previo['b']+$base,$pb)-(int)$previo['c'];
+        if ($monto<=0) { return; }
         $this->repo->consulta("INSERT INTO comisiones_movimientos (profesional_id,profesional_nombre,pago_id,pago_referencia,tipo,base_centavos,porcentaje_pb,monto_centavos,registrado_en) VALUES (?,?,?,?,'devengo',?,?,?,?)",'isisiiis',[$prof,$config['nombre'],$pago,$referencia,$base,(int)$config['porcentaje_pb'],$monto,OperacionRepository::ahora()]);
     }
     /** Dentro de transacción de devolución: saldo no abonado se anula, abonado genera ajuste. */

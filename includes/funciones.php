@@ -120,12 +120,25 @@ function version_sesion_vigente(array $contexto): bool
 }
 
 /**
+ * Acceso al que se envía a una persona anónima según la ruta pedida: las pantallas exclusivas del equipo llevan al acceso del
+ * equipo; todo lo demás, al del cliente. Solo mira el camino de la petición (nunca un parámetro ni el Referer).
+ */
+function login_por_ruta(): string
+{
+    $ruta = (string)(parse_url((string)($_SERVER['REQUEST_URI'] ?? '/'), PHP_URL_PATH) ?? '/');
+    foreach (['/agenda', '/caja', '/admin', '/profesionales', '/servicios'] as $prefijo) {
+        if ($ruta === $prefijo || str_starts_with($ruta, $prefijo . '/')) { return '/equipo/login'; }
+    }
+    return '/';
+}
+
+/**
  * Detiene la ejecución si el usuario no está autenticado.
  */
 function isAuth(): void
 {
     iniciar_sesion_segura();
-    $loginDestino = '/';
+    $loginDestino = login_por_ruta();
     if (($_SESSION['login'] ?? false) === true) {
         $contexto = (new \Services\AuthorizationService())->contexto((int)($_SESSION['id'] ?? 0));
         $loginDestino = destino_portal(($_SESSION['portal'] ?? '') === 'equipo' ? 'login_equipo' : 'login_cliente');
