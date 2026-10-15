@@ -439,10 +439,10 @@ final class R5QaAtencionTest extends R5Case
     }
 
     /**
-     * Req E (contrato §5): «Iniciar» solo hasta que TERMINE el día de la cita. Una cita confirmada de AYER no se inicia (no se reabre una cita
-     * histórica en silencio): botón deshabilitado/ausente y POST forjado ⇒ 409/422 sin cambios.
+     * Req E (decisión del líder, ronda 5): una cita confirmada de DÍAS ANTERIORES que nadie inició se puede registrar CON RETRASO (si no, jamás
+     * podría atenderse ni cobrarse). No es silencioso: el evento deja quién y CUÁNDO (fecha real de hoy), distinta de la fecha de la cita.
      */
-    public function test_E_cita_de_dias_anteriores_no_se_inicia_en_silencio(): void
+    public function test_E_cita_de_dias_anteriores_se_registra_con_retraso_y_queda_auditada(): void
     {
         $n = $this->equipo('dueno');
         $donante = $this->citaComenzada();
@@ -450,11 +450,12 @@ final class R5QaAtencionTest extends R5Case
         $pag = $this->agenda($n);
         $t = self::tarjeta($pag['body'], $ayer);
         $this->assertNotNull($t);
-        $this->assertTrue(self::accion($t, '/Iniciar atenci[óo]n/iu') === null, 'una cita de ayer no debe ofrecer «Iniciar atención» habilitado');
+        $this->assertTrue(self::accion($t, '/Iniciar atenci[óo]n/iu') !== null, 'una cita pasada sin iniciar debe poder registrarse con retraso');
         $r = $this->postForjado($n, $donante, $ayer, 'en_servicio');
-        $this->assertContains($r['status'], [409, 422], 'status ' . $r['status']);
-        $this->assertSame('confirmada', $this->estado($ayer));
-        $this->assertCount(0, $this->eventos($ayer));
+        $this->assertContains($r['status'], [200, 302, 303], 'status ' . $r['status']);
+        $this->assertSame('en_servicio', $this->estado($ayer));
+        $ev = $this->eventos($ayer);
+        $this->assertCount(1, $ev);
     }
 
     /**
