@@ -28,8 +28,8 @@ final class Exportador
      * @param array<int,array{clave:string,titulo:string,tipo?:string}> $columnas
      * @param iterable<array<string,mixed>> $filas  generador recomendado (memoria acotada)
      * @param array<string,mixed>|null $totales     valores por clave de columna; se escribe una fila «Total»
-     * @param array{max_filas?:int,hoja?:string,ahora?:\DateTimeImmutable} $opciones
-     * @return array{flujo:resource,formato:string,mime:string,archivo:string,filas:int,bytes:int,sha256:string,truncado:bool,columnas:string[]}
+     * @param array{max_filas?:int,hoja?:string,ahora?:\DateTimeImmutable,aviso_truncado?:string} $opciones
+     * @return array{flujo:resource,formato:string,mime:string,archivo:string,filas:int,bytes:int,sha256:string,truncado:bool,columnas:string[],limite:int}
      */
     public static function generar(string $formato, string $nombreBase, array $columnas, iterable $filas, ?array $totales = null, array $opciones = []): array
     {
@@ -45,16 +45,23 @@ final class Exportador
         if ($formato === 'xlsx') { $max = min($max, XlsxEscritor::MAX_FILAS); }
         $flujo = fopen('php://temp/maxmemory:' . self::MEMORIA_TEMPORAL, 'w+b');
         if ($flujo === false) { throw new \RuntimeException('No se pudo preparar la exportación.'); }
-        $w = $formato === 'xlsx' ? new XlsxEscritor($flujo, (string)($opciones['hoja'] ?? 'Datos'), $opciones['ahora'] ?? null) : new CsvEscritor($flujo);
-        $w->iniciar($cols);
-        $n = 0; $truncado = false;
-        foreach ($filas as $fila) {
-            if ($n >= $max) { $truncado = true; break; }
-            $w->fila($fila);
-            $n++;
+        try {
+            $w = $formato === 'xlsx' ? new XlsxEscritor($flujo, (string)($opciones['hoja'] ?? 'Datos'), $opciones['ahora'] ?? null) : new CsvEscritor($flujo);
+            $w->iniciar($cols);
+            $n = 0; $truncado = false;
+            foreach ($filas as $fila) {
+                if ($n >= $max) { $truncado = true; break; }
+                $w->fila($fila);
+                $n++;
+            }
+            if ($totales !== null && !$truncado) { $w->totales('Total', $totales); }
+            // Truncado: nunca se declara como completo. Aviso dentro del archivo (última fila), nombre «_parcial» y, al entregar, cabecera X-Exportacion-Truncada.
+            if ($truncado) { $w->nota((string)($opciones['aviso_truncado'] ?? ('AVISO: exportación limitada a ' . $max . ' filas; afine los filtros para obtener el resto.'))); }
+            $w->cerrar();
+        } catch (\Throwable $e) {
+            fclose($flujo);   // un fallo a mitad (p. ej. de la base de datos) no deja flujos abiertos ni un archivo a medias
+            throw $e;
         }
-        if ($totales !== null && !$truncado) { $w->totales('Total', $totales); }
-        $w->cerrar();
         $bytes = (int)ftell($flujo);
         rewind($flujo);
         $h = hash_init('sha256');
@@ -63,7 +70,7 @@ final class Exportador
         return [
             'flujo' => $flujo, 'formato' => $formato, 'mime' => self::FORMATOS[$formato], 'filas' => $n, 'bytes' => $bytes,
             'sha256' => hash_final($h), 'truncado' => $truncado, 'columnas' => array_column($cols, 'titulo'),
-            'archivo' => self::nombreArchivo($nombreBase, $formato),
+            'archivo' => self::nombreArchivo($nombreBase . ($truncado ? '_parcial' : ''), $formato), 'limite' => $max,
         ];
     }
 
@@ -76,6 +83,8 @@ final class Exportador
             'Content-Length' => (string)$r['bytes'],
             'X-Content-Type-Options' => 'nosniff',
             'Cache-Control' => 'no-store, no-cache, must-revalidate',
+            'X-Exportacion-Filas' => (string)$r['filas'],
+            'X-Exportacion-Truncada' => !empty($r['truncado']) ? '1' : '0',
         ];
         $GLOBALS['__appsalon_ultima_exportacion'] = ['cabeceras' => $cabeceras, 'filas' => $r['filas'], 'sha256' => $r['sha256'], 'formato' => $r['formato']];
         if (!headers_sent()) {

@@ -69,6 +69,12 @@ final class XlsxEscritor implements EscritorTabla
         $this->zip->escribirEntrada('<row r="' . $this->fila . '">' . $cel . '</row>');
     }
 
+    public function nota(string $texto): void
+    {
+        $this->fila++;
+        $this->zip->escribirEntrada('<row r="' . $this->fila . '">' . self::texto(self::ref(0, $this->fila), $texto, 8) . '</row>');
+    }
+
     public function cerrar(): void
     {
         $ultima = self::ref(max(0, count($this->columnas) - 1), 1);
