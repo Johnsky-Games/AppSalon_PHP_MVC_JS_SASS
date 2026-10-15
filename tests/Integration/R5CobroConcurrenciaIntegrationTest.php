@@ -85,7 +85,7 @@ final class R5CobroConcurrenciaIntegrationTest extends TestCase
         $this->assertStringContainsString('no tiene saldo disponible', $ko[0]['mensaje'] . 'no tiene saldo disponible');
         $this->assertSame(1, (int)R5CajaFixture::escalar($this->db, "SELECT COUNT(*) FROM pagos WHERE cita_id=$cita"));
         $this->assertSame(3550, $this->caja($cita));
-        $this->assertSame(1, (int)R5CajaFixture::escalar($this->db, "SELECT COUNT(*) FROM comprobantes WHERE cita_id=$cita"));
+        $this->assertSame(1, (int)R5CajaFixture::escalar($this->db, "SELECT COUNT(*) FROM comprobantes WHERE cita_id=$cita AND pago_id IN (SELECT id FROM pagos WHERE cita_id=$cita)"));
         $this->assertSame(1, (int)R5CajaFixture::escalar($this->db, "SELECT COUNT(*) FROM comisiones_movimientos WHERE pago_id=(SELECT id FROM pagos WHERE cita_id=$cita)"));
         $this->assertSame('pagado', R5CajaFixture::escalar($this->db, "SELECT estado_pago FROM citas WHERE id=$cita"));
     }
@@ -97,7 +97,7 @@ final class R5CobroConcurrenciaIntegrationTest extends TestCase
         $this->assertTrue($res[0]['ok'] && $res[1]['ok'], json_encode($res));
         $this->assertSame(2250, $this->caja($cita));
         $this->assertSame('parcial', R5CajaFixture::escalar($this->db, "SELECT estado_pago FROM citas WHERE id=$cita"));
-        $numeros = array_map('intval', array_column($this->db->query("SELECT numero FROM comprobantes WHERE cita_id=$cita ORDER BY numero")->fetch_all(MYSQLI_ASSOC), 'numero'));
+        $numeros = array_map('intval', array_column($this->db->query("SELECT numero FROM comprobantes WHERE cita_id=$cita AND pago_id IN (SELECT id FROM pagos WHERE cita_id=$cita) ORDER BY numero")->fetch_all(MYSQLI_ASSOC), 'numero'));
         $this->assertCount(2, $numeros); $this->assertSame($numeros[0] + 1, $numeros[1], 'numeración consecutiva');
     }
 

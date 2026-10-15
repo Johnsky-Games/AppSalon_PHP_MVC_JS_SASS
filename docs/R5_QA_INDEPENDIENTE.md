@@ -24,6 +24,7 @@ Suite `tests/Qa/R5Qa*.php` (116 pruebas en 6 clases) escrita **a partir de los r
 | La guardia de portal respondía en lugar de la acción ante sesiones caducadas (perdía el JSON de su contrato) | `exigir_portal` solo actúa con sesión vigente |
 | Un anónimo en pantallas del equipo iba al acceso del cliente | `/equipo/login` por prefijo de ruta |
 | El mensaje de error no se anunciaba | `role="alert"` en la tarjeta de error |
+| Dos cobros simultáneos de citas distintas se interbloqueaban (bloqueo de huecos en `idx_pagos_cita_id` al leer `pagos` con `FOR UPDATE` por rango) y tras 3 reintentos respondían 409. Lo detectó el CI de `9ec7eaf` (no se reprodujo en reposo; sí bajo carga de CPU) | Las operaciones de caja usan `READ COMMITTED` (sin bloqueos de hueco; la cita sigue bloqueada y la lectura ve lo último confirmado); 25 repeticiones bajo carga sin fallos |
 
 ## 3. Ajustes hechos a las pruebas (y por qué no reducen garantías)
 
