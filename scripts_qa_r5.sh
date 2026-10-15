@@ -34,7 +34,7 @@ export CHROME_BIN="${CHROME_BIN:-/opt/pw-browsers/chromium-1194/chrome-linux/chr
 
 echo "== Árbol: $ARBOL   ($(git -C "$ARBOL" log --oneline -1 2>/dev/null))"
 echo "== 1/4 copiando pruebas R5Qa* y utilidades al árbol"
-[ "$ARBOL" = "$ORIGEN" ] || cp "$ORIGEN"/tests/Qa/R5Case.php "$ORIGEN"/tests/Qa/R5Qa*.php "$ORIGEN"/tests/Qa/r5_qa_navegador.cjs "$ARBOL/tests/Qa/"
+if [ "$ARBOL" != "$ORIGEN" ]; then for f in "$ORIGEN"/tests/Qa/R5Case.php "$ORIGEN"/tests/Qa/R5Qa*.php "$ORIGEN"/tests/Qa/r5_qa_navegador.cjs; do b=$(basename "$f"); [ -e "$ARBOL/tests/Qa/$b" ] && [ -z "${PISAR:-}" ] && { echo "   (se conserva $b del árbol)"; continue; }; cp "$f" "$ARBOL/tests/Qa/"; done; fi
 
 [ -e "$ARBOL/vendor/autoload.php" ] || { echo "   (sin vendor/: se copia el vendor enlazado de q5)"; cp -a "$ORIGEN/vendor" "$ARBOL/vendor"; }
 echo "== 2/4 recreando $DB_NAME con las migraciones del árbol"
