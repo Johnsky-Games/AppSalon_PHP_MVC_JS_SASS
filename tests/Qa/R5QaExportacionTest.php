@@ -440,11 +440,16 @@ PHP;
         // Sumas contra SQL (ingresos − egresos, o ingresos y egresos separados según el diseño de la hoja).
         $sumaFilas = 0;
         foreach ($detalle as $f) { $sumaFilas += self::centavos(number_format((float)($this->numero($f[$colImporte]) ?? '0'), 2, '.', '')); }
-        $this->assertTrue(in_array($sumaFilas, [$ing + $egr, $ing - $egr, $ing], true),
+        // La base de la clase acumula días previos de otras pruebas: el universo exportado es TODA la caja de hoy, no solo lo sembrado aquí.
+        $ingHoy = (int)self::escalar("SELECT COALESCE(SUM(monto_centavos),0) FROM caja_movimientos WHERE tipo='ingreso' AND pago_id IS NOT NULL AND DATE(registrado_en)=?", [$hoy]);
+        $egrHoy = (int)self::escalar("SELECT COALESCE(SUM(monto_centavos),0) FROM caja_movimientos WHERE tipo='egreso' AND pago_id IS NOT NULL AND DATE(registrado_en)=?", [$hoy]);
+        $this->assertGreaterThanOrEqual($ing, $ingHoy);
+        $this->assertTrue(in_array($sumaFilas, [$ingHoy + $egrHoy, $ingHoy - $egrHoy, $ingHoy], true),
             "la suma de la columna «{$csv[0][$colImporte]}» (" . self::dolares($sumaFilas) . ") no corresponde a lo cobrado en caja (ingresos " . self::dolares($ing) . ", egresos sueltos " . self::dolares($egr) . ')');
         $this->assertNotNull($this->numero($totalFila[$colImporte]), 'la fila de totales no tiene importe');
         $pantalla = self::texto($n->get("/caja?desde=$hoy&hasta=$hoy")['body']);
-        $this->assertStringContainsString(self::dolares($ing), $pantalla, 'la pantalla /caja no muestra lo cobrado que exportó (' . self::dolares($ing) . ')');
+        $this->assertStringContainsString(number_format($sumaFilas / 100, 2, '.', ','), $pantalla, 'la pantalla /caja no muestra el total cobrado que exportó (' . number_format($sumaFilas / 100, 2, '.', ',') . ')');
+        $this->assertStringContainsString(number_format(array_sum(array_map(fn($f) => (float)$this->numero($f[$colImporte]), $detalle)), 2, '.', ','), $pantalla);
     }
 
     /** Req F/6 + E: CRM — el CSV, el XLSX y la lista en pantalla (todas las páginas) tienen exactamente los mismos clientes con los mismos filtros. */

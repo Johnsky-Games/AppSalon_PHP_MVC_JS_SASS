@@ -397,8 +397,10 @@ final class R5QaCrmTest extends R5Case
         $sin = $n->get($limpiar);
         $this->assertSame(200, $sin['status']);
         $linkLimpiarSin = false;
-        foreach (self::xp($sin['body'])->query('//a') as $a) { if (preg_match('/Limpiar filtros/iu', $a->textContent)) { $linkLimpiarSin = true; } }
-        $this->assertFalse($linkLimpiarSin, 'sin filtros activos no debe ofrecerse «Limpiar filtros» (quedan chips)');
+        // El formulario conserva siempre su propio «Limpiar filtros» (restablece también lo tecleado y no aplicado); lo que no debe
+        // existir sin filtros aplicados es el bloque de FILTROS ACTIVOS (chips + enlace de limpieza del resumen).
+        foreach (self::xp($sin['body'])->query("//a[contains(@class,'crm-activos__limpiar')]") as $a) { $linkLimpiarSin = true; }
+        $this->assertFalse($linkLimpiarSin, 'sin filtros aplicados no debe mostrarse el bloque de filtros activos con su enlace de limpieza');
         $this->assertNotNull($this->conteoMostrado($r['body']), 'falta el conteo');
         $this->assertGreaterThan($this->conteoMostrado($r['body']), $this->conteoMostrado($sin['body']), 'limpiar filtros debe ampliar el universo');
     }
