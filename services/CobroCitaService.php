@@ -399,12 +399,24 @@ final class CobroCitaService
      */
     private function ejecutar(string $operacion, int $actor, string $clave, array $contenido, callable $alta): array
     {
+        // READ COMMITTED: leer `pagos` con FOR UPDATE por rango de cita bajo REPEATABLE READ toma bloqueos de hueco en idx_pagos_cita_id y
+        // dos cobros de citas distintas se interbloquean al insertar. La cita ya está bloqueada (serializa sus pagos) y cada lectura ve
+        // lo último confirmado, así que no se pierde ninguna garantía.
+        $db = $this->repo->db;
+        $previo = null;
+        $res = @$db->query('SELECT @@session.transaction_isolation AS n');
+        if ($res) { $previo = (string)($res->fetch_assoc()['n'] ?? ''); }
+        @$db->query('SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED');
         try {
-            return Idempotencia::ejecutar($this->repo->db, self::SCOPE . $operacion, Idempotencia::actorUsuario($actor, 'equipo'), $clave, $contenido, static fn() => $alta());
+            return Idempotencia::ejecutar($db, self::SCOPE . $operacion, Idempotencia::actorUsuario($actor, 'equipo'), $clave, $contenido, static fn() => $alta());
         } catch (ConflictoIdempotenciaException) {
             throw new CobroRechazado('Esta solicitud ya se había enviado con otros datos. No se cambió nada: vuelva a abrir la cita para ver su estado actual y registre la operación de nuevo.', 409);
         } catch (OperacionEnCursoException) {
             throw new CobroRechazado('La misma operación sigue procesándose. Espere unos segundos y revise la cita antes de repetirla.', 409);
+        } finally {
+            if ($previo !== null && preg_match('/^[A-Z-]+$/', $previo) === 1) {
+                @$db->query('SET SESSION TRANSACTION ISOLATION LEVEL ' . str_replace('-', ' ', $previo));
+            }
         }
     }
 
