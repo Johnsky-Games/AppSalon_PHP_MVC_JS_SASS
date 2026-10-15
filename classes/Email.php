@@ -274,6 +274,7 @@ class Email
         $mensaje['nombre'] = (string)$this->nombre;
         $mensaje['detalles'] = ['Tu cuenta' => (string)$this->email] + $this->detallesExtra;
         $mensaje['enlace'] = $enlace;
+        $mensaje['sitio_ruta'] = ($this->portal === 'equipo' || $proposito === 'invitacion') ? '/equipo/login' : '';
         $mensaje['aviso'] = 'Recibiste este correo porque se solicitó una acción relacionada con tu cuenta.';
         $contenido = ($plantilla ?? new EmailTemplate())->render($mensaje);
         $email->Body = $contenido['html'];

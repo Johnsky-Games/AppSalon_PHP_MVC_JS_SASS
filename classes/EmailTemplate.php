@@ -88,7 +88,8 @@ class EmailTemplate
         $nota = trim((string)($mensaje['nota'] ?? ''));
         $enlace = self::urlSegura((string)($mensaje['enlace'] ?? Email::resolverAppUrl()));
         $boton = (string)($mensaje['boton'] ?? 'Abrir mi cuenta');
-        $sitio = Email::resolverAppUrl();
+        // Enlace de marca/«Visitar el sitio»: los correos del equipo llevan al acceso del EQUIPO, nunca al del cliente (ronda 5).
+        $sitio = Email::resolverAppUrl() . (($mensaje['sitio_ruta'] ?? '') === '/equipo/login' ? '/equipo/login' : '');
 
         $htmlParrafos = '';
         $texto = [$nombreNegocio, $categoria, $titulo, '', 'Hola ' . $nombreCliente . ',', ''];

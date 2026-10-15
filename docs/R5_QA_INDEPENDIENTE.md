@@ -41,6 +41,10 @@ Los hizo el líder al integrar, tras reproducir cada fallo; se listan para revis
 
 **Envío único y botón «procesando».** El script de navegador ejecuta, en el **mismo turno síncrono**, el primer clic, la lectura del estado inmediato y varios clics/`requestSubmit` adicionales; guarda el resultado en `sessionStorage` por si la navegación destruye el contexto y borra el valor previo antes de cada paso. Las pruebas exigen **a la vez** (a) estado de proceso (botón deshabilitado, `aria-busy` o texto «Registrando…») y (b) **exactamente 1 POST de red** al endpoint, contado con `page.on('request')`, no con el valor almacenado.
 
+## 3 bis. Pruebas del integrador (NO son revisión independiente)
+
+Escritas por quien integró, para cerrar huecos que el QA no cubrió: `R5QaCobroTest::test_C3_cambio_de_tarifa…` y `::test_C4_pago_despues_de_devolucion_parcial…` (comisiones; viven en la clase del QA pero **las escribió el integrador**), el refuerzo del script de navegador (envío en un solo turno síncrono), `tests/Integration/R5EnlacesCorreoTest.php`, `tests/Qa/R5IntEnlacesCorreoHttpTest.php` y `tests/Qa/R5IntInicioTardioTest.php`. **Reverificación independiente pendiente:** se le pedirá al QA cuando pueda continuar (hoy limitado por cuota); hasta entonces no se etiquetan como revisadas por él.
+
 ## 4. Resultados (SHA y entorno)
 
 * Rama integrada local (`/tmp/wt/int`, PHP 8.3 y MySQL 8.0.46): PHPUnit por defecto 1058 pruebas OK (tras corregir 3 pruebas heredadas); QA completo 879 pruebas, 0 omitidas, 2 fallos que se corrigieron (cita de días anteriores y una carrera de Chromium); `R5Qa*` completas en verde.

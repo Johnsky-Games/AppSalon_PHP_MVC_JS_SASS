@@ -49,7 +49,22 @@ Anónimo en pantallas exclusivas del equipo (`/agenda`, `/caja`, `/admin…`, `/
 
 `tests/Unit` del catálogo (tipado, inyección `//evil`, `http:`, `javascript:`, CRLF, arreglos), `tests/Qa/R5DevPortalesTest.php`, `tests/Qa/R5QaPortalesTest.php` (escáner de enlaces equipo↔cliente, doble membresía, suspensión por portal, sesión expirada, rol cambiado en caliente, errores desde acciones del equipo y del cliente) y la matriz de autorización (`AutorizacionMatrizTest`) actualizada a estos contratos.
 
-## 7. Pendiente
+## 7. Enlaces de correos y notificaciones (auditados)
 
-* **Enlaces profundos de correos y notificaciones: NO auditados en esta fase** (el agente de portales quedó limitado por cuota antes de entregar esa parte; no hay correos nuevos en la ronda). Queda como pendiente real.
+Inventario de correos y su destino (`classes/Email.php`, `services/NotificacionCitaService.php`, `scripts/instalar.php`):
+
+| Correo | Destinatario | Enlace principal | Portal |
+|---|---|---|---|
+| Confirmación de cuenta | cliente | `/confirmar-cuenta?token=…` (GET solo muestra el formulario) | cliente |
+| Recuperación de contraseña | cliente o equipo | `/recuperar?token=…` (+ `&portal=equipo` si es del equipo) | el de la cuenta |
+| Invitación | colaborador | `/equipo/aceptar?token=…` | equipo |
+| «Ya tienes una cuenta» | titular | `/cliente/login` o `/equipo/login` según su portal | el de la cuenta |
+| Confirmación, recordatorio, reprogramación y cancelación de cita | cliente | `/cita` | cliente |
+
+Hallazgo corregido: el enlace de marca y «Visitar el sitio» de **todos** los correos apuntaba a `/` (acceso de clientes); en los correos del equipo (invitación, recuperación y «cuenta existente» del equipo) ahora apunta a `/equipo/login`.
+Pruebas (escritas por el integrador, no son revisión independiente): `tests/Integration/R5EnlacesCorreoTest.php` (contenido: mismo origen, destino por portal, ningún cruce cliente↔equipo, solo el enlace personal lleva token, una sola vez; verificada con mutación: sin la corrección fallan 3 casos) y `tests/Qa/R5IntEnlacesCorreoHttpTest.php` (HTTP real: `/cita` anónimo → acceso de clientes, cliente → reserva, equipo → su inicio; sesión invalidada de cliente → `/` y de equipo → `/equipo/login`; membresía de cliente suspendida sin acceso y sin afectar al equipo; tokens inválidos de invitación, recuperación y confirmación sin filtrar cuentas ni redirigir a pantallas privadas).
+Límite: `scripts/instalar.php` imprime en consola el enlace de invitación del propietario inicial (comportamiento de la instalación, ya existente); no es un correo.
+
+## 8. Pendiente
+
 * La validación de estos recorridos en el equipo real del usuario sigue fuera de esta fase.
