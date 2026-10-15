@@ -189,6 +189,12 @@ class PagoService
                     'errores' => ['No se puede iniciar un cobro de una cita cancelada o no asistida.']];
             }
 
+            if ($this->pagoRepository->tieneCobrosDeCajaVivos($citaId)) {
+                $this->pagoRepository->rollback();
+                return ['status' => self::STATUS_CONFLICT, 'http_code' => 409,
+                    'errores' => ['Esta cita ya tiene cobros registrados en caja. Pague el saldo restante en el salón.']];
+            }
+
             $montoServidor = round((float)$cita['monto_servidor'], 2);
             if ($montoServidor <= 0) {
                 $this->pagoRepository->rollback();

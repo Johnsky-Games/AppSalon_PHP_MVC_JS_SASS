@@ -19,61 +19,43 @@ final class FinanzasService
         $cita=filter_var($datos['cita_id'] ?? '',FILTER_VALIDATE_INT,['options'=>['min_range'=>1]]) ?: null;
         if (trim((string)($datos['cita_id'] ?? '')) !== '' && !$cita) { throw new \InvalidArgumentException('Cita inválida.'); }
         if ($cita && $tipo!=='ingreso') { throw new \InvalidArgumentException('El cobro de una cita debe ser un ingreso.'); }
-        $monto=$cita ? 0 : ValoresExactos::decimal($datos['monto'] ?? null);
-        $huella=hash('sha256',json_encode([$tipo,$metodo,$concepto,$cita,$monto]));
-        return $this->repo->transaccion(function() use($actor,$tipo,$metodo,$concepto,$clave,$cita,$monto,$huella) {
-            $pagoRepo=new PagoRepository($this->repo->db);
-            $reserva=$cita ? $pagoRepo->obtenerCitaConImporteServidor($cita,true) : null;
+        if ($cita) {
+            // El cobro de una cita ya no es un movimiento libre: pasa por el servicio de cobro (saldo, verificación, caja,
+            // comisión, estado y comprobante en una sola transacción). Se cobra TODO el saldo disponible; una transferencia
+            // queda pendiente de verificación y su referencia es el concepto indicado.
+            try {
+                $r=(new CobroCitaService($this->repo))->cobrar($actor,['cita_id'=>$cita,'metodo'=>$metodo,'monto'=>CobroCitaService::SALDO,'referencia'=>$concepto,
+                    'idem_key'=>substr(hash('sha256','finanzas:'.$clave),0,64)]);
+            } catch (CobroRechazado $e) { throw new \InvalidArgumentException($e->getMessage(),0,$e); }
+            return ['id'=>$r['pago_id'],'idempotente'=>$r['repetida']];
+        }
+        $monto=ValoresExactos::decimal($datos['monto'] ?? null);
+        $huella=hash('sha256',json_encode([$tipo,$metodo,$concepto,null,$monto]));
+        return $this->repo->transaccion(function() use($actor,$tipo,$metodo,$concepto,$clave,$monto,$huella) {
             $anterior=$this->repo->consulta('SELECT * FROM caja_movimientos WHERE idempotencia=? FOR UPDATE','s',[$clave])[0] ?? null;
             if ($anterior) {
                 if (!hash_equals($anterior['huella'],$huella)) { throw new \InvalidArgumentException('El identificador ya pertenece a otra operación.'); }
                 return ['id'=>(int)$anterior['id'],'idempotente'=>true];
             }
-            $pagoId=null;
-            if ($cita) {
-                if (!$reserva || !in_array($reserva['estado'],['confirmada','en_servicio','completada'],true)) { throw new \InvalidArgumentException('Esta cita no admite nuevos cobros.'); }
-                if ($reserva['estado_pago']==='pagado' || $pagoRepo->findCompletadoPorCitaId($cita,true) || $pagoRepo->findActivoPorCitaId($cita,true)) { throw new \InvalidArgumentException('La cita ya está cobrada o tiene un pago pendiente. Revise el historial antes de cobrar.'); }
-                $monto=ValoresExactos::decimal(number_format($reserva['monto_servidor'],2,'.',''));
-                $pago=new Pago(['cita_id'=>$cita,'cita_referencia_id'=>$cita,'usuario_id'=>$reserva['usuario_id'],
-                    'referencia_pago'=>'MAN-'.strtoupper(bin2hex(random_bytes(12))),'proveedor'=>'manual',
-                    'monto'=>$monto/100,'estado'=>'completado','metodo_pago'=>$metodo,'idempotency_key'=>'manual:'.$clave,
-                    'pagado_at'=>(new \DateTimeImmutable('now',new \DateTimeZone('America/Guayaquil')))->format('Y-m-d H:i:s'),
-                    'payload_proveedor'=>['registro_manual'=>true,'actor_id'=>$actor,'declaracion'=>'Recepción verificada por personal autorizado']]);
-                $pagoId=$pagoRepo->create($pago);
-                $pagoRepo->actualizarEstadoPagoCita($cita,'pagado');
-                if ($reserva['profesional_id']) { (new ComisionService($this->repo))->devengar((int)$reserva['profesional_id'],$pagoId,$pago->referencia_pago,$monto); }
-            }
-            $this->repo->consulta('INSERT INTO caja_movimientos (actor_id,tipo,monto_centavos,concepto,metodo,pago_id,idempotencia,huella,registrado_en) VALUES (?,?,?,?,?,?,?,?,?)','isississs',[$actor,$tipo,$monto,$concepto,$metodo,$pagoId,$clave,$huella,OperacionRepository::ahora()]);
+            $this->repo->consulta('INSERT INTO caja_movimientos (actor_id,tipo,monto_centavos,concepto,metodo,pago_id,idempotencia,huella,registrado_en) VALUES (?,?,?,?,?,?,?,?,?)','isississs',[$actor,$tipo,$monto,$concepto,$metodo,null,$clave,$huella,OperacionRepository::ahora()]);
             return ['id'=>(int)$this->repo->db->insert_id,'idempotente'=>false];
         });
     }
+    /**
+     * Devolución total de lo que queda de un cobro manual (compatibilidad con el formulario «Registrar devolución»). Delega en
+     * CobroCitaService::devolver, que registra la devolución por importe, la caja, la comisión y el estado de la cita.
+     */
     public function reembolsar(int $actor, array $datos): array
     {
         $referencia=ValoresExactos::texto($datos['referencia'] ?? null,64);
         $concepto=ValoresExactos::texto($datos['concepto'] ?? null,180);
         $clave=ValoresExactos::clave($datos['idempotencia'] ?? null,$actor);
-        $huella=hash('sha256',json_encode(['reembolso',$referencia,$concepto]));
-        $pagoRepo=new PagoRepository($this->repo->db);
-        $citaId=$pagoRepo->obtenerCitaIdPorReferencia($referencia);
-        return $this->repo->transaccion(function() use($actor,$referencia,$concepto,$clave,$huella,$pagoRepo,$citaId) {
-            if ($citaId) { $pagoRepo->bloquearCitaPorId($citaId); }
-            $pago=$pagoRepo->findByReferencia($referencia,true);
-            $anterior=$this->repo->consulta('SELECT * FROM caja_movimientos WHERE idempotencia=? FOR UPDATE','s',[$clave])[0] ?? null;
-            if ($anterior) {
-                if (!hash_equals($anterior['huella'],$huella)) { throw new \InvalidArgumentException('El identificador ya pertenece a otra operación.'); }
-                return ['id'=>(int)$anterior['id'],'idempotente'=>true];
-            }
-            if (!$pago || $pago->proveedor!=='manual' || $pago->estado!=='completado') { throw new \InvalidArgumentException('Solo se devuelve un cobro manual completado, una sola vez.'); }
-            $monto=ValoresExactos::decimal(number_format($pago->monto,2,'.',''));
-            $fecha=(new \DateTimeImmutable('now',new \DateTimeZone('America/Guayaquil')))->format('Y-m-d H:i:s');
-            $payload=$pago->obtenerPayloadProveedor();
-            $payload['devolucion_manual']=['actor_id'=>$actor,'registrado_en'=>$fecha,'concepto'=>$concepto];
-            $pagoRepo->actualizarEstadoPago((int)$pago->id,'reembolsado',null,null,$payload,null,$fecha);
-            (new ComisionService($this->repo))->revertir((int)$pago->id);
-            if ($pago->cita_id) { $pagoRepo->actualizarEstadoPagoCita($pago->cita_id,'reembolsado'); }
-            $this->repo->consulta('INSERT INTO caja_movimientos (actor_id,tipo,monto_centavos,concepto,metodo,pago_id,idempotencia,huella,registrado_en) VALUES (?,\'egreso\',?,?,?,?,?,?,?)','iississs',[$actor,$monto,$concepto,$pago->metodo_pago,(int)$pago->id,$clave,$huella,OperacionRepository::ahora()]);
-            return ['id'=>(int)$this->repo->db->insert_id,'idempotente'=>false];
-        });
+        $pago=(new PagoRepository($this->repo->db))->findByReferencia($referencia);
+        if (!$pago || $pago->proveedor!=='manual') { throw new \InvalidArgumentException('Solo se devuelve un cobro manual completado, una sola vez.'); }
+        try {
+            $r=(new CobroCitaService($this->repo))->devolver($actor,['pago_id'=>(int)$pago->id,'monto'=>CobroCitaService::SALDO,'motivo'=>$concepto,'idem_key'=>substr(hash('sha256','finanzas:'.$clave),0,64)]);
+        } catch (CobroRechazado $e) { throw new \InvalidArgumentException($e->getMessage(),0,$e); }
+        return ['id'=>$r['caja_id'],'idempotente'=>$r['repetida']];
     }
 
 }

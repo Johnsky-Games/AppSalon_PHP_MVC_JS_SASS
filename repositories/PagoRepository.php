@@ -234,6 +234,22 @@ class PagoRepository
     }
 
     /**
+     * ¿La cita tiene cobros de caja vivos (efectivo/transferencia confirmados o por verificar)? Si es así el pago en línea no puede
+     * iniciarse: la pasarela cobraría el total completo y se superaría el saldo. Debe llamarse con la cita ya bloqueada.
+     */
+    public function tieneCobrosDeCajaVivos(int $citaId): bool
+    {
+        $db = $this->resolveDb();
+        $stmt = $db->prepare("SELECT 1 FROM pagos WHERE (cita_id = ? OR cita_referencia_id = ?) AND proveedor = 'manual' AND estado IN ('completado','pendiente') LIMIT 1 FOR UPDATE");
+        if (!$stmt) { throw new PersistenceException('Error al preparar consulta de cobros de caja: ' . $db->error); }
+        $stmt->bind_param('ii', $citaId, $citaId);
+        $stmt->execute();
+        $hay = $stmt->get_result()->num_rows > 0;
+        $stmt->close();
+        return $hay;
+    }
+
+    /**
      * Adquiere un bloqueo pesimista `FOR UPDATE` sobre una cita específica.
      * Garantiza el orden estricto de bloqueos (citas -> pagos) para prevenir deadlocks cíclicos.
      */
