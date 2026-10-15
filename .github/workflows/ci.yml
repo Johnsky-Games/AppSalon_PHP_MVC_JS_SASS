@@ -92,6 +92,15 @@ jobs:
       - name: Ejecutar suite completa de PHPUnit (sin caché y orden aleatorio)
         run: php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --order-by=random --colors=never
 
+      # La validación independiente de los XLSX exportados (ronda 5) usa dos lectores ajenos a nuestro escritor: openpyxl y LibreOffice.
+      - name: Instalar lectores independientes de XLSX (openpyxl y LibreOffice Calc)
+        run: |
+          python3 -m pip install --user 'openpyxl==3.1.5'
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends libreoffice-calc
+          python3 -c "import openpyxl; print('openpyxl', openpyxl.__version__)"
+          soffice --version
+
       - name: QA independiente (tests/Qa) en base MySQL aislada — obligatorio
         # Incluye las pruebas de concurrencia con procesos reales (DEF-02, DEF-06), HTTP real, correo, esquema y navegador.
         # El arnés (tests/Qa/QaCase.php) aborta si DB_NAME no cumple appsalon_qa_*_test; nunca toca appsalon_ci_test.
