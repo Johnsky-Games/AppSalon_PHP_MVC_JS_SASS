@@ -232,12 +232,16 @@ final class R5QaCobroTest extends R5Case
         $c = $this->cita();
         $n = $this->eq('gerente');
         $this->aceptado($this->cobrar($n, $c, ['monto' => 2000, 'metodo' => 'transferencia', 'referencia' => 'TRF-' . random_int(100000, 999999)]), 'registro de transferencia');
+        // Separación de funciones (decisión documentada de p5): quien registró la transferencia no la verifica ni la rechaza.
+        $propia = $this->pantalla($n, $c);
+        $this->assertNull(self::formulario($propia['body'], '~/caja/pago/verificar~'), 'el registrante no debe poder verificar su propia transferencia');
+        $n = $this->eq('finanzas');
         $p = $this->pantalla($n, $c);
         $rech = self::formulario($p['body'], '~/caja/pago/rechazar~');
         $ver = self::formulario($p['body'], '~/caja/pago/verificar~');
         $this->assertNotNull($rech, 'sin acción «Rechazar»');
         $this->assertNotNull($ver);
-        $this->aceptado(self::enviar($n, $rech), 'rechazo');
+        $this->aceptado(self::enviar($n, $rech, ['nota' => 'No aparece en el extracto bancario']), 'rechazo');
         $this->assertSame(0, $this->confirmados($c));
         $this->assertContains((string)self::escalar('SELECT estado_pago FROM citas WHERE id=?', [$c]), ['pendiente']);
         $x = self::enviar($n, $ver);
@@ -293,6 +297,7 @@ final class R5QaCobroTest extends R5Case
         $this->assertSame(2500, $f['saldo']);
         $txt = self::texto($this->pantalla($n, $c)['body']);
         foreach (['15.00', '25.00', '40.00'] as $esperado) { $this->assertStringContainsString($esperado, $txt, "la pantalla de cobro no muestra $esperado (anticipo/saldo/total)"); }
+        $formularioViejo = $this->formCobro($this->pantalla($n, $c));   // pantalla abierta ANTES de pagar el saldo (otra pestaña)
         $this->aceptado($this->cobrar($n, $c, ['monto' => 2500, 'metodo' => 'efectivo', 'recibido' => 3000]), 'saldo');
         $f = self::resumenFinanciero($c);
         $this->assertSame(4000, $f['neto']);
@@ -301,7 +306,7 @@ final class R5QaCobroTest extends R5Case
         $this->assertSame(400, (int)self::escalar("SELECT COALESCE(SUM(monto_centavos),0) FROM comisiones_movimientos WHERE tipo='devengo'"), 'comisión acumulada del 10 % sobre $40.00');
         $this->conciliado();
         // Ya pagada: otro cobro ⇒ rechazo.
-        $x = $this->cobrar($n, $c, ['monto' => 100, 'metodo' => 'efectivo', 'recibido' => 100]);
+        $x = $this->cobrar($n, $c, ['monto' => 100, 'metodo' => 'efectivo', 'recibido' => 100, 'clave' => bin2hex(random_bytes(16))], $formularioViejo);
         $this->rechazado($x, 'cobrar una cita ya pagada', [409, 422]);
         $this->assertSame(4000, $this->neto($c));
     }
@@ -389,13 +394,13 @@ final class R5QaCobroTest extends R5Case
         $this->assertSame(1000, $f['saldo']);
         $dev = (int)self::escalar("SELECT COALESCE(SUM(monto_centavos),0) FROM comisiones_movimientos WHERE tipo='devengo'");
         $rev = (int)self::escalar("SELECT COALESCE(SUM(monto_centavos),0) FROM comisiones_movimientos WHERE tipo='reversa'");
-        $this->assertSame(300, $dev - $rev, 'la comisión neta debe ser el 10 % de lo realmente retenido ($30.00 → $3.00)');
+        $this->assertSame(300, $dev + $rev, 'la comisión neta debe ser el 10 % de lo realmente retenido ($30.00 → $3.00)');
         $this->conciliado('devolución parcial');
         $this->aceptado($this->devolver($n, $c, 3000), 'devolución del resto');
         $f = self::resumenFinanciero($c);
         $this->assertSame([4000, 4000, 0], [$f['ingresos'], $f['egresos'], $f['neto']]);
         $this->assertSame('reembolsado', $f['estado_pago']);
-        $this->assertSame(0, (int)self::escalar("SELECT COALESCE(SUM(IF(tipo='devengo',monto_centavos,-monto_centavos)),0) FROM comisiones_movimientos"));
+        $this->assertSame(0, (int)self::escalar("SELECT COALESCE(SUM(monto_centavos),0) FROM comisiones_movimientos"));
         $this->conciliado('devolución total');
     }
 
