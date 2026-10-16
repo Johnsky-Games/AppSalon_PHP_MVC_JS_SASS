@@ -1,6 +1,6 @@
 # Guía: actualizar a la ronda 5 (agenda → atención → cobro → comprobante) — Windows, Docker y Linux
 
-Complementa `GUIA_ACTUALIZACION_RONDA3.md` y `IDENTIFICAR_ENTORNO_LOCAL.md`. **Esta guía no se ha ejecutado en tu equipo**: se probó el procedimiento de migración, respaldo y restauración en la nube, no en tu instalación. Haz primero `IDENTIFICAR_ENTORNO_LOCAL.md` (qué entorno atiende `localhost:8085`, rama, SHA, cambios locales, respaldo).
+Complementa `GUIA_ACTUALIZACION_RONDA3.md` y `IDENTIFICAR_ENTORNO_LOCAL.md`. Tras la integración del [PR #1](https://github.com/Johnsky-Games/AppSalon_PHP_MVC_JS_SASS/pull/1), la rama de actualización es `main`; ver [INTEGRACION_MAIN_R5B.md](INTEGRACION_MAIN_R5B.md) para el alcance acumulado y las migraciones desde versiones anteriores. **Esta guía no se ha ejecutado en tu equipo**: se probó el procedimiento de migración, respaldo y restauración en la nube, no en tu instalación. Haz primero `IDENTIFICAR_ENTORNO_LOCAL.md` (qué entorno atiende `localhost:8085`, rama, SHA, cambios locales, respaldo).
 
 No se borran volúmenes, no se reemplaza `includes/.env`, no se envían correos reales. Convención: `COMPOSE` = `docker compose --env-file includes/.env -p <tu-proyecto>`.
 
@@ -20,10 +20,11 @@ Migraciones nuevas: **027** regularización de la atención (columnas `citas.ate
 
 ```bash
 git fetch origin --prune
-git switch claude/blissful-hopper-f5k7a0 && git pull --ff-only       # si hay cambios locales en conflicto, DETENTE y consulta
+git switch main && git pull --ff-only origin main                 # resolver los cambios locales antes de continuar
+composer install --prefer-dist --no-interaction                   # dependencias y autoload; alternativa Docker en guía de identidades §8
 $COMPOSE build web
 $COMPOSE exec web php scripts/backup_db.php --gzip --output=storage/respaldos/antes-ronda5.sql.gz
-$COMPOSE run --rm instalador php scripts/instalar.php --migrar       # aplica 023-027 sobre la base existente
+$COMPOSE run --rm instalador php scripts/instalar.php --migrar       # aplica todas las pendientes hasta 027 sobre la base existente
 $COMPOSE up -d db web notificaciones
 $COMPOSE exec web php database/migrador.php status                   # 027 aplicada
 $COMPOSE exec web php scripts/instalar.php --comprobar               # «Esquema al día.»

@@ -1,6 +1,6 @@
 # Entrega ronda 5 — agenda → atención → finalización → cobro → comprobante, portales separados, segmentación y exportaciones
 
-Rama `claude/blissful-hopper-f5k7a0` (sin merge a `main`, sin despliegue, sin PR). Parte de `3c71d3d`. El SHA final y el CI figuran en §8.
+Rama de origen `claude/blissful-hopper-f5k7a0`; integración en `main` mediante [PR #1](https://github.com/Johnsky-Games/AppSalon_PHP_MVC_JS_SASS/pull/1). Parte de `3c71d3d`. El SHA validado y el CI figuran en §8. Alcance y procedimiento de actualización: [INTEGRACION_MAIN_R5B.md](INTEGRACION_MAIN_R5B.md). La instalación del usuario no se ha desplegado ni migrado.
 
 ## 0. Estado honesto — leer primero
 
@@ -71,7 +71,7 @@ Ver `docs/R5_QA_INDEPENDIENTE.md` (hallazgos reales corregidos, tabla de pruebas
 
 ## 8. Rama, SHA y CI
 
-Rama `claude/blissful-hopper-f5k7a0` (sin merge a `main`, sin despliegue, sin PR).
+Rama de origen `claude/blissful-hopper-f5k7a0`. El [PR #1](https://github.com/Johnsky-Games/AppSalon_PHP_MVC_JS_SASS/pull/1) registra la revisión integrada y el SHA del merge en `main`; la evidencia siguiente corresponde al cierre técnico anterior a la integración.
 
 | SHA | Qué es | Resultado real |
 |---|---|---|
@@ -91,6 +91,6 @@ La ampliación R5b posterior a `6b9ae6f` **sí cambia código y pruebas** (inclu
 | `e39572a` | Aislamiento de la cola, restauración de conexiones, evidencia de reasignaciones/fidelidad y orden de bloqueos. CI run 78 falló en una prueba de privacidad: buscaba el dígito del id `1` en todo el HTML. El QA local se interrumpió al corregirla; no se cuenta como validación final |
 | **`39c4fc5`** | **Código y pruebas validados:** dos PHPUnit locales aleatorios, QA local con omisiones de navegador explícitas, 30 mutaciones detectadas y [CI run 79 — éxito completo](https://github.com/Johnsky-Games/AppSalon_PHP_MVC_JS_SASS/actions/runs/38840115357). El CI completó PHPUnit, QA sin omisiones, imagen Docker, E2E en Apache y respaldo/restauración |
 
-El commit que incorpora este cierre modifica únicamente documentación y evidencia (`[skip ci]`); el código y las pruebas siguen siendo exactamente los de `39c4fc5`. No hay merge, despliegue ni PR.
+El commit `f6c9794` incorporó este cierre modificando únicamente documentación y evidencia (`[skip ci]`); el código y las pruebas siguen siendo exactamente los de `39c4fc5`. En ese momento aún no había PR ni merge. La integración posterior, autorizada por el usuario, se documenta en [INTEGRACION_MAIN_R5B.md](INTEGRACION_MAIN_R5B.md) y en el PR #1. No se ejecuta un despliegue ni una migración de la instalación del usuario.
 
 Cambios de expectativas de pruebas y su justificación: `docs/R5_QA_INDEPENDIENTE.md` §3. Pruebas del integrador (no independientes) y su reverificación: §3 bis.
