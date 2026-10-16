@@ -2,6 +2,8 @@
 
 namespace Tests\Integration;
 
+require_once __DIR__ . '/BaseDatosAislada.php';
+
 use AppTerminationException;
 use Controllers\AdminController;
 use Controllers\APIController;
@@ -33,22 +35,19 @@ use Services\ServicioService;
 class Fase5InterfazReservasIntegrationTest extends TestCase
 {
     private static ?mysqli $db = null;
+    private static ?mysqli $dbAnterior = null;
 
     public static function setUpBeforeClass(): void
     {
-        $host = getenv('DB_HOST') ?: 'appsalon-test-db';
-        $user = getenv('DB_USER') ?: 'root';
-        $pass = getenv('DB_PASS') ?: 'root';
-        $name = getenv('DB_NAME') ?: 'appsalon_test';
-        $port = (int)(getenv('DB_PORT') ?: 3306);
+        self::$dbAnterior = ActiveRecord::getDB();
+        self::$db = BaseDatosAislada::crear('interfaz_reservas');
+        ActiveRecord::setDB(self::$db);
+    }
 
-        $conn = @new mysqli($host, $user, $pass, $name, $port);
-        if ($conn->connect_errno) {
-            self::markTestSkipped('No hay conexión MySQL de pruebas disponible: ' . $conn->connect_error);
-        }
-        $conn->set_charset('utf8mb4');
-        self::$db = $conn;
-        ActiveRecord::setDB($conn);
+    public static function tearDownAfterClass(): void
+    {
+        ActiveRecord::setDB(self::$dbAnterior);
+        if (self::$db) { BaseDatosAislada::destruir(self::$db); self::$db = null; }
     }
 
     protected function setUp(): void
@@ -75,8 +74,8 @@ class Fase5InterfazReservasIntegrationTest extends TestCase
         self::$db->query('TRUNCATE TABLE profesionales');
         self::$db->query('TRUNCATE TABLE servicios');
         self::$db->query('TRUNCATE TABLE usuarios');
-        // Con las claves foráneas desactivadas el TRUNCATE no se propaga: las filas huérfanas de otras pruebas (accesos,
-        // membresías, colaboradores) se reasignarían a los nuevos usuarios que reutilizan los ids 1, 2, 3…
+        // La base de esta clase es efímera: los TRUNCATE no reinician ids utilizados por la evidencia financiera de otras clases.
+        // Limpiar también las relaciones de los casos anteriores de esta misma clase.
         foreach (['usuario_accesos', 'clientes', 'colaborador_invitaciones', 'colaboradores', 'citas_regularizaciones'] as $huerfana) {
             self::$db->query("DELETE FROM {$huerfana}");
         }
