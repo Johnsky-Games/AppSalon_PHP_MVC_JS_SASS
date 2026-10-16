@@ -279,7 +279,7 @@ final class CajaController
         if ($formato === null) { self::fallo(422, 'Formato de exportación no válido: usa csv o xlsx.', 'caja'); return; }
         if ($errores) { self::fallo(422, 'No se pudo exportar: ' . implode(' ', $errores), 'caja'); return; }
         $columnas = [
-            ['clave' => 'cita', 'titulo' => 'Cita', 'tipo' => 'entero'], ['clave' => 'fecha', 'titulo' => 'Fecha', 'tipo' => 'fecha'], ['clave' => 'hora', 'titulo' => 'Hora', 'tipo' => 'texto'],
+            ['clave' => 'cita', 'titulo' => 'Cita', 'tipo' => 'entero'], ['clave' => 'fecha', 'titulo' => 'Fecha programada de la cita', 'tipo' => 'fecha'], ['clave' => 'hora', 'titulo' => 'Hora', 'tipo' => 'texto'],
             ['clave' => 'cliente', 'titulo' => 'Cliente', 'tipo' => 'texto'], ['clave' => 'profesional', 'titulo' => 'Profesional', 'tipo' => 'texto'],
             ['clave' => 'atencion', 'titulo' => 'Atención', 'tipo' => 'texto'], ['clave' => 'estado_pago', 'titulo' => 'Estado de pago', 'tipo' => 'texto'], ['clave' => 'metodos', 'titulo' => 'Métodos', 'tipo' => 'texto'],
             ['clave' => 'total', 'titulo' => 'Total', 'tipo' => 'dinero'], ['clave' => 'cobrado', 'titulo' => 'Cobrado confirmado', 'tipo' => 'dinero'], ['clave' => 'devuelto', 'titulo' => 'Devuelto', 'tipo' => 'dinero'],
@@ -299,7 +299,7 @@ final class CajaController
                             'pendiente' => $f['pendiente'], 'por_cobrar' => $f['por_cobrar'], 'anticipo' => $f['anticipo_sin_resolver']];
                     }
                 })();
-                $r = Exportador::generar($formato, 'caja-citas-' . $filtros['desde'] . '_a_' . $filtros['hasta'], $columnas, $filas,
+                $r = Exportador::generar($formato, 'caja-citas-por-fecha-programada_' . $filtros['desde'] . '_a_' . $filtros['hasta'], $columnas, $filas,
                     ['total' => $totales['total'], 'cobrado' => $totales['cobrado'], 'devuelto' => $totales['devuelto'], 'pendiente' => $totales['pendiente'], 'por_cobrar' => $totales['por_cobrar'], 'anticipo' => $totales['anticipo_sin_resolver']],
                     ['hoja' => 'Caja']);
             } finally {

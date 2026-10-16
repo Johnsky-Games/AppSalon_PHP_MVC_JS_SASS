@@ -1210,6 +1210,21 @@ class CitaRepository
         return $hay;
     }
 
+    /** ¿La cita tiene pagos, comprobantes o eventos de cobro? (evidencia financiera sin FK por diseño: no se elimina). */
+    public function tieneRegistrosFinancieros(int $citaId): bool
+    {
+        $db = $this->resolveDb();
+        foreach ([['pagos', 'cita_referencia_id'], ['pagos', 'cita_id'], ['cobros_devoluciones', 'cita_id'], ['comprobantes', 'cita_id'], ['cobros_eventos', 'cita_id']] as [$tabla, $col]) {
+            $stmt = $db->prepare("SELECT 1 FROM {$tabla} WHERE {$col} = ? LIMIT 1");
+            if (!$stmt) throw new PersistenceException('No se pudo comprobar los cobros de la cita.');
+            $stmt->bind_param('i', $citaId);
+            if (!$stmt->execute()) { $stmt->close(); throw new PersistenceException('No se pudo comprobar los cobros de la cita.'); }
+            $hay = (bool)$stmt->get_result()->fetch_row(); $stmt->close();
+            if ($hay) return true;
+        }
+        return false;
+    }
+
     public function eliminarCitaAtomica(int $citaId): bool
     {
         if ($citaId <= 0) {

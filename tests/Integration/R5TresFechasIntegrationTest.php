@@ -106,6 +106,7 @@ final class R5TresFechasIntegrationTest extends TestCase
         $this->assertSame('realizado', $reporte['filtros']['criterio_fecha'] ?? $reporte['criterio_fecha'] ?? 'realizado');
         $res = array_values(array_filter($reporte['reservas'] ?? [], fn($r) => (int)$r['id'] === $this->cita));
         $this->assertCount(1, $res, 'la cita figura en el reporte de servicios realizados del día efectivo');
+        $this->assertSame('Atendida', $res[0]['etiqueta_estado_cita'], 'una cita completada no se presenta como «Confirmada»');
         $this->assertSame($this->programada, $res[0]['fecha_programada']);
         $this->assertSame($this->efectiva . ' 12:00:00', $res[0]['atencion_efectiva_at']);
         $tabla = $svc->tablaExportacion($reporte, 'reservas');

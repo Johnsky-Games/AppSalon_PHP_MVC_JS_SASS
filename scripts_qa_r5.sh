@@ -24,7 +24,7 @@ while [ $# -gt 0 ]; do
   if [ "$1" = "--" ]; then shift; EXTRA=("$@"); break; fi
   CLASES+=("$1"); shift
 done
-[ ${#CLASES[@]} -gt 0 ] || CLASES=(R5QaAtencionTest R5QaPortalesTest R5QaCobroTest R5QaCrmTest R5QaExportacionTest R5QaNavegadorTest)
+[ ${#CLASES[@]} -gt 0 ] || CLASES=(R5QaAtencionTest R5QaPortalesTest R5QaCobroTest R5QaCrmTest R5QaExportacionTest R5QaNavegadorTest R5bQaPermisosTest R5bQaAuditoriaTest R5bQaFinanzasTest R5bQaPendientesTest R5bQaFase2Test R5bQaNavegadorTest)
 SALIDA="${SALIDA:-/tmp/q5_resultados_$(date +%Y%m%d_%H%M%S)}"
 mkdir -p "$SALIDA"
 

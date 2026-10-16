@@ -754,6 +754,15 @@ class CitaService
                     'error' => 'Esta cita tiene una regularización de la atención registrada y no se puede eliminar para conservar su auditoría.'
                 ];
             }
+            // Pagos, comprobantes y eventos de cobro no tienen clave foránea hacia la cita: eliminarla los dejaría apuntando a una cita inexistente.
+            if ($this->citaRepository->tieneRegistrosFinancieros($idCita)) {
+                return [
+                    'status' => self::STATUS_CONFLICT,
+                    'httpCode' => 409,
+                    'resultado' => false,
+                    'error' => 'Esta cita tiene cobros o comprobantes registrados y no se puede eliminar; cancélala o gestiona su devolución.'
+                ];
+            }
         } catch (PersistenceException $e) {
             return ['status' => self::STATUS_ERROR, 'httpCode' => 500, 'resultado' => false, 'error' => 'No fue posible comprobar la cita debido a un error de base de datos.'];
         }

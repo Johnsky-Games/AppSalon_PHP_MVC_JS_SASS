@@ -1030,7 +1030,10 @@ class ReporteService
                 'es_historica_sin_profesional' => $cita['es_historica_sin_profesional'],
                 'cita_estado' => $cita['cita_estado'],
                 'es_cancelada' => $esCancelada,
-                'etiqueta_estado_cita' => $esCancelada ? 'Cancelada' : 'Confirmada',
+                'etiqueta_estado_cita' => [
+                    'cancelada' => 'Cancelada', 'completada' => 'Atendida', 'no_asistio' => 'No asistió',
+                    'en_servicio' => 'En servicio', 'pendiente' => 'Pendiente',
+                ][$estadoCita] ?? 'Confirmada',
                 'servicios' => $cita['servicios'],
                 'servicios_resumen' => implode(', ', $serviciosTextoPartes),
                 'duracion_total_minutos' => $duracionCitaMinutos,
