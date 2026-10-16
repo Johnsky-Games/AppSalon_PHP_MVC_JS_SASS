@@ -26,6 +26,21 @@ class EquipoController
         return new ColaboradorService(new ColaboradorRepository($db), new CorreoSalidaService(new CorreoSalidaRepository($db)));
     }
 
+    public static function recursosHumanos(Router $router): void
+    {
+        exigir_permiso('rh.gestionar');
+        if (!headers_sent()) { header('Cache-Control: no-store'); }
+        try { $datos = (new \Services\RecursosHumanosService(self::repo()))->consultar($_GET); }
+        catch (\Repositories\PersistenceException $e) { throw new \Classes\ServiceUnavailableException('El directorio de personal no está disponible.', 0, $e); }
+        $alertas = $_SESSION['equipo_alertas'] ?? []; unset($_SESSION['equipo_alertas']);
+        if ($datos['errores']) { http_response_code(422); $alertas['error'] = $datos['errores']; }
+        $router->render('equipo/recursos-humanos', $datos + ['alertas' => $alertas,
+            'puedeAccesos' => puede('equipo.gestionar'), 'puedeProfesionales' => puede('profesionales.gestionar')]);
+    }
+
+    public static function fichaRh(Router $router): void { self::ficha($router, true); }
+    public static function fichaAgendaRh(Router $router): void { self::fichaAgenda($router, true); }
+
     public static function index(Router $router): void
     {
         exigir_permiso('equipo.gestionar');
@@ -121,7 +136,7 @@ class EquipoController
         redirigir('/admin/equipo');
     }
 
-    public static function ficha(Router $router): void
+    public static function ficha(Router $router, bool $desdeRh = false): void
     {
         exigir_permiso('rh.gestionar');
         $id = filter_var($_GET['id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
@@ -134,13 +149,13 @@ class EquipoController
             $r = self::servicio()->actualizarFicha((int)$_SESSION['id'], (int)$id, $_POST);
             if ($r['status'] === ColaboradorService::OK) {
                 $_SESSION['equipo_alertas'] = ['exito' => ['Ficha laboral actualizada.']];
-                redirigir('/admin/equipo');
+                redirigir($desdeRh ? '/admin/recursos-humanos' : '/admin/equipo');
                 return;
             }
             $alertas = ['error' => $r['errores'] ?? ['No se pudo guardar la ficha.']];
             http_response_code(422);
         }
-        $router->render('equipo/ficha', ['colaborador' => $colaborador, 'alertas' => $alertas] + self::datosAgenda($colaborador));
+        $router->render('equipo/ficha', ['colaborador' => $colaborador, 'alertas' => $alertas, 'desdeRh' => $desdeRh] + self::datosAgenda($colaborador));
     }
 
     /**
@@ -174,7 +189,7 @@ class EquipoController
     }
 
     /** POST del asistente de la ficha: guarda servicios y horario del profesional de forma atómica e idempotente. */
-    public static function fichaAgenda(Router $router): void
+    public static function fichaAgenda(Router $router, bool $desdeRh = false): void
     {
         exigir_permiso('rh.gestionar');
         exigir_permiso('profesionales.gestionar');
@@ -189,11 +204,11 @@ class EquipoController
                 ($r['estado'] ?? '') === 'invitado'
                     ? 'Servicios y horario guardados. La ficha seguirá sin aparecer en reservas hasta que la persona acepte la invitación.'
                     : 'Servicios y horario del profesional actualizados.')]];
-            redirigir('/admin/equipo/ficha?id=' . (int)$id);
+            redirigir(($desdeRh ? '/admin/recursos-humanos/ficha' : '/admin/equipo/ficha') . '?id=' . (int)$id);
             return;
         }
         http_response_code($r['status'] === ColaboradorService::CONFLICT_KEY || $r['status'] === ColaboradorService::IN_PROGRESS ? 409 : ($r['status'] === ColaboradorService::FORBIDDEN ? 403 : 422));
-        $router->render('equipo/ficha', ['colaborador' => $colaborador, 'alertas' => ['error' => $r['errores'] ?? ['No se pudo guardar la agenda.']]] + self::datosAgenda($colaborador, self::previoSeguro($_POST)));
+        $router->render('equipo/ficha', ['colaborador' => $colaborador, 'desdeRh' => $desdeRh, 'alertas' => ['error' => $r['errores'] ?? ['No se pudo guardar la agenda.']]] + self::datosAgenda($colaborador, self::previoSeguro($_POST)));
     }
 
     /** Copia saneada (solo texto, hasta 4 niveles) de lo enviado, para repoblar el formulario tras un error. */

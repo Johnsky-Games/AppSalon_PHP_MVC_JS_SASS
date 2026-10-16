@@ -145,6 +145,17 @@ async function runBrowserTests() {
     });
 
     const page = await browser.newPage();
+
+    async function abrirFormulario(selector) {
+        const resumen = await page.evaluateHandle(sel => {
+            const formulario = document.querySelector(sel);
+            if (!formulario) throw new Error(`No se encontró el formulario ${sel}`);
+            const detalles = formulario.closest('details');
+            return detalles && !detalles.open ? detalles.querySelector('summary') : null;
+        }, selector);
+        if (resumen.asElement()) await resumen.asElement().click();
+        await resumen.dispose();
+    }
     await page.setViewport({ width: 1280, height: 800 });
 
     const responsiveResults = [];
@@ -463,6 +474,7 @@ async function runBrowserTests() {
             document.querySelector(`#horario_inicio_${day}`).value = '18:00';
             document.querySelector(`#horario_fin_${day}`).value = '09:00';
         }, bookingDay);
+        await abrirFormulario('#form-horarios-semanales');
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'networkidle0' }),
             page.click('#form-horarios-semanales input[type="submit"]')
@@ -478,12 +490,14 @@ async function runBrowserTests() {
             document.querySelector(`#horario_inicio_${day}`).value = '09:00';
             document.querySelector(`#horario_fin_${day}`).value = '18:00';
         }, bookingDay);
+        await abrirFormulario('#form-horarios-semanales');
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'networkidle0' }),
             page.click('#form-horarios-semanales input[type="submit"]')
         ]);
 
         // Añadir descanso en el día de la reserva (13:00 a 14:00)
+        await abrirFormulario('#form-crear-descanso');
         await page.select('#descanso_dia_semana', String(bookingDay));
         await page.evaluate(() => {
             document.querySelector('#descanso_hora_inicio').value = '13:00';
@@ -548,6 +562,7 @@ async function runBrowserTests() {
             document.querySelector(`#horario_inicio_${day}`).value = '08:00';
             document.querySelector(`#horario_fin_${day}`).value = '12:00';
         }, splitDay);
+        await abrirFormulario('#form-horarios-semanales');
         await page.click(`.btn-agregar-franja[data-dia="${splitDay}"]`);
         await page.evaluate(day => {
             document.querySelector(`#horario_activo_${day}_1`).checked = true;
@@ -555,6 +570,7 @@ async function runBrowserTests() {
             document.querySelector(`#horario_fin_${day}_1`).value = '18:00';
         }, splitDay);
 
+        await abrirFormulario('#form-horarios-semanales');
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'networkidle0' }),
             page.click('#form-horarios-semanales input[type="submit"]')
@@ -578,6 +594,7 @@ async function runBrowserTests() {
         }
 
         // 3. Guardar SIN CAMBIOS y verificar que ambas franjas se preservan en MySQL y en el DOM
+        await abrirFormulario('#form-horarios-semanales');
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'networkidle0' }),
             page.click('#form-horarios-semanales input[type="submit"]')
@@ -607,7 +624,9 @@ async function runBrowserTests() {
         }
 
         // 4. Retirada explícita de la primera franja del día de prueba independiente (08:00-12:00) y comprobar que elimina únicamente la franja elegida
+        await abrirFormulario('#form-horarios-semanales');
         await page.click(`.horario-dia-franjas[data-dia-contenedor="${splitDay}"] .horario-franja-fila[data-franja-index="0"] .btn-retirar-franja`);
+        await abrirFormulario('#form-horarios-semanales');
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'networkidle0' }),
             page.click('#form-horarios-semanales input[type="submit"]')
@@ -680,6 +699,7 @@ async function runBrowserTests() {
             document.querySelector(`#horario_inicio_${day}`).value = '09:00';
             document.querySelector(`#horario_fin_${day}`).value = '18:00';
         }, bookingDay);
+        await abrirFormulario('#form-horarios-semanales');
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'networkidle0' }),
             page.click('#form-horarios-semanales input[type="submit"]')

@@ -219,7 +219,8 @@ final class CorreccionesQaIntegrationTest extends TestCase
     // DEF-09
     public function testLaClaveMaestraSoloSeDerivaEnUnEntornoExplicitoDeDesarrollo(): void
     {
-        $previo = [$_ENV['APP_ENV'] ?? null, $_ENV['APP_KEY'] ?? null];
+        $previo = [];
+        foreach (['APP_ENV', 'APP_KEY'] as $campo) { $previo[$campo] = [$_ENV[$campo] ?? null, getenv($campo)]; }
         try {
             unset($_ENV['APP_KEY']); putenv('APP_KEY');
             // Criterio ESTRICTO (Classes\Entorno): solo el valor exacto, en minúsculas y sin espacios, es de desarrollo/pruebas.
@@ -233,8 +234,12 @@ final class CorreccionesQaIntegrationTest extends TestCase
                 $this->assertSame(32, strlen(Secretos::clave('prueba')));
             }
         } finally {
-            $_ENV['APP_ENV'] = $previo[0] ?? 'testing'; putenv('APP_ENV=' . ($previo[0] ?? 'testing'));
-            if ($previo[1] !== null) { $_ENV['APP_KEY'] = $previo[1]; }
+            // Los procesos hijos heredan getenv(), mientras Secretos también consulta $_ENV.
+            // Restaurar ambos evita que la prueba cambie las claves HMAC de las siguientes clases.
+            foreach ($previo as $campo => [$env, $proceso]) {
+                if ($env === null) { unset($_ENV[$campo]); } else { $_ENV[$campo] = $env; }
+                if ($proceso === false) { putenv($campo); } else { putenv($campo . '=' . $proceso); }
+            }
         }
     }
 

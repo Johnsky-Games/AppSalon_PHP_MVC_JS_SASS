@@ -261,6 +261,12 @@ final class CrmRepository
     private function donde(array $c, array $f): array
     {
         $sql = ' WHERE ' . self::CLIENTE_SQL; $t = ''; $p = [];
+        // La pertenencia a clientes no elimina el perfil laboral: la base abre con clientes externos.
+        // El mismo filtro alcanza indicadores, listados y exportaciones, sin borrar membresías ni historial.
+        $vinculo = $f['vinculo'] ?? 'todos';
+        if ($vinculo === 'externo' || $vinculo === 'equipo') {
+            $sql .= " AND COALESCE(a.rol,IF(u.admin=1,'propietario','cliente'))" . ($vinculo === 'externo' ? "='cliente'" : "<>'cliente'");
+        }
         if (!empty($f['id'])) { $sql .= ' AND u.id=?'; $t .= 'i'; $p[] = (int)$f['id']; }
         $q = (string)($f['q'] ?? '');
         if ($q !== '') {
@@ -593,7 +599,7 @@ final class CrmRepository
      * Población RFM: clientes con >= 1 visita completada en la ventana. Recencia (días), frecuencia (visitas en la ventana)
      * y gasto neto real (centavos) en la ventana. @return array<int,array{id:int,recencia:int,frecuencia:int,gasto:int}>
      */
-    public function poblacionRfm(string $hoy, int $ventanaDias): array
+    public function poblacionRfm(string $hoy, int $ventanaDias, string $vinculo = 'todos'): array
     {
         $ini = (new \DateTimeImmutable($hoy))->modify('-' . max(1, $ventanaDias) . ' days')->format('Y-m-d');
         [$sql, $t, $p] = self::unir(
@@ -601,7 +607,7 @@ final class CrmRepository
                 . "FROM (SELECT usuarioId,MAX(fecha) ultima,COUNT(*) f FROM citas WHERE estado='completada' AND fecha BETWEEN ? AND ? GROUP BY usuarioId) x "
                 . "INNER JOIN usuarios u ON u.id=x.usuarioId LEFT JOIN usuario_accesos a ON a.usuario_id=u.id LEFT JOIN clientes cl ON cl.usuario_id=u.id LEFT JOIN (", 'sss', [$hoy, $ini, $hoy]),
             $this->gastoPorUsuario($ini, $hoy),
-            self::f(') g ON g.usuario=x.usuarioId WHERE ' . self::CLIENTE_SQL)
+            self::f(') g ON g.usuario=x.usuarioId WHERE ' . self::CLIENTE_SQL . ($vinculo === 'externo' ? " AND COALESCE(a.rol,IF(u.admin=1,'propietario','cliente'))='cliente'" : ($vinculo === 'equipo' ? " AND COALESCE(a.rol,IF(u.admin=1,'propietario','cliente'))<>'cliente'" : '')))
         );
         return array_map(static fn(array $r): array => ['id' => (int)$r['id'], 'recencia' => (int)$r['recencia'], 'frecuencia' => (int)$r['frecuencia'], 'gasto' => (int)$r['gasto']], $this->filas($sql, $t, $p));
     }

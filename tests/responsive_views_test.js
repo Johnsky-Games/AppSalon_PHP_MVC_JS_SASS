@@ -255,6 +255,8 @@ async function login(page, email, destination) {
             ['servicios', '/servicios', '#catalogo-servicios'],
             ['equipo-colaboradores', '/admin/equipo', '#equipo-invitar-titulo'],
             ['clientes-crm', '/admin/clientes', 'main'],
+            ['clientes-indicadores', '/admin/clientes/indicadores', '#crm-ind-titulo'],
+            ['recursos-humanos', '/admin/recursos-humanos', '#rh-directorio'],
             ['crear-servicio', '/servicios/crear', '#nombre'],
             ['actualizar-servicio', `/servicios/actualizar?id=${serviceId}`, '#nombre'],
             ['profesionales', '/profesionales', '#equipo-profesionales'],

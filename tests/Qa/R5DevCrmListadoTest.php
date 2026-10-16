@@ -92,7 +92,7 @@ final class R5DevCrmListadoTest extends QaCase
     public function test_panel_filtro_listado_y_descargas_recorren_el_mismo_universo(): void
     {
         $n = $this->nav('dueno');
-        $panel = $n->get('/admin/clientes?cuenta=confirmada');
+        $panel = $n->get('/admin/clientes/indicadores?cuenta=confirmada');
         $this->assertSame(200, $panel['status']);
         $this->assertStringContainsString('Quitar el filtro Cuenta: Confirmada', $panel['body']);
         $this->assertStringContainsString('Limpiar filtros', $panel['body']);
@@ -135,7 +135,7 @@ final class R5DevCrmListadoTest extends QaCase
     public function test_cada_indicador_con_enlace_abre_su_listado_con_la_misma_cifra(): void
     {
         $n = $this->nav('dueno');
-        $panel = $n->get('/admin/clientes');
+        $panel = $n->get('/admin/clientes/indicadores');
         preg_match_all('~<a class="crm-kpi__listado" href="([^"]+)">Ver listado de ([^<]+)</a>~u', $panel['body'], $m, PREG_SET_ORDER);
         $this->assertGreaterThanOrEqual(5, count($m), 'las cifras de clientes ofrecen su listado');
         foreach ($m as [, $href, $texto]) {
@@ -185,7 +185,7 @@ final class R5DevCrmListadoTest extends QaCase
     {
         $r = $this->nav('dueno')->get('/admin/clientes/listado?segmento=nuevo&orden=ultima&dir=desc&por_pagina=10');
         $this->assertSame(200, $r['status']);
-        foreach (['<h1 class="nombre-pagina"', 'aria-sort="descending"', 'role="status"', '<caption class="crm-sr">', 'aria-label="Paginación de clientes"', 'Volver a clientes'] as $t) { $this->assertStringContainsString($t, $r['body'], $t); }
+        foreach (['<h1 class="nombre-pagina"', 'aria-sort="descending"', 'role="status"', '<caption class="crm-sr">', 'aria-label="Paginación de clientes"', 'Volver a indicadores'] as $t) { $this->assertStringContainsString($t, $r['body'], $t); }
         $this->assertSame('no-store', $r['headers']['cache-control'][0] ?? '');
     }
 }

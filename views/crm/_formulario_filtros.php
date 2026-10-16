@@ -19,6 +19,7 @@ $centavosATexto = static fn($c): string => $c === null ? '' : number_format((int
     </fieldset>
     <?php endif; ?>
 
+    <div class="campo"><label for="crm-vinculo">Vínculo con el negocio</label><select id="crm-vinculo" name="vinculo"><?php foreach (CrmService::VINCULOS as $k => $et): ?><option value="<?= s($k) ?>"<?= $sel($f['vinculo'] ?? 'externo', $k) ?>><?= s($et) ?></option><?php endforeach; ?></select></div>
     <fieldset class="crm-grupo">
         <legend>Periodo y actividad</legend>
         <div class="campo"><label for="crm-desde">Periodo desde</label><input id="crm-desde" name="desde" type="date" value="<?= s($f['desde']) ?>" max="<?= s($panelHoy) ?>"></div>
@@ -81,7 +82,7 @@ $centavosATexto = static fn($c): string => $c === null ? '' : number_format((int
     <summary>Qué significa cada filtro</summary>
     <dl class="crm-dl">
         <?php foreach (CrmService::DEFINICIONES as $clave => $texto): if (!$analitica && in_array($clave, ['gasto', 'saldo'], true)) { continue; } if (!$completo && !in_array($clave, ['periodo'], true)) { continue; } ?>
-        <dt><?= s(['q' => 'Búsqueda', 'cuenta' => 'Cuenta', 'membresia' => 'Membresía de cliente', 'consentimiento' => 'Suscripción a comunicaciones comerciales', 'actividad' => 'Actividad comercial', 'segmento' => 'Segmento', 'alta' => 'Alta', 'ultima' => 'Última visita', 'proxima' => 'Próxima cita', 'profesional' => 'Atendido por', 'servicio' => 'Servicio recibido', 'frecuencia' => 'Frecuencia', 'gasto' => 'Gasto', 'saldo' => 'Saldo pendiente', 'periodo' => 'Periodo'][$clave] ?? $clave) ?></dt>
+        <dt><?= s(['vinculo' => 'Vínculo con el negocio', 'q' => 'Búsqueda', 'cuenta' => 'Cuenta', 'membresia' => 'Membresía de cliente', 'consentimiento' => 'Suscripción a comunicaciones comerciales', 'actividad' => 'Actividad comercial', 'segmento' => 'Segmento', 'alta' => 'Alta', 'ultima' => 'Última visita', 'proxima' => 'Próxima cita', 'profesional' => 'Atendido por', 'servicio' => 'Servicio recibido', 'frecuencia' => 'Frecuencia', 'gasto' => 'Gasto', 'saldo' => 'Saldo pendiente', 'periodo' => 'Periodo'][$clave] ?? $clave) ?></dt>
         <dd><?= s($texto) ?></dd>
         <?php endforeach; ?>
     </dl>

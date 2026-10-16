@@ -102,6 +102,10 @@ $router->get('/admin/reportes/exportar', [ReporteController::class, 'exportarCsv
 
 // Plataforma integral: identidad, operación y gestión comercial.
 $router->get('/admin/equipo', [\Controllers\EquipoController::class, 'index']);
+$router->get('/admin/recursos-humanos', [\Controllers\EquipoController::class, 'recursosHumanos']);
+$router->get('/admin/recursos-humanos/ficha', [\Controllers\EquipoController::class, 'fichaRh']);
+$router->post('/admin/recursos-humanos/ficha', [\Controllers\EquipoController::class, 'fichaRh']);
+$router->post('/admin/recursos-humanos/ficha/agenda', [\Controllers\EquipoController::class, 'fichaAgendaRh']);
 $router->post('/admin/equipo/crear', [\Controllers\EquipoController::class, 'crear']);
 $router->post('/admin/equipo/actualizar', [\Controllers\EquipoController::class, 'actualizar']);
 $router->post('/admin/equipo/invitar', [\Controllers\EquipoController::class, 'invitar']);
@@ -136,6 +140,7 @@ $router->post('/admin/ajustes', [\Controllers\AjustesController::class, 'index']
 
 // CRM de clientes (módulo CrmController: listado, ficha 360° y exportación).
 $router->get('/admin/clientes', [\Controllers\CrmController::class, 'index']);
+$router->get('/admin/clientes/indicadores', [\Controllers\CrmController::class, 'indicadores']);
 $router->get('/admin/clientes/ficha', [\Controllers\CrmController::class, 'ficha']);
 $router->get('/admin/clientes/exportar', [\Controllers\CrmController::class, 'exportar']);
 $router->get('/admin/clientes/auditoria', [\Controllers\CrmController::class, 'auditoria']);

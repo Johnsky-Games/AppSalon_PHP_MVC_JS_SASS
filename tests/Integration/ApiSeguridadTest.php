@@ -2,6 +2,8 @@
 
 namespace Tests\Integration;
 
+require_once __DIR__ . '/BaseDatosAislada.php';
+
 use PHPUnit\Framework\TestCase;
 use Model\ActiveRecord;
 use Model\Usuario;
@@ -18,18 +20,19 @@ use mysqli;
 class ApiSeguridadTest extends TestCase
 {
     private static ?mysqli $db = null;
+    private static ?mysqli $dbAnterior = null;
 
     public static function setUpBeforeClass(): void
     {
-        $host = getenv('DB_HOST') ?: 'appsalon-test-db';
-        $user = getenv('DB_USER') ?: 'root';
-        $pass = getenv('DB_PASS') ?: 'root';
-        $name = getenv('DB_NAME') ?: 'appsalon_test';
-        $port = (int)(getenv('DB_PORT') ?: 3306);
-
-        self::$db = new mysqli($host, $user, $pass, $name, $port);
-        self::$db->set_charset('utf8mb4');
+        self::$dbAnterior = ActiveRecord::getDB();
+        self::$db = BaseDatosAislada::crear('api');
         ActiveRecord::setDB(self::$db);
+    }
+
+    public static function tearDownAfterClass(): void
+    {
+        ActiveRecord::setDB(self::$dbAnterior);
+        if (self::$db) { BaseDatosAislada::destruir(self::$db); self::$db = null; }
     }
 
     protected function setUp(): void

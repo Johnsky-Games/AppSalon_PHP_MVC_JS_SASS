@@ -1,0 +1,51 @@
+// Directorios y captura semanal: una tarea principal por vista.
+.gestion-secciones {
+  display: flex; gap: .6rem; flex-wrap: wrap; border-bottom: 1px solid var(--ui-border);
+  padding-bottom: .8rem; margin: 1.6rem 0 2.4rem;
+  a { display: inline-flex; align-items: center; padding: 1rem 1.6rem; min-height: 4.4rem; border-radius: 1rem; color: var(--ui-muted); font-weight: 600; }
+  a[aria-current='page'] { color: var(--ui-accent); background: #eaf4f0; }
+}
+.gestion-busqueda {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .65fr) auto;
+  gap: 1.4rem; align-items: end; padding: 2rem; border: 1px solid var(--ui-border); border-radius: 1.6rem; background: #fff;
+  .campo { display: flex; flex-direction: column; gap: .6rem; min-width: 0; margin: 0; }
+  label { font-size: 1.4rem; font-weight: 600; }
+  input, select { width: 100%; min-width: 0; min-height: 4.4rem; border: 1px solid var(--ui-border); border-radius: .8rem; padding: .9rem 1.2rem; background: #fff; color: var(--ui-ink); font: inherit; }
+  .boton { margin: 0; min-height: 4.4rem; }
+  &--rh { grid-template-columns: minmax(0, 1fr) minmax(0, .5fr) minmax(0, .5fr) auto; }
+}
+.gestion-detalle {
+  margin-block: 1.6rem; padding: 1.6rem 1.8rem; border: 1px solid var(--ui-border); border-radius: 1.2rem; background: #fff;
+  > summary { cursor: pointer; min-height: 4.4rem; font-size: 1.5rem; font-weight: 600; color: var(--ui-accent); }
+  // El contenido nativo de details interrumpe la herencia del modelo de caja.
+  > * { box-sizing: border-box; }
+  &[open] > summary { margin-bottom: 1.4rem; }
+}
+.gestion-grupo-dias {
+  min-width: 0; padding: 1.6rem; border: 1px solid var(--ui-border); border-radius: 1.2rem;
+  legend { font-size: 1.6rem; font-weight: 650; padding-inline: .6rem; }
+  .boton { margin: 0; min-height: 4.4rem; }
+}
+.gestion-presets { display: flex; flex-wrap: wrap; gap: .6rem; margin-bottom: 1.2rem; .boton { font-size: 1.3rem; padding: .8rem 1.2rem; } }
+.gestion-dias {
+  display: flex; flex-wrap: wrap; gap: .6rem; margin-bottom: 1.6rem;
+  label { display: inline-flex; align-items: center; gap: .6rem; padding: .8rem 1rem; min-height: 4.4rem; border: 1px solid var(--ui-border); border-radius: .8rem; cursor: pointer; font-size: 1.35rem; }
+  label:has(input:checked) { background: #eaf4f0; color: var(--ui-accent); border-color: #9fc4b8; }
+  input[type='checkbox'] { width: 1.6rem; height: 1.6rem; min-height: 0; margin: 0; accent-color: var(--ui-accent); }
+}
+.gestion-intervalo { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); gap: 1.2rem; .campo { min-width: 0; } }
+.ag-grupos { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 34rem), 1fr)); gap: 1.4rem; }
+.gestion-total { display: inline-block; padding: .3rem .9rem; border-radius: 2rem; background: #eaf4f0; color: var(--ui-accent); font-size: 1.4rem; vertical-align: middle; }
+.gestion-acciones { display: flex; flex-wrap: wrap; gap: .8rem; }
+.gestion-abrir { display: inline-flex; align-items: center; min-height: 4.4rem; font-weight: 600; white-space: nowrap; }
+.crm-tabla .crm-tabla-clientes--compacta { min-width: 78rem; }
+.rh-tabla { min-width: 86rem; }
+@media (max-width: 900px) {
+  .gestion-busqueda, .gestion-busqueda--rh { grid-template-columns: 1fr 1fr; }
+  .gestion-busqueda .campo:first-child { grid-column: 1 / -1; }
+}
+@media (max-width: 540px) {
+  .gestion-busqueda, .gestion-busqueda--rh { grid-template-columns: 1fr; padding: 1.4rem; }
+  .gestion-grupo-dias { padding: 1.2rem; }
+  .gestion-secciones a { flex: 1; justify-content: center; text-align: center; padding-inline: 1rem; }
+}

@@ -1,7 +1,8 @@
+<?php $baseFicha = !empty($desdeRh) ? '/admin/recursos-humanos/ficha' : '/admin/equipo/ficha'; ?>
 <?php $etiquetaRol = ['propietario' => 'Propietario', 'gerente' => 'Gerencia', 'recepcion' => 'Recepción', 'profesional' => 'Profesional', 'finanzas' => 'Finanzas']; ?>
 <header class="ui-page-header"><p class="ui-eyebrow">Ficha laboral · privada</p><h1 class="nombre-pagina"><?= s($colaborador['nombre'] . ' ' . $colaborador['apellido']) ?></h1><p class="descripcion-pagina"><?= s($colaborador['codigo'] ?? '') ?> · <?= s($etiquetaRol[$colaborador['rol']] ?? $colaborador['rol']) ?> · <?= s($colaborador['estado']) ?>. Solo se muestra a quien tiene permiso de RR. HH.; nunca a clientes, recepción ni finanzas.</p></header>
 <?php include __DIR__ . '/../templates/barra.php'; include __DIR__ . '/../templates/alertas.php'; ?>
-<form method="POST" action="/admin/equipo/ficha?id=<?= s($colaborador['id']) ?>" class="formulario ui-card" data-una-vez>
+<form method="POST" action="<?= s($baseFicha) ?>?id=<?= s($colaborador['id']) ?>" class="formulario ui-card" data-una-vez>
 <input type="hidden" name="csrf_token" value="<?= s(csrf_token()) ?>">
 <div class="campo"><label for="f-email">Correo</label><input id="f-email" value="<?= s($colaborador['email']) ?>" disabled></div>
 <div class="campo"><label for="f-telefono">Teléfono</label><input id="f-telefono" name="telefono" inputmode="numeric" pattern="[0-9]{7,10}" maxlength="10" value="<?= s($colaborador['telefono'] ?? '') ?>"></div>
@@ -19,7 +20,7 @@
 <?php if ($agenda['activo']) { ?><span class="ui-badge">Visible en reservas</span><?php } else { ?><span class="ui-badge ui-badge--warning">Inactiva: no aparece en disponibilidad ni reservas</span><?php } ?></p>
 <?php if (!$agenda['activo'] && $colaborador['estado'] === 'invitado') { ?><p class="ui-form-help">Esta persona aún no aceptó su invitación. Lo que definas aquí queda guardado y entrará en vigor al activarse su ficha.</p><?php } ?>
 <?php if (empty($agenda['puedeEditar'])) { ?><p class="ui-form-help">Tu rol puede consultar esta configuración, pero no modificarla.</p><?php } ?>
-<form method="POST" action="/admin/equipo/ficha/agenda?id=<?= s($colaborador['id']) ?>" class="formulario" data-una-vez>
+<form method="POST" action="<?= s($baseFicha) ?>/agenda?id=<?= s($colaborador['id']) ?>" class="formulario" data-una-vez>
 <input type="hidden" name="csrf_token" value="<?= s(csrf_token()) ?>">
 <input type="hidden" name="idem_key" value="<?= s(clave_operacion_formulario()) ?>">
 <?php include __DIR__ . '/_agenda_asistente.php'; ?>
@@ -27,4 +28,4 @@
 </form>
 </section>
 <?php } ?>
-<div class="acciones"><a href="/admin/equipo" class="ui-back-link">← Volver al equipo</a></div>
+<div class="acciones"><a href="<?= !empty($desdeRh) ? '/admin/recursos-humanos' : '/admin/equipo' ?>" class="ui-back-link">← <?= !empty($desdeRh) ? 'Volver a Recursos Humanos' : 'Volver al equipo' ?></a></div>

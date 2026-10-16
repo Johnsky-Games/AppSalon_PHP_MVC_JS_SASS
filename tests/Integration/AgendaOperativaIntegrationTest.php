@@ -1,6 +1,8 @@
 <?php
 namespace Tests\Integration;
 
+require_once __DIR__ . '/BaseDatosAislada.php';
+
 use Model\ActiveRecord;
 use PHPUnit\Framework\TestCase;
 use Repositories\CitaRepository;
@@ -9,6 +11,8 @@ use Services\CitaService;
 
 final class AgendaOperativaIntegrationTest extends TestCase
 {
+    private static string $base;
+    private static ?\mysqli $admin = null;
     private \mysqli $db;
     private ?\mysqli $previa = null;
     private CitaService $service;
@@ -17,10 +21,22 @@ final class AgendaOperativaIntegrationTest extends TestCase
     private array $citas = [];
     private int $prof;
     private int $servicio;
+    public static function setUpBeforeClass(): void
+    {
+        self::$admin = BaseDatosAislada::crear('agenda');
+        self::$base = BaseDatosAislada::nombre(self::$admin);
+    }
+
+    public static function tearDownAfterClass(): void
+    {
+        if (self::$admin) { BaseDatosAislada::destruir(self::$admin); self::$admin = null; }
+    }
+
     protected function setUp(): void
     {
         $this->previa = ActiveRecord::getDB();
-        $this->db = new \mysqli(getenv('DB_HOST') ?: '127.0.0.1', getenv('DB_USER') ?: 'root', getenv('DB_PASS') ?: 'root', getenv('DB_NAME') ?: 'appsalon_test', (int)(getenv('DB_PORT') ?: 3306));
+        $this->db = new \mysqli(getenv('DB_HOST') ?: '127.0.0.1', getenv('DB_USER') ?: 'root', getenv('DB_PASS') ?: 'root', self::$base, (int)(getenv('DB_PORT') ?: 3306));
+        validar_base_datos_prueba($this->db);
         $this->db->set_charset('utf8mb4'); ActiveRecord::setDB($this->db);
         for ($i = 0; $i < 3; $i++) {
             $email = 'agenda-' . bin2hex(random_bytes(8)) . '@test.local';

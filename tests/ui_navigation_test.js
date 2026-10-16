@@ -17,6 +17,11 @@ if (screenshotDir) fs.mkdirSync(screenshotDir, { recursive: true });
 const css = sass.compile(path.join(root, 'src/scss/app.scss'), { style: 'expanded', loadPaths: [path.join(root, 'src/scss')] }).css;
 const javascript = fs.readFileSync(path.join(root, 'src/js/ui.js'));
 const companyName = 'Estudio de bienestar, belleza y cuidado personal de nuestra comunidad';
+const ownerRoutes = [
+    '/admin', '/agenda', '/caja', '/servicios', '/servicios/crear', '/profesionales',
+    '/admin/recursos-humanos', '/admin/equipo', '/admin/finanzas', '/admin/inventario',
+    '/admin/reportes', '/admin/crecimiento', '/admin/clientes', '/admin/clientes/indicadores', '/admin/ajustes', '/perfil'
+];
 const fixture = `<?php
 namespace Repositories {
     class CrecimientoRepository {
@@ -68,7 +73,7 @@ const server = http.createServer((request, response) => {
             await page.goto(`${baseUrl}/admin/ajustes`, { waitUntil: 'load' });
             if (screenshotDir) await page.screenshot({ path: path.join(screenshotDir, `navigation-${width}-${height}.png`), fullPage: true });
             assert.equal(await page.$eval('.ui-brand > span:last-child', node => node.firstChild.textContent), companyName);
-            assert.equal(await page.$$eval('.ui-nav-link', links => links.length), 14, 'El propietario conserva todos sus enlaces (incluye Clientes y la sección Caja de la ronda 5)');
+            assert.deepEqual(await page.$$eval('.ui-nav-link', links => links.map(link => link.getAttribute('href'))), ownerRoutes, 'El propietario dispone de sus accesos, incluidos Recursos Humanos e indicadores de clientes');
             assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, `Sin desbordamiento horizontal a ${width}×${height}`);
             if (width <= 1024) {
                 assert.equal(await page.$eval('#ui-navigation-panel', node => node.hidden), true, 'Panel móvil inicialmente cerrado');
@@ -97,15 +102,15 @@ const server = http.createServer((request, response) => {
                 }), true, 'El último enlace es alcanzable con teclado incluso en pantalla baja');
             }
         }
-        for (const [route, active] of [['/servicios/crear', '/servicios/crear'], ['/servicios/crear/', '/servicios/crear'], ['/servicios/actualizar', '/servicios'], ['/profesionales/horarios', '/profesionales'], ['/admin/finanzas', '/admin/finanzas']]) {
+        for (const [route, active] of [['/servicios/crear', '/servicios/crear'], ['/servicios/crear/', '/servicios/crear'], ['/servicios/actualizar', '/servicios'], ['/profesionales/horarios', '/profesionales'], ['/admin/finanzas', '/admin/finanzas'], ['/admin/recursos-humanos', '/admin/recursos-humanos'], ['/admin/recursos-humanos/ficha', '/admin/recursos-humanos'], ['/admin/clientes/indicadores', '/admin/clientes/indicadores']]) {
             await page.goto(baseUrl + route, { waitUntil: 'load' });
             assert.deepEqual(await page.$$eval('[aria-current="page"]', links => links.map(link => link.getAttribute('href'))), [active], `Una sola sección activa en ${route}`);
         }
         for (const [role, routes, home] of [
             ['cliente', ['/cita', '/mis-citas', '/perfil', '/mi-bienestar'], '/cita'],
             ['profesional', ['/agenda', '/admin/clientes', '/perfil'], '/agenda'],
-            ['recepcion', ['/admin', '/agenda', '/admin/clientes', '/perfil'], '/admin'],
-            ['finanzas', ['/caja', '/admin/finanzas', '/admin/inventario', '/admin/reportes', '/admin/clientes', '/perfil'], '/admin/finanzas']
+            ['recepcion', ['/admin', '/agenda', '/admin/clientes', '/admin/clientes/indicadores', '/perfil'], '/admin'],
+            ['finanzas', ['/caja', '/admin/finanzas', '/admin/inventario', '/admin/reportes', '/admin/clientes/indicadores', '/perfil'], '/admin/finanzas']
         ]) {
             await page.goto(`${baseUrl}/perfil?role=${role}`, { waitUntil: 'load' });
             assert.deepEqual(await page.$$eval('.ui-nav-link', links => links.map(link => link.getAttribute('href'))), routes, `El rol ${role} ve sus accesos permitidos`);

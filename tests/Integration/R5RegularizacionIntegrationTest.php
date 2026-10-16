@@ -1,6 +1,8 @@
 <?php
 namespace Tests\Integration;
 
+require_once __DIR__ . '/BaseDatosAislada.php';
+
 require_once __DIR__ . '/R5CajaFixture.php';
 
 use Model\ActiveRecord;
@@ -21,13 +23,28 @@ use Services\RegularizacionAtencionService;
  */
 final class R5RegularizacionIntegrationTest extends TestCase
 {
+    private static string $base;
+    private static ?\mysqli $admin = null;
     private \mysqli $db;
+    private ?\mysqli $dbAnterior = null;
     private int $dueno; private int $gerente; private int $recepcion; private int $finanzas; private int $cliente;
     private int $profUsuario; private int $profOtroUsuario; private int $prof; private int $profOtro;
 
+    public static function setUpBeforeClass(): void
+    {
+        self::$admin = BaseDatosAislada::crear('regularizacion');
+        self::$base = BaseDatosAislada::nombre(self::$admin);
+    }
+
+    public static function tearDownAfterClass(): void
+    {
+        if (self::$admin) { BaseDatosAislada::destruir(self::$admin); self::$admin = null; }
+    }
+
     protected function setUp(): void
     {
-        $this->db = new \mysqli(getenv('DB_HOST') ?: 'appsalon-test-db', getenv('DB_USER') ?: 'root', getenv('DB_PASS') ?: 'root', getenv('DB_NAME') ?: 'appsalon_test', (int)(getenv('DB_PORT') ?: 3306));
+        $this->dbAnterior = ActiveRecord::getDB();
+        $this->db = new \mysqli(getenv('DB_HOST') ?: 'appsalon-test-db', getenv('DB_USER') ?: 'root', getenv('DB_PASS') ?: 'root', self::$base, (int)(getenv('DB_PORT') ?: 3306));
         $this->db->set_charset('utf8mb4');
         ActiveRecord::setDB($this->db);
         validar_base_datos_prueba($this->db);
@@ -48,6 +65,8 @@ final class R5RegularizacionIntegrationTest extends TestCase
     {
         // Hijos primero y solo lo creado por esta prueba (la clave foránea RESTRICT impide borrar citas con regularización).
         $this->db->query("DELETE r FROM citas_regularizaciones r JOIN citas c ON c.id=r.cita_id WHERE c.usuarioId={$this->cliente}");
+        ActiveRecord::setDB($this->dbAnterior);
+        $this->db->close();
     }
 
     // ------------------------------------------------------------------------------------------------ utilidades

@@ -900,6 +900,33 @@ class ProfesionalRepository
         });
     }
 
+    /** Aplica un intervalo a varios días en una sola transacción; conserva los días y descansos ajenos al cambio. */
+    public function aplicarGrupoSemanal(int $profesionalId, array $dias, string $tipo, string $inicio, string $fin, ?string $motivo): void
+    {
+        $db = $this->resolveDb();
+        \Classes\Transaccion::ejecutar($db, function (mysqli $db) use ($profesionalId, $dias, $tipo, $inicio, $fin, $motivo): void {
+            if (!$this->bloquearProfesionalParaMutacion($db, $profesionalId)) { throw new \DomainException('La ficha profesional no existe.', 404); }
+            $franjas = []; $descansos = [];
+            foreach ($this->findHorariosByProfesional($profesionalId) as $h) {
+                if ($tipo === 'horario' && in_array((int)$h->dia_semana, $dias, true)) { continue; }
+                $franjas[(int)$h->dia_semana][] = ['inicio' => $h->hora_inicio, 'fin' => $h->hora_fin];
+            }
+            foreach ($this->findDescansosByProfesional($profesionalId) as $d) {
+                // Repetir la misma pausa no crea duplicados; sí permite actualizar su motivo.
+                if ($tipo === 'descanso' && in_array((int)$d->dia_semana, $dias, true)
+                    && substr($d->hora_inicio, 0, 5) === $inicio && substr($d->hora_fin, 0, 5) === $fin) { continue; }
+                $descansos[(int)$d->dia_semana][] = ['inicio' => $d->hora_inicio, 'fin' => $d->hora_fin, 'motivo' => (string)($d->motivo ?? '')];
+            }
+            foreach ($dias as $dia) {
+                if ($tipo === 'horario') { $franjas[$dia][] = ['inicio' => $inicio, 'fin' => $fin]; }
+                else { $descansos[$dia][] = ['inicio' => $inicio, 'fin' => $fin, 'motivo' => $motivo ?? '']; }
+            }
+            $validacion = \Services\AgendaSemanalValidador::normalizar($franjas, $descansos);
+            if ($validacion['errores']) { throw new \DomainException(implode(' ', $validacion['errores']), 422); }
+            $this->reemplazarConfiguracionAgenda($profesionalId, null, $validacion['franjas'], $validacion['descansos']);
+        });
+    }
+
     /**
      * @param int[] $servicioIds
      * @throws \DomainException

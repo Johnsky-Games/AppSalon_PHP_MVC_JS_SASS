@@ -40,14 +40,17 @@ function catalogo_destinos(): array
         'caja_comprobante'  => ['equipo', '/caja/comprobante', ['finanzas.gestionar'], ['id' => 'id']],
         'finanzas'          => ['equipo', '/admin/finanzas', ['finanzas.gestionar'], ['inicio' => 'fecha', 'fin' => 'fecha', 'pagina' => 'entero']],
         'clientes'          => ['equipo', '/admin/clientes', $verClientes, [
-            'q' => 'texto', 'pagina' => 'entero', 'desde' => 'fecha', 'hasta' => 'fecha', 'membresia' => 'texto', 'confirmado' => 'texto', 'consentimiento' => 'texto',
+            'vinculo' => 'enum:externo,equipo,todos', 'q' => 'texto', 'pagina' => 'entero', 'desde' => 'fecha', 'hasta' => 'fecha', 'membresia' => 'texto', 'confirmado' => 'texto', 'consentimiento' => 'texto',
             'actividad' => 'texto', 'segmento' => 'texto', 'profesional' => 'id', 'orden' => 'texto', 'dir' => 'enum:asc,desc']],
+        'clientes_indicadores' => ['equipo', '/admin/clientes/indicadores', ['clientes.ver', 'clientes.analitica'], $rango + ['vinculo' => 'enum:externo,equipo,todos']],
         'clientes_ficha'    => ['equipo', '/admin/clientes/ficha', $verClientes, ['id' => 'id']],
         'clientes_nuevo'    => ['equipo', '/admin/clientes/nuevo', ['clientes.ver'], []],
         'servicios'         => ['equipo', '/servicios', ['servicios.gestionar'], []],
         'servicio_nuevo'    => ['equipo', '/servicios/crear', ['servicios.gestionar'], []],
         'profesionales'     => ['equipo', '/profesionales', ['profesionales.gestionar'], []],
         'profesional_horarios' => ['equipo', '/profesionales/horarios', ['profesionales.gestionar'], ['id' => 'id']],
+        'rh'                => ['equipo', '/admin/recursos-humanos', ['rh.gestionar'], ['q' => 'texto', 'rol' => 'enum:propietario,gerente,recepcion,profesional,finanzas', 'estado' => 'enum:invitado,activo,suspendido,baja', 'pagina' => 'entero']],
+        'rh_ficha'          => ['equipo', '/admin/recursos-humanos/ficha', ['rh.gestionar'], ['id' => 'id']],
         'equipo'            => ['equipo', '/admin/equipo', ['equipo.gestionar'], []],
         'equipo_ficha'      => ['equipo', '/admin/equipo/ficha', ['rh.gestionar'], ['id' => 'id']],
         'equipo_reasignar'  => ['equipo', '/admin/equipo/reasignar', ['agenda.gestionar'], ['id' => 'id']],
@@ -222,7 +225,7 @@ function etiqueta_destino(string $clave): string
         'caja' => 'Volver a caja', 'caja_cita' => 'Volver al cobro', 'caja_comprobante' => 'Volver al comprobante',
         'finanzas' => 'Volver a finanzas', 'clientes' => 'Volver a clientes', 'clientes_ficha' => 'Volver a la ficha del cliente',
         'servicios' => 'Volver a servicios', 'profesionales' => 'Volver a profesionales', 'profesional_horarios' => 'Volver a los horarios',
-        'equipo' => 'Volver al equipo', 'equipo_ficha' => 'Volver a la ficha laboral', 'inventario' => 'Volver al inventario',
+        'rh' => 'Volver a Recursos Humanos', 'rh_ficha' => 'Volver a la ficha laboral', 'clientes_indicadores' => 'Volver a indicadores de clientes', 'equipo' => 'Volver al equipo', 'equipo_ficha' => 'Volver a la ficha laboral', 'inventario' => 'Volver al inventario',
         'reportes' => 'Volver a reportes', 'crecimiento' => 'Volver a crecimiento', 'ajustes' => 'Volver a ajustes',
         'cliente_citas' => 'Volver a mis citas', 'cliente_reservar' => 'Volver a reservar', 'cliente_bienestar' => 'Volver a mi bienestar',
         'perfil' => 'Volver a mi perfil',
@@ -332,7 +335,7 @@ function navegacion_portal(string $portal): array
         return [$ruta, $texto, $icono, $clave];
     };
     $clientes = null;
-    foreach ([['clientes.ver', 'Clientes', 'users'], ['clientes.analitica', 'Analítica de clientes', 'chart'], ['clientes.ver_propios', 'Mis clientes', 'users']] as [$permiso, $texto, $icono]) {
+    foreach ([['clientes.ver', 'Clientes', 'users'], ['clientes.ver_propios', 'Mis clientes', 'users']] as [$permiso, $texto, $icono]) {
         if ($puede($permiso)) { $clientes = $enlace('clientes', $texto, $icono); break; }
     }
     $grupos = [
@@ -340,10 +343,11 @@ function navegacion_portal(string $portal): array
             $enlace('admin_citas', 'Citas del día', 'calendar'), $enlace('agenda', 'Agenda', 'calendar'), $enlace('caja', 'Caja', 'chart', true)]],
         ['titulo' => 'Servicios y equipo', 'enlaces' => [
             $enlace('servicios', 'Servicios', 'sparkles'), $enlace('servicio_nuevo', 'Nuevo Servicio', 'plus'),
-            $enlace('profesionales', 'Profesionales', 'users'), $enlace('equipo', 'Equipo y Permisos', 'users')]],
+            $enlace('profesionales', 'Profesionales', 'users')]],
+        ['titulo' => 'Personas', 'enlaces' => [$enlace('rh', 'Recursos Humanos', 'users'), $enlace('equipo', 'Equipo y Permisos', 'users')]],
         ['titulo' => 'Gestión comercial', 'enlaces' => [
             $enlace('finanzas', 'Finanzas', 'chart'), $enlace('inventario', 'Inventario', 'check'), $enlace('reportes', 'Reportes', 'chart'),
-            $enlace('crecimiento', 'Crecimiento y fidelidad', 'sparkles'), $clientes]],
+            $enlace('crecimiento', 'Crecimiento y fidelidad', 'sparkles'), $clientes, $enlace('clientes_indicadores', 'Indicadores de clientes', 'chart')]],
         ['titulo' => 'Ajustes del negocio', 'enlaces' => [$enlace('ajustes', 'Ajustes del negocio', 'check')]],
         ['titulo' => 'Mi cuenta', 'enlaces' => [['/perfil', 'Mi cuenta', 'users', 'perfil']]],
     ];

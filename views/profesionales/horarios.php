@@ -15,6 +15,14 @@ include __DIR__ . '/../templates/alertas.php';
 </div>
 
 <h2 class="ui-section-title">1. Horario Semanal</h2><p class="ui-form-help">Activa los días de atención. Añade varias franjas para organizar jornadas divididas.</p>
+<?php $previoGrupos = ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' ? $_POST : []; ?>
+<form action="/profesionales/horarios?id=<?= (int)$profesional->id ?>" method="POST" class="formulario ui-card">
+    <input type="hidden" name="csrf_token" value="<?= s(csrf_token()) ?>">
+    <input type="hidden" name="accion" value="horario_grupo">
+    <?php $grupo = ['prefijo' => 'jornada', 'tipo' => 'horario', 'previo' => ($previoGrupos['accion'] ?? '') === 'horario_grupo' ? $previoGrupos : []]; include __DIR__ . '/../templates/_grupo_dias.php'; ?>
+</form>
+<details class="gestion-detalle"<?= !empty($alertas['error']) && ($previoGrupos['accion'] ?? '') === 'guardar_horarios' ? ' open' : '' ?>>
+<summary>Ajustar horarios por día</summary>
 <form action="/profesionales/horarios?id=<?php echo s($profesional->id); ?>" method="POST" class="formulario ui-card" id="form-horarios-semanales">
     <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
     <input type="hidden" name="accion" value="guardar_horarios">
@@ -206,10 +214,17 @@ include __DIR__ . '/../templates/alertas.php';
     });
 })();
 </script>
+</details>
 
 <hr>
 
 <h2 class="ui-section-title">2. Descansos Semanales</h2><p class="ui-form-help">Reserva tiempo para almuerzos y pausas recurrentes; no se ofrecerán citas en estos intervalos.</p>
+<form action="/profesionales/horarios?id=<?= (int)$profesional->id ?>" method="POST" class="formulario ui-card">
+    <input type="hidden" name="csrf_token" value="<?= s(csrf_token()) ?>">
+    <input type="hidden" name="accion" value="descanso_grupo">
+    <?php $grupo = ['prefijo' => 'pausa', 'tipo' => 'descanso', 'previo' => ($previoGrupos['accion'] ?? '') === 'descanso_grupo' ? $previoGrupos : []]; include __DIR__ . '/../templates/_grupo_dias.php'; ?>
+</form>
+<details class="gestion-detalle"><summary>Añadir descanso para un solo día</summary>
 <form action="/profesionales/descansos/crear?id=<?php echo s($profesional->id); ?>" method="POST" class="formulario ui-card" id="form-crear-descanso">
     <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
     <input type="hidden" name="accion" value="crear_descanso">
@@ -238,6 +253,8 @@ include __DIR__ . '/../templates/alertas.php';
 
     <input type="submit" value="Añadir Descanso" class="boton">
 </form>
+
+</details>
 
 <?php if (empty($descansos)) { ?><p class="ui-empty">No hay descansos registrados para este profesional.</p><?php } ?>
 <ul class="servicios descansos-lista ui-grid">

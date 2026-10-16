@@ -355,11 +355,11 @@ final class R5DevPortalesTest extends R5DevPortalesCase
     public function test_el_menu_muestra_solo_lo_que_el_servidor_permite_a_cada_rol_y_marca_la_seccion_actual(): void
     {
         $esperado = [
-            'propietario' => ['/admin', '/agenda', '/servicios', '/servicios/crear', '/profesionales', '/admin/equipo', '/admin/finanzas', '/admin/inventario', '/admin/reportes', '/admin/crecimiento', '/admin/clientes', '/admin/ajustes', '/perfil'],
-            'gerente' => ['/admin', '/agenda', '/servicios', '/servicios/crear', '/profesionales', '/admin/finanzas', '/admin/inventario', '/admin/reportes', '/admin/crecimiento', '/admin/clientes', '/admin/ajustes', '/perfil'],
-            'recepcion' => ['/admin', '/agenda', '/admin/clientes', '/perfil'],
+            'propietario' => ['/admin', '/agenda', '/servicios', '/servicios/crear', '/profesionales', '/admin/recursos-humanos', '/admin/equipo', '/admin/finanzas', '/admin/inventario', '/admin/reportes', '/admin/crecimiento', '/admin/clientes', '/admin/clientes/indicadores', '/admin/ajustes', '/perfil'],
+            'gerente' => ['/admin', '/agenda', '/servicios', '/servicios/crear', '/profesionales', '/admin/finanzas', '/admin/inventario', '/admin/reportes', '/admin/crecimiento', '/admin/clientes', '/admin/clientes/indicadores', '/admin/ajustes', '/perfil'],
+            'recepcion' => ['/admin', '/agenda', '/admin/clientes', '/admin/clientes/indicadores', '/perfil'],
             'profesional' => ['/agenda', '/admin/clientes', '/perfil'],
-            'finanzas' => ['/admin/finanzas', '/admin/inventario', '/admin/reportes', '/admin/clientes', '/perfil'],
+            'finanzas' => ['/admin/finanzas', '/admin/inventario', '/admin/reportes', '/admin/clientes/indicadores', '/perfil'],
         ];
         foreach ($esperado as $rol => $hrefs) {
             $n = self::entrar(self::$base, 'equipo', self::$roles[$rol]);
@@ -370,7 +370,7 @@ final class R5DevPortalesTest extends R5DevPortalesCase
             foreach (self::EXCLUSIVAS_CLIENTE as $x) { $this->assertNotContains($x, $this->navHrefs($pag), "$rol no ve $x"); }
         }
         $n = self::entrar(self::$base, 'equipo', self::$dueno);
-        foreach (['/servicios/crear' => '/servicios/crear', '/servicios' => '/servicios', '/admin/finanzas' => '/admin/finanzas', '/admin' => '/admin', '/profesionales/horarios?id=1' => '/profesionales'] as $ruta => $activo) {
+        foreach (['/servicios/crear' => '/servicios/crear', '/servicios' => '/servicios', '/admin/finanzas' => '/admin/finanzas', '/admin' => '/admin', '/profesionales/horarios?id=1' => '/profesionales', '/admin/clientes' => '/admin/clientes', '/admin/clientes/indicadores' => '/admin/clientes/indicadores', '/admin/recursos-humanos' => '/admin/recursos-humanos'] as $ruta => $activo) {
             $pag = $n->get($ruta)['body'];
             preg_match_all('~<a href="([^"]+)" class="ui-nav-link is-active" aria-current="page"~', $pag, $m);
             $this->assertSame([$activo], $m[1], "sección activa en $ruta");
@@ -383,7 +383,7 @@ final class R5DevPortalesTest extends R5DevPortalesCase
 
     public function test_escaner_de_enlaces_las_pantallas_de_cada_portal_no_enlazan_al_otro(): void
     {
-        $equipo = ['/admin', '/agenda', '/admin/finanzas', '/admin/clientes', '/admin/reportes', '/servicios', '/servicios/crear', '/profesionales', '/profesionales/crear', '/admin/equipo', '/admin/inventario', '/admin/crecimiento', '/admin/ajustes', '/perfil', '/ruta-que-no-existe', '/admin/clientes/nuevo'];
+        $equipo = ['/admin', '/agenda', '/admin/finanzas', '/admin/clientes', '/admin/clientes/indicadores', '/admin/recursos-humanos', '/admin/reportes', '/servicios', '/servicios/crear', '/profesionales', '/profesionales/crear', '/admin/equipo', '/admin/inventario', '/admin/crecimiento', '/admin/ajustes', '/perfil', '/ruta-que-no-existe', '/admin/clientes/nuevo'];
         $revisadas = 0;
         foreach (self::INICIO as $rol => $_) {
             $n = self::entrar(self::$base, 'equipo', self::$roles[$rol]);
