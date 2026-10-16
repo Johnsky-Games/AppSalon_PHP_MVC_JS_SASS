@@ -2,6 +2,8 @@
 
 namespace Tests\Integration;
 
+require_once __DIR__ . '/BaseDatosAislada.php';
+
 use AppTerminationException;
 use Controllers\APIController;
 use Model\ActiveRecord;
@@ -36,6 +38,7 @@ use Services\ServicioService;
 class ReservaConcurrenciaIntegrationTest extends TestCase
 {
     private static ?mysqli $db = null;
+    private static ?mysqli $dbAnterior = null;
     private static string $host;
     private static string $user;
     private static string $pass;
@@ -47,12 +50,17 @@ class ReservaConcurrenciaIntegrationTest extends TestCase
         self::$host = getenv('DB_HOST') ?: 'appsalon-test-db';
         self::$user = getenv('DB_USER') ?: 'root';
         self::$pass = getenv('DB_PASS') ?: 'root';
-        self::$dbName = getenv('DB_NAME') ?: 'appsalon_test';
         self::$port = (int)(getenv('DB_PORT') ?: 3306);
-
-        self::$db = new mysqli(self::$host, self::$user, self::$pass, self::$dbName, self::$port);
-        self::$db->set_charset('utf8mb4');
+        self::$dbAnterior = ActiveRecord::getDB();
+        self::$db = BaseDatosAislada::crear('reservas');
+        self::$dbName = BaseDatosAislada::nombre(self::$db);
         ActiveRecord::setDB(self::$db);
+    }
+
+    public static function tearDownAfterClass(): void
+    {
+        ActiveRecord::setDB(self::$dbAnterior);
+        if (self::$db) { BaseDatosAislada::destruir(self::$db); self::$db = null; }
     }
 
     protected function setUp(): void

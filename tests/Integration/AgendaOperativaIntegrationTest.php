@@ -1,6 +1,8 @@
 <?php
 namespace Tests\Integration;
 
+require_once __DIR__ . '/BaseDatosAislada.php';
+
 use Model\ActiveRecord;
 use PHPUnit\Framework\TestCase;
 use Repositories\CitaRepository;
@@ -21,23 +23,15 @@ final class AgendaOperativaIntegrationTest extends TestCase
     private int $servicio;
     public static function setUpBeforeClass(): void
     {
-        // Esta clase cuenta eventos exactos. Los arneses que reutilizan ids de citas no deben aportar historial ajeno.
-        self::$base = 'appsalon_agenda_operativa_' . bin2hex(random_bytes(5)) . '_test';
-        self::$admin = new \mysqli(getenv('DB_HOST') ?: '127.0.0.1', getenv('DB_USER') ?: 'root', getenv('DB_PASS') ?: 'root', '', (int)(getenv('DB_PORT') ?: 3306));
-        self::assertTrue(self::$admin->query('CREATE DATABASE ' . self::$base . ' CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci'));
-        self::$admin->select_db(self::$base); validar_base_datos_prueba(self::$admin);
-        self::assertTrue(self::$admin->multi_query((string)file_get_contents(__DIR__ . '/../../database/schema_base.sql')));
-        do { if ($r = self::$admin->store_result()) { $r->free(); } } while (self::$admin->more_results() && self::$admin->next_result());
-        $p = proc_open([PHP_BINARY, __DIR__ . '/../../database/migrador.php', 'up'], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null,
-            array_merge(getenv(), ['DB_NAME' => self::$base]));
-        self::assertIsResource($p);
-        $out = stream_get_contents($pipes[1]); $err = stream_get_contents($pipes[2]); fclose($pipes[1]); fclose($pipes[2]);
-        self::assertSame(0, proc_close($p), $out . $err);
+        self::$admin = BaseDatosAislada::crear('agenda');
+        self::$base = BaseDatosAislada::nombre(self::$admin);
     }
+
     public static function tearDownAfterClass(): void
     {
-        if (self::$admin) { self::$admin->query('DROP DATABASE IF EXISTS ' . self::$base); self::$admin->close(); self::$admin = null; }
+        if (self::$admin) { BaseDatosAislada::destruir(self::$admin); self::$admin = null; }
     }
+
     protected function setUp(): void
     {
         $this->previa = ActiveRecord::getDB();
