@@ -10,6 +10,7 @@ use Services\CitaService;
 final class AgendaOperativaIntegrationTest extends TestCase
 {
     private \mysqli $db;
+    private ?\mysqli $previa = null;
     private CitaService $service;
     private CitaRepository $repo;
     private array $usuarios = [];
@@ -18,6 +19,7 @@ final class AgendaOperativaIntegrationTest extends TestCase
     private int $servicio;
     protected function setUp(): void
     {
+        $this->previa = ActiveRecord::getDB();
         $this->db = new \mysqli(getenv('DB_HOST') ?: '127.0.0.1', getenv('DB_USER') ?: 'root', getenv('DB_PASS') ?: 'root', getenv('DB_NAME') ?: 'appsalon_test', (int)(getenv('DB_PORT') ?: 3306));
         $this->db->set_charset('utf8mb4'); ActiveRecord::setDB($this->db);
         for ($i = 0; $i < 3; $i++) {
@@ -46,6 +48,7 @@ final class AgendaOperativaIntegrationTest extends TestCase
         $this->db->query("DELETE FROM profesionales WHERE id = {$this->prof}");
         $this->db->query("DELETE FROM servicios WHERE id = {$this->servicio}");
         foreach ($this->usuarios as $id) $this->db->query("DELETE FROM usuarios WHERE id = $id");
+        ActiveRecord::setDB($this->previa);
         $this->db->close();
     }
     public function testReprogramarPreservaPrecioEstadoPagoYIdRechazaSolapamientoYAjeno(): void

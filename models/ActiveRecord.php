@@ -301,7 +301,8 @@ class ActiveRecord
      */
     private const TABLAS_PROTEGIDAS = [
         'citas', 'citasservicios', 'citas_regularizaciones', 'usuarios', 'clientes', 'pagos', 'comprobantes', 'cobros_eventos',
-        'cobros_devoluciones', 'caja_movimientos', 'comisiones_movimientos', 'agenda_eventos', 'equipo_auditoria',
+        'cobros_devoluciones', 'caja_movimientos', 'comisiones_movimientos', 'agenda_eventos', 'citas_reasignaciones',
+        'fidelidad_movimientos', 'equipo_auditoria',
     ];
 
     // Eliminar un Registro por su ID usando consulta preparada

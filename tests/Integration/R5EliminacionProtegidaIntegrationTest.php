@@ -176,7 +176,7 @@ final class R5EliminacionProtegidaIntegrationTest extends TestCase
     {
         $lista = (new \ReflectionClassConstant(ActiveRecord::class, 'TABLAS_PROTEGIDAS'))->getValue();
         $obligatorias = ['citas', 'citasservicios', 'citas_regularizaciones', 'usuarios', 'clientes', 'pagos', 'comprobantes', 'cobros_eventos',
-            'cobros_devoluciones', 'caja_movimientos', 'comisiones_movimientos', 'agenda_eventos', 'equipo_auditoria'];
+            'cobros_devoluciones', 'caja_movimientos', 'comisiones_movimientos', 'agenda_eventos', 'citas_reasignaciones', 'fidelidad_movimientos', 'equipo_auditoria'];
         $this->assertSame([], array_values(array_diff($obligatorias, $lista)), 'se quitó una tabla con historial de la lista protegida');
     }
 
@@ -194,7 +194,7 @@ final class R5EliminacionProtegidaIntegrationTest extends TestCase
 
     public function testElBorradoGenericoHeredadoRechazaTablasConHistorial(): void
     {
-        foreach (['citas', 'usuarios', 'pagos', 'comprobantes', 'citas_regularizaciones', 'cobros_eventos', 'clientes'] as $tabla) {
+        foreach (['citas', 'usuarios', 'pagos', 'comprobantes', 'citas_regularizaciones', 'cobros_eventos', 'clientes', 'citas_reasignaciones', 'fidelidad_movimientos'] as $tabla) {
             $modelo = new class extends ActiveRecord { public static $tabla = ''; };
             $modelo::$tabla = $tabla;
             $modelo->id = PHP_INT_MAX; // inexistente: de no estar protegida, solo ejecutaría un DELETE sin filas
@@ -208,7 +208,7 @@ final class R5EliminacionProtegidaIntegrationTest extends TestCase
     public function testNingunCodigoDeLaAplicacionBorraCitasUsuariosOEvidencia(): void
     {
         $raiz = dirname(__DIR__, 2);
-        $protegidas = 'citas|citasservicios|citas_regularizaciones|usuarios|clientes|pagos|comprobantes|cobros_eventos|cobros_devoluciones|caja_movimientos|comisiones_movimientos|agenda_eventos|equipo_auditoria|colaboradores|usuario_accesos';
+        $protegidas = 'citas|citasservicios|citas_regularizaciones|usuarios|clientes|pagos|comprobantes|cobros_eventos|cobros_devoluciones|caja_movimientos|comisiones_movimientos|agenda_eventos|citas_reasignaciones|fidelidad_movimientos|equipo_auditoria|colaboradores|usuario_accesos';
         $permitidos = ['repositories/CitaRepository.php' => ['citas', 'citasservicios']];
         $hallazgos = [];
         $it = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($raiz, \FilesystemIterator::SKIP_DOTS));

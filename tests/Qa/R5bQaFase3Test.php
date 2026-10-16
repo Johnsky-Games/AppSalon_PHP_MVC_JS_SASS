@@ -51,6 +51,12 @@ final class R5bQaFase3Test extends R5bCase
                 self::q("INSERT INTO cobros_devoluciones(cita_id,monto_centavos,motivo,registrado_en) VALUES (?,500,'Evidencia aislada',?)", [$c, $ahora]); break;
             case 'citas_regularizaciones':
                 self::q("INSERT INTO citas_regularizaciones(cita_id,estado,solicitada_por,solicitada_at,efectiva_propuesta_at,motivo_solicitud) VALUES (?, 'solicitada', ?, ?, ?, 'Evidencia aislada de regularización')", [$c, self::$e['proA']['id'], $ahora, self::cita($c)['fecha'] . ' 11:00:00']); break;
+            case 'agenda_eventos':
+                self::q("INSERT INTO agenda_eventos(citaId,actorId,tipo,antes_json,despues_json,creado_en) VALUES (?,?,'estado','{}','{}',?)", [$c, self::$e['dueno']['id'], $ahora]); break;
+            case 'citas_reasignaciones':
+                self::q("INSERT INTO citas_reasignaciones(cita_id,cita_referencia_id,accion,profesional_origen_nombre,actor_id,motivo,snapshot_json) VALUES (?,?,'reasignada','Profesional anterior',?,'Evidencia aislada','{}')", [$c, $c, self::$e['dueno']['id']]); break;
+            case 'fidelidad_movimientos':
+                self::q("INSERT INTO fidelidad_movimientos(usuario_id,cita_id,puntos,tipo,referencia) VALUES (?,?,10,'devengo',?)", [$cli, $c, 'ev:' . bin2hex(random_bytes(8))]); break;
             default: throw new \InvalidArgumentException($tipo);
         }
     }
@@ -58,7 +64,7 @@ final class R5bQaFase3Test extends R5bCase
     /** @return array<string,array{string}> */
     public static function tiposDeEvidencia(): array
     {
-        return array_combine($t = ['pagos.cita_referencia_id', 'pagos.cita_id', 'comprobantes', 'cobros_eventos', 'cobros_devoluciones', 'citas_regularizaciones'], array_map(fn($x) => [$x], $t));
+        return array_combine($t = ['pagos.cita_referencia_id', 'pagos.cita_id', 'comprobantes', 'cobros_eventos', 'cobros_devoluciones', 'citas_regularizaciones', 'agenda_eventos', 'citas_reasignaciones', 'fidelidad_movimientos'], array_map(fn($x) => [$x], $t));
     }
 
     /**
@@ -70,12 +76,68 @@ final class R5bQaFase3Test extends R5bCase
     {
         $c = $this->nueva(3);
         $this->evidencia($tipo, $c);
+        [$tabla, $columna] = str_starts_with($tipo, 'pagos.') ? explode('.', $tipo) : [$tipo, $tipo === 'agenda_eventos' ? 'citaId' : 'cita_id'];
+        $evidenciaAntes = self::q("SELECT * FROM `$tabla` WHERE `$columna`=? ORDER BY id", [$c]);
+        $this->assertCount(1, $evidenciaAntes, "[$tipo] debe existir una sola evidencia aislada");
         $r = (new CitaService())->eliminar($c, self::$e['dueno']['id'], true);
         $this->assertSame(409, (int)($r['httpCode'] ?? 0), "[$tipo] CitaService::eliminar → " . json_encode($r, JSON_UNESCAPED_UNICODE));
         $this->assertMatchesRegularExpression('/cancel|devoluci|ausencia/iu', (string)$r['error'], "[$tipo] el 409 debe ofrecer la alternativa auditada");
         try { (new CitaRepository(self::db()))->eliminarCitaAtomica($c); $this->fail("[$tipo] el repositorio eliminó la cita"); } catch (CitaProtegidaException $e) { $this->assertNotSame('', $e->motivo); }
         $this->assertTrue($this->existe($c), "[$tipo] la cita desapareció");
         $this->assertSame(1, (int)self::escalar('SELECT COUNT(*) FROM citasservicios WHERE citaId=?', [$c]), "[$tipo] se borraron sus servicios");
+        $this->assertSame($evidenciaAntes, self::q("SELECT * FROM `$tabla` WHERE `$columna`=? ORDER BY id", [$c]), "[$tipo] la evidencia o su vínculo cambió");
+    }
+
+    /** Eliminar espera al profesional sin retener la cita: el orden inverso es el origen del interbloqueo. */
+    public function test_E_orden_de_bloqueo_profesional_antes_de_cita(): void
+    {
+        $c = $this->nueva();
+        $profesional = (int)self::cita($c)['profesionalId'];
+        $this->assertGreaterThan(0, $profesional);
+        $db = new \mysqli(self::cfg('DB_HOST', '127.0.0.1'), self::cfg('DB_USER', 'root'), self::cfg('DB_PASS', ''), self::nombreBd(), (int)self::cfg('DB_PORT', '3306'));
+        $p = null;
+        try {
+            $db->begin_transaction();
+            $bloqueo = $db->query("SELECT id FROM profesionales WHERE id=$profesional FOR UPDATE");
+            $this->assertNotFalse($bloqueo);
+            $this->assertSame(1, $bloqueo->num_rows);
+            $codigo = <<<'PHP'
+require $argv[1] . '/tests/bootstrap.php';
+$db = \Model\ActiveRecord::getDB();
+$db->query('SET SESSION innodb_lock_wait_timeout=5');
+echo $db->thread_id . "\n"; flush();
+try { echo json_encode(['eliminada' => (new \Repositories\CitaRepository($db))->eliminarCitaAtomica((int)$argv[2])]); }
+catch (\Throwable $e) { echo json_encode(['error' => $e->getMessage()]); }
+PHP;
+            $p = proc_open([PHP_BINARY, '-d', 'variables_order=EGPCS', '-r', $codigo, self::RAIZ, (string)$c],
+                [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, self::RAIZ, array_merge(getenv(), ['DB_NAME' => self::nombreBd()]));
+            $this->assertIsResource($p);
+            stream_set_timeout($pipes[1], 10);
+            $conexion = (int)fgets($pipes[1]);
+            $this->assertGreaterThan(0, $conexion);
+            $espera = false;
+            for ($i = 0; $i < 60 && !$espera; $i++) {
+                $espera = (int)self::escalar('SELECT COUNT(*) FROM performance_schema.data_lock_waits w JOIN performance_schema.threads t ON t.THREAD_ID=w.REQUESTING_THREAD_ID WHERE t.PROCESSLIST_ID=?', [$conexion]) > 0;
+                if (!$espera) { usleep(50000); }
+            }
+            $diagnostico = self::q('SELECT OBJECT_NAME,INDEX_NAME,LOCK_DATA,LOCK_MODE,LOCK_STATUS FROM performance_schema.data_locks WHERE OBJECT_SCHEMA=DATABASE()');
+            // Si se restaura cita→profesional, el hijo ya retiene la cita y NOWAIT falla (3572).
+            $citaLibre = $db->query("SELECT id FROM citas WHERE id=$c FOR UPDATE NOWAIT");
+            $error = $db->error;
+            $this->assertNotFalse($citaLibre, 'la eliminación retuvo la cita mientras esperaba al profesional: ' . $error);
+        } finally {
+            $db->rollback();
+            if (is_resource($p)) {
+                $salida = stream_get_contents($pipes[1]);
+                $stderr = stream_get_contents($pipes[2]);
+                fclose($pipes[1]); fclose($pipes[2]);
+                proc_close($p);
+            }
+            $db->close();
+        }
+        $this->assertTrue($espera, 'el proceso de eliminación debe esperar a ESTE profesional: ' . json_encode([$conexion, $diagnostico, $salida, $stderr]));
+        $this->assertSame('', $stderr);
+        $this->assertSame(['eliminada' => true], json_decode($salida, true), $salida);
     }
 
     /** Req: flujos REALES de la aplicación (cobro, devolución parcial, comprobante, regularización) dejan la cita protegida, con 409 por servicio y sin huérfanas. */

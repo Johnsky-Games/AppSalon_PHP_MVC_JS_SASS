@@ -18,10 +18,12 @@ use Services\DisponibilidadService;
 final class RevocacionApiIntegrationTest extends TestCase
 {
     private \mysqli $db;
+    private ?\mysqli $previa = null;
     private int $id;
     private array $server;
     protected function setUp(): void
     {
+        $this->previa = ActiveRecord::getDB();
         $this->server = $_SERVER;
         $this->db = new \mysqli(getenv('DB_HOST') ?: '127.0.0.1',getenv('DB_USER') ?: 'root',getenv('DB_PASS') ?: 'root',getenv('DB_NAME') ?: 'appsalon_test',(int)(getenv('DB_PORT') ?: 3306));
         ActiveRecord::setDB($this->db); validar_base_datos_prueba($this->db);
@@ -36,7 +38,9 @@ final class RevocacionApiIntegrationTest extends TestCase
     protected function tearDown(): void
     {
         APIController::setCitaService(null); APIController::setProfesionalService(null); APIController::setDisponibilidadService(null); PagoController::setPagoService(null);
-        $this->db->query("DELETE FROM usuarios WHERE id={$this->id}");$this->db->close();
+        $this->db->query("DELETE FROM usuarios WHERE id={$this->id}");
+        ActiveRecord::setDB($this->previa);
+        $this->db->close();
         $_SESSION=[];$_POST=[];$_GET=[];$_SERVER=$this->server;http_response_code(200);
     }
     public static function solicitudesRevocadas(): array

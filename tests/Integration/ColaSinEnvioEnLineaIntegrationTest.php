@@ -19,15 +19,61 @@ use Services\CorreoSalidaService;
 final class ColaSinEnvioEnLineaIntegrationTest extends TestCase
 {
     private const SUF = '@sinlinea.test';
+    private static string $base;
     private \mysqli $db;
+    private ?\mysqli $previa = null;
+    private array $envioInmediatoPrevio;
     /** @var list<array{0:string,1:string}> */
     private array $enviados = [];
 
+    /** El worker procesa TODA la cola: su base debe ser propia para no enviar residuos de otras clases. */
+    public static function setUpBeforeClass(): void
+    {
+        self::$base = 'appsalon_sinlinea_' . bin2hex(random_bytes(6)) . '_test';
+        $db = self::conectar('');
+        try {
+            if (!$db->query('CREATE DATABASE `' . self::$base . '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci')) {
+                throw new \RuntimeException($db->error);
+            }
+            $db->select_db(self::$base);
+            validar_base_datos_prueba($db);
+            if (!$db->multi_query((string)file_get_contents(__DIR__ . '/../../database/schema_base.sql'))) {
+                throw new \RuntimeException($db->error);
+            }
+            do { if ($r = $db->store_result()) { $r->free(); } } while ($db->more_results() && $db->next_result());
+            if ($db->errno) { throw new \RuntimeException($db->error); }
+            $p = proc_open([PHP_BINARY, '-d', 'variables_order=EGPCS', __DIR__ . '/../../database/migrador.php', 'up'],
+                [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, array_merge(getenv(), ['DB_NAME' => self::$base]));
+            if (!is_resource($p)) { throw new \RuntimeException('No se pudo iniciar el migrador de la cola aislada.'); }
+            $salida = stream_get_contents($pipes[1]) . stream_get_contents($pipes[2]);
+            fclose($pipes[1]); fclose($pipes[2]);
+            if (proc_close($p) !== 0) { throw new \RuntimeException($salida); }
+        } catch (\Throwable $e) {
+            $db->query('DROP DATABASE IF EXISTS `' . self::$base . '`');
+            throw $e;
+        } finally { $db->close(); }
+    }
+
+    public static function tearDownAfterClass(): void
+    {
+        $db = self::conectar('');
+        try { $db->query('DROP DATABASE IF EXISTS `' . self::$base . '`'); }
+        finally { $db->close(); }
+    }
+
+    private static function conectar(string $base): \mysqli
+    {
+        $db = new \mysqli(getenv('DB_HOST') ?: '127.0.0.1', getenv('DB_USER') ?: 'root', getenv('DB_PASS') ?: 'root', $base, (int)(getenv('DB_PORT') ?: 3306));
+        $db->set_charset('utf8mb4');
+        return $db;
+    }
+
     protected function setUp(): void
     {
+        $this->envioInmediatoPrevio = [$_ENV['CORREOS_ENVIO_INMEDIATO'] ?? null, getenv('CORREOS_ENVIO_INMEDIATO')];
         unset($_ENV['CORREOS_ENVIO_INMEDIATO']); putenv('CORREOS_ENVIO_INMEDIATO');
-        $this->db = new \mysqli(getenv('DB_HOST') ?: '127.0.0.1', getenv('DB_USER') ?: 'root', getenv('DB_PASS') ?: 'root', getenv('DB_NAME') ?: 'appsalon_test', (int)(getenv('DB_PORT') ?: 3306));
-        $this->db->set_charset('utf8mb4');
+        $this->previa = ActiveRecord::getDB();
+        $this->db = self::conectar(self::$base);
         ActiveRecord::setDB($this->db);
         validar_base_datos_prueba($this->db);
         $this->limpiar();
@@ -42,7 +88,14 @@ final class ColaSinEnvioEnLineaIntegrationTest extends TestCase
     protected function tearDown(): void
     {
         Email::setTransport(null);
-        if ($this->db->ping()) { $this->limpiar(); }
+        try { $this->limpiar(); }
+        finally {
+            ActiveRecord::setDB($this->previa);
+            $this->db->close();
+            [$env, $proceso] = $this->envioInmediatoPrevio;
+            if ($env === null) { unset($_ENV['CORREOS_ENVIO_INMEDIATO']); } else { $_ENV['CORREOS_ENVIO_INMEDIATO'] = $env; }
+            putenv($proceso === false ? 'CORREOS_ENVIO_INMEDIATO' : 'CORREOS_ENVIO_INMEDIATO=' . $proceso);
+        }
     }
 
     private function limpiar(): void
