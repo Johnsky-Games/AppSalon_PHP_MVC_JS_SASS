@@ -303,12 +303,13 @@ final class R5RegularizacionIntegrationTest extends TestCase
         $this->assertSame(1, $this->n("SELECT COUNT(*) FROM citas_regularizaciones WHERE cita_id=$cita"));
         $this->assertSame(1, $this->n("SELECT COUNT(*) FROM agenda_eventos WHERE citaId=$cita"));
         // Base de datos: la clave foránea RESTRICT lo impide aunque otro código lo intente (no es una limpieza de pruebas).
+        // La aplicación fija MYSQLI_REPORT_OFF (includes/database.php): aquí se usa explícitamente y se restaura el mismo valor.
         mysqli_report(MYSQLI_REPORT_OFF);
         try {
             $ok = $this->db->query("DELETE FROM citas WHERE id=$cita");
             $errno = $this->db->errno;
         } finally {
-            mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT); // valor predeterminado de PHP 8.1+: no alterar a las demás pruebas
+            mysqli_report(MYSQLI_REPORT_OFF); // valor del proyecto (includes/database.php): no alterar el modo de las demás pruebas
         }
         $this->assertFalse($ok, 'DELETE directo debe fallar');
         $this->assertSame(1451, $errno, 'violación de clave foránea (hijo existente)');
