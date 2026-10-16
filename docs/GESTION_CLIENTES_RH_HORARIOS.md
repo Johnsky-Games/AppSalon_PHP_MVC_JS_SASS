@@ -62,4 +62,4 @@ Validación local con PHP 8.3.6 y MySQL 8.0.46, sobre bases sintéticas aisladas
 
 La restricción de sockets del entorno local impide arrancar Chromium; esa ejecución no cuenta como una validación de navegador. El recorrido se exige sin omisiones en CI, junto con el QA general y la validación en PHP 8.2. Esas comprobaciones siguen pendientes.
 
-La implementación está en la rama local `feature/clientes-rh-horarios`. La publicación de la rama y la apertura del PR quedan pendientes de autorización; todavía no hay enlace de CI para estos cambios.
+Seguimiento de la entrega: [PR #2](https://github.com/Johnsky-Games/AppSalon_PHP_MVC_JS_SASS/pull/2), rama `feature/clientes-rh-horarios`. Los resultados de CI y la revisión visual se registran en la descripción del PR.
