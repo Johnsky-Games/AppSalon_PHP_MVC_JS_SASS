@@ -29,7 +29,12 @@ class ReporteService
     public const TIMEZONE = 'America/Guayaquil';
     public const MAX_DIAS_RANGO = 366;
 
-    public const CRITERIO_FECHA_SERVICIO = 'servicio';
+    /** Fecha PROGRAMADA original de la cita (todas las reservas). Antes se llamaba «servicio»; ese valor se sigue aceptando como alias. */
+    public const CRITERIO_FECHA_PROGRAMACION = 'programacion';
+    /** Servicios REALIZADOS: citas atendidas por la fecha EFECTIVA de la atención (la programada si no hubo regularización). */
+    public const CRITERIO_FECHA_REALIZADO = 'realizado';
+    /** @deprecated alias de CRITERIO_FECHA_PROGRAMACION (no es la fecha real del servicio). */
+    public const CRITERIO_FECHA_SERVICIO = self::CRITERIO_FECHA_PROGRAMACION;
     public const CRITERIO_FECHA_COBRO = 'cobro';
 
     public const ESTADO_PAGO_PENDIENTE = 'pendiente';
@@ -262,7 +267,7 @@ class ReporteService
             }
         }
 
-        // Filtro de criterio de fecha: 'servicio' (predeterminado) o 'cobro'
+        // Criterio de fecha: 'programacion' (predeterminado; fecha original de la cita), 'realizado' (fecha efectiva de la atención) o 'cobro' (fecha del movimiento)
         $criterioRaw = $parametros['criterio_fecha'] ?? $parametros['tipo_fecha'] ?? null;
         $criterioFecha = self::CRITERIO_FECHA_SERVICIO;
 
@@ -270,10 +275,12 @@ class ReporteService
             $criterioStr = strtolower(trim((string)$criterioRaw));
             if ($criterioStr === 'cobro' || $criterioStr === 'pago') {
                 $criterioFecha = self::CRITERIO_FECHA_COBRO;
-            } elseif ($criterioStr === 'servicio' || $criterioStr === 'cita') {
-                $criterioFecha = self::CRITERIO_FECHA_SERVICIO;
+            } elseif ($criterioStr === 'realizado' || $criterioStr === 'atencion') {
+                $criterioFecha = self::CRITERIO_FECHA_REALIZADO;
+            } elseif (in_array($criterioStr, ['programacion', 'programada', 'servicio', 'cita'], true)) {
+                $criterioFecha = self::CRITERIO_FECHA_PROGRAMACION;
             } else {
-                $errores[] = "El criterio de fecha seleccionado no es válido. Debe ser 'servicio' o 'cobro'.";
+                $errores[] = "El criterio de fecha seleccionado no es válido. Debe ser 'programacion', 'realizado' o 'cobro'.";
             }
         }
 
@@ -610,6 +617,7 @@ class ReporteService
                         'reembolsado_at' => $filaP['reembolsado_at'] !== null ? (string)$filaP['reembolsado_at'] : null,
                         'created_at' => (string)($filaP['pago_created_at'] ?? ''),
                         'cita_fecha' => $filaP['cita_fecha'] !== null ? (string)$filaP['cita_fecha'] : null,
+                        'cita_atencion_efectiva' => ($filaP['cita_atencion_efectiva_at'] ?? null) !== null ? (string)$filaP['cita_atencion_efectiva_at'] : null,
                         'cita_hora' => $filaP['cita_hora'] !== null ? (string)$filaP['cita_hora'] : null,
                         'cita_estado' => (string)($filaP['cita_estado'] ?? 'confirmada'),
                         'profesional_id' => $pProfId,
@@ -769,6 +777,8 @@ class ReporteService
                 $citasAgrupadas[$citaId] = [
                     'id' => $citaId,
                     'fecha' => (string)($fila['fecha'] ?? ''),
+                    'fecha_programada' => (string)($fila['fecha_programada'] ?? $fila['fecha'] ?? ''),
+                    'atencion_efectiva_at' => ($fila['atencion_efectiva_at'] ?? null) !== null ? (string)$fila['atencion_efectiva_at'] : null,
                     'hora' => (string)($fila['hora'] ?? ''),
                     'hora_inicio' => $fila['hora_inicio'] !== null ? (string)$fila['hora_inicio'] : null,
                     'hora_fin' => $fila['hora_fin'] !== null ? (string)$fila['hora_fin'] : null,
@@ -1006,6 +1016,8 @@ class ReporteService
             $reservasDetalle[] = [
                 'id' => $cita['id'],
                 'fecha' => $cita['fecha'],
+                'fecha_programada' => $cita['fecha_programada'] ?? $cita['fecha'],
+                'atencion_efectiva_at' => $cita['atencion_efectiva_at'] ?? null,
                 'hora' => $cita['hora'],
                 'hora_inicio' => $cita['hora_inicio'],
                 'hora_fin' => $cita['hora_fin'],
@@ -1377,7 +1389,7 @@ class ReporteService
         $escribirFila([
             (string)($filtros['fecha_inicio'] ?? ''),
             (string)($filtros['fecha_fin'] ?? ''),
-            (string)($filtros['criterio_fecha'] ?? 'servicio'),
+            (string)($filtros['criterio_fecha'] ?? 'programacion'),
             (string)(($filtros['profesional_id'] ?? '') !== '' ? $filtros['profesional_id'] : 'Todos'),
             (string)(($filtros['servicio_id'] ?? '') !== '' ? $filtros['servicio_id'] : 'Todos'),
             (int)($global['total_citas'] ?? 0),
@@ -1473,7 +1485,8 @@ class ReporteService
                 'Neto Periodo',
                 'Cita Referencia ID',
                 'Estado Cita',
-                'Fecha Servicio',
+                'Fecha programada de la cita',
+                'Fecha efectiva de atencion',
                 'Profesional',
                 'Cliente',
                 'Servicios Historicos',
@@ -1499,6 +1512,7 @@ class ReporteService
                     (int)($mov['cita_referencia_id'] ?? 0),
                     (string)($mov['cita_estado'] ?? ''),
                     (string)($mov['cita_fecha'] ?? ''),
+                    self::fechaHoraCorta($mov['cita_atencion_efectiva'] ?? null),
                     (string)($mov['profesional_nombre'] ?? ''),
                     (string)($mov['cliente'] ?? ''),
                     implode(', ', $servTexto),
@@ -1511,7 +1525,8 @@ class ReporteService
         $escribirFila(['LISTADO DETALLADO DE RESERVAS']);
         $escribirFila([
             'Cita ID',
-            'Fecha',
+            'Fecha programada',
+            'Fecha efectiva de atencion',
             'Horario',
             'Cliente',
             'Email Cliente',
@@ -1527,7 +1542,8 @@ class ReporteService
         foreach ($reporte['reservas'] ?? [] as $res) {
             $escribirFila([
                 (int)($res['id'] ?? 0),
-                (string)($res['fecha'] ?? ''),
+                (string)($res['fecha_programada'] ?? $res['fecha'] ?? ''),
+                self::fechaHoraCorta($res['atencion_efectiva_at'] ?? null),
                 (string)($res['horario'] ?? ''),
                 (string)($res['cliente'] ?? ''),
                 (string)($res['cliente_email'] ?? ''),
@@ -1553,6 +1569,9 @@ class ReporteService
 
     public const BLOQUES_EXPORTACION = ['completo' => 'Reporte completo (varias secciones, solo CSV)', 'reservas' => 'Listado detallado de reservas', 'movimientos' => 'Movimientos financieros'];
 
+    /** «2026-10-12 15:30» de un DATETIME de la base, o cadena vacía. */
+    private static function fechaHoraCorta(mixed $v): string { return is_string($v) && $v !== '' ? substr($v, 0, 16) : ''; }
+
     private static function centavos(mixed $v): int { return (int)round(((float)$v) * 100); }
 
     /**
@@ -1564,7 +1583,7 @@ class ReporteService
     {
         if ($bloque === 'reservas') {
             $columnas = [
-                ['clave' => 'id', 'titulo' => 'Cita ID', 'tipo' => 'entero'], ['clave' => 'fecha', 'titulo' => 'Fecha', 'tipo' => 'fecha'], ['clave' => 'horario', 'titulo' => 'Horario'],
+                ['clave' => 'id', 'titulo' => 'Cita ID', 'tipo' => 'entero'], ['clave' => 'fecha', 'titulo' => 'Fecha programada', 'tipo' => 'fecha'], ['clave' => 'efectiva', 'titulo' => 'Fecha efectiva de atencion'], ['clave' => 'horario', 'titulo' => 'Horario'],
                 ['clave' => 'cliente', 'titulo' => 'Cliente', 'ancho' => 26], ['clave' => 'email', 'titulo' => 'Email Cliente', 'ancho' => 32], ['clave' => 'profesional', 'titulo' => 'Profesional', 'ancho' => 22],
                 ['clave' => 'estado', 'titulo' => 'Estado Cita'], ['clave' => 'servicios', 'titulo' => 'Servicios (Snapshot Historico)', 'ancho' => 44], ['clave' => 'duracion', 'titulo' => 'Duracion Cita (min)', 'tipo' => 'entero'],
                 ['clave' => 'total_cita', 'titulo' => 'Importe Total Cita (USD)', 'tipo' => 'dinero'], ['clave' => 'reservado', 'titulo' => 'Importe Reservado Filtrado (USD)', 'tipo' => 'dinero'],
@@ -1572,7 +1591,7 @@ class ReporteService
             ];
             $filas = [];
             foreach ($reporte['reservas'] ?? [] as $r) {
-                $filas[] = ['id' => (int)($r['id'] ?? 0), 'fecha' => (string)($r['fecha'] ?? ''), 'horario' => (string)($r['horario'] ?? ''), 'cliente' => (string)($r['cliente'] ?? ''),
+                $filas[] = ['id' => (int)($r['id'] ?? 0), 'fecha' => (string)($r['fecha_programada'] ?? $r['fecha'] ?? ''), 'efectiva' => self::fechaHoraCorta($r['atencion_efectiva_at'] ?? null), 'horario' => (string)($r['horario'] ?? ''), 'cliente' => (string)($r['cliente'] ?? ''),
                     'email' => (string)($r['cliente_email'] ?? ''), 'profesional' => (string)($r['profesional_nombre'] ?? ''), 'estado' => (string)($r['etiqueta_estado_cita'] ?? 'Confirmada'),
                     'servicios' => (string)($r['servicios_resumen'] ?? ''), 'duracion' => (int)($r['duracion_total_minutos'] ?? 0), 'total_cita' => self::centavos($r['importe_total_cita'] ?? 0),
                     'reservado' => self::centavos($r['importe_reservado'] ?? 0), 'pagado' => self::centavos($r['ingreso_pagado'] ?? 0), 'estado_pago' => (string)($r['etiqueta_estado_pago'] ?? '')];
@@ -1586,7 +1605,7 @@ class ReporteService
                 ['clave' => 'estado', 'titulo' => 'Estado Pago'], ['clave' => 'fecha_cobro', 'titulo' => 'Fecha Cobro'], ['clave' => 'fecha_reembolso', 'titulo' => 'Fecha Reembolso'],
                 ['clave' => 'cobro_periodo', 'titulo' => 'Importe Cobro Periodo (USD)', 'tipo' => 'dinero'], ['clave' => 'reembolso_periodo', 'titulo' => 'Importe Reembolso Periodo (USD)', 'tipo' => 'dinero'],
                 ['clave' => 'neto_periodo', 'titulo' => 'Neto Periodo (USD)', 'tipo' => 'dinero'], ['clave' => 'cita_id', 'titulo' => 'Cita Referencia ID', 'tipo' => 'entero'],
-                ['clave' => 'cita_estado', 'titulo' => 'Estado Cita'], ['clave' => 'cita_fecha', 'titulo' => 'Fecha Servicio'], ['clave' => 'profesional', 'titulo' => 'Profesional'],
+                ['clave' => 'cita_estado', 'titulo' => 'Estado Cita'], ['clave' => 'cita_fecha', 'titulo' => 'Fecha programada de la cita'], ['clave' => 'cita_efectiva', 'titulo' => 'Fecha efectiva de atencion'], ['clave' => 'profesional', 'titulo' => 'Profesional'],
                 ['clave' => 'cliente', 'titulo' => 'Cliente'], ['clave' => 'servicios', 'titulo' => 'Servicios Historicos', 'ancho' => 44],
             ];
             $filas = [];
@@ -1597,7 +1616,7 @@ class ReporteService
                     'proveedor' => (string)($m['proveedor'] ?? ''), 'simulado' => !empty($m['es_simulado']) ? 'SI (Mock)' : 'NO (Real)', 'monto' => self::centavos($m['monto'] ?? 0),
                     'estado' => (string)($m['estado'] ?? ''), 'fecha_cobro' => (string)($m['fecha_cobro'] ?? ''), 'fecha_reembolso' => (string)($m['fecha_reembolso'] ?? ''),
                     'cobro_periodo' => self::centavos($m['importe_cobro_periodo'] ?? 0), 'reembolso_periodo' => self::centavos($m['importe_reembolso_periodo'] ?? 0), 'neto_periodo' => self::centavos($m['neto_periodo'] ?? 0),
-                    'cita_id' => (int)($m['cita_referencia_id'] ?? 0), 'cita_estado' => (string)($m['cita_estado'] ?? ''), 'cita_fecha' => (string)($m['cita_fecha'] ?? ''),
+                    'cita_id' => (int)($m['cita_referencia_id'] ?? 0), 'cita_estado' => (string)($m['cita_estado'] ?? ''), 'cita_fecha' => (string)($m['cita_fecha'] ?? ''), 'cita_efectiva' => self::fechaHoraCorta($m['cita_atencion_efectiva'] ?? null),
                     'profesional' => (string)($m['profesional_nombre'] ?? ''), 'cliente' => (string)($m['cliente'] ?? ''), 'servicios' => implode(', ', $serv)];
             }
             return ['columnas' => $columnas, 'filas' => $filas, 'totales' => $this->totalesBloque($reporte, 'movimientos'), 'hoja' => 'Movimientos'];

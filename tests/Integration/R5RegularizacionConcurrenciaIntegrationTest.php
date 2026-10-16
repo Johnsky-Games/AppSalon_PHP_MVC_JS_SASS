@@ -13,7 +13,7 @@ use PHPUnit\Framework\TestCase;
 final class R5RegularizacionConcurrenciaIntegrationTest extends TestCase
 {
     private \mysqli $db;
-    private int $dueno; private int $gerente; private int $cliente; private int $profUsuario; private int $prof;
+    private int $dueno; private int $gerente; private int $finanzas; private int $cliente; private int $profUsuario; private int $prof;
 
     protected function setUp(): void
     {
@@ -21,14 +21,18 @@ final class R5RegularizacionConcurrenciaIntegrationTest extends TestCase
         $this->db->set_charset('utf8mb4');
         ActiveRecord::setDB($this->db);
         validar_base_datos_prueba($this->db);
-        // Otras pruebas vacían `citas` con las claves foráneas desactivadas y dejan regularizaciones huérfanas cuyo cita_id se reutiliza.
-        $this->db->query('DELETE FROM citas_regularizaciones WHERE cita_id NOT IN (SELECT id FROM citas)');
         $this->dueno = R5CajaFixture::usuario($this->db, 'propietario');
         $this->gerente = R5CajaFixture::usuario($this->db, 'gerente');
+        $this->finanzas = R5CajaFixture::usuario($this->db, 'finanzas');
         $this->cliente = R5CajaFixture::usuario($this->db, 'cliente');
         $this->profUsuario = R5CajaFixture::usuario($this->db, 'profesional');
         $this->prof = R5CajaFixture::profesional($this->db, 1000);
         $this->db->query("UPDATE profesionales SET usuarioId={$this->profUsuario} WHERE id={$this->prof}");
+    }
+
+    protected function tearDown(): void
+    {
+        $this->db->query("DELETE r FROM citas_regularizaciones r JOIN citas c ON c.id=r.cita_id WHERE c.usuarioId={$this->cliente}");
     }
 
     private function cita(string $estado = 'confirmada'): int
@@ -56,6 +60,7 @@ final class R5RegularizacionConcurrenciaIntegrationTest extends TestCase
     /** @return list<array<string,mixed>> */
     private function competir(array $trabajadores, int $citaId): array
     {
+        $correosAntes = $this->correos();
         $holder = new \mysqli(getenv('DB_HOST') ?: 'appsalon-test-db', getenv('DB_USER') ?: 'root', getenv('DB_PASS') ?: 'root', getenv('DB_NAME') ?: 'appsalon_test', (int)(getenv('DB_PORT') ?: 3306));
         $holder->begin_transaction();
         $holder->query("SELECT id FROM citas WHERE id=$citaId FOR UPDATE");
@@ -71,8 +76,36 @@ final class R5RegularizacionConcurrenciaIntegrationTest extends TestCase
             $this->assertIsArray($j, (string)$linea);
             $res[] = $j;
         }
+        // Un segundo «éxito» solo es válido si no duplica nada: una única transición a «completada», una única aprobación, y por cada
+        // pago exactamente un movimiento de caja, un comprobante y una comisión; ninguna operación de atención genera notificaciones ni correos.
+        $e = $this->efectos($citaId);
+        $this->assertLessThanOrEqual(1, $e['transiciones_a_completada'], 'transición duplicada: ' . json_encode($e));
+        $this->assertLessThanOrEqual(1, $e['aprobadas'], 'aprobación duplicada: ' . json_encode($e));
+        $this->assertSame($e['pagos'], $e['caja'], 'caja duplicada o ausente: ' . json_encode($e));
+        $this->assertSame($e['pagos'], $e['comprobantes'], 'comprobantes duplicados: ' . json_encode($e));
+        $this->assertSame($e['pagos'], $e['comisiones'], 'comisión duplicada: ' . json_encode($e));
+        $this->assertSame(0, $e['notificaciones'], 'la atención no genera notificaciones de cita');
+        $this->assertSame($correosAntes, $this->correos(), 'la atención no genera correos');
         return $res;
     }
+
+    /** Huella de efectos que NO deben duplicarse ni aparecer sin motivo. */
+    private function efectos(int $cita): array
+    {
+        return [
+            'transiciones_a_completada' => $this->n("SELECT COUNT(*) FROM agenda_eventos WHERE citaId=$cita AND (tipo='regularizar' OR (tipo='estado' AND JSON_UNQUOTE(JSON_EXTRACT(despues_json,'$.estado'))='completada'))"),
+            'eventos_agenda' => $this->n("SELECT COUNT(*) FROM agenda_eventos WHERE citaId=$cita"),
+            'aprobadas' => $this->n("SELECT COUNT(*) FROM citas_regularizaciones WHERE cita_id=$cita AND estado='aprobada'"),
+            'pagos' => $this->n("SELECT COUNT(*) FROM pagos WHERE cita_id=$cita"),
+            'caja' => $this->n("SELECT COUNT(*) FROM caja_movimientos WHERE pago_id IN (SELECT id FROM pagos WHERE cita_id=$cita)"),
+            'comprobantes' => $this->n("SELECT COUNT(*) FROM comprobantes WHERE cita_id=$cita AND pago_id IN (SELECT id FROM pagos WHERE cita_id=$cita)"),
+            'comisiones' => $this->n("SELECT COUNT(*) FROM comisiones_movimientos WHERE pago_id IN (SELECT id FROM pagos WHERE cita_id=$cita)"),
+            'notificaciones' => $this->n("SELECT COUNT(*) FROM notificaciones_citas WHERE cita_id=$cita"),
+        ];
+    }
+
+    /** Ninguna operación de atención genera correos: el total global no cambia durante la carrera. */
+    private function correos(): int { return $this->n('SELECT COUNT(*) FROM correos_salida'); }
 
     private function n(string $sql): int { return (int)R5CajaFixture::escalar($this->db, $sql); }
     private function estado(int $cita): string { return (string)R5CajaFixture::escalar($this->db, "SELECT estado FROM citas WHERE id=$cita"); }
@@ -138,6 +171,43 @@ final class R5RegularizacionConcurrenciaIntegrationTest extends TestCase
             $this->assertTrue($fin['ok']);
             $this->assertFalse($reg['ok']);
             $this->assertSame(409, $reg['http']);
+        }
+    }
+
+    public function testRegularizarContraCobrarAplicaCadaOperacionUnaVezYSinDuplicarNada(): void
+    {
+        $cita = $this->cita();
+        $cobro = ['cita_id' => $cita, 'metodo' => 'efectivo', 'monto' => '40.00', 'recibido' => '40.00', 'idem_key' => R5CajaFixture::clave()];
+        [$reg, $cob] = $this->competir([$this->lanzar('regularizar', $this->gerente, $this->datos($cita)), $this->lanzar('cobrar', $this->finanzas, $cobro)], $cita);
+        $this->assertTrue($reg['ok'] && $cob['ok'], 'son operaciones distintas y compatibles: ' . json_encode([$reg, $cob]));
+        $e = $this->efectos($cita);
+        $this->assertSame(['completada', 'pagado'], [$this->estado($cita), R5CajaFixture::escalar($this->db, "SELECT estado_pago FROM citas WHERE id=$cita")]);
+        $this->assertSame([1, 1, 1, 1, 1], [$e['aprobadas'], $e['pagos'], $e['caja'], $e['comprobantes'], $e['comisiones']], json_encode($e));
+        $this->assertSame(1, $e['transiciones_a_completada']);
+        // El cobro lleva SU fecha real (hoy), no la efectiva declarada en la regularización (hace 5 días).
+        $hoy = (new \DateTimeImmutable('now', new \DateTimeZone('America/Guayaquil')))->format('Y-m-d');
+        $this->assertSame($hoy, substr((string)R5CajaFixture::escalar($this->db, "SELECT pagado_at FROM pagos WHERE cita_id=$cita"), 0, 10));
+        $this->assertNotSame($hoy, substr((string)R5CajaFixture::escalar($this->db, "SELECT atencion_efectiva_at FROM citas WHERE id=$cita"), 0, 10));
+    }
+
+    public function testRegularizarContraRechazarLaSolicitudAbiertaResuelveCadaDecisionUnaVez(): void
+    {
+        $cita = $this->cita();
+        $sol = (new \Services\RegularizacionAtencionService(new \Repositories\OperacionRepository($this->db)))->solicitar($this->profUsuario, $this->datos($cita));
+        [$reg, $rech] = $this->competir([$this->lanzar('regularizar', $this->dueno, $this->datos($cita)), $this->lanzar('rechazar', $this->gerente, ['regularizacion_id' => $sol['regularizacion_id'], 'motivo' => 'Sin constancia de la atención', 'idem_key' => R5CajaFixture::clave()])], $cita);
+        $this->assertTrue($reg['ok'], json_encode($reg));
+        $this->assertSame('completada', $this->estado($cita));
+        $this->assertSame(0, $this->n("SELECT COUNT(*) FROM citas_regularizaciones WHERE cita_id=$cita AND estado='solicitada'"), 'ninguna solicitud queda abierta');
+        $filas = $this->db->query("SELECT estado FROM citas_regularizaciones WHERE cita_id=$cita ORDER BY id")->fetch_all(MYSQLI_ASSOC);
+        if ($rech['ok']) {
+            // Ganó el rechazo de la solicitud y después la regularización directa del propietario: dos decisiones DISTINTAS, cada una una vez.
+            $this->assertSame(['rechazada', 'aprobada'], array_column($filas, 'estado'));
+            $this->assertSame(3, $this->n("SELECT COUNT(*) FROM agenda_eventos WHERE citaId=$cita"), 'solicitud + rechazo + regularización');
+        } else {
+            // Ganó la regularización (que resolvió la solicitud) y el rechazo recibió 409.
+            $this->assertSame(409, $rech['http']);
+            $this->assertSame(['aprobada'], array_column($filas, 'estado'));
+            $this->assertSame(2, $this->n("SELECT COUNT(*) FROM agenda_eventos WHERE citaId=$cita"), 'solicitud + regularización');
         }
     }
 

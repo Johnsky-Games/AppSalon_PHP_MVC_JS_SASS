@@ -1198,6 +1198,18 @@ class CitaRepository
      * @return bool True si la cita existía y fue eliminada, false si el registro no existía.
      * @throws PersistenceException Si ocurre un fallo SQL o de transacción.
      */
+    /** ¿La cita tiene alguna solicitud o decisión de regularización de la atención? (auditoría que impide eliminarla). */
+    public function tieneRegularizaciones(int $citaId): bool
+    {
+        $db = $this->resolveDb();
+        $stmt = $db->prepare('SELECT 1 FROM citas_regularizaciones WHERE cita_id = ? LIMIT 1');
+        if (!$stmt) throw new PersistenceException('No se pudo comprobar la auditoría de la cita.');
+        $stmt->bind_param('i', $citaId);
+        if (!$stmt->execute()) { $stmt->close(); throw new PersistenceException('No se pudo comprobar la auditoría de la cita.'); }
+        $hay = (bool)$stmt->get_result()->fetch_row(); $stmt->close();
+        return $hay;
+    }
+
     public function eliminarCitaAtomica(int $citaId): bool
     {
         if ($citaId <= 0) {

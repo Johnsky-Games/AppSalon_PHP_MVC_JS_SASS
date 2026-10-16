@@ -347,7 +347,7 @@ class ReporteRepository
      * @param string $fechaFin Fecha final `YYYY-MM-DD`.
      * @param string|null $filtroProfesional `null` (todos), `'sin_profesional'` (`profesionalId IS NULL`) o ID entero en string.
      * @param int|null $servicioId ID entero positivo de servicio para filtrar citas que incluyan dicho servicio.
-     * @param string $criterioFecha 'servicio' (por fecha de cita) o 'cobro' (por fecha de cobro del pago asociado).
+     * @param string $criterioFecha 'programacion' (fecha original de la cita), 'realizado' (fecha efectiva de la atención) o 'cobro' (fecha del movimiento).
      * @return array<int, array<string, mixed>>
      * @throws PersistenceException
      */
@@ -356,13 +356,21 @@ class ReporteRepository
         string $fechaFin,
         ?string $filtroProfesional = null,
         ?int $servicioId = null,
-        string $criterioFecha = 'servicio'
+        string $criterioFecha = 'programacion'
     ): array {
         $db = $this->resolveDb();
 
+        // Tres fechas distintas: programada (original de la reserva), efectiva de atención (declarada al regularizar) y del cobro.
+        // «realizado» usa la efectiva cuando existe y, si no, la programada (una atención ordinaria ocurre el día de su cita).
+        $realizado = $criterioFecha === 'realizado';
+        $fechaServicio = "COALESCE(DATE(c.atencion_efectiva_at), c.fecha)";
+        $fechaSel = $realizado ? $fechaServicio : 'c.fecha';
+
         $sql = "SELECT
+                    {$fechaSel} AS fecha,
+                    c.fecha AS fecha_programada,
+                    c.atencion_efectiva_at,
                     c.id AS cita_id,
-                    c.fecha,
                     c.hora,
                     c.hora_inicio,
                     c.hora_fin,
@@ -427,6 +435,11 @@ class ReporteRepository
             $tipos .= 'ss';
             $params[] = $fechaInicio;
             $params[] = $fechaFin;
+        } elseif ($realizado) {
+            $sql .= "c.estado = 'completada' AND {$fechaServicio} >= ? AND {$fechaServicio} <= ?";
+            $tipos .= 'ss';
+            $params[] = $fechaInicio;
+            $params[] = $fechaFin;
         } else {
             $sql .= "c.fecha >= ? AND c.fecha <= ?";
             $tipos .= 'ss';
@@ -452,7 +465,7 @@ class ReporteRepository
             $params[] = $servicioId;
         }
 
-        $sql .= " ORDER BY c.fecha ASC, COALESCE(c.hora_inicio, c.hora) ASC, c.id ASC, cs.id ASC";
+        $sql .= " ORDER BY {$fechaSel} ASC, COALESCE(c.hora_inicio, c.hora) ASC, c.id ASC, cs.id ASC";
 
         try {
             $stmt = $db->prepare($sql);
@@ -502,7 +515,7 @@ class ReporteRepository
      *
      * @param string $fechaInicio Fecha inicial `YYYY-MM-DD`.
      * @param string $fechaFin Fecha final `YYYY-MM-DD`.
-     * @param string $criterioFecha 'servicio' (por fecha de cita) o 'cobro' (por fecha de cobro).
+     * @param string $criterioFecha 'programacion' (fecha original de la cita), 'realizado' (fecha efectiva de la atención) o 'cobro' (fecha del movimiento).
      * @param string|null $filtroProfesional null, 'sin_profesional' o ID de profesional.
      * @param int|null $servicioId ID de servicio en catálogo.
      * @return array<int, array<string, mixed>>
@@ -511,7 +524,7 @@ class ReporteRepository
     public function obtenerMovimientosFinancierosEnRango(
         string $fechaInicio,
         string $fechaFin,
-        string $criterioFecha = 'servicio',
+        string $criterioFecha = 'programacion',
         ?string $filtroProfesional = null,
         ?int $servicioId = null
     ): array {
@@ -538,6 +551,7 @@ class ReporteRepository
                     pg.reembolsado_at AS fecha_reembolso,
                     c.id AS cita_id_join,
                     c.fecha AS cita_fecha,
+                    c.atencion_efectiva_at AS cita_atencion_efectiva_at,
                     c.hora AS cita_hora,
                     c.hora_inicio AS cita_hora_inicio,
                     c.hora_fin AS cita_hora_fin,
@@ -589,8 +603,14 @@ class ReporteRepository
             $params[] = $fechaFin;
             $params[] = $fechaInicio;
             $params[] = $fechaFin;
+        } elseif ($criterioFecha === 'realizado') {
+            // Servicios realizados: pagos de citas atendidas, por la fecha EFECTIVA de la atención (la programada si no hubo regularización).
+            $sql .= "(c.estado = 'completada' AND COALESCE(DATE(c.atencion_efectiva_at), c.fecha) >= ? AND COALESCE(DATE(c.atencion_efectiva_at), c.fecha) <= ?)";
+            $tipos .= 'ss';
+            $params[] = $fechaInicio;
+            $params[] = $fechaFin;
         } else {
-            // Por fecha de servicio de la cita (con fallback a fecha de cobro si la cita fue eliminada físicamente)
+            // Por fecha PROGRAMADA de la cita (con fallback a fecha de cobro si la cita fue eliminada físicamente)
             $sql .= "( (c.fecha >= ? AND c.fecha <= ?) OR (c.id IS NULL AND DATE(COALESCE(pg.pagado_at, pg.created_at)) >= ? AND DATE(COALESCE(pg.pagado_at, pg.created_at)) <= ?) )";
             $tipos .= 'ssss';
             $params[] = $fechaInicio;

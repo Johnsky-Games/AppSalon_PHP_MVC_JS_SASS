@@ -242,7 +242,9 @@ final class R5QaCrmTest extends R5Case
             $this->assertContains($uno, $ids, "búsqueda por $tipo («" . trim($q) . "») no encuentra al cliente");
             if ($tipo !== 'nombre') { $this->assertSame([$uno], $ids, "búsqueda por $tipo debe ser exacta"); }
         }
-        $hoy = self::gye()->format('Y-m-d');
+        // `clientes.creado_en` lo escribe el servidor MySQL (UTC en CI y en los contenedores): entre las 19:00 y las 24:00 de Guayaquil su fecha
+        // ya es la del día siguiente. El rango «que cubre todo» debe usar la mayor de las dos fechas (hallazgo: la fecha de alta no es de negocio).
+        $hoy = max(self::gye()->format('Y-m-d'), gmdate('Y-m-d'));
         $this->assertSame($this->sembrados(array_keys(self::$meta)), $this->sembrados($this->idsLista($n, ['alta_desde' => '2000-01-01', 'alta_hasta' => $hoy])), 'rango de alta que cubre todo');
         $this->assertSame([], $this->sembrados($this->idsLista($n, ['alta_desde' => '2000-01-01', 'alta_hasta' => '2000-01-31'])), 'rango de alta sin clientes');
     }

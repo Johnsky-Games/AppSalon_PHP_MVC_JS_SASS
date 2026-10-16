@@ -31,8 +31,6 @@ final class R5RegularizacionIntegrationTest extends TestCase
         $this->db->set_charset('utf8mb4');
         ActiveRecord::setDB($this->db);
         validar_base_datos_prueba($this->db);
-        // Otras pruebas vacían `citas` con las claves foráneas desactivadas y dejan regularizaciones huérfanas cuyo cita_id se reutiliza.
-        $this->db->query('DELETE FROM citas_regularizaciones WHERE cita_id NOT IN (SELECT id FROM citas)');
         $this->dueno = R5CajaFixture::usuario($this->db, 'propietario');
         $this->gerente = R5CajaFixture::usuario($this->db, 'gerente');
         $this->recepcion = R5CajaFixture::usuario($this->db, 'recepcion');
@@ -44,6 +42,12 @@ final class R5RegularizacionIntegrationTest extends TestCase
         $this->profOtro = R5CajaFixture::profesional($this->db);
         $this->db->query("UPDATE profesionales SET usuarioId={$this->profUsuario} WHERE id={$this->prof}");
         $this->db->query("UPDATE profesionales SET usuarioId={$this->profOtroUsuario} WHERE id={$this->profOtro}");
+    }
+
+    protected function tearDown(): void
+    {
+        // Hijos primero y solo lo creado por esta prueba (la clave foránea RESTRICT impide borrar citas con regularización).
+        $this->db->query("DELETE r FROM citas_regularizaciones r JOIN citas c ON c.id=r.cita_id WHERE c.usuarioId={$this->cliente}");
     }
 
     // ------------------------------------------------------------------------------------------------ utilidades
@@ -282,6 +286,38 @@ final class R5RegularizacionIntegrationTest extends TestCase
         // Puede volver a solicitar.
         $this->assertGreaterThan($sol['regularizacion_id'], $this->servicio()->solicitar($this->profUsuario, $this->datos($cita))['regularizacion_id']);
         $this->assertSame(3, $this->n("SELECT COUNT(*) FROM agenda_eventos WHERE citaId=$cita"), 'solicitud + rechazo + nueva solicitud');
+    }
+
+    // ------------------------------------------------------------------------------------------------ integridad referencial
+
+    public function testUnaCitaConRegularizacionNoSePuedeEliminarNiQuedaAuditoriaHuerfana(): void
+    {
+        $cita = $this->cita();
+        $this->servicio()->regularizar($this->gerente, $this->datos($cita));
+        // Aplicación: 409 con mensaje claro y nada se pierde.
+        $r = (new CitaService())->eliminar($cita, $this->dueno, true);
+        $this->assertFalse($r['resultado']);
+        $this->assertSame(409, $r['httpCode']);
+        $this->assertStringContainsString('regularización', $r['error']);
+        $this->assertSame(1, $this->n("SELECT COUNT(*) FROM citas WHERE id=$cita"));
+        $this->assertSame(1, $this->n("SELECT COUNT(*) FROM citas_regularizaciones WHERE cita_id=$cita"));
+        $this->assertSame(1, $this->n("SELECT COUNT(*) FROM agenda_eventos WHERE citaId=$cita"));
+        // Base de datos: la clave foránea RESTRICT lo impide aunque otro código lo intente (no es una limpieza de pruebas).
+        mysqli_report(MYSQLI_REPORT_OFF);
+        try {
+            $ok = $this->db->query("DELETE FROM citas WHERE id=$cita");
+            $errno = $this->db->errno;
+        } finally {
+            mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT); // valor predeterminado de PHP 8.1+: no alterar a las demás pruebas
+        }
+        $this->assertFalse($ok, 'DELETE directo debe fallar');
+        $this->assertSame(1451, $errno, 'violación de clave foránea (hijo existente)');
+        $this->assertSame(1, $this->n("SELECT COUNT(*) FROM citas WHERE id=$cita"));
+        // Una cita SIN regularización se sigue eliminando como siempre.
+        $libre = $this->cita();
+        $this->assertTrue((new CitaService())->eliminar($libre, $this->dueno, true)['resultado']);
+        // Tras todas estas operaciones de la aplicación no hay regularizaciones sin cita.
+        $this->assertSame(0, $this->n('SELECT COUNT(*) FROM citas_regularizaciones r LEFT JOIN citas c ON c.id=r.cita_id WHERE c.id IS NULL'), 'ninguna regularización huérfana');
     }
 
     // ------------------------------------------------------------------------------------------------ pendientes de revisión

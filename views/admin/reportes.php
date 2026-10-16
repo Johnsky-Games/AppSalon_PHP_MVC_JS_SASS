@@ -15,7 +15,7 @@ $movimientosFinancieros = $movimientosFinancieros ?? [];
 
 $fechaInicioVal = (string)($filtros['fecha_inicio'] ?? '');
 $fechaFinVal = (string)($filtros['fecha_fin'] ?? '');
-$criterioFechaVal = (string)($filtros['criterio_fecha'] ?? 'servicio');
+$criterioFechaVal = (string)($filtros['criterio_fecha'] ?? 'programacion');
 $profFiltroVal = (string)($filtros['profesional_id'] ?? '');
 $servFiltroVal = (string)($filtros['servicio_id'] ?? '');
 $tieneFiltroServicio = !empty($filtros['tiene_filtro_servicio']);
@@ -29,7 +29,7 @@ $queryExportar = http_build_query([
 ]);
 ?>
 
-<h2 class="ui-section-title">Filtrar Reporte de Reservas, Ocupación y Movimientos Financieros</h2><p class="ui-form-help">Elige un periodo y compara la agenda por fecha de servicio o los ingresos por fecha de cobro.</p>
+<h2 class="ui-section-title">Filtrar Reporte de Reservas, Ocupación y Movimientos Financieros</h2><p class="ui-form-help">Elige un periodo y compara la agenda por fecha programada, los servicios realizados por fecha efectiva o los ingresos por fecha de cobro.</p>
 <div class="busqueda reportes-filtros ui-card">
     <form action="/admin/reportes" method="GET" class="formulario" id="form-filtros-reportes">
         <div class="campo">
@@ -57,11 +57,14 @@ $queryExportar = http_build_query([
         <div class="campo">
             <label for="criterio_fecha">Criterio de Fecha</label>
             <select id="criterio_fecha" name="criterio_fecha">
-                <option value="servicio" <?php echo $criterioFechaVal === 'servicio' ? 'selected' : ''; ?>>
-                    Fecha de Servicio (Cita en Agenda)
+                <option value="programacion" <?php echo $criterioFechaVal === 'programacion' ? 'selected' : ''; ?>>
+                    Fecha programada (la de la reserva en agenda)
+                </option>
+                <option value="realizado" <?php echo $criterioFechaVal === 'realizado' ? 'selected' : ''; ?>>
+                    Fecha del servicio realizado (la efectiva de la atención)
                 </option>
                 <option value="cobro" <?php echo $criterioFechaVal === 'cobro' ? 'selected' : ''; ?>>
-                    Fecha de Cobro (Ingreso en Pagos)
+                    Fecha del cobro o la devolución (movimiento)
                 </option>
             </select>
         </div>
@@ -115,7 +118,7 @@ $queryExportar = http_build_query([
 </div>
 
 <section id="resumen-global-reportes" class="reportes-seccion">
-    <h2>Resumen General del Rango (<?php echo s($fechaInicioVal); ?> a <?php echo s($fechaFinVal); ?> — Filtro: <?php echo $criterioFechaVal === 'cobro' ? 'Fecha de Cobro' : 'Fecha de Servicio'; ?>)</h2>
+    <h2>Resumen General del Rango (<?php echo s($fechaInicioVal); ?> a <?php echo s($fechaFinVal); ?> — Fecha usada: <?php echo s(['cobro' => 'del cobro o la devolución', 'realizado' => 'del servicio realizado (efectiva)'][$criterioFechaVal] ?? 'programada'); ?>)</h2>
     <p class="reportes-nota-pagos" id="nota-distincion-pagos">
         <?php echo s((string)($resumenGlobal['nota_pagos'] ?? '')); ?>
     </p>
@@ -376,7 +379,8 @@ $escalaServiciosUi = empty($serviciosGraficaUi) ? 0 : max(array_map(static funct
                     <th>Monto ($)</th>
                     <th>Estado</th>
                     <th>Fecha Cobro</th>
-                    <th>Fecha Cita</th>
+                    <th>Fecha programada</th>
+                    <th>Fecha efectiva de atención</th>
                     <th>Estado Cita</th>
                     <th>Profesional</th>
                     <th>Cliente</th>
@@ -397,6 +401,7 @@ $escalaServiciosUi = empty($serviciosGraficaUi) ? 0 : max(array_map(static funct
                         <td><span class="etiqueta-estado etiqueta-<?php echo s((string)$mov['estado']); ?>"><?php echo s(ucfirst((string)$mov['estado'])); ?></span></td>
                         <td><?php echo s((string)$mov['fecha_cobro']); ?></td>
                         <td><?php echo s((string)($mov['cita_fecha'] ?? 'N/A')); ?></td>
+                        <td><?php echo s(($mov['cita_atencion_efectiva'] ?? null) ? substr((string)$mov['cita_atencion_efectiva'], 0, 16) : '—'); ?></td>
                         <td><?php echo s(ucfirst((string)($mov['cita_estado'] ?? 'N/A'))); ?></td>
                         <td><?php echo s((string)$mov['profesional_nombre']); ?></td>
                         <td><?php echo s((string)$mov['cliente']); ?></td>
@@ -435,7 +440,8 @@ $escalaServiciosUi = empty($serviciosGraficaUi) ? 0 : max(array_map(static funct
                     class="<?php echo !empty($res['es_cancelada']) ? 'cita-cancelada' : ''; ?>"
                 >
                     <p>ID Cita: <span><?php echo s((string)$res['id']); ?></span></p>
-                    <p>Fecha: <span><?php echo s((string)$res['fecha']); ?></span></p>
+                    <p>Fecha programada: <span><?php echo s((string)($res['fecha_programada'] ?? $res['fecha'])); ?></span></p>
+                    <?php if (!empty($res['atencion_efectiva_at'])) { ?><p>Fecha efectiva de atención: <span><?php echo s(substr((string)$res['atencion_efectiva_at'], 0, 16)); ?></span></p><?php } ?>
                     <p>Horario: <span><?php echo s((string)$res['horario']); ?> (<?php echo s((string)$res['duracion_total_minutos']); ?> min)</span></p>
                     <p>Profesional: <span><?php echo s((string)$res['profesional_nombre']); ?></span></p>
                     <p>Cliente: <span><?php echo s((string)$res['cliente']); ?><?php if ((string)($res['cliente_email'] ?? '') !== '') { ?> (<?php echo s((string)$res['cliente_email']); ?>)<?php } ?></span></p>

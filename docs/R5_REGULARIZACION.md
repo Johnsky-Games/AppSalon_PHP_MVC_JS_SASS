@@ -21,18 +21,23 @@ Contrato de la funcionalidad. Implementación: `classes/ReglaAtencion.php`, `ser
 
 Los permisos se comprueban en el SERVIDOR en cada operación (no en la vista) y con el rol vigente (un cambio de rol en caliente aplica). Rutas: `GET /agenda/pendientes`, `POST /agenda/regularizar`, `POST /agenda/regularizar/solicitar`, `POST /agenda/regularizar/rechazar` (todas con CSRF; las POST con clave de idempotencia `idem_key`).
 
-## 3. Efecto financiero (definido)
+## 3. Las tres fechas y su efecto (definido)
 
-| Dato | Fecha que lleva | ¿Cambia por regularizar? |
-|---|---|---|
-| `citas.fecha` / hora | la original de la reserva | **No** |
-| Atención | `atencion_efectiva_at` (cuándo ocurrió) + `regularizada_at` (cuándo se registró) | Se añaden, separadas |
-| Pago (`pagos.pagado_at`), movimiento de caja (`caja_movimientos.registrado_en`), comprobante (`emitido_en`) | el momento REAL de cada operación | **Nunca se retrodatan** |
-| Comisión (`comisiones_movimientos.registrado_en`) | momento real en que se confirma el dinero | Idem |
-| Reportes «por fecha de servicio» | `citas.fecha` original: la cita regularizada figura en su día original | No se mueve |
-| Reportes «por fecha de cobro» y movimientos de caja (Finanzas, `caja_movimientos`) | fecha real del cobro | Figura el día que se cobró |
-| Pantalla `/caja` («Cobros por cita») y su exportación | filtra por el **día de la cita** (es una lista de citas por cobrar); la cita regularizada y cobrada hoy aparece con la fecha de la cita y su cobro conserva la fecha real. La pantalla lo dice. El efectivo del día real se concilia en Finanzas | Sin cambios (límite conocido, ver §6) |
-| Liquidaciones de comisiones ya cerradas | — | **Protegidas**: la comisión de una cita regularizada nace en la fecha real del cobro, de modo que una liquidación cerrada (`estado='liquidada'`, con su `hasta_fecha`) nunca la absorbe ni cambia; entra en la siguiente liquidación |
+Una atención regularizada tiene **tres fechas distintas** y cada informe usa la que le corresponde. Ninguna se presenta como otra: la fecha programada **no** se etiqueta como fecha real del servicio.
+
+| Fecha | Qué es | Dónde se guarda | La usan |
+|---|---|---|---|
+| **Programada (original)** | La de la reserva en agenda. Nunca se modifica al regularizar | `citas.fecha` / `hora` | Reportes «Fecha programada» (programación, ocupación, reservas), pantalla `/caja` y su exportación (lista de citas por cobrar) |
+| **Efectiva de atención** | Cuándo ocurrió realmente el servicio, según la regularización (nunca futura) | `citas.atencion_efectiva_at` | Reportes «Fecha del servicio realizado» (solo citas atendidas; sin regularización vale la programada, porque una atención ordinaria ocurre el día de su cita) |
+| **Real del movimiento** | Cuándo se cobró, devolvió o liquidó | `pagos.pagado_at`, `caja_movimientos.registrado_en`, `comprobantes.emitido_en`, `comisiones_movimientos.registrado_en` | Reportes «Fecha del cobro o la devolución», Finanzas (caja por fecha real), comprobantes y comisiones |
+
+Por tanto: pagos, comprobantes, caja y comisiones **nunca se retrodatan** (llevan el momento real de cada operación), y regularizar no recalcula nada hacia atrás.
+
+**Reportes (`/admin/reportes`, criterio de fecha):** `programacion` (predeterminado), `realizado` y `cobro`. El valor histórico `servicio` se sigue aceptando como alias de `programacion` (era la fecha de la cita) pero ya no se llama «fecha de servicio». Los listados y exportaciones traen columnas separadas «Fecha programada» y «Fecha efectiva de atención», y los movimientos financieros traen «Fecha programada de la cita» y «Fecha efectiva de atención» junto a la fecha del cobro/devolución.
+
+**Liquidaciones de comisiones ya cerradas — protegidas:** la comisión de una cita regularizada nace en la fecha real del cobro, así que una liquidación cerrada (`estado='liquidada'`, con su `hasta_fecha`) nunca la absorbe ni cambia; entra en la siguiente.
+
+**`/caja`:** se mantiene **por fecha programada de la cita** (contrato de esta entrega; la pantalla lo dice con una etiqueta). El efectivo del día real (cobros y devoluciones) se concilia en **Finanzas** (`caja_movimientos.registrado_en`). *Mejora pendiente:* un filtro «por fecha de cobro» en `/caja` y su exportación; requiere separar los importes cobrados/devueltos dentro del rango de los totales por cita y no se hizo en esta entrega.
 
 ## 4. Auditoría
 
@@ -48,5 +53,34 @@ Cada operación bloquea la cita (`FOR UPDATE`) y cambia el estado con comparaci�
 
 * Reprogramar una cita vencida exige una fecha futura (regla habitual de reprogramación); si el cliente llega hoy, se regulariza o se registra como nueva reserva.
 * Las citas pendientes de revisión se muestran como lista de tarjetas (no tabular), sin exportación.
-* `/caja` filtra por el día de la cita; no hay (todavía) un filtro «por fecha de cobro» en esa pantalla: el efectivo del día real se ve en Finanzas.
+* `/caja` filtra por la fecha programada de la cita; el filtro «por fecha de cobro» es una **mejora pendiente** (el efectivo del día real se ve en Finanzas).
 * Recepción puede reprogramar y registrar ausencias pero no solicita regularizaciones.
+
+## 7. Integridad referencial y filas huérfanas
+
+**Qué se observó.** En una base de pruebas reutilizada aparecieron filas de `citas_regularizaciones`, `cobros_eventos` y `comprobantes` cuyo `cita_id` apuntaba a citas que ya no existían (y cuyo id volvió a asignarse a otra cita de otra prueba). Causa: una prueba heredada (`Fase5InterfazReservasIntegrationTest`) hace `TRUNCATE` de `citas` con `FOREIGN_KEY_CHECKS=0`; con las claves foráneas desactivadas nada se propaga y el contador de `AUTO_INCREMENT` vuelve a 1.
+
+**¿Puede pasar en producción?**
+
+| Tabla | ¿Puede quedar con una cita inexistente? | Por qué |
+|---|---|---|
+| `citas_regularizaciones` | **No.** | `cita_id` tiene clave foránea `ON DELETE RESTRICT`: la base rechaza (1451) eliminar una cita con solicitudes o decisiones, y la aplicación responde 409 antes («tiene una regularización… no se puede eliminar para conservar su auditoría»). Solo podría ocurrir si alguien desactiva las claves foráneas a mano (como hace el arnés de pruebas). |
+| `agenda_eventos` | No | `ON DELETE CASCADE` (diseño anterior: el historial de agenda se va con la cita; una cita regularizada no se puede eliminar, así que su historial se conserva) |
+| `pagos` (`cita_id`) | No | `ON DELETE SET NULL` |
+| `comprobantes.cita_id`, `cobros_eventos.cita_id`, `pagos.cita_referencia_id` | **Sí, por diseño** | Son evidencia contable **sin clave foránea** a propósito (los comprobantes son de solo anexar y guardan una instantánea con SHA-256; los reportes tienen un camino explícito «cita eliminada físicamente»). Si el propietario elimina una cita que ya tenía pagos, esas referencias quedan apuntando a una cita inexistente. Los ids de `citas` no se reutilizan en MySQL 8, así que el vínculo no se confunde con otra cita. |
+
+Lo último **no es un artefacto del arnés**: es el comportamiento vigente de eliminar citas con movimientos. *Decisión pendiente (no tomada):* impedir (409) la eliminación de citas con pagos o comprobantes, o pasar a baja lógica. Hasta decidirlo, la comprobación de solo lectura de abajo permite medirlo en tu instalación.
+
+**La limpieza de pruebas no oculta nada.** Las pruebas de regularización borran *sus propias* filas (hijos primero) en `tearDown`; la prueba heredada que vacía `citas` con claves foráneas desactivadas ahora también borra `citas_regularizaciones` (igual que ya borraba sus otras tablas huérfanas). Y hay una prueba que demuestra la garantía real: eliminar por la aplicación → 409, `DELETE` directo → error 1451, y ninguna fila huérfana.
+
+**Comprobación de solo lectura para tu instalación** (no modifica nada):
+
+```sql
+SELECT 'citas_regularizaciones' t, COUNT(*) n FROM citas_regularizaciones x LEFT JOIN citas c ON c.id=x.cita_id WHERE c.id IS NULL
+UNION ALL SELECT 'agenda_eventos', COUNT(*) FROM agenda_eventos x LEFT JOIN citas c ON c.id=x.citaId WHERE c.id IS NULL
+UNION ALL SELECT 'comprobantes (referencia a cita eliminada)', COUNT(*) FROM comprobantes x LEFT JOIN citas c ON c.id=x.cita_id WHERE c.id IS NULL
+UNION ALL SELECT 'cobros_eventos (referencia a cita eliminada)', COUNT(*) FROM cobros_eventos x LEFT JOIN citas c ON c.id=x.cita_id WHERE x.cita_id IS NOT NULL AND c.id IS NULL
+UNION ALL SELECT 'pagos.cita_referencia_id (cita eliminada)', COUNT(*) FROM pagos x LEFT JOIN citas c ON c.id=x.cita_referencia_id WHERE x.cita_referencia_id IS NOT NULL AND c.id IS NULL;
+```
+
+Las dos primeras filas deben dar 0. Las otras tres pueden ser mayores que 0 solo si en esa instalación se eliminaron citas con movimientos.

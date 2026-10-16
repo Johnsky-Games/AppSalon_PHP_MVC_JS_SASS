@@ -6,7 +6,9 @@
 --
 --   citas.atencion_efectiva_at : cuándo ocurrió realmente el servicio (la declara quien regulariza; nunca futura)
 --   citas.regularizada_por     : quién regularizó      citas.regularizada_at : cuándo lo hizo (momento real del registro)
---   citas_regularizaciones     : solicitudes (profesional) y decisiones (propietario/gerente); historial, nunca se borra una fila
+--   citas_regularizaciones     : solicitudes (profesional) y decisiones (propietario/gerente); historial, nunca se borra una fila.
+--                                ON DELETE RESTRICT: una cita con regularización NO se puede eliminar (la auditoría no se pierde ni queda huérfana;
+--                                la aplicación responde 409 y la base lo impone aunque otro código lo intente).
 --
 -- Idempotente (cada paso comprueba el esquema real). Compatible con MySQL 8.0.16+ (CHECK, columnas generadas).
 
@@ -38,7 +40,7 @@ CREATE TABLE IF NOT EXISTS citas_regularizaciones (
  UNIQUE KEY uq_regul_solicitud_activa (cita_id, solicitud_activa),
  UNIQUE KEY uq_regul_aprobada (cita_id, aprobada_unica),
  INDEX idx_regul_estado (estado, solicitada_at),
- CONSTRAINT fk_regul_cita FOREIGN KEY (cita_id) REFERENCES citas (id) ON DELETE CASCADE,
+ CONSTRAINT fk_regul_cita FOREIGN KEY (cita_id) REFERENCES citas (id) ON DELETE RESTRICT,
  CONSTRAINT fk_regul_solicitada_por FOREIGN KEY (solicitada_por) REFERENCES usuarios (id) ON DELETE SET NULL,
  CONSTRAINT fk_regul_resuelta_por FOREIGN KEY (resuelta_por) REFERENCES usuarios (id) ON DELETE SET NULL,
  CONSTRAINT ck_regul_efectiva_no_futura CHECK (atencion_efectiva_at IS NULL OR resuelta_at IS NULL OR atencion_efectiva_at <= resuelta_at),

@@ -225,7 +225,7 @@ final class R5bQaFinanzasTest extends R5bCase
         $this->assertStringNotContainsString('Cobro de la cita #' . $c, $finOrig['body'], 'Finanzas del día de la cita NO lista un cobro de hoy');
         $caja = $n->get("/caja?desde=$orig&hasta=$orig");
         $this->assertSame(200, $caja['status']);
-        $this->assertStringContainsString('día de la cita', self::texto($caja['body']), '/caja avisa que filtra por el día de la cita');
+        $this->assertStringContainsString('fecha programada de la cita', self::texto($caja['body']), '/caja avisa que filtra por la fecha programada de la cita');
         $this->assertSame(1, (int)self::escalar("SELECT COUNT(*) FROM caja_movimientos WHERE pago_id IN (SELECT id FROM pagos WHERE cita_id=?) AND DATE(registrado_en)=?", [$c, $hoy]), 'el movimiento de caja lleva la fecha real');
     }
 }

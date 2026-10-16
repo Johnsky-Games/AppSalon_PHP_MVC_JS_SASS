@@ -743,6 +743,21 @@ class CitaService
             ];
         }
 
+        // Una cita con solicitudes o decisiones de regularización es evidencia de auditoría (quién regularizó y cuándo): no se elimina.
+        // La clave foránea `citas_regularizaciones.cita_id` (ON DELETE RESTRICT) lo garantiza también en la base de datos.
+        try {
+            if ($this->citaRepository->tieneRegularizaciones($idCita)) {
+                return [
+                    'status' => self::STATUS_CONFLICT,
+                    'httpCode' => 409,
+                    'resultado' => false,
+                    'error' => 'Esta cita tiene una regularización de la atención registrada y no se puede eliminar para conservar su auditoría.'
+                ];
+            }
+        } catch (PersistenceException $e) {
+            return ['status' => self::STATUS_ERROR, 'httpCode' => 500, 'resultado' => false, 'error' => 'No fue posible comprobar la cita debido a un error de base de datos.'];
+        }
+
         // Capturar snapshot de la cita antes de eliminarla para la notificación de cancelación
         $snapshotCancelacion = null;
         try {
