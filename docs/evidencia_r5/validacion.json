@@ -1,0 +1,346 @@
+{
+  "codigo_sha": "39c4fc5921bbdb450ce1df12416fe134268547f6",
+  "entorno_local": "Linux; PHP 8.3.6; MySQL 8.0.46; bases nuevas; ejecuciones secuenciales; código y pruebas sin modificaciones durante la ejecución",
+  "local": [
+    {
+      "nombre": "qa",
+      "pruebas": 958,
+      "omitidas": 36,
+      "fallos": 0,
+      "errores": 0,
+      "aserciones": 17446,
+      "inicio": "2026-10-16T02:22:59Z",
+      "fin": "2026-10-16T02:37:48Z",
+      "omisiones": [
+        {
+          "clase": "Tests\\Qa\\FrontendTest",
+          "prueba": "test_sin_desbordamiento_horizontal_en_320_390_768_1440",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\FrontendTest",
+          "prueba": "test_sin_errores_de_consola_ni_recursos_rotos",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\FrontendTest",
+          "prueba": "test_guardian_de_envio_unico_emite_una_sola_peticion_y_crea_una_ficha",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\FrontendTest",
+          "prueba": "test_guardian_comunica_el_estado_mientras_envia",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\FrontendTest",
+          "prueba": "test_selector_de_rol_muestra_el_bloque_de_profesional_solo_cuando_corresponde",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\FrontendTest",
+          "prueba": "test_teclado_orden_de_foco_foco_visible_y_envio_con_enter",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\FrontendTest",
+          "prueba": "test_sin_javascript_el_formulario_de_invitacion_sigue_siendo_utilizable",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\R2bFrontendTest",
+          "prueba": "test_sin_desbordamiento_horizontal_en_las_pantallas_nuevas_de_320_a_1440",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\R2bFrontendTest",
+          "prueba": "test_sin_errores_de_consola_ni_recursos_rotos",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\R2bFrontendTest",
+          "prueba": "test_los_avisos_de_homonimos_aparecen_en_la_interfaz_real_a_todos_los_anchos_y_sin_javascript",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\R2bFrontendTest",
+          "prueba": "test_el_asistente_con_javascript_envia_exactamente_lo_que_el_servidor_espera",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\R2bFrontendTest",
+          "prueba": "test_foco_visible_movimiento_reducido_y_objetivos_tactiles",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\R5QaNavegadorTest",
+          "prueba": "test_A_clic_real_en_iniciar_atencion",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\R5QaNavegadorTest",
+          "prueba": "test_A_cita_futura_boton_deshabilitado_con_motivo_y_clic_inerte",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\R5QaNavegadorTest",
+          "prueba": "test_A_B_error_forjado_dentro_del_layout_y_volver_a_la_agenda",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\R5QaNavegadorTest",
+          "prueba": "test_C_finalizar_atencion_con_clic",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\R5QaNavegadorTest",
+          "prueba": "test_C_finalizar_y_cobrar_con_clic_llega_al_cobro_de_esa_cita",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\R5QaNavegadorTest",
+          "prueba": "test_N_mensaje_de_exceso_concreto_y_persistente",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\R5QaNavegadorTest",
+          "prueba": "test_N_cobro_boton_en_proceso_y_un_solo_envio",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\R5QaNavegadorTest",
+          "prueba": "test_N_agenda_iniciar_boton_en_proceso_y_un_solo_envio",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\R5QaNavegadorTest",
+          "prueba": "test_M_modal_registrar_ausencia_accesible",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\R5QaNavegadorTest",
+          "prueba": "test_M_modal_listado_o_descarga_crm_accesible",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\R5QaNavegadorTest",
+          "prueba": "test_M_modal_devolucion_o_rechazo_accesible",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\R5QaNavegadorTest",
+          "prueba": "test_D_descargas_reales_con_clic",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\R5QaNavegadorTest",
+          "prueba": "test_P_comprobante_imprimible_con_leyenda",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\R5QaNavegadorTest",
+          "prueba": "test_K_teclado_foco_visible",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\R5QaNavegadorTest",
+          "prueba": "test_R_sin_desbordes_horizontales",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\R5QaNavegadorTest",
+          "prueba": "test_R_sin_errores_de_consola",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\R5QaNavegadorTest",
+          "prueba": "test_S_sesion_de_equipo_en_mis_citas",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\R5QaNavegadorTest",
+          "prueba": "test_S_cliente_en_agenda",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\R5bQaNavegadorTest",
+          "prueba": "test_M_modal_regularizar_accesible",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\R5bQaNavegadorTest",
+          "prueba": "test_N_regularizar_estado_de_proceso_y_un_solo_post",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\R5bQaNavegadorTest",
+          "prueba": "test_N_mensaje_concreto_y_persistente_ante_efectiva_futura",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\R5bQaNavegadorTest",
+          "prueba": "test_R_sin_desbordes_y_sin_errores_de_consola",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\R5bQaNavegadorTest",
+          "prueba": "test_K_foco_visible_en_pendientes",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        },
+        {
+          "clase": "Tests\\Qa\\R5bQaNavegadorTest",
+          "prueba": "test_S_profesional_solicita_desde_el_navegador",
+          "motivo": "Navegador local no disponible; JUnit no incluye motivo textual."
+        }
+      ]
+    },
+    {
+      "nombre": "phpunit-1792111571",
+      "pruebas": 1125,
+      "omitidas": 0,
+      "fallos": 0,
+      "errores": 0,
+      "aserciones": 15806,
+      "inicio": "2026-10-16T02:37:49Z",
+      "fin": "2026-10-16T02:41:52Z",
+      "omisiones": []
+    },
+    {
+      "nombre": "phpunit-1792127001",
+      "pruebas": 1125,
+      "omitidas": 0,
+      "fallos": 0,
+      "errores": 0,
+      "aserciones": 15809,
+      "inicio": "2026-10-16T02:41:54Z",
+      "fin": "2026-10-16T02:45:53Z",
+      "omisiones": []
+    }
+  ],
+  "ci": {
+    "head_sha": "39c4fc5921bbdb450ce1df12416fe134268547f6",
+    "run_id": 38840115357,
+    "run_number": 79,
+    "html_url": "https://github.com/Johnsky-Games/AppSalon_PHP_MVC_JS_SASS/actions/runs/38840115357",
+    "conclusion": "success",
+    "inicio": "2026-10-16T02:22:43Z",
+    "fin": "2026-10-16T02:48:23Z",
+    "phpunit_pruebas": 1125,
+    "phpunit_aserciones": 15808,
+    "random_seed": 1792117420,
+    "qa_pruebas": 958,
+    "qa_aserciones": 17823,
+    "qa_omitidas": 0,
+    "entorno": "PHP 8.2; MySQL 8.0; Chromium real; openpyxl 3.1.5 y LibreOffice",
+    "pasos": [
+      {
+        "nombre": "Set up job",
+        "resultado": "success"
+      },
+      {
+        "nombre": "Initialize containers",
+        "resultado": "success"
+      },
+      {
+        "nombre": "Checkout del repositorio",
+        "resultado": "success"
+      },
+      {
+        "nombre": "Configurar PHP 8.2",
+        "resultado": "success"
+      },
+      {
+        "nombre": "Configurar Node.js 24",
+        "resultado": "success"
+      },
+      {
+        "nombre": "Instalar dependencias de Composer",
+        "resultado": "success"
+      },
+      {
+        "nombre": "Instalar dependencias de NPM y compilar frontend",
+        "resultado": "success"
+      },
+      {
+        "nombre": "Verificar sintaxis PHP (php -l)",
+        "resultado": "success"
+      },
+      {
+        "nombre": "Cargar esquema base y aplicar todas las migraciones incrementales",
+        "resultado": "success"
+      },
+      {
+        "nombre": "Instalador idempotente del primer propietario (base nueva aislada)",
+        "resultado": "success"
+      },
+      {
+        "nombre": "Ejecutar suite completa de PHPUnit (sin caché y orden aleatorio)",
+        "resultado": "success"
+      },
+      {
+        "nombre": "Instalar lectores independientes de XLSX (openpyxl y LibreOffice Calc)",
+        "resultado": "success"
+      },
+      {
+        "nombre": "QA independiente (tests/Qa) en base MySQL aislada — obligatorio",
+        "resultado": "success"
+      },
+      {
+        "nombre": "Conservar informe JUnit de QA",
+        "resultado": "success"
+      },
+      {
+        "nombre": "Construir y verificar imagen Docker oficial (Apache + PHP 8.2 + mbstring)",
+        "resultado": "success"
+      },
+      {
+        "nombre": "Recorrido E2E aislado en Apache, MySQL y SMTP mock",
+        "resultado": "success"
+      },
+      {
+        "nombre": "Conservar resultados y registros E2E",
+        "resultado": "success"
+      },
+      {
+        "nombre": "Verificar ciclo completo de respaldo y restauración con validación SHA-256",
+        "resultado": "success"
+      },
+      {
+        "nombre": "Post Configurar Node.js 24",
+        "resultado": "success"
+      },
+      {
+        "nombre": "Post Checkout del repositorio",
+        "resultado": "success"
+      },
+      {
+        "nombre": "Stop containers",
+        "resultado": "success"
+      },
+      {
+        "nombre": "Complete job",
+        "resultado": "success"
+      }
+    ],
+    "artefacto_qa": {
+      "id": 12020574338,
+      "name": "qa-junit",
+      "size_in_bytes": 33983,
+      "url": "https://api.github.com/repos/Johnsky-Games/AppSalon_PHP_MVC_JS_SASS/actions/artifacts/12020574338",
+      "archive_download_url": "https://api.github.com/repos/Johnsky-Games/AppSalon_PHP_MVC_JS_SASS/actions/artifacts/12020574338/zip",
+      "expired": false,
+      "created_at": "2026-10-16T02:43:33Z",
+      "expires_at": "2027-01-14T02:22:44Z",
+      "updated_at": "2026-10-16T02:43:33Z",
+      "digest": "sha256:b5b5f5338a5ce05723be15cc61f4bf3d72e7006926dfaa241aa1b9508a2b2bf1",
+      "workflow_run": {
+        "id": 38840115357,
+        "repository_id": 796801181,
+        "head_repository_id": 796801181,
+        "head_branch": "claude/blissful-hopper-f5k7a0",
+        "head_sha": "39c4fc5921bbdb450ce1df12416fe134268547f6"
+      }
+    }
+  },
+  "omitidas_locales": "Navegador local no disponible por restricciones de sockets del entorno; se exige en CI y la lista de omisiones permitidas permanece vacía."
+}

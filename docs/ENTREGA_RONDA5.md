@@ -4,6 +4,8 @@ Rama `claude/blissful-hopper-f5k7a0` (sin merge a `main`, sin despliegue, sin PR
 
 ## 0. Estado honesto — leer primero
 
+* **Cierre técnico R5b validado:** código y pruebas `39c4fc5`; resultados actuales en §4/§8. Las cifras de `6b9ae6f` corresponden a la entrega anterior a la regularización.
+
 * **Tu equipo NO está validado.** Todo se hizo y se probó en la nube (Linux, sin tus contenedores, `.env`, volúmenes ni respaldo). `docs/IDENTIFICAR_ENTORNO_LOCAL.md` y `docs/GUIA_ACTUALIZACION_RONDA5.md` dan los comandos para tu entorno; la validación en tu computadora queda fuera de esta fase.
 * **Decisión tomada por ti — citas de días anteriores:** no hay inicio ordinario de una cita de un día anterior; se **reprograma** (con las validaciones habituales) o el propietario/gerente la **regulariza** (motivo + fecha/hora efectiva, nunca futura; quién y cuándo se registran aparte), el profesional puede **solicitarlo** pero no aprobarlo, y las citas antiguas sin resolver quedan **pendientes de revisión** sin marcarse solas. Detalle, efecto en reportes y comisiones y pruebas: `docs/R5_REGULARIZACION.md` (migración 027).
 * **Otras decisiones de negocio tomadas (revísalas):** margen de 60 minutos para iniciar antes de la hora; «Finalizar y cobrar» solo para quien tiene permiso de agenda **y** de finanzas (propietario y gerente), recepción no cobra; quien registra una transferencia no la verifica (salvo el propietario); «suscripción» del CRM = suscripción a comunicaciones comerciales (no existe suscripción de pago); el comprobante es interno.
@@ -35,7 +37,19 @@ Rama `claude/blissful-hopper-f5k7a0` (sin merge a `main`, sin despliegue, sin PR
 
 ## 4. Resultados por suite (sin sumar)
 
-Se detallan con SHA en §8. Resumen de lo comprobado en la rama integrada (nube): PHPUnit por defecto 1073 pruebas; QA completo (`tests/Qa`) 889 pruebas con 0 omitidas; clases `R5Qa*` (116 pruebas) en verde; CSV y XLSX generados validados con openpyxl 3.1.5 y LibreOffice. El E2E de navegador con Chromium cubre el clic en «Iniciar atención», «Finalizar y cobrar», modales y descargas.
+| Ejecución sobre `39c4fc5` | Pruebas | Resultado |
+|---|---:|---|
+| PHPUnit local, semilla `1792111571` (la que había dado 89 errores) | 1125 | OK; 0 omitidas |
+| PHPUnit local, semilla nueva `1792127001` | 1125 | OK; 0 omitidas |
+| QA local completo (`tests/Qa`) | 958 | 0 fallos y 0 errores; 36 omitidas por navegador local no disponible |
+| PHPUnit en CI (PHP 8.2, orden aleatorio) | 1125 | OK; semilla `1792117420` |
+| QA en CI (MySQL 8.0, Chromium, openpyxl y LibreOffice) | 958 | OK; **0 omitidas** |
+| Mutaciones en árbol separado | 30 | **30 detectadas** por fallos de aserción; fuentes restauradas |
+| Integridad en base nueva migrada | 11 consultas / 33 FK | Todas las consultas dan 0; FK contrastadas con `information_schema` |
+
+[CI run 79 — éxito completo](https://github.com/Johnsky-Games/AppSalon_PHP_MVC_JS_SASS/actions/runs/38840115357). También pasó compilación frontend, sintaxis PHP, instalación idempotente, imagen Docker, E2E en Apache con SMTP simulado y respaldo/restauración con SHA-256.
+
+La ejecución local se hizo en Linux con PHP 8.3.6 y MySQL 8.0.46. Sus omisiones de navegador se declaran; la validación completa del navegador corresponde al CI, que exige `QA_EXIGIR_NAVEGADOR=1` y **no permite omisiones**. Evidencia por SHA, comandos, semillas, fechas y casos omitidos: [validacion.json](evidencia_r5/validacion.json), [mutaciones.json](evidencia_r5/mutaciones.json) e [integridad.json](evidencia_r5/integridad.json). No se suman suites ni repeticiones.
 
 ## 5. Ejemplos ficticios
 
@@ -46,6 +60,9 @@ Se detallan con SHA en §8. Resumen de lo comprobado en la rama integrada (nube)
 Ver `docs/R5_QA_INDEPENDIENTE.md` (hallazgos reales corregidos, tabla de pruebas ajustadas con su motivo y cómo se demuestra «un solo envío real» con botón en proceso).
 
 ## 7. Riesgos que quedan
+
+* La prueba de arquitectura detecta SQL literal en PHP; no SQL dinámico ni sentencias fuera de PHP. Las rondas regularizar contra cobrar/rechazar siguen siendo cobertura limitada: no discriminan las mutaciones ensayadas. No se presentan como evidencia de esos bloqueos.
+* Anonimización de usuarios y baja lógica de servicios del catálogo: decisiones de negocio pendientes, fuera del cierre autorizado; ver `docs/R5_REGULARIZACION.md` §7.
 
 * Las pruebas de Chromium dependen del navegador del runner; se endureció la captura del estado, pero conviene vigilar su estabilidad.
 * La verificación de transferencias es manual (sin conciliación con extractos bancarios reales).
@@ -65,6 +82,15 @@ Rama `claude/blissful-hopper-f5k7a0` (sin merge a `main`, sin despliegue, sin PR
 | `3d6152f` | Puertos R5 de 8199 hacia abajo; cierre de servidores con su árbol; pruebas del integrador adicionales | CI **falló** solo en el E2E de Apache (primera vez que llegaba): `/api/disponibilidad` leída con sesión del equipo (ahora 403 por diseño), menú del equipo sin catálogo en la prueba de navegación y falta de `noindex` en errores dentro del layout. PHPUnit, QA e imagen Docker pasaron |
 | **`6b9ae6f`** | **Código validado: corrige lo anterior (`noindex` en errores, E2E y navegación ajustados)** | **CI run 71 en éxito completo:** PHPUnit (PHP 8.2, orden aleatorio), QA con openpyxl y LibreOffice, imagen Docker, E2E en Apache con SMTP simulado, respaldo y restauración SHA-256. **Local (nube, PHP 8.3, MySQL 8.0.46, bases nuevas): PHPUnit 1074 pruebas OK; QA 889 pruebas OK, 0 omitidas.** El E2E se ensayó además en emulación local (`php -S`, sin Apache): 8 etapas OK |
 
-Los commits posteriores a `6b9ae6f` son solo de documentación (no cambian código ni pruebas); su CI, si corre, no es una validación nueva del código.
+La ampliación R5b posterior a `6b9ae6f` **sí cambia código y pruebas** (incluye la migración 027). El cierre actual es:
+
+| SHA | Evidencia del cierre R5b |
+|---|---|
+| `5526f81`, `6ac8c4e` | Revisiones sustituidas por correcciones posteriores; sus ejecuciones locales invalidadas no se utilizan para este cierre |
+| `b254642` | CI run 77 falló en `ColaSinEnvioEnLineaIntegrationTest`: el worker procesó un evento ajeno a la prueba (2 envíos en vez de 1) |
+| `e39572a` | Aislamiento de la cola, restauración de conexiones, evidencia de reasignaciones/fidelidad y orden de bloqueos. CI run 78 falló en una prueba de privacidad: buscaba el dígito del id `1` en todo el HTML. El QA local se interrumpió al corregirla; no se cuenta como validación final |
+| **`39c4fc5`** | **Código y pruebas validados:** dos PHPUnit locales aleatorios, QA local con omisiones de navegador explícitas, 30 mutaciones detectadas y [CI run 79 — éxito completo](https://github.com/Johnsky-Games/AppSalon_PHP_MVC_JS_SASS/actions/runs/38840115357). El CI completó PHPUnit, QA sin omisiones, imagen Docker, E2E en Apache y respaldo/restauración |
+
+El commit que incorpora este cierre modifica únicamente documentación y evidencia (`[skip ci]`); el código y las pruebas siguen siendo exactamente los de `39c4fc5`. No hay merge, despliegue ni PR.
 
 Cambios de expectativas de pruebas y su justificación: `docs/R5_QA_INDEPENDIENTE.md` §3. Pruebas del integrador (no independientes) y su reverificación: §3 bis.

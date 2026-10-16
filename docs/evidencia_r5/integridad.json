@@ -1,0 +1,251 @@
+{
+  "base": "39c4fc5921bbdb450ce1df12416fe134268547f6",
+  "verificada_en": "2026-10-16T02:48:28.383193+00:00",
+  "entorno": "MySQL 8.0.46; esquema base y 27 migraciones en una base nueva",
+  "huerfanas": [
+    {
+      "comprobacion": "citas_regularizaciones sin cita",
+      "filas": 0
+    },
+    {
+      "comprobacion": "agenda_eventos sin cita",
+      "filas": 0
+    },
+    {
+      "comprobacion": "citasservicios sin cita",
+      "filas": 0
+    },
+    {
+      "comprobacion": "comprobantes de cita inexistente",
+      "filas": 0
+    },
+    {
+      "comprobacion": "cobros_eventos de cita inexistente",
+      "filas": 0
+    },
+    {
+      "comprobacion": "cobros_devoluciones de cita inexistente",
+      "filas": 0
+    },
+    {
+      "comprobacion": "pagos.cita_referencia_id de cita inexistente",
+      "filas": 0
+    },
+    {
+      "comprobacion": "citas_reasignaciones de cita inexistente",
+      "filas": 0
+    },
+    {
+      "comprobacion": "notificaciones_citas de cita inexistente",
+      "filas": 0
+    },
+    {
+      "comprobacion": "citas de usuario inexistente",
+      "filas": 0
+    },
+    {
+      "comprobacion": "citasservicios de servicio inexistente",
+      "filas": 0
+    }
+  ],
+  "claves_foraneas": [
+    {
+      "tabla": "agenda_eventos",
+      "columna": "citaId",
+      "referencia": "citas",
+      "on_delete": "CASCADE"
+    },
+    {
+      "tabla": "citas_reasignaciones",
+      "columna": "cita_id",
+      "referencia": "citas",
+      "on_delete": "SET NULL"
+    },
+    {
+      "tabla": "citas_regularizaciones",
+      "columna": "cita_id",
+      "referencia": "citas",
+      "on_delete": "RESTRICT"
+    },
+    {
+      "tabla": "fidelidad_movimientos",
+      "columna": "cita_id",
+      "referencia": "citas",
+      "on_delete": "SET NULL"
+    },
+    {
+      "tabla": "notificaciones_citas",
+      "columna": "cita_id",
+      "referencia": "citas",
+      "on_delete": "SET NULL"
+    },
+    {
+      "tabla": "pagos",
+      "columna": "cita_id",
+      "referencia": "citas",
+      "on_delete": "SET NULL"
+    },
+    {
+      "tabla": "agenda_eventos",
+      "columna": "actorId",
+      "referencia": "usuarios",
+      "on_delete": "SET NULL"
+    },
+    {
+      "tabla": "caja_movimientos",
+      "columna": "actor_id",
+      "referencia": "usuarios",
+      "on_delete": "SET NULL"
+    },
+    {
+      "tabla": "citas",
+      "columna": "atencion_fin_por",
+      "referencia": "usuarios",
+      "on_delete": "SET NULL"
+    },
+    {
+      "tabla": "citas",
+      "columna": "atencion_inicio_por",
+      "referencia": "usuarios",
+      "on_delete": "SET NULL"
+    },
+    {
+      "tabla": "citas",
+      "columna": "ausencia_por",
+      "referencia": "usuarios",
+      "on_delete": "SET NULL"
+    },
+    {
+      "tabla": "citas",
+      "columna": "regularizada_por",
+      "referencia": "usuarios",
+      "on_delete": "SET NULL"
+    },
+    {
+      "tabla": "citas_reasignaciones",
+      "columna": "actor_id",
+      "referencia": "usuarios",
+      "on_delete": "SET NULL"
+    },
+    {
+      "tabla": "citas_regularizaciones",
+      "columna": "resuelta_por",
+      "referencia": "usuarios",
+      "on_delete": "SET NULL"
+    },
+    {
+      "tabla": "citas_regularizaciones",
+      "columna": "solicitada_por",
+      "referencia": "usuarios",
+      "on_delete": "SET NULL"
+    },
+    {
+      "tabla": "clientes",
+      "columna": "usuario_id",
+      "referencia": "usuarios",
+      "on_delete": "CASCADE"
+    },
+    {
+      "tabla": "cobros_devoluciones",
+      "columna": "actor_id",
+      "referencia": "usuarios",
+      "on_delete": "SET NULL"
+    },
+    {
+      "tabla": "colaboradores",
+      "columna": "usuario_id",
+      "referencia": "usuarios",
+      "on_delete": "SET NULL"
+    },
+    {
+      "tabla": "comisiones_config",
+      "columna": "actor_id",
+      "referencia": "usuarios",
+      "on_delete": "SET NULL"
+    },
+    {
+      "tabla": "comisiones_liquidaciones",
+      "columna": "actor_id",
+      "referencia": "usuarios",
+      "on_delete": "SET NULL"
+    },
+    {
+      "tabla": "consentimientos_historial",
+      "columna": "usuario_id",
+      "referencia": "usuarios",
+      "on_delete": "CASCADE"
+    },
+    {
+      "tabla": "fidelidad_movimientos",
+      "columna": "usuario_id",
+      "referencia": "usuarios",
+      "on_delete": "CASCADE"
+    },
+    {
+      "tabla": "formulario_respuestas",
+      "columna": "usuario_id",
+      "referencia": "usuarios",
+      "on_delete": "CASCADE"
+    },
+    {
+      "tabla": "inventario_movimientos",
+      "columna": "actor_id",
+      "referencia": "usuarios",
+      "on_delete": "SET NULL"
+    },
+    {
+      "tabla": "lista_espera",
+      "columna": "usuario_id",
+      "referencia": "usuarios",
+      "on_delete": "CASCADE"
+    },
+    {
+      "tabla": "notificaciones_citas",
+      "columna": "usuario_id",
+      "referencia": "usuarios",
+      "on_delete": "SET NULL"
+    },
+    {
+      "tabla": "pagos",
+      "columna": "registrado_por",
+      "referencia": "usuarios",
+      "on_delete": "SET NULL"
+    },
+    {
+      "tabla": "pagos",
+      "columna": "usuario_id",
+      "referencia": "usuarios",
+      "on_delete": "SET NULL"
+    },
+    {
+      "tabla": "pagos",
+      "columna": "verificado_por",
+      "referencia": "usuarios",
+      "on_delete": "SET NULL"
+    },
+    {
+      "tabla": "perfil_fotos",
+      "columna": "usuarioId",
+      "referencia": "usuarios",
+      "on_delete": "CASCADE"
+    },
+    {
+      "tabla": "perfiles_usuario",
+      "columna": "usuarioId",
+      "referencia": "usuarios",
+      "on_delete": "CASCADE"
+    },
+    {
+      "tabla": "profesionales",
+      "columna": "usuarioId",
+      "referencia": "usuarios",
+      "on_delete": "SET NULL"
+    },
+    {
+      "tabla": "usuario_accesos",
+      "columna": "usuario_id",
+      "referencia": "usuarios",
+      "on_delete": "CASCADE"
+    }
+  ]
+}

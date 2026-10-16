@@ -66,9 +66,19 @@ Huecos que halló y que el integrador cerró después con pruebas propias (**no 
 
 ## 4. Resultados (SHA y entorno)
 
-* Código validado: `6b9ae6f`. **CI (PHP 8.2, MySQL 8.0): éxito completo** (PHPUnit, QA, imagen Docker, E2E en Apache, respaldo y restauración). **Local (nube, PHP 8.3, MySQL 8.0.46):** PHPUnit 1074 pruebas OK; QA 889 pruebas OK, 0 omitidas (Chromium real, XLSX leídos con openpyxl y LibreOffice).
-* CI previos que fallaron y por qué: `9ec7eaf` (interbloqueo real en cobros simultáneos), `33605ff` (puertos del arnés de QA), `3d6152f` (E2E de Apache: contratos de la ronda y `noindex`). Detalle en `docs/ENTREGA_RONDA5.md` §8.
-* Reverificación independiente de las pruebas del integrador: §3 bis.
+Código y pruebas del cierre actual: **`39c4fc5`**. [CI run 79 — éxito completo](https://github.com/Johnsky-Games/AppSalon_PHP_MVC_JS_SASS/actions/runs/38840115357).
+
+| Ejecución sobre `39c4fc5` | Pruebas | Resultado |
+|---|---:|---|
+| PHPUnit local, semilla `1792111571` (la que había dado 89 errores) | 1125 | OK; 0 omitidas |
+| PHPUnit local, semilla nueva `1792127001` | 1125 | OK; 0 omitidas |
+| QA local completo (`tests/Qa`) | 958 | 0 fallos y 0 errores; 36 omitidas por navegador local no disponible |
+| PHPUnit en CI (PHP 8.2, orden aleatorio) | 1125 | OK; semilla `1792117420` |
+| QA en CI (MySQL 8.0, Chromium, openpyxl y LibreOffice) | 958 | OK; **0 omitidas** |
+| Mutaciones en árbol separado | 30 | **30 detectadas** por fallos de aserción; fuentes restauradas |
+| Integridad en base nueva migrada | 11 consultas / 33 FK | Todas las consultas dan 0; FK contrastadas con `information_schema` |
+
+Los resultados históricos de `6b9ae6f` validaban la entrega previa a la ampliación R5b. Las revisiones y ejecuciones sustituidas se identifican en `docs/ENTREGA_RONDA5.md` §8. Evidencia verificable: [validacion.json](evidencia_r5/validacion.json), [mutaciones.json](evidencia_r5/mutaciones.json) e [integridad.json](evidencia_r5/integridad.json).
 
 ## 5. Citas de días anteriores: decisión del usuario y su QA
 
@@ -111,3 +121,24 @@ Hecha por el agente QA en un clon propio, con mutaciones (se rompe el código a 
 | Integridad referencial | `DELETE` directo → 1451; `CitaService::eliminar` → 409 con regularización; sin huérfanas en las tablas de regularización/agenda. Corrección a mi análisis: `/api/eliminar` solo cancela; la eliminación física no tiene ruta HTTP. Punto abierto confirmado (eliminar con cobros dejaba comprobantes apuntando a una cita inexistente) → **corregido con 409** (`test_E_…` pasa) |
 
 Resultado de la clase: 12 de 12 pasan tras las correcciones (antes de ellas, 11 de 12; fallaba solo la de eliminar con cobros). `scripts_qa_r5.sh` la incluye.
+
+
+### 5 ter. Reverificación del cierre R5b sobre `39c4fc5`
+
+Hecha por Codex al retomar la entrega: clon propio, bases de pruebas nuevas y mutaciones en un árbol separado. No se atribuyen resultados a ejecuciones anteriores que quedaron interrumpidas.
+
+**Eliminación (`R5bQaFase3Test`, 13 pruebas):** cada evidencia se inserta de forma aislada y se comprueba el 409 del servicio, la excepción del repositorio y la conservación íntegra de cita, servicios y evidencia. Incluye pagos por ambas referencias, comprobantes, eventos, devoluciones, regularizaciones, agenda, reasignaciones y fidelidad. Los tres últimos casos y la prueba determinista del orden de bloqueos fueron añadidos por Codex al cierre.
+
+**Interbloqueo:** las 15 rondas HTTP reales contra cambios de estado terminan sin 5xx ni interbloqueos observados. Además, la prueba nueva retiene el profesional, identifica en `performance_schema.data_lock_waits` la espera de la conexión exacta que elimina e intenta obtener la cita con `NOWAIT`. Si se restaura cita→profesional, falla porque el eliminador ya retiene la cita. Así la regresión del orden se discrimina sin depender de que una carrera aparezca por azar.
+
+**30 mutaciones, todas detectadas:** 3 de atomicidad/orden de bloqueos, 9 de evidencia aislada, 15 de tablas protegidas y 3 de filtración del id (URL, JSON y campo). Cada caso produjo un fallo de aserción, no un error de sintaxis; cada archivo se restauró antes del siguiente caso. Transformaciones, pruebas y hashes están en `docs/evidencia_r5/mutaciones.json`.
+
+| Prueba ajustada al cierre | Motivo y garantía conservada |
+|---|---|
+| `ColaSinEnvioEnLineaIntegrationTest` | El worker procesa toda la cola: residuos de otras clases disparaban la aserción de envío único en CI. Ahora usa una base propia con esquema y migraciones reales. Conserva las aserciones de cero envíos en línea, un envío del worker y cero reenvíos; restaura conexión y variable de entorno |
+| `AgendaOperativaIntegrationTest`, `R5AtencionCitaIntegrationTest`, `RevocacionApiIntegrationTest` | Se cerraba la conexión publicada en `ActiveRecord` sin restaurar la anterior. Se corrige ese patrón de aislamiento; no se cambian expectativas del producto |
+| `AltaHomonimosIntegrationTest::testElAvisoSoloLoVeQuienPuedeDarDeAltaYNoFiltraDatosAOtrosRoles` | CI run 78, semilla `1792116672`: el id era `1`, presente también en SVG/metadatos de una página 403 correcta. Se mantienen las comprobaciones de PII/aviso y se verifica el id en referencias URL/JSON y campos mediante DOM. El caso aislado en base vacía pasa (118 aserciones); las tres mutaciones con filtraciones reales del id fallan |
+
+Se añaden reasignaciones y fidelidad a la protección del borrado genérico y a la prueba de arquitectura. La consulta de huérfanas da 0 en sus 11 filas sobre una base recién migrada; se contrastan las 33 FK hacia citas/usuarios (`docs/evidencia_r5/integridad.json`). No se modifican FK ni se limpia información del usuario.
+
+**Límites conservados:** regularizar contra cobrar/rechazar sigue sin discriminar las mutaciones ensayadas; el escáner de arquitectura solo ve SQL literal en PHP. Las decisiones sobre anonimización y servicios del catálogo siguen pendientes de negocio. El navegador local está restringido por el entorno: sus omisiones se detallan y **958 pruebas de QA con 0 omitidas pasan en CI**, con Chromium y lectores XLSX independientes.
