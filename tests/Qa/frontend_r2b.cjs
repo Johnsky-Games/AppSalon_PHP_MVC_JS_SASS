@@ -92,6 +92,7 @@ const out = { medidas: [], eventos: [], objetivos: [], asistente: {}, teclado: [
     // --- asistente: añadir turnos/descansos con JS, copiar el lunes y guardar (contrato JS ↔ servidor)
     await page.setViewport({ width: 1280, height: 1000 });
     await page.goto(cfg.base + '/admin/equipo/ficha?id=' + cfg.colProf, { waitUntil: 'networkidle0' });
+    await page.click('[data-agenda-asistente] > details.gestion-detalle > summary');
     const setHora = async (sel, v) => { await page.$eval(sel, (e, val) => { e.value = val; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); }, v); };
     // Lunes: dos turnos y un descanso con motivo
     await setHora('[data-ag-dia="1"] [data-ag-lista="franja"] [data-ag-fila]:first-child input[name$="[inicio]"]', '09:00');

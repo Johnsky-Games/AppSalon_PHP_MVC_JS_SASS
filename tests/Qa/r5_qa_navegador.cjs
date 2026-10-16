@@ -239,12 +239,13 @@ const FN = {
       return Object.assign(d, { atrapaFoco: atrapa, cierraConEscape: !post.abierto, devuelveFoco: post.retorno, etiqueta });
     };
     await paso('M_modal_registrar_ausencia', async () => probarModal(`/agenda?${periodo}`, 'Registrar ausencia', 'ausencia'));
-    await paso('M_modal_listado_o_descarga_crm', async () => probarModal('/admin/clientes', 'Ver clientes|Listado|Descargar', 'crm'));
+    await paso('M_modal_listado_o_descarga_crm', async () => probarModal('/admin/clientes/indicadores', 'Ver listado de', 'crm'));
     await paso('M_modal_devolucion_o_rechazo', async () => probarModal(`/caja/cita?id=${cfg.citaConPago}`, 'Devol|Reembols|Rechazar', 'caja'));
 
     // ===================================================================== Descargas reales (CSV y Excel) con clic
-    const descargar = async (ruta, reLink) => {
+    const descargar = async (ruta, reLink, resumen = null) => {
       await ir(ruta);
+      if (resumen) await page.click(resumen);
       const antes = new Set(fs.readdirSync(dl));
       const link = await page.evaluateHandle(re => [...document.querySelectorAll('a[href],button')].find(a => new RegExp(re, 'i').test((a.textContent || '').replace(/\s+/g, ' ')) && /exportar|descargar|formato=/i.test((a.getAttribute('href') || '') + (a.textContent || ''))) || null, reLink);
       if (!link.asElement()) return { sinEnlace: true };
@@ -252,8 +253,8 @@ const FN = {
       for (let i = 0; i < 40; i++) { await esperar(250); const n = fs.readdirSync(dl).filter(f => !antes.has(f) && !f.endsWith('.crdownload')); if (n.length) { const f = path.join(dl, n[0]); const b = fs.readFileSync(f); return { archivo: n[0], bytes: b.length, esZip: b.slice(0, 2).toString() === 'PK', bom: b.slice(0, 3).equals(Buffer.from([0xEF, 0xBB, 0xBF])) }; } }
       return { sinArchivo: true };
     };
-    await paso('D_descarga_xlsx_crm', async () => descargar('/admin/clientes', 'Excel|XLSX'));
-    await paso('D_descarga_csv_crm', async () => descargar('/admin/clientes', 'CSV'));
+    await paso('D_descarga_xlsx_crm', async () => descargar('/admin/clientes', 'Excel|XLSX', 'details.gestion-detalle > summary'));
+    await paso('D_descarga_csv_crm', async () => descargar('/admin/clientes', 'CSV', 'details.gestion-detalle > summary'));
     await paso('D_descarga_xlsx_caja', async () => descargar('/caja', 'Excel|XLSX'));
 
     // ===================================================================== Comprobante en pantalla e impresión
