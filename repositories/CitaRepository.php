@@ -1210,6 +1210,14 @@ class CitaRepository
         return $hay;
     }
 
+    /** Motivo por el que la cita no puede eliminarse físicamente (`regularizacion` | `cobros`) o null si puede. */
+    public function motivoProteccionEliminacion(int $citaId): ?string
+    {
+        if ($this->tieneRegularizaciones($citaId)) return 'regularizacion';
+        if ($this->tieneRegistrosFinancieros($citaId)) return 'cobros';
+        return null;
+    }
+
     /** ¿La cita tiene pagos, comprobantes o eventos de cobro? (evidencia financiera sin FK por diseño: no se elimina). */
     public function tieneRegistrosFinancieros(int $citaId): bool
     {
@@ -1246,7 +1254,7 @@ class CitaRepository
         }
 
         try {
-            $stmtPre = $db->prepare("SELECT id, profesionalId FROM citas WHERE id = ? LIMIT 1");
+            $stmtPre = $db->prepare("SELECT id, profesionalId FROM citas WHERE id = ? LIMIT 1 FOR UPDATE");
             if (!$stmtPre) {
                 throw new PersistenceException("Fallo al preparar lectura previa de cita: " . $db->error);
             }
@@ -1269,6 +1277,13 @@ class CitaRepository
             if (!$filaPre) {
                 $db->rollback();
                 return false;
+            }
+
+            // Con la cita bloqueada (los cobros y las regularizaciones la bloquean también), la comprobación y la eliminación son
+            // atómicas: ningún cobro puede colarse entre la guarda y el DELETE. Es la guarda autoritativa; la del servicio solo da un mensaje antes.
+            $motivoProteccion = $this->motivoProteccionEliminacion($citaId);
+            if ($motivoProteccion !== null) {
+                throw new CitaProtegidaException($motivoProteccion);
             }
 
             if ($filaPre['profesionalId'] !== null && (int)$filaPre['profesionalId'] > 0) {
@@ -1334,7 +1349,7 @@ class CitaRepository
                 error_log("[CitaRepository::eliminarCitaAtomica] Error adicional en rollback: " . $rollbackError->getMessage());
             }
 
-            if ($e instanceof PersistenceException) {
+            if ($e instanceof PersistenceException || $e instanceof CitaProtegidaException) {
                 throw $e;
             }
 

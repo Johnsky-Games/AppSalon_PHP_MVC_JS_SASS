@@ -11,12 +11,14 @@ use Services\ProfileService;
 final class PerfilPortalesIntegrationTest extends TestCase
 {
     private \mysqli $db;
+    private ?\mysqli $previa = null;
     private int $id;
 
     protected function setUp(): void
     {
         $this->db = new \mysqli(getenv('DB_HOST') ?: '127.0.0.1', getenv('DB_USER') ?: 'root', getenv('DB_PASS') ?: 'root', getenv('DB_NAME') ?: 'appsalon_test', (int)(getenv('DB_PORT') ?: 3306));
         $this->db->set_charset('utf8mb4');
+        $this->previa = ActiveRecord::getDB();
         ActiveRecord::setDB($this->db);
         validar_base_datos_prueba($this->db);
         $email = 'perfil-portal-' . bin2hex(random_bytes(4)) . '@portales.test';
@@ -32,6 +34,7 @@ final class PerfilPortalesIntegrationTest extends TestCase
     {
         $this->db->query("DELETE FROM profesionales WHERE usuarioId={$this->id}");
         $this->db->query("DELETE FROM usuarios WHERE id={$this->id}");
+        ActiveRecord::setDB($this->previa);
         $this->db->close();
     }
 

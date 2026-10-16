@@ -14,12 +14,17 @@ use PHPUnit\Framework\TestCase;
 final class R5PortalesDestinosTest extends TestCase
 {
     private \mysqli $db;
+    private ?\mysqli $previa = null;
     private array $respaldo = [];
     private static int $seq = 0;
 
     protected function setUp(): void
     {
-        $this->db = \Model\ActiveRecord::getDB();
+        // Conexión propia: otras pruebas cierran la global al terminar y el orden de ejecución es aleatorio.
+        $this->previa = \Model\ActiveRecord::getDB();
+        $this->db = new \mysqli(getenv('DB_HOST') ?: 'appsalon-test-db', getenv('DB_USER') ?: 'root', getenv('DB_PASS') ?: 'root', getenv('DB_NAME') ?: 'appsalon_test', (int)(getenv('DB_PORT') ?: 3306));
+        $this->db->set_charset('utf8mb4');
+        \Model\ActiveRecord::setDB($this->db);
         validar_base_datos_prueba($this->db);
         iniciar_sesion_segura();   // puede() abre la sesión la primera vez y vaciaría $_SESSION si no estuviera abierta
         $this->respaldo = [$_SESSION ?? [], $_POST, $_GET, $_SERVER];
@@ -33,6 +38,8 @@ final class R5PortalesDestinosTest extends TestCase
     protected function tearDown(): void
     {
         $this->limpiarUsuarios();
+        \Model\ActiveRecord::setDB($this->previa);
+        $this->db->close();
         [$_SESSION, $_POST, $_GET, $_SERVER] = $this->respaldo;
         http_response_code(200);
     }

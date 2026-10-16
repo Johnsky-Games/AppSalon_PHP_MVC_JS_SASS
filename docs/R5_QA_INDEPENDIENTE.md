@@ -97,3 +97,17 @@ El usuario decidió: sin inicio ordinario de una cita de un día anterior (repro
 **Pruebas del integrador (NO independientes):** `R5RegularizacionIntegrationTest` (19), `R5RegularizacionConcurrenciaIntegrationTest` (6, procesos reales: dos regularizaciones, mismo formulario dos veces, regularizar vs ausencia, vs finalizar, solicitud vs regularización directa, dos rechazos), pruebas unitarias de `esPendienteRevision` y los ajustes de contrato de la matriz de autorización (3 rutas POST + `/agenda/pendientes` + permisos), `EsquemaTest` (50 tablas) y `MatrizHttp`.
 
 **Observación sobre `finalizar` vs regularizar:** si la regularización gana, «Finalizar» encuentra la cita ya completada y responde idempotente («Estado ya actualizado») sin escribir; la prueba exige una única escritura.
+
+### 5 bis. Reverificación independiente sobre `8f06ca7` (clase `R5bQaFase2Test`, 12 pruebas)
+
+Hecha por el agente QA en un clon propio, con mutaciones (se rompe el código a propósito y se comprueba que alguna prueba falla; luego se revierte).
+
+| Punto pedido | Resultado |
+|---|---|
+| Los cuatro defectos corregidos (`affected_rows`, `AppTerminationException`, permiso portal-aware, fecha efectiva) | Cada mutación hace fallar pruebas concretas (`R2_solo_propietario`, `R4_rechazo`, `R4_solicitud`, `R2_fecha_efectiva_invalida`). La mutación 4 es una aproximación del QA, no el diff real |
+| Prueba de caja modificada (`test_F_caja_por_dia_real`) | Justificación válida: la garantía de «caja por fecha real» sigue cubierta en **Finanzas** (nueva `test_B_…`: programada −6 días, efectiva −5, cobro ayer 30.00, devolución hoy 10.00; ayer = ingreso 30.00, hoy = egreso 10.00; los días programada/efectiva dan 0; el total del rango = Σ pagos y Σ devoluciones; una mutación con un día de holgura la rompe). Lo que se pierde es verlo en `/caja`; su CSV no llevaba la aclaración → **corregido** (columna «Fecha programada de la cita» y nombre de archivo `caja-citas-por-fecha-programada_…`) |
+| Tres fechas | Criterios `programacion`, `realizado`, `cobro` y alias `servicio` correctos; ninguna etiqueta presenta la programada como real. Hallazgo menor anterior a la ronda: «Estado Cita» del reporte era binario (Cancelada/Confirmada) y una cita atendida salía «Confirmada» → **corregido** (Atendida, No asistió, En servicio, Cancelada…) con aserción en `R5TresFechasIntegrationTest` |
+| Concurrencia (procesos reales, 10 rondas por caso) | Regularizar vs finalizar / cobrar / rechazar / ausencia / reprogramar / doble envío / dos regularizaciones: sin 5xx ni interbloqueos; una sola transición, un solo pago, caja, comprobante y comisión. Matiz honesto del QA: las rondas contra *cobrar* y *rechazar* no se discriminan con las mutaciones probadas (pasan aun sin esas protecciones), por lo que **no se citan como evidencia** de esos bloqueos; sí lo son las de *finalizar* y el triple (fallan si se quita el compare-and-set) |
+| Integridad referencial | `DELETE` directo → 1451; `CitaService::eliminar` → 409 con regularización; sin huérfanas en las tablas de regularización/agenda. Corrección a mi análisis: `/api/eliminar` solo cancela; la eliminación física no tiene ruta HTTP. Punto abierto confirmado (eliminar con cobros dejaba comprobantes apuntando a una cita inexistente) → **corregido con 409** (`test_E_…` pasa) |
+
+Resultado de la clase: 12 de 12 pasan tras las correcciones (antes de ellas, 11 de 12; fallaba solo la de eliminar con cobros). `scripts_qa_r5.sh` la incluye.

@@ -69,18 +69,56 @@ Cada operación bloquea la cita (`FOR UPDATE`) y cambia el estado con comparaci�
 | `pagos` (`cita_id`) | No | `ON DELETE SET NULL` |
 | `comprobantes.cita_id`, `cobros_eventos.cita_id`, `pagos.cita_referencia_id` | **Sí, por diseño** | Son evidencia contable **sin clave foránea** a propósito (los comprobantes son de solo anexar y guardan una instantánea con SHA-256; los reportes tienen un camino explícito «cita eliminada físicamente»). Si el propietario elimina una cita que ya tenía pagos, esas referencias quedan apuntando a una cita inexistente. Los ids de `citas` no se reutilizan en MySQL 8, así que el vínculo no se confunde con otra cita. |
 
-Lo último **no es un artefacto del arnés**: es el comportamiento vigente de eliminar citas con movimientos. *Decisión pendiente (no tomada):* impedir (409) la eliminación de citas con pagos o comprobantes, o pasar a baja lógica. Hasta decidirlo, la comprobación de solo lectura de abajo permite medirlo en tu instalación.
+Lo último **no es un artefacto del arnés**: era el comportamiento de eliminar citas con movimientos. **Corregido tras la reverificación independiente:** `CitaService::eliminar` responde 409 si la cita tiene pagos (`cita_id` o `cita_referencia_id`), devoluciones, comprobantes o eventos de cobro («cancélala o gestiona su devolución»), con prueba (`R5bQaFase2Test::test_E_eliminar_cita_con_cobros_criterio_QA`). Importante para dimensionar: **ninguna ruta HTTP elimina físicamente una cita** (`/api/eliminar` hace una cancelación lógica); `eliminar` solo la usa código de dominio y pruebas, así que esta regla y la FK `RESTRICT` son defensa en profundidad. Las instalaciones que ya eliminaron citas con cobros antes de esta versión pueden tener referencias huérfanas: la consulta de abajo las mide.
+
+**Limitaciones que siguen (anotadas, no resueltas):**
+- `citas.regularizada_por`, `citas_regularizaciones.*_por` y `agenda_eventos.actorId` usan `ON DELETE SET NULL`: si se suprime a un usuario, la auditoría conserva el hecho pero pierde «quién». Mejora pendiente: guardar una instantánea del nombre en el momento del evento.
+- `citas.usuarioId` no tiene clave foránea (anterior a esta ronda).
+- «Los ids de cita no se reutilizan» vale mientras no haya `TRUNCATE` ni restauración de un respaldo anterior.
 
 **La limpieza de pruebas no oculta nada.** Las pruebas de regularización borran *sus propias* filas (hijos primero) en `tearDown`; la prueba heredada que vacía `citas` con claves foráneas desactivadas ahora también borra `citas_regularizaciones` (igual que ya borraba sus otras tablas huérfanas). Y hay una prueba que demuestra la garantía real: eliminar por la aplicación → 409, `DELETE` directo → error 1451, y ninguna fila huérfana.
 
-**Comprobación de solo lectura para tu instalación** (no modifica nada):
+### 7.1 Todas las vías de eliminación revisadas (citas y usuarios)
+
+Revisión de `controllers/`, `services/`, `repositories/`, `models/`, `scripts/` y `public/index.php` (búsqueda de `DELETE`, `TRUNCATE`, `DROP`, y de todo método `eliminar/delete/borrar/remove`). La guarda de `CitaService` **no** es lo único que protege: se reforzó donde hacía falta y una prueba de arquitectura vigila el resto.
+
+| Vía | Qué hace | Estado |
+|---|---|---|
+| `POST /api/eliminar` (`APIController::eliminar`) | Llama a `cancelar()`: cancelación lógica, conserva cita, servicios y pagos | Sin riesgo (no borra) |
+| `CitaService::eliminar` | Eliminación física; solo la usan el dominio y las pruebas, **ninguna ruta HTTP** | 409 con regularizaciones, pagos, devoluciones, comprobantes o eventos de cobro; mensaje con la alternativa (cancelar, ausencia, devolución auditada) |
+| `CitaRepository::eliminarCitaAtomica` | Único `DELETE FROM citas` de la aplicación | **Defecto hallado y corregido en esta revisión:** la comprobación vivía solo en el servicio, *antes* de la transacción; un cobro confirmado entre la comprobación y el `DELETE` habría dejado evidencia sin cita. Ahora la guarda está **dentro de la transacción con la cita bloqueada** (`FOR UPDATE`, el mismo candado que toman cobros y regularizaciones) y lanza `CitaProtegidaException`. Cubierto por una prueba con un proceso real que espera el candado mientras otra conexión confirma un cobro; falla si se quita la guarda o el bloqueo (probado por mutación) |
+| `Model\ActiveRecord::eliminar` (heredado, genérico) | `DELETE FROM {tabla} WHERE id=?` | Hoy **ningún modelo lo extiende ni se llama**; aun así rechaza las tablas con historial (`citas`, `usuarios`, `clientes`, `pagos`, `comprobantes`, `cobros_*`, `caja_movimientos`, `comisiones_movimientos`, `agenda_eventos`, `citas_regularizaciones`, `equipo_auditoria`) por si un modelo futuro lo hereda |
+| Resto del código | Prueba de arquitectura `testNingunCodigoDeLaAplicacionBorraCitasUsuariosOEvidencia`: ningún `DELETE`/`TRUNCATE` sobre esas tablas fuera de `CitaRepository` | Falla si alguien añade uno |
+| `scripts/restore_db.php` | Restaura un respaldo completo (operación del operador, con respaldo y SHA-256) | Fuera del flujo de la aplicación; reemplaza datos por diseño |
+| `POST /servicios/eliminar` | Eliminación física de un **servicio** del catálogo (`DELETE FROM servicios`); `citasservicios` no tiene FK hacia `servicios` | **Observación fuera del alcance pedido (citas y usuarios), sin cambios:** las citas históricas conservan el `servicioId` y su instantánea de precio, pero apuntarían a un servicio inexistente. Pendiente de decisión (baja lógica del servicio) |
+
+**Usuarios.** No existe ninguna ruta, servicio ni script que elimine filas de `usuarios`. La identidad histórica se conserva **desactivando**: `/admin/equipo/actualizar` (`usuario_accesos.activo`, estado laboral `activo|suspendido|baja`, con `equipo_auditoria`; el último propietario no puede desactivarse). Lo que ocurriría si alguien borrara un usuario **a mano en la base**:
+
+| Dependencia | Efecto del borrado directo |
+|---|---|
+| `perfiles_usuario`, `perfil_fotos`, `usuario_accesos`, membresía `clientes`, historial de consentimientos, preferencias | `ON DELETE CASCADE`: se pierden |
+| Actores de auditoría (`agenda_eventos.actorId`, `citas.*_por`, `citas_regularizaciones.*_por`, `pagos.registrado_por/verificado_por`, `caja_movimientos.actor_id`, comisiones, devoluciones, reasignaciones) | `ON DELETE SET NULL`: el hecho se conserva pero **se pierde quién** |
+| `pagos.usuario_id`, notificaciones | Sin `CASCADE`: la base lo rechaza si hay pagos o notificaciones |
+| `citas.usuarioId` | **Sin clave foránea** (anterior a esta ronda): las citas quedarían apuntando a un usuario inexistente |
+
+No se debilitó ninguna clave foránea ni se añadió una limpieza para resolverlo. **Pendiente de decisión (no implementado):** (a) política de **anonimización** de usuarios que piden su baja (sustituir datos personales por un marcador conservando el id y la auditoría), (b) guardar una instantánea del nombre del actor en cada evento de auditoría, (c) una restricción en base de datos (migración nueva) que impida borrar usuarios con historial. Mientras tanto, la regla operativa es: **desactivar, nunca eliminar**.
+
+### 7.2 Referencias huérfanas históricas: cómo detectarlas (solo lectura)
+
+Pueden existir en instalaciones que, antes de esta versión, eliminaron citas con cobros o usuarios directamente en la base. **No se borran ni se reconstruyen** (no se inventan citas ni usuarios): se informan al operador para que decida con su contabilidad. La consulta no modifica nada:
 
 ```sql
-SELECT 'citas_regularizaciones' t, COUNT(*) n FROM citas_regularizaciones x LEFT JOIN citas c ON c.id=x.cita_id WHERE c.id IS NULL
-UNION ALL SELECT 'agenda_eventos', COUNT(*) FROM agenda_eventos x LEFT JOIN citas c ON c.id=x.citaId WHERE c.id IS NULL
-UNION ALL SELECT 'comprobantes (referencia a cita eliminada)', COUNT(*) FROM comprobantes x LEFT JOIN citas c ON c.id=x.cita_id WHERE c.id IS NULL
-UNION ALL SELECT 'cobros_eventos (referencia a cita eliminada)', COUNT(*) FROM cobros_eventos x LEFT JOIN citas c ON c.id=x.cita_id WHERE x.cita_id IS NOT NULL AND c.id IS NULL
-UNION ALL SELECT 'pagos.cita_referencia_id (cita eliminada)', COUNT(*) FROM pagos x LEFT JOIN citas c ON c.id=x.cita_referencia_id WHERE x.cita_referencia_id IS NOT NULL AND c.id IS NULL;
+SELECT 'citas_regularizaciones sin cita' t, COUNT(*) n FROM citas_regularizaciones x LEFT JOIN citas c ON c.id=x.cita_id WHERE c.id IS NULL
+UNION ALL SELECT 'agenda_eventos sin cita', COUNT(*) FROM agenda_eventos x LEFT JOIN citas c ON c.id=x.citaId WHERE c.id IS NULL
+UNION ALL SELECT 'citasservicios sin cita', COUNT(*) FROM citasservicios x LEFT JOIN citas c ON c.id=x.citaId WHERE c.id IS NULL
+UNION ALL SELECT 'comprobantes de cita inexistente', COUNT(*) FROM comprobantes x LEFT JOIN citas c ON c.id=x.cita_id WHERE c.id IS NULL
+UNION ALL SELECT 'cobros_eventos de cita inexistente', COUNT(*) FROM cobros_eventos x LEFT JOIN citas c ON c.id=x.cita_id WHERE x.cita_id IS NOT NULL AND c.id IS NULL
+UNION ALL SELECT 'cobros_devoluciones de cita inexistente', COUNT(*) FROM cobros_devoluciones x LEFT JOIN citas c ON c.id=x.cita_id WHERE x.cita_id IS NOT NULL AND c.id IS NULL
+UNION ALL SELECT 'pagos.cita_referencia_id de cita inexistente', COUNT(*) FROM pagos x LEFT JOIN citas c ON c.id=x.cita_referencia_id WHERE x.cita_referencia_id IS NOT NULL AND c.id IS NULL
+UNION ALL SELECT 'citas de usuario inexistente', COUNT(*) FROM citas x LEFT JOIN usuarios u ON u.id=x.usuarioId WHERE x.usuarioId IS NOT NULL AND u.id IS NULL
+UNION ALL SELECT 'citasservicios de servicio inexistente', COUNT(*) FROM citasservicios x LEFT JOIN servicios s ON s.id=x.servicioId WHERE s.id IS NULL;
 ```
 
-Las dos primeras filas deben dar 0. Las otras tres pueden ser mayores que 0 solo si en esa instalación se eliminaron citas con movimientos.
+Las dos primeras filas deben dar 0 en cualquier instalación íntegra. Las demás, mayores que 0, indican eliminaciones hechas fuera de la aplicación o antes de esta versión; para ver el detalle, cambia `COUNT(*)` por las columnas de `x`. Las citas eliminadas conservan su id (MySQL no lo reutiliza salvo `TRUNCATE` o restauración de un respaldo anterior), de modo que cada referencia puede relacionarse con su comprobante, que guarda una instantánea con SHA-256.
+
+**En bases de pruebas** esta consulta devuelve cifras mayores que 0 en comprobantes, eventos de cobro y devoluciones: son residuo de pruebas cuya limpieza borra citas directamente en la base (sin pasar por la aplicación, que desde esta revisión lo rechaza). No son un hallazgo del producto, pero tampoco se esconden: la consulta las muestra tal cual y las pruebas nuevas de eliminación limpian sus propios comprobantes, pagos y eventos antes de salir.

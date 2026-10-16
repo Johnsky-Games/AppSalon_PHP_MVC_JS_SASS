@@ -680,6 +680,15 @@ class CitaService
         ];
     }
 
+    /** 409 uniforme para una cita protegida contra la eliminación física, con la alternativa auditada que corresponde. */
+    private function respuestaCitaProtegida(string $motivo): array
+    {
+        $error = $motivo === 'regularizacion'
+            ? 'Esta cita tiene una regularización de la atención registrada y no se puede eliminar para conservar su auditoría. Si no se realizó, cancélala o regístrala como ausencia.'
+            : 'Esta cita tiene cobros, devoluciones o comprobantes registrados y no se puede eliminar. Cancélala (conserva todo el historial) o, si un cobro fue erróneo, corrígelo con una devolución auditada.';
+        return ['status' => self::STATUS_CONFLICT, 'httpCode' => 409, 'resultado' => false, 'error' => $error];
+    }
+
     /**
      * Valida permisos y elimina una cita junto con sus registros en `citasservicios`.
      *
@@ -743,28 +752,16 @@ class CitaService
             ];
         }
 
-        // Una cita con solicitudes o decisiones de regularización es evidencia de auditoría (quién regularizó y cuándo): no se elimina.
-        // La clave foránea `citas_regularizaciones.cita_id` (ON DELETE RESTRICT) lo garantiza también en la base de datos.
+        // Una cita con regularizaciones (auditoría), pagos, devoluciones, comprobantes o eventos de cobro NO se elimina físicamente:
+        // se cancela (conserva todo) o, si el dato es erróneo, se corrige con la devolución/regularización auditadas. Esta comprobación solo
+        // adelanta el mensaje; la guarda atómica (con la cita bloqueada) está en CitaRepository::eliminarCitaAtomica.
         try {
-            if ($this->citaRepository->tieneRegularizaciones($idCita)) {
-                return [
-                    'status' => self::STATUS_CONFLICT,
-                    'httpCode' => 409,
-                    'resultado' => false,
-                    'error' => 'Esta cita tiene una regularización de la atención registrada y no se puede eliminar para conservar su auditoría.'
-                ];
-            }
-            // Pagos, comprobantes y eventos de cobro no tienen clave foránea hacia la cita: eliminarla los dejaría apuntando a una cita inexistente.
-            if ($this->citaRepository->tieneRegistrosFinancieros($idCita)) {
-                return [
-                    'status' => self::STATUS_CONFLICT,
-                    'httpCode' => 409,
-                    'resultado' => false,
-                    'error' => 'Esta cita tiene cobros o comprobantes registrados y no se puede eliminar; cancélala o gestiona su devolución.'
-                ];
-            }
+            $motivoProteccion = $this->citaRepository->motivoProteccionEliminacion($idCita);
         } catch (PersistenceException $e) {
             return ['status' => self::STATUS_ERROR, 'httpCode' => 500, 'resultado' => false, 'error' => 'No fue posible comprobar la cita debido a un error de base de datos.'];
+        }
+        if ($motivoProteccion !== null) {
+            return $this->respuestaCitaProtegida($motivoProteccion);
         }
 
         // Capturar snapshot de la cita antes de eliminarla para la notificación de cancelación
@@ -789,6 +786,8 @@ class CitaService
                     'error' => 'La cita solicitada no existe.'
                 ];
             }
+        } catch (\Repositories\CitaProtegidaException $e) {
+            return $this->respuestaCitaProtegida($e->motivo);
         } catch (PersistenceException $e) {
             return [
                 'status' => self::STATUS_ERROR,
