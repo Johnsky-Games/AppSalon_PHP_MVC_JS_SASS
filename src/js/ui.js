@@ -194,6 +194,14 @@
                 });
             });
         });
+        document.querySelectorAll('[data-grupo-dias]').forEach(grupo => {
+            grupo.addEventListener('click', event => {
+                const preset = event.target.closest('[data-dias-preset]');
+                if (!preset) return;
+                const dias = preset.dataset.diasPreset.split(',');
+                grupo.querySelectorAll('[data-grupo-dia]').forEach(campo => { campo.checked = dias.includes(campo.value); });
+            });
+        });
         // Asistente de agenda del profesional: añadir/quitar turnos y descansos y copiar el lunes.
         // Sin JavaScript el formulario sigue siendo válido con las filas que ya trae renderizadas.
         document.querySelectorAll('[data-agenda-asistente]').forEach(asistente => {
@@ -225,6 +233,31 @@
                 if (tipo === 'descanso' && filas.length) dia.querySelector('details')?.setAttribute('open', '');
             };
             asistente.addEventListener('click', event => {
+                const aplicar = event.target.closest('[data-ag-aplicar-grupo]');
+                if (aplicar) {
+                    const grupo = aplicar.closest('[data-grupo-dias]');
+                    const elegidos = [...grupo.querySelectorAll('[data-grupo-dia]:checked')];
+                    const inicio = grupo.querySelector('[data-grupo-inicio]');
+                    const fin = grupo.querySelector('[data-grupo-fin]');
+                    const estado = grupo.querySelector('[data-grupo-resultado]');
+                    if (!elegidos.length) { estado.textContent = 'Selecciona al menos un día.'; return; }
+                    if (!inicio.value || !fin.value || inicio.value >= fin.value || !inicio.checkValidity() || !fin.checkValidity()) {
+                        estado.textContent = 'Indica un intervalo válido en pasos de cinco minutos.'; return;
+                    }
+                    const tipo = grupo.dataset.tipo === 'horario' ? 'franja' : 'descanso';
+                    const motivo = grupo.querySelector('[data-grupo-motivo]')?.value || '';
+                    const resultado = [];
+                    elegidos.forEach(campo => {
+                        const dia = asistente.querySelector(`[data-ag-dia="${campo.value}"]`);
+                        if (!dia) return;
+                        let filas = tipo === 'franja' ? [] : valores(dia, tipo).filter(fila => fila[0] !== inicio.value || fila[1] !== fin.value);
+                        filas.push(tipo === 'franja' ? [inicio.value, fin.value] : [inicio.value, fin.value, motivo]);
+                        llenar(dia, tipo, filas);
+                        resultado.push(nombreDia(dia));
+                    });
+                    estado.textContent = `${tipo === 'franja' ? 'Jornada' : 'Descanso'} preparado de ${inicio.value} a ${fin.value}: ${resultado.join(', ')}. Guarda la configuración para aplicarlo.`;
+                    return;
+                }
                 const agregar = event.target.closest('[data-ag-agregar]');
                 if (agregar) {
                     const fila = nuevaFila(agregar.dataset.agAgregar, agregar.closest('[data-ag-dia]'));

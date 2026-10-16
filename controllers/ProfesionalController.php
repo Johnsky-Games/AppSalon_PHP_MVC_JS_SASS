@@ -20,6 +20,8 @@ class ProfesionalController
 {
     private const ACCIONES_AGENDA_VALIDAS = [
         'guardar_horarios',
+        'horario_grupo',
+        'descanso_grupo',
         'crear_descanso',
         'eliminar_descanso',
         'crear_bloqueo',
@@ -85,6 +87,9 @@ class ProfesionalController
         }
 
         switch ($accion) {
+            case 'horario_grupo':
+            case 'descanso_grupo':
+                return is_array($post['dias'] ?? null) && !empty($post['dias']) ? null : 'Selecciona los días de la semana.';
             case 'guardar_horarios':
                 if (!array_key_exists('horarios', $post) || !is_array($post['horarios']) || empty($post['horarios'])) {
                     return 'Debe enviar una estructura válida de horarios semanales.';
@@ -427,7 +432,7 @@ class ProfesionalController
             }
 
             if ($resultadoAccion['status'] === ProfesionalService::STATUS_NOT_FOUND) {
-                if ($accion === 'guardar_horarios' || $accion === 'crear_descanso' || $accion === 'crear_bloqueo') {
+                if ($accion === 'guardar_horarios' || $accion === 'crear_descanso' || $accion === 'crear_bloqueo' || $accion === 'horario_grupo' || $accion === 'descanso_grupo') {
                     header('Location: /profesionales');
                 } else {
                     header("Location: /profesionales/horarios?id={$id}");
@@ -439,7 +444,7 @@ class ProfesionalController
             $alertas = $resultadoAccion['alertas'];
             if ($resultadoAccion['status'] === ProfesionalService::STATUS_ERROR) {
                 http_response_code(500);
-            } elseif (es_peticion_json()) {
+            } elseif (es_peticion_json() || in_array($accion, ['horario_grupo', 'descanso_grupo'], true)) {
                 http_response_code(422);
             }
 
@@ -506,6 +511,10 @@ class ProfesionalController
         array $post
     ): array {
         switch ($accion) {
+            case 'horario_grupo':
+                return $service->aplicarGrupoSemanal($profesionalId, $post, 'horario');
+            case 'descanso_grupo':
+                return $service->aplicarGrupoSemanal($profesionalId, $post, 'descanso');
             case 'crear_descanso':
                 return $service->crearDescanso($profesionalId, $post);
 

@@ -95,6 +95,25 @@ final class ColaboradorRepository
         return $this->una("SELECT c.*, c.email_norm email, p.id profesional_id, p.nombre profesional FROM colaboradores c LEFT JOIN profesionales p ON p.colaborador_id=c.id WHERE c.id=?", 'i', [$id]);
     }
 
+    /** Directorio de RR. HH. paginado; sin el límite de 500 ni datos de invitación del panel de accesos. */
+    public function directorio(string $busqueda, ?string $rol, ?string $estado, int $pagina): array
+    {
+        $where = ' WHERE 1=1'; $tipos = ''; $args = [];
+        if ($busqueda !== '') {
+            $where .= " AND (CONCAT(c.nombre,' ',c.apellido) LIKE ? OR c.email_norm LIKE ? OR c.codigo LIKE ? OR c.puesto LIKE ?)";
+            $like = '%' . addcslashes($busqueda, '%_\\') . '%';
+            $tipos .= 'ssss'; array_push($args, $like, $like, $like, $like);
+        }
+        if ($rol !== null) { $where .= ' AND c.rol=?'; $tipos .= 's'; $args[] = $rol; }
+        if ($estado !== null) { $where .= ' AND c.estado=?'; $tipos .= 's'; $args[] = $estado; }
+        $total = (int)$this->una('SELECT COUNT(*) total FROM colaboradores c' . $where, $tipos, $args)['total'];
+        $paginas = max(1, (int)ceil($total / 25)); $pagina = max(1, min($pagina, $paginas));
+        $filas = $this->todas('SELECT c.id,c.codigo,c.nombre,c.apellido,c.email_norm email,c.telefono,c.puesto,c.rol,c.estado,c.fecha_ingreso,p.id profesional_id '
+            . 'FROM colaboradores c LEFT JOIN profesionales p ON p.colaborador_id=c.id' . $where . ' ORDER BY c.apellido,c.nombre,c.id LIMIT 25 OFFSET ?',
+            $tipos . 'i', [...$args, ($pagina - 1) * 25]);
+        return ['filas' => $filas, 'total' => $total, 'pagina' => $pagina, 'paginas' => $paginas];
+    }
+
     /** Fichas profesionales heredadas, sin cuenta ni colaborador: candidatas a invitación asistida. */
     public function profesionalesSinCuenta(): array
     {

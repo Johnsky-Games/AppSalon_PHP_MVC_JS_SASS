@@ -41,6 +41,7 @@ final class CrmService
         'inactivo' => 'Inactivo',
     ];
     public const MEMBRESIAS = ['activo' => 'Activa', 'suspendido' => 'Suspendida', 'sin_registro' => 'Sin registro (cuenta legada)'];
+    public const VINCULOS = ['externo' => 'Clientes externos', 'equipo' => 'Equipo con perfil de cliente', 'todos' => 'Todos los perfiles de cliente'];
     public const ESTADOS_CITA = [
         'confirmada' => 'Confirmada', 'en_servicio' => 'En servicio', 'completada' => 'Completada',
         'no_asistio' => 'No asistió', 'cancelada' => 'Cancelada',
@@ -106,7 +107,7 @@ final class CrmService
     ];
 
     /** Claves de la consulta que describen el universo y su presentación; todas se conservan al paginar, ordenar y exportar. */
-    public const CLAVES_CONSULTA = ['q', 'desde', 'hasta', 'alta_desde', 'alta_hasta', 'profesional_id', 'servicio_id', 'segmento', 'membresia', 'consentimiento', 'cuenta', 'actividad',
+    public const CLAVES_CONSULTA = ['q', 'vinculo', 'desde', 'hasta', 'alta_desde', 'alta_hasta', 'profesional_id', 'servicio_id', 'segmento', 'membresia', 'consentimiento', 'cuenta', 'actividad',
         'ultima_desde', 'ultima_hasta', 'proxima', 'proxima_desde', 'proxima_hasta', 'visitas_min', 'visitas_max', 'gasto_min', 'gasto_max', 'saldo', 'dias_activo', 'orden', 'dir', 'por_pagina', 'indicador'];
 
     /**
@@ -139,6 +140,7 @@ final class CrmService
     /** Definición visible de cada filtro (se muestra en la pantalla y se prueba que no falte ninguna). */
     public const DEFINICIONES = [
         'q' => 'Busca por nombre, apellido, correo o teléfono (hasta 80 caracteres).',
+        'vinculo' => 'Por defecto se muestran clientes externos. El propietario y las demás cuentas laborales quedan fuera. Para consultar a personas del equipo que también tienen membresía de cliente o citas, elige «Equipo con perfil de cliente» o «Todos los perfiles de cliente».',
         'cuenta' => 'Cuenta: «Confirmada» = la persona ya confirmó su correo y puede entrar; «Sin confirmar» = creó o recibió la cuenta pero aún no la activa.',
         'membresia' => 'Membresía de cliente: estado de la ficha de cliente (activa o suspendida). No es una suscripción de pago: este sistema no cobra suscripciones.',
         'consentimiento' => 'Comunicaciones comerciales: consentimiento para recibir promociones por correo. «Otorgado» muestra la versión del texto aceptada y la fecha; «Revocado» = su última decisión fue retirarlo; «Sin decisión» = nunca decidió. Es lo único que en esta pantalla se llama «suscripción»: la suscripción a comunicaciones comerciales.',
@@ -282,6 +284,7 @@ final class CrmService
         if (empty($acceso['analitica'])) { $segmentos = array_values(array_diff($segmentos, ['vip'])); }
         $segmento = $lista('segmento', 'El segmento', $segmentos);
         $membresia = $lista('membresia', 'El estado de membresía', array_keys(self::MEMBRESIAS));
+        $vinculo = $lista('vinculo', 'El vínculo con el negocio', array_keys(self::VINCULOS)) ?? 'externo';
         $consentimiento = $lista('consentimiento', 'El filtro de consentimiento (comunicaciones comerciales)', array_keys(self::CONSENTIMIENTOS));
         $cuenta = $lista('cuenta', 'El estado de la cuenta', array_keys(self::CUENTAS));
         $actividad = $lista('actividad', 'La actividad comercial', array_keys(self::ACTIVIDADES));
@@ -322,7 +325,7 @@ final class CrmService
         $indicador = $lista('indicador', 'El indicador', $indicadoresPermitidos);
 
         $filtros = [
-            'q' => $q, 'desde' => $desde, 'hasta' => $hasta, 'alta_desde' => $altaDesde, 'alta_hasta' => $altaHasta,
+            'q' => $q, 'vinculo' => $vinculo, 'desde' => $desde, 'hasta' => $hasta, 'alta_desde' => $altaDesde, 'alta_hasta' => $altaHasta,
             'profesional_id' => $profesional, 'servicio_id' => $servicio, 'segmento' => $segmento, 'membresia' => $membresia,
             'consentimiento' => $consentimiento, 'cuenta' => $cuenta, 'actividad' => $actividad,
             'ultima_desde' => $ultimaDesde, 'ultima_hasta' => $ultimaHasta, 'proxima' => $proxima, 'proxima_desde' => $proximaDesde, 'proxima_hasta' => $proximaHasta,
@@ -419,9 +422,9 @@ final class CrmService
             ], 'vip_ids' => $vip, 'puntajes' => $puntajes];
     }
 
-    private function rfm(string $hoy, int $diasActivo): array
+    private function rfm(string $hoy, int $diasActivo, string $vinculo = 'todos'): array
     {
-        return self::calcularRfm($this->repo->poblacionRfm($hoy, self::VENTANA_RFM_DIAS), $diasActivo);
+        return self::calcularRfm($this->repo->poblacionRfm($hoy, self::VENTANA_RFM_DIAS, $vinculo), $diasActivo);
     }
 
     // ---------------------------------------------------------------- paginación
@@ -463,14 +466,14 @@ final class CrmService
      * Datos de la pantalla principal según el modo del usuario.
      * @return array<string,mixed>
      */
-    public function panel(array $f, array $acceso, ?int $profesionalId = null): array
+    public function panel(array $f, array $acceso, ?int $profesionalId = null, bool $incluirListado = true): array
     {
         $modo = self::modo($acceso);
         if ($modo === null) { throw new \DomainException('Sin permisos de clientes.'); }
         $hoy = $this->hoy()->format('Y-m-d');
         if ($modo === 'propios') { return $this->panelProfesional($f, $profesionalId, $hoy); }
 
-        $rfm = !empty($acceso['analitica']) ? $this->rfm($hoy, (int)$f['dias_activo']) : null;
+        $rfm = !empty($acceso['analitica']) ? $this->rfm($hoy, (int)$f['dias_activo'], $f['vinculo'] ?? 'externo') : null;
         $c = $this->contexto($f, $acceso, $rfm['vip_ids'] ?? []);
         // UN SOLO UNIVERSO: indicadores, citas, gráficos, segmentos, totales y listado parten de los mismos filtros `$f`.
         $ind = $this->repo->indicadores($c, $f);
@@ -554,7 +557,7 @@ final class CrmService
         }, $cohortes);
 
         $listado = null;
-        if ($modo === 'completo') {
+        if ($modo === 'completo' && $incluirListado) {
             $listado = $this->paginaListado($c, $f);
         }
 
@@ -587,7 +590,7 @@ final class CrmService
         if ($modo !== 'completo' && $modo !== 'propios') { throw new \DomainException('Sin permiso para ver listados nominales de clientes.'); }
         $hoy = $this->hoy()->format('Y-m-d');
         if ($modo === 'propios') { return $this->panelProfesional($f, $profesionalId, $hoy) + ['filtros_activos' => $this->filtrosActivos($f, [], $acceso)]; }
-        $rfm = !empty($acceso['analitica']) ? $this->rfm($hoy, (int)$f['dias_activo']) : null;
+        $rfm = !empty($acceso['analitica']) ? $this->rfm($hoy, (int)$f['dias_activo'], $f['vinculo'] ?? 'externo') : null;
         $c = $this->contexto($f, $acceso, $rfm['vip_ids'] ?? []);
         $catalogos = $this->repo->catalogos();
         $ind = $f['indicador'] !== null ? (self::INDICADORES[$f['indicador']] ?? null) : null;
@@ -611,6 +614,7 @@ final class CrmService
         $nombre = static function (array $lista, int $id): string { foreach ($lista as $x) { if ((int)$x['id'] === $id) { return (string)$x['nombre']; } } return '#' . $id; };
         if (($f['indicador'] ?? null) !== null && isset(self::INDICADORES[$f['indicador']])) { $add('indicador', 'Indicador', self::INDICADORES[$f['indicador']]['etiqueta'], ['indicador']); }
         if ((string)($f['q'] ?? '') !== '') { $add('q', 'Búsqueda', (string)$f['q'], ['q']); }
+        if (isset($f['vinculo']) && $f['vinculo'] !== 'externo') { $add('vinculo', 'Vínculo', self::VINCULOS[$f['vinculo']] ?? '', ['vinculo']); }
         if (($f['desde'] ?? $defDesde) !== $defDesde || ($f['hasta'] ?? $defHasta) !== $defHasta) { $add('periodo', 'Periodo', ($f['desde'] ?? '') . ' a ' . ($f['hasta'] ?? ''), ['desde', 'hasta']); }
         if ((int)($f['dias_activo'] ?? self::DIAS_ACTIVO_DEFECTO) !== self::DIAS_ACTIVO_DEFECTO) { $add('dias_activo', 'Ventana de actividad', (int)$f['dias_activo'] . ' días', ['dias_activo']); }
         $rango = static fn(?string $d, ?string $h): string => ($d !== null ? 'desde ' . $d : '') . ($d !== null && $h !== null ? ' ' : '') . ($h !== null ? 'hasta ' . $h : '');
@@ -781,7 +785,7 @@ final class CrmService
         $hoy = $this->hoy()->format('Y-m-d');
         $comercial = $tipo === 'comercial';
         $analitica = !empty($acceso['analitica']) && !$comercial;
-        $rfm = !empty($acceso['analitica']) && !$comercial ? $this->rfm($hoy, (int)$f['dias_activo']) : null;
+        $rfm = !empty($acceso['analitica']) && !$comercial ? $this->rfm($hoy, (int)$f['dias_activo'], $f['vinculo'] ?? 'externo') : null;
         $c = $this->contexto($f, $acceso, $rfm['vip_ids'] ?? []);
         $c['analitica'] = $analitica;
         $f['comercial'] = $comercial;

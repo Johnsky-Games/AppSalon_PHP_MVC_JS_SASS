@@ -19,6 +19,8 @@ $idemInvitacion = !empty($homonimos['clave']) ? $homonimos['clave'] : clave_oper
 <header class="ui-page-header"><p class="ui-eyebrow">Personas y accesos</p><h1 class="nombre-pagina">Equipo y permisos</h1><p class="descripcion-pagina">Invita a cada persona con su propio correo. Hasta que acepte la invitación no tiene acceso laboral; los cambios de rol o estado cierran sus sesiones anteriores.</p></header>
 <?php include __DIR__ . '/../templates/barra.php'; include __DIR__ . '/../templates/alertas.php'; ?>
 
+<?php if (!empty($puedeRh)) { ?><nav class="gestion-secciones" aria-label="Gestión de personal"><a href="/admin/recursos-humanos">Recursos Humanos</a><a href="/admin/equipo" aria-current="page">Accesos e invitaciones</a></nav><?php } ?>
+
 <section class="ui-card" aria-labelledby="equipo-invitar-titulo">
 <h2 id="equipo-invitar-titulo">Invitar a una persona</h2>
 <p class="ui-form-help">Un mismo correo corresponde a una sola ficha laboral. Si ya es cliente conserva su cuenta y sus reservas; solo se añade su acceso al equipo cuando acepte.</p>

@@ -206,7 +206,7 @@ final class CrmIntegrationTest extends TestCase
         $laboralConCitas = $this->usuario('Gina', 'ConCitas ' . $this->tag, ['rol' => 'gerente', 'membresia' => null]);
         $this->cita($laboralConCitas, $this->dia(-3), 'completada');
 
-        $filas = $this->listado();
+        $filas = $this->listado(['vinculo' => 'todos']);
         $this->assertArrayHasKey($cliente, $filas);
         $this->assertArrayNotHasKey($soloLaboral, $filas, 'Una cuenta solo laboral sin membresía ni citas no es cliente.');
         $this->assertArrayNotHasKey($propietarioLegado, $filas);
@@ -221,7 +221,7 @@ final class CrmIntegrationTest extends TestCase
 
         // El total global concilia con una clasificación independiente hecha en PHP sobre filas crudas.
         $ref = $this->referencia($this->dia(-30), $this->dia(0), 90);
-        $p = $this->panel(['desde' => $this->dia(-30), 'hasta' => $this->dia(0)]);
+        $p = $this->panel(['desde' => $this->dia(-30), 'hasta' => $this->dia(0), 'vinculo' => 'todos']);
         $this->assertSame($ref['total'], $p['resumen']['clientes_total']);
         $this->assertSame($ref['membresia_sin_registro'], $p['resumen']['membresias']['sin_registro']);
     }
@@ -594,7 +594,8 @@ final class CrmIntegrationTest extends TestCase
         $r = $this->index(['q' => $this->tag]);
         $this->assertSame(200, $r['http']);
         $this->assertStringContainsString('Tomás', $r['cuerpo']);
-        $this->assertStringContainsString('Cómo se calcula', $r['cuerpo']);
+        $this->assertStringContainsString('Filtros avanzados', $r['cuerpo']);
+        $this->assertStringNotContainsString('id="crm-ind-titulo"', $r['cuerpo']);
         foreach (['Gasto neto real', 'Dinero del periodo', '77.77', 'Ticket promedio', 'Retención por cohorte', 'Cobros reales por mes', 'Repetición en el periodo'] as $prohibido) {
             $this->assertStringNotContainsString($prohibido, $r['cuerpo'], "Recepción no debe ver: $prohibido");
         }

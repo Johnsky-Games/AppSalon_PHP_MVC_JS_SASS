@@ -923,12 +923,38 @@ class ProfesionalService
         }
     }
 
-    /**
-     * Valida y registra un descanso semanal para un profesional:
-     * - Rechaza horarios invertidos o de duración cero (`hora_inicio >= hora_fin`).
-     * - Exige que el descanso esté dentro de una franja laboral activa del mismo día sin cubrir todo el turno.
-     * - Rechaza solapamientos con otros descansos existentes del profesional en el mismo día.
-     */
+    /** Valida la selección de días y aplica la jornada o pausa como una sola operación. */
+    public function aplicarGrupoSemanal($profesionalIdRaw, array $datos, string $tipo): array
+    {
+        $id = $this->validarId($profesionalIdRaw); $dias = []; $errores = [];
+        if ($id === null) { $errores[] = 'El identificador del profesional no es válido.'; }
+        if (!in_array($tipo, ['horario', 'descanso'], true)) { $errores[] = 'El tipo de configuración no es válido.'; }
+        $raw = $datos['dias'] ?? null;
+        if (!is_array($raw) || !$raw || count($raw) > 7) { $errores[] = 'Selecciona entre uno y siete días.'; }
+        else {
+            foreach ($raw as $diaRaw) {
+                $dia = $this->validarDiaSemana($diaRaw);
+                if ($dia === null) { $errores[] = 'Hay días de la semana no válidos.'; break; }
+                $dias[$dia] = $dia;
+            }
+        }
+        $inicio = self::validarHora($datos['hora_inicio'] ?? null); $fin = self::validarHora($datos['hora_fin'] ?? null);
+        if ($inicio === null || $fin === null || $inicio >= $fin) { $errores[] = 'Indica un intervalo válido: la salida debe ser posterior a la entrada.'; }
+        $motivo = $datos['motivo'] ?? '';
+        if (!is_string($motivo) || mb_strlen($motivo) > self::MAX_MOTIVO_DESCANSO_LENGTH) { $errores[] = 'El motivo admite hasta 120 caracteres.'; }
+        if ($errores) { return ['status' => self::STATUS_INVALID, 'resultado' => false, 'alertas' => ['error' => $errores]]; }
+        sort($dias);
+        try {
+            $this->profesionalRepository->aplicarGrupoSemanal($id, array_values($dias), $tipo, $inicio, $fin, trim($motivo) ?: null);
+            return ['status' => self::STATUS_OK, 'resultado' => true, 'alertas' => []];
+        } catch (\DomainException $e) {
+            return ['status' => $e->getCode() === 404 ? self::STATUS_NOT_FOUND : self::STATUS_INVALID, 'resultado' => false, 'alertas' => ['error' => [$e->getMessage()]]];
+        } catch (PersistenceException $e) {
+            return ['status' => self::STATUS_ERROR, 'resultado' => false, 'alertas' => ['error' => ['No se pudo guardar la configuración semanal. Inténtalo de nuevo.']]];
+        }
+    }
+
+    /** Descanso de un solo día, compatible con la jornada y las citas ya reservadas. */
     public function crearDescanso($profesionalIdRaw, array $datos): array
     {
         $profesionalId = $this->validarId($profesionalIdRaw);

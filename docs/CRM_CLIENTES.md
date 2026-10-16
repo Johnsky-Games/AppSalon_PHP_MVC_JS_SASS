@@ -5,6 +5,7 @@ Módulo para conocer a la base de clientes: listado con filtros, ficha 360°, in
 | Ruta (todas GET) | Controlador | Permiso |
 |---|---|---|
 | `/admin/clientes` | `CrmController::index` | `clientes.ver`, `clientes.analitica` o `clientes.ver_propios` (el modo depende de cuál) |
+| `/admin/clientes/indicadores` | `CrmController::indicadores` | `clientes.ver` o `clientes.analitica`; agregados sin tabla nominal |
 | `/admin/clientes/ficha?id=N` | `CrmController::ficha` | `clientes.ver`, o `clientes.ver_propios` solo para clientes atendidos por ese profesional |
 | `/admin/clientes/exportar?tipo=clientes\|comercial` | `CrmController::exportar` | `clientes.exportar` (y `clientes.ver`) |
 | `/admin/clientes/auditoria` | `CrmController::auditoria` | `clientes.exportar` (solo lectura, paginada) |
@@ -79,9 +80,11 @@ Para cada dimensión se ordenan los valores y se toman los cortes `c1`, `c2` en 
 
 ## Listado, filtros, orden y paginación
 
+Filtro de vínculo `vinculo`: `externo` (por defecto), `equipo`, `todos`. Se conserva también en descargas y auditoría.
+
 Filtros (GET, validados en servidor con mensajes en español y HTTP 422 si alguno es inválido; se aplican los valores válidos o por defecto): búsqueda `q` (nombre, apellido, nombre completo, correo, teléfono; hasta 80 caracteres; comodines `%` y `_` del usuario se escapan; el teléfono admite separadores), `desde`/`hasta`, `alta_desde`/`alta_hasta`, `profesional_id`, `servicio_id`, `segmento`, `membresia` (`activo`, `suspendido`, `sin_registro`), `consentimiento` (`si` = aceptó cualquier versión, `vigente`, `anterior`, `no`), `dias_activo`, `orden` (lista blanca: nombre, alta, ultima, visitas, visitas_total y gasto con analítica) y `dir`, `por_pagina` (10, 25, 50 o 100; por defecto 25) y `pagina`. «Atendido por» y «Servicio» exigen ≥ 1 visita completada en el periodo con esa condición **sobre la misma cita**, y entonces «Visitas del periodo» cuenta solo las visitas que la cumplen. Una página fuera de rango se recorta a la última. `LIMIT/OFFSET` son enteros validados.
 
-Los indicadores y gráficos describen a **todos** los clientes y no cambian con los filtros del listado (se dice en pantalla).
+La base, los indicadores, sus listados y las descargas comparten los filtros. Por defecto se muestran clientes externos (`vinculo=externo`); `equipo` permite consultar perfiles de cliente del personal y `todos` reúne ambos. Las cuentas solo laborales sin membresía ni citas nunca se incluyen. La reportería tiene su propia vista en `/admin/clientes/indicadores`.
 
 ## Ficha 360°
 
@@ -198,3 +201,6 @@ Optimizaciones aplicadas: `COUNT(*)` en lugar de `COUNT(DISTINCT)` cuando no hay
 - Puntos de fidelidad: solo los movimientos registrados; no se calculan puntos virtuales.
 - La ficha limita citas (100), movimientos de fidelidad (100), pagos (100) y espera (50), y la cronología a 150 eventos.
 - El enlace de navegación al módulo no está incluido (`views/layout.php` no es de este módulo); ver el fragmento en el informe de entrega. «Nuevo cliente» y «Auditoría de exportaciones» se enlazan desde la cabecera de `/admin/clientes`.
+
+
+Organización actual de vistas, Recursos Humanos y carga semanal: [guía de gestión](GESTION_CLIENTES_RH_HORARIOS.md).

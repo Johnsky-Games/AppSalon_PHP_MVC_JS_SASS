@@ -15,7 +15,8 @@ use Services\CrmService;
 
 /**
  * CRM de clientes (solo lectura, todo GET):
- *  - GET /admin/clientes          listado, indicadores, segmentos y gráficos.
+ *  - GET /admin/clientes          base operativa de clientes, separada de la reportería.
+ *  - GET /admin/clientes/indicadores indicadores, segmentos y gráficos (sin listado nominal).
  *  - GET /admin/clientes/ficha    ficha 360° de un cliente (?id=N).
  *  - GET /admin/clientes/listado  la lista real que explica un indicador, segmento o combinación de filtros (?indicador=…&segmento=…),
  *    con paginación, orden, estados vacío y de error y descarga CSV/XLSX del MISMO universo. Funciona sin JavaScript.
@@ -114,12 +115,20 @@ final class CrmController
     public static function index(Router $router): void
     {
         $acceso = self::exigirAcceso();
+        if (CrmService::modo($acceso) === 'analitica') { self::indicadores($router); return; }
+        self::mostrarListado($router, $acceso, true);
+    }
+
+    public static function indicadores(Router $router): void
+    {
+        $acceso = self::exigirAcceso();
+        if (CrmService::modo($acceso) === 'propios') { exigir_permiso('clientes.ver'); }
         self::sinCache();
         try {
             $servicio = self::service();
             $catalogos = $servicio->catalogos();
             $validacion = $servicio->normalizarFiltros($_GET, $acceso, $catalogos);
-            $panel = $servicio->panel($validacion['filtros'], $acceso, CrmService::modo($acceso) === 'propios' ? profesional_actual_id() : null);
+            $panel = $servicio->panel($validacion['filtros'], $acceso, null, false);
         } catch (PersistenceException | \mysqli_sql_exception $e) {
             throw self::noDisponible($e);
         }
@@ -157,6 +166,11 @@ final class CrmController
     public static function listado(Router $router): void
     {
         $acceso = self::exigirAcceso();
+        self::mostrarListado($router, $acceso, false);
+    }
+
+    private static function mostrarListado(Router $router, array $acceso, bool $directorio): void
+    {
         self::sinCache();
         $modo = CrmService::modo($acceso);
         if ($modo === 'analitica') { exigir_permiso('clientes.ver'); }   // 403: la analítica no incluye listados nominales
@@ -169,7 +183,9 @@ final class CrmController
             throw self::noDisponible($e);
         }
         if ($validacion['errores']) { http_response_code(422); }
+        $acceso['alta'] = !empty($acceso['ver']) && puede('perfiles.gestionar');
         $router->render('crm/listado', [
+            'directorio' => $directorio,
             'datos' => $datos, 'acceso' => $acceso, 'catalogos' => $catalogos, 'errores' => $validacion['errores'],
             'alertas' => $validacion['errores'] ? ['error' => $validacion['errores']] : [],
             'script' => '<script src="/build/js/crm.js" defer></script>',

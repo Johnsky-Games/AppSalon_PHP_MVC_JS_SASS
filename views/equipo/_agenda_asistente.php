@@ -39,6 +39,11 @@ $fila = static function (string $tipo, int $dia, int $i, $datos, string $nombreD
   <p class="ui-section-title">Horario semanal</p>
   <p class="ui-form-help">Añade una o varias franjas por día (por ejemplo una jornada partida) y, dentro de ellas, los descansos. Horas entre 00:00 y 23:59 en múltiplos de 5 minutos. Un día sin franjas no se atiende. Los bloqueos por fecha (vacaciones, permisos) se gestionan en «Profesionales».</p>
 <?php if ($editable) { ?>
+  <div class="ag-grupos">
+    <?php $grupo = ['prefijo' => $pref . '-jornada', 'tipo' => 'horario', 'asistente' => true]; include __DIR__ . '/../templates/_grupo_dias.php'; ?>
+    <?php $grupo = ['prefijo' => $pref . '-pausa', 'tipo' => 'descanso', 'asistente' => true]; include __DIR__ . '/../templates/_grupo_dias.php'; ?>
+  </div>
+  <details class="gestion-detalle"><summary>Revisar y ajustar día por día</summary>
   <div class="ag-herramientas"><button type="button" class="boton ui-button-quiet" data-ag-copiar-lunes>Copiar el lunes a martes–viernes</button></div>
 <?php } ?>
   <div class="ag-dias">
@@ -66,6 +71,7 @@ $fila = static function (string $tipo, int $dia, int $i, $datos, string $nombreD
 <?php } ?>
   </div>
 <?php if ($editable) { ?>
+  </details>
   <template data-ag-plantilla="franja"><?= $fila('franja', 0, 0, [], '__DIA__') ?></template>
   <template data-ag-plantilla="descanso"><?= $fila('descanso', 0, 0, [], '__DIA__') ?></template>
 <?php } ?>

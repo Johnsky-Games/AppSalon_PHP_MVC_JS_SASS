@@ -20,7 +20,7 @@ final class CrmAuditoriaService
     public const POR_PAGINA = [25, 50, 100];
     public const TIMEZONE = 'America/Guayaquil';
     /** Filtros de la exportación que no son datos personales y se guardan tal cual. */
-    private const FILTROS_LITERALES = ['desde', 'hasta', 'alta_desde', 'alta_hasta', 'profesional_id', 'servicio_id', 'segmento', 'membresia', 'consentimiento', 'dias_activo', 'orden', 'dir',
+    private const FILTROS_LITERALES = ['vinculo', 'desde', 'hasta', 'alta_desde', 'alta_hasta', 'profesional_id', 'servicio_id', 'segmento', 'membresia', 'consentimiento', 'dias_activo', 'orden', 'dir',
         'cuenta', 'actividad', 'ultima_desde', 'ultima_hasta', 'proxima', 'proxima_desde', 'proxima_hasta', 'visitas_min', 'visitas_max', 'gasto_min', 'gasto_max', 'saldo', 'indicador'];
 
     public function __construct(private CrmAuditoriaRepository $repo, private ?ConsentimientoRepository $consentimientos = null) {}

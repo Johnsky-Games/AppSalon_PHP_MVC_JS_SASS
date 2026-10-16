@@ -9,7 +9,7 @@ $puedeExportar = !empty($acceso['exportar']);
 $catalogos = $catalogos ?? ['servicios' => [], 'profesionales' => []];
 $listado = $panel['listado'] ?? null;
 $script = '<script src="/build/js/crm.js" defer></script>';
-$rutaBase = '/admin/clientes';
+$rutaBase = '/admin/clientes/indicadores';
 $pct = static fn(?float $v): string => $v === null ? 'Sin datos' : number_format($v, 1, '.', '') . ' %';
 $entero = static fn($v): string => (string)(int)$v;
 $fechaCorta = static fn($d): string => $d ? substr((string)$d, 0, 10) : '—';
@@ -26,7 +26,7 @@ $hastaEf = $res['hasta_efectivo'] ?? ($f['hasta'] ?? '');
 <header class="ui-page-header">
     <div>
         <p class="ui-eyebrow">Relación con clientes</p>
-        <h1 class="nombre-pagina"><?= $modo === 'propios' ? 'Mis clientes' : 'Clientes' ?></h1>
+        <h1 class="nombre-pagina"><?= $modo === 'propios' ? 'Mis clientes' : 'Indicadores de clientes' ?></h1>
         <p class="descripcion-pagina"><?php if ($modo === 'propios'): ?>Personas a las que has atendido. Solo contacto operativo y servicios realizados contigo.<?php elseif ($modo === 'analitica'): ?>Indicadores agregados de la base de clientes. No incluye datos personales individuales.<?php else: ?>Quiénes son, cuándo vinieron, qué prefieren y cómo cuidar la relación con ellos.<?php endif; ?></p>
     </div>
     <?php if ($modo !== 'propios'): ?>
@@ -38,15 +38,16 @@ $hastaEf = $res['hasta_efectivo'] ?? ($f['hasta'] ?? '');
     <?php endif; ?>
 </header>
 <?php include __DIR__ . '/../templates/barra.php'; include __DIR__ . '/../templates/alertas.php'; ?>
+<?php $seccionClientes = 'indicadores'; include __DIR__ . '/_secciones.php'; ?>
 
 <?php if ($modo === 'propios'): ?>
     <?php include __DIR__ . '/_propios.php'; ?>
 <?php else: ?>
 
-<details class="crm-card crm-filtros-panel"<?= $errores || !$panel['filtros_activos'] ? ' open' : '' ?>>
+<details class="crm-card crm-filtros-panel"<?= $errores ? ' open' : '' ?>>
     <summary><h2 class="crm-filtros-panel__titulo" id="crm-filtros-titulo"><?= $modo === 'completo' ? 'Buscar y filtrar' : 'Periodo del análisis' ?></h2></summary>
     <?php $panelHoy = $panel['hoy']; include __DIR__ . '/_formulario_filtros.php'; ?>
-    <p class="crm-nota">Periodo analizado: <strong><?= s($f['desde']) ?></strong> a <strong><?= s($hastaEf) ?></strong> (nunca después de hoy, <?= s($panel['hoy']) ?>, hora de Guayaquil). <strong>Todo lo que ves en esta página (indicadores, segmentos, gráficos y listado) describe al mismo conjunto de clientes: el que cumple los filtros.</strong> Sin filtros son todos los clientes.</p>
+    <p class="crm-nota">Periodo analizado: <strong><?= s($f['desde']) ?></strong> a <strong><?= s($hastaEf) ?></strong> (nunca después de hoy, <?= s($panel['hoy']) ?>, hora de Guayaquil). <strong>Los indicadores y sus listados comparten los filtros seleccionados.</strong> Por defecto se analizan clientes externos.</p>
 </details>
 <?php $chips = $panel['filtros_activos']; $total = (int)($res['clientes_total'] ?? 0); $sustantivo = 'clientes'; include __DIR__ . '/_filtros_activos.php'; ?>
 
@@ -77,6 +78,9 @@ $hastaEf = $res['hasta_efectivo'] ?? ($f['hasta'] ?? '');
             <p class="crm-kpi__nota">En el periodo, de <?= $entero($res['con_visita_rango']) ?> clientes distintos. Frecuencia media: <?= $res['frecuencia_media'] === null ? 'sin datos' : s(number_format($res['frecuencia_media'], 2, '.', '')) . ' visitas por cliente con visita' ?>. Las canceladas y las no asistidas no son visitas.</p>
             <p class="crm-kpi__enlaces"><?= $verListado('con_visita', (int)$res['con_visita_rango'], 'los ' . $entero($res['con_visita_rango']) . ' clientes con visita') ?></p>
         </article>
+    </div>
+    <details class="gestion-detalle"><summary>Más indicadores de actividad y relación</summary>
+    <div class="crm-kpis">
         <?php if ($analitica): ?>
         <article class="crm-kpi">
             <h3 class="crm-kpi__titulo">Repetición en el periodo</h3>
@@ -124,6 +128,8 @@ $hastaEf = $res['hasta_efectivo'] ?? ($f['hasta'] ?? '');
             <p class="crm-kpi__enlaces"><?= $verListado('cuenta_sin_confirmar', (int)$res['cuenta_sin_confirmar']) ?></p>
         </article>
     </div>
+
+    </details>
 
     <?php if ($analitica && is_array($res['gasto'])): $g = $res['gasto']; ?>
     <h3 class="crm-subtitulo">Dinero del periodo (solo analítica)</h3>
@@ -244,27 +250,11 @@ $hastaEf = $res['hasta_efectivo'] ?? ($f['hasta'] ?? '');
 </section>
 <?php endif; ?>
 
-<?php if ($modo === 'completo' && is_array($listado)): ?>
-<section aria-labelledby="crm-lista-titulo" class="crm-seccion">
-    <div class="crm-encabezado-lista">
-        <h2 id="crm-lista-titulo">Listado de clientes</h2>
-        <div class="crm-exportar"><a class="boton ui-button-quiet" href="/admin/clientes/listado?<?= s($consulta(['pagina' => null])) ?>">Abrir como página completa</a></div>
-    </div>
-    <?php if ($listado['total'] === 0): ?>
-        <p class="crm-vacio" role="status"><?php if ((int)$res['clientes_total'] === 0 && !$panel['filtros_activos']): ?>Aún no hay clientes registrados. Cuando alguien cree una cuenta o reserve una cita, aparecerá aquí.<?php else: ?>Ningún cliente coincide con los filtros. <a href="<?= s($rutaBase) ?>">Limpiar filtros</a>.<?php endif; ?></p>
-    <?php else: ?>
-        <?php $descripcion = 'Clientes'; include __DIR__ . '/_tabla_clientes.php'; ?>
-        <?php $pag = $listado; $noun = 'clientes'; include __DIR__ . '/_paginacion.php'; ?>
-    <?php endif; ?>
-    <?php include __DIR__ . '/_descargas.php'; ?>
-</section>
-<?php endif; ?>
-
-<section class="crm-seccion crm-definiciones" id="como-se-calcula" aria-labelledby="crm-calc-titulo">
-    <h2 id="crm-calc-titulo">Cómo se calcula</h2>
+<details class="crm-seccion crm-definiciones gestion-detalle" id="como-se-calcula">
+    <summary>Cómo se calcula</summary>
     <p>Todas las fechas «de hoy» se calculan en la zona America/Guayaquil. Una <strong>visita</strong> es una cita en estado <em>completada</em> con fecha hasta hoy; las citas canceladas, no asistidas, confirmadas o en servicio no son visitas. Nada aquí es una predicción ni un valor de vida estimado.</p>
     <dl class="crm-dl">
-        <dt>Clientes totales</dt><dd>Personas con membresía de cliente, más cuentas legadas sin membresía cuyo rol efectivo es cliente, más cuentas con alguna cita. Las cuentas solo laborales (propietario, gerente, recepción, profesional o finanzas) sin membresía ni citas no cuentan; si además tienen membresía de cliente sí cuentan.</dd>
+        <dt>Clientes totales</dt><dd>Personas con membresía de cliente, más cuentas legadas sin membresía cuyo rol efectivo es cliente, más cuentas con alguna cita. Por defecto se excluye a todo el equipo. El filtro de vínculo permite consultar a personas del equipo que también tienen perfil de cliente; nunca incluye cuentas solo laborales sin membresía ni citas.</dd>
         <dt>Clientes nuevos</dt><dd>Altas con fecha de alta (<code>clientes.creado_en</code>) dentro del periodo. «Primera visita completada» es otro indicador y se informa por separado.</dd>
         <dt>Clientes activos</dt><dd>Al menos una visita completada en los últimos <?= (int)$dias ?> días hasta hoy. La ventana se cambia (30 a 365 días) en el formulario.</dd>
         <dt>Frecuencia</dt><dd>Visitas completadas por cliente dentro del periodo. La media divide las visitas entre los clientes que tuvieron al menos una.</dd>
@@ -277,5 +267,5 @@ $hastaEf = $res['hasta_efectivo'] ?? ($f['hasta'] ?? '');
         <dt>Consentimiento</dt><dd>Estado de aceptación de promociones por correo, su fecha y la <strong>versión del texto</strong> que la persona vio al decidir. «Aceptó una versión anterior» marca a quienes aceptaron un texto que ya no es el vigente: siguen registrados tal como lo dieron, pero la lista comercial y las campañas solo incluyen la versión vigente hasta que reconfirmen. La versión 1 es la histórica: se asignó a los consentimientos existentes antes del versionado, sin inventar su fecha.</dd>
         <dt>Datos privados</dt><dd>Las respuestas de formularios y fichas privadas no se leen ni se muestran en este módulo, ni en pantalla ni en exportaciones.</dd>
     </dl>
-</section>
+</details>
 <?php endif; ?>
