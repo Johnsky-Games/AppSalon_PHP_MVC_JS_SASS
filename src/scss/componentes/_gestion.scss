@@ -17,6 +17,8 @@
 .gestion-detalle {
   margin-block: 1.6rem; padding: 1.6rem 1.8rem; border: 1px solid var(--ui-border); border-radius: 1.2rem; background: #fff;
   > summary { cursor: pointer; min-height: 4.4rem; font-size: 1.5rem; font-weight: 600; color: var(--ui-accent); }
+  // El contenido nativo de details interrumpe la herencia del modelo de caja.
+  > * { box-sizing: border-box; }
   &[open] > summary { margin-bottom: 1.4rem; }
 }
 .gestion-grupo-dias {

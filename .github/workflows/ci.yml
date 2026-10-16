@@ -89,6 +89,30 @@ jobs:
           test "$(mysql -h 127.0.0.1 -P 3306 -uroot -proot -N -e 'SELECT COUNT(*) FROM appsalon_ci_install_test.colaboradores')" = "1"
           mysql -h 127.0.0.1 -P 3306 -uroot -proot -e "DROP DATABASE appsalon_ci_install_test"
 
+      # Detectar regresiones de navegador antes de las suites largas, sin omitir comprobaciones.
+      - name: Construir y verificar imagen Docker oficial (Apache + PHP 8.2 + mbstring)
+        run: |
+          docker build -t appsalon-web-ci .
+          docker run --rm appsalon-web-ci php -m | grep -i mbstring
+          docker run --rm appsalon-web-ci php -m | grep -i mysqli
+          docker run --rm appsalon-web-ci php -m | grep -i gd
+          docker run --rm appsalon-web-ci php -m | grep -i sodium
+          docker run --rm appsalon-web-ci apache2ctl -M | grep rewrite_module
+
+      - name: Recorrido E2E aislado en Apache, MySQL y SMTP mock
+        env:
+          E2E_WEB_IMAGE: appsalon-web-ci
+          E2E_ARTIFACT_DIR: ${{ runner.temp }}/appsalon-e2e
+        run: bash tests/run_browser_e2e.sh
+
+      - name: Conservar resultados y registros E2E
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apache-browser-e2e
+          path: ${{ runner.temp }}/appsalon-e2e
+          if-no-files-found: ignore
+
       - name: Ejecutar suite completa de PHPUnit (sin caché y orden aleatorio)
         run: php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --order-by=random --colors=never
 
@@ -137,29 +161,6 @@ jobs:
         with:
           name: gestion-personas-capturas
           path: ${{ runner.temp }}/gestion-capturas
-          if-no-files-found: ignore
-
-      - name: Construir y verificar imagen Docker oficial (Apache + PHP 8.2 + mbstring)
-        run: |
-          docker build -t appsalon-web-ci .
-          docker run --rm appsalon-web-ci php -m | grep -i mbstring
-          docker run --rm appsalon-web-ci php -m | grep -i mysqli
-          docker run --rm appsalon-web-ci php -m | grep -i gd
-          docker run --rm appsalon-web-ci php -m | grep -i sodium
-          docker run --rm appsalon-web-ci apache2ctl -M | grep rewrite_module
-
-      - name: Recorrido E2E aislado en Apache, MySQL y SMTP mock
-        env:
-          E2E_WEB_IMAGE: appsalon-web-ci
-          E2E_ARTIFACT_DIR: ${{ runner.temp }}/appsalon-e2e
-        run: bash tests/run_browser_e2e.sh
-
-      - name: Conservar resultados y registros E2E
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: apache-browser-e2e
-          path: ${{ runner.temp }}/appsalon-e2e
           if-no-files-found: ignore
 
       - name: Verificar ciclo completo de respaldo y restauración con validación SHA-256
