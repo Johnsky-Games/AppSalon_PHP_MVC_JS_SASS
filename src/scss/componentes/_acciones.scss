@@ -1,20 +1,6 @@
-@use 'base/variables' as v;
-@use 'base/mixins' as m;
-
-.acciones {
-    margin-top: v.$separacion;
-    margin-right: 2rem;
-
-    @include m.tablet {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-    }
-
-    a {
-        color: v.$blanco;
-        display: block;
-        margin-bottom: calc(v.$separacion / 2);
-        text-align: center;
-    }
-}
+.acciones { display: flex; align-items: center; flex-wrap: wrap; gap: 1rem; margin: 2rem 0; }
+.acciones a:not(.boton):not(.boton-eliminar) { display: inline-flex; align-items: center; min-height: 4.4rem; color: var(--ui-accent); font-size: 1.25rem; }
+.acciones form { margin: 0; }
+.acciones .boton, .acciones .boton-eliminar { margin: 0; }
+.ui-auth .acciones { display: grid; gap: .5rem; padding-top: 1.5rem; border-top: 1px solid var(--ui-border); }
+.ui-auth .acciones a { min-height: 4.4rem; text-align: left; font-size: 1.25rem; }

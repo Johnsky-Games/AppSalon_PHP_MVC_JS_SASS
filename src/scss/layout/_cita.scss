@@ -1,16 +1,24 @@
-.seccion {
-    padding: 5rem 0;
-    display: none;
-
-    .text-center {
-        text-align: center;
-    }
-}
-
-.mostrar {
-    display: block;
-}
-
-.ocultar {
-    display: none;
-}
+.seccion { padding: 3rem 0 0; display: none; }
+.seccion.mostrar { display: block; animation: ui-enter .3s ease both; }
+.seccion .text-center { text-align: left; }
+.seccion > h2 { font-size: 2.3rem; }
+.campo-horarios .horarios-contenedor { width: 100%; min-width: 0; display: flex; flex-direction: column; gap: 1.2rem; }
+.estado-profesionales, .estado-disponibilidad { padding: 1.3rem 1.6rem; border-radius: 1rem; font-size: 1.25rem; margin: 0 0 1.5rem; background: #edf3ee; color: #4e695b; border: 1px solid #dbe7df; }
+.estado-loading { border-left: 3px solid var(--ui-accent); }
+.estado-empty { background: #fbf5e9; border-color: #e8dbc2; color: #806232; }
+.estado-error { background: #fff0ef; color: #903b40; border-color: #eed3cf; }
+.intervalos-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr)); gap: 1rem; }
+.intervalo-btn { background: #fff; color: var(--ui-ink); border: 1px solid #d5e3da; border-radius: 1rem; min-height: 4.6rem; padding: 1rem 1.2rem; font-size: 1.3rem; font-weight: 600; cursor: pointer; transition: background .2s, transform .2s, border-color .2s; }
+.intervalo-btn:hover { border-color: var(--ui-accent); transform: translateY(-2px); }
+.intervalo-btn.seleccionado { background: var(--ui-accent); color: #fff; border-color: var(--ui-accent); }
+.mis-citas-seccion { margin-top: 4rem; border-top: 1px solid var(--ui-border); padding-top: 3rem; }
+.mis-citas-seccion .btn-cancelar-cita { margin: 1.2rem 0 0; }
+.mis-citas-seccion .text-center { text-align: left; }
+.booking-hero { background: linear-gradient(115deg, #e5efe5, #f4eee2); border-radius: 2rem; padding: 3rem; position: relative; border: 1px solid #dce5d9; margin-bottom: 2.5rem; }
+.booking-hero p { color: #546d5f; }
+.booking-hero .ui-eyebrow { margin-bottom: 1rem; }
+.booking-selection { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; margin: 1.5rem 0 2rem; padding: 1.2rem 1.6rem; background: #fff; border: 1px solid var(--ui-border); border-radius: 1.2rem; font-size: 1.25rem; }
+.professional-preview { display: flex; align-items: center; gap: 1.2rem; padding: 1.5rem; background: #f7f9f5; border: 1px solid var(--ui-border); border-radius: 1.2rem; margin-bottom: 2rem; }
+.professional-preview p { margin: 0; font-size: 1.3rem; }
+.professional-preview img { width: 5rem; height: 5rem; border-radius: 50%; }
+@media (max-width: 500px) { .booking-hero { padding: 2rem; } }

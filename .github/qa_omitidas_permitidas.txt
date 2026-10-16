@@ -1,0 +1,10 @@
+# Omisiones PERMITIDAS en la suite tests/Qa dentro del CI. Formato: Clase::metodo | motivo
+# Cualquier otra prueba omitida hace fallar el CI (scripts/ci_verificar_omitidas.php).
+#
+# Lista definitiva fijada por la reverificación del QA independiente (ronda 2B): VACÍA.
+# Comprobado con el informe JUnit de la ejecución completa de tests/Qa (563 pruebas, 0 omitidas):
+#   php scripts/ci_verificar_omitidas.php <junit.xml> .github/qa_omitidas_permitidas.txt  ->  «omitidas: 0», código de salida 0.
+# Las dos omisiones de la ronda 2 (TokensTest DEF-13 y EsquemaTest DEF-16) ya no existen: ambas pruebas se ejecutan contra la corrección.
+# Las pruebas que dependen de Chromium (FrontendTest, R2bFrontendTest) no se omiten en CI: con QA_EXIGIR_NAVEGADOR=1 (lo fija
+# .github/workflows/ci.yml) fallan si no hay navegador, de modo que su ausencia nunca se confunde con un éxito.
+# Una omisión legítima futura debe constar aquí con un motivo técnico estable (nunca «temporal» ni «intermitente»).

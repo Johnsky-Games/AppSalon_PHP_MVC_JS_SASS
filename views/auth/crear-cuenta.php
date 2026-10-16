@@ -1,9 +1,11 @@
+<p class="ui-eyebrow">BIENVENIDO A APPSALÓN</p>
 <h1 class="nombre-pagina">Crear Cuenta</h1>
 <p class="descripcion-pagina">Llena el siguiente formulario para crear una cuenta</p>
 
-<?php include_once __DIR__ . '/../templates/alertas.php'; ?>
-<form class="formulario" method="POST" action="/crear-cuenta">
+<?php include __DIR__ . '/../templates/alertas.php'; ?>
+<form class="formulario" method="POST" action="/cliente/registro" data-una-vez>
     <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
+    <input type="hidden" name="idem_key" value="<?php echo s(clave_operacion_formulario()); ?>">
     <div class="campo">
         <label for="nombre">Nombre</label>
         <input type="text" id="nombre" name="nombre" placeholder="Tu Nombre" value="<?php echo s($usuario->nombre); ?>">
@@ -23,8 +25,9 @@
         <input type="email" id="email" name="email" placeholder="Tu Email" value="<?php echo s($usuario->email); ?>">
     </div>
     <div class="campo">
-        <label for="password">Password</label>
-        <input type="password" id="password" name="password" placeholder="Tu Password">
+        <label for="password">Contraseña</label>
+        <input type="password" autocomplete="new-password" id="password" name="password" placeholder="Tu contraseña" aria-describedby="registro-password-ayuda">
+        <p class="ui-form-help" id="registro-password-ayuda">Es provisional: al abrir el enlace de tu correo elegirás tu contraseña definitiva y la de este formulario se descarta.</p>
     </div>
 
     <input type="submit" value="Crear Cuenta" class="boton">
@@ -32,6 +35,6 @@
 
 
 <div class="acciones">
-    <a href="/">¿Ya tienes una cuenta? Iniciar Sessión</a>
-    <a href="/olvide">¿Olvidaste tu password?</a>
+    <a href="/">¿Ya tienes una cuenta? Iniciar Sesión</a>
+    <a href="/olvide">¿Olvidaste tu contraseña?</a>
 </div>

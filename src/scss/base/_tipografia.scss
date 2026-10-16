@@ -1,39 +1,13 @@
 @use 'variables' as v;
-
-h1,
-h2,
-h3 {
-    font-family: v.$fuente_principal;
-    margin: 0 0 calc(v.$separacion / 2) 0;
-    font-weight: 900;
-    color: v.$blanco;
-    text-align: center;
-}
-
-h1 {
-    font-size: 4rem;
-}
-
-h2 {
-    font-size: 3.6rem;
-}
-
-h3 {
-    font-size: 3rem;
-    text-align: center;
-}
-
-p {
-    color: v.$blanco;
-    font-size: 2rem;
-}
-
-.nombre-pagina {
-    text-align: center;
-    margin: 5rem 0;
-    font-weight: v.$bold;
-}
-
-.descripcion-pagina {
-    text-align: center;
-}
+h1, h2, h3, h4 { font-family: v.$fuente_principal; color: var(--ui-ink); font-weight: 700; line-height: 1.2; letter-spacing: -.035em; margin: 0 0 1.5rem; }
+h1 { font-size: clamp(2.6rem, 3.2vw, 3.8rem); }
+h2 { font-size: clamp(2rem, 2.2vw, 2.7rem); }
+h3 { font-size: 1.9rem; }
+p { margin: 0 0 1.5rem; color: var(--ui-muted); font-size: 1.5rem; }
+.nombre-pagina { text-align: left; margin: 0 0 1rem; font-weight: 700; }
+.descripcion-pagina { text-align: left; margin: 0 0 2.5rem; max-width: 68rem; }
+.text-center { text-align: center; }
+.ui-eyebrow { display: block; color: var(--ui-accent); font-size: 1.05rem; font-weight: 750; letter-spacing: .13em; line-height: 1.6; text-transform: uppercase; margin-bottom: .7rem; }
+.ui-section-title { display: flex; align-items: center; justify-content: space-between; gap: 1.6rem; margin-bottom: 2rem; }
+.ui-page-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2rem; margin-bottom: 2.4rem; }
+.ui-page-header p { margin-bottom: 0; }

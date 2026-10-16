@@ -2,108 +2,180 @@
 
 namespace Controllers;
 
-use MVC\Router;
-use Model\Usuario;
-use Classes\Email;
 use Classes\RateLimiter;
 use Model\ActiveRecord;
+use Model\Usuario;
+use MVC\Router;
+use Repositories\UsuarioRepository;
+use Services\AuthService;
 
+/**
+ * Controlador HTTP para autenticación, registro, confirmación y recuperación de contraseña.
+ * Gestiona exclusivamente transporte HTTP, sesiones, CSRF, vistas, mensajes y redirecciones,
+ * delegando las reglas de negocio en AuthService y la persistencia en UsuarioRepository.
+ */
 class LoginController
 {
+    private static ?AuthService $authService = null;
+
+    /**
+     * Permite inyectar una instancia de AuthService (o restablecerla con null).
+     */
+    public static function setAuthService(?AuthService $service): void
+    {
+        self::$authService = $service;
+    }
+
+    /**
+     * Obtiene la instancia inyectada de AuthService o construye una por defecto
+     * con la conexión activa de base de datos.
+     */
+    private static function obtenerAuthService(): AuthService
+    {
+        if (self::$authService !== null) {
+            return self::$authService;
+        }
+
+        return new AuthService(new UsuarioRepository(ActiveRecord::getDB()));
+    }
+
     /**
      * Autenticación de usuarios con regeneración de sesión, reconstrucción estricta de roles
      * y Rate Limiting atómico.
      */
     public static function login(Router $router)
     {
+        self::autenticar($router, 'cliente');
+    }
+
+    /** Acceso del portal de clientes (/cliente/login). `/` conserva el mismo comportamiento por compatibilidad. */
+    public static function loginCliente(Router $router)
+    {
+        self::autenticar($router, 'cliente');
+    }
+
+    /** Acceso del portal del equipo (/equipo/login): solo cuentas con colaborador activo y rol laboral. */
+    public static function loginEquipo(Router $router)
+    {
+        self::autenticar($router, 'equipo');
+    }
+
+    private static function autenticar(Router $router, string $portal)
+    {
         iniciar_sesion_segura();
+        Usuario::limpiarAlertas();
         $alertas = [];
-        $auth = new Usuario;
-        $db = ActiveRecord::getDB();
+        $auth = new Usuario();
+        if (!empty($_SESSION['aviso_sesion_expirada'])) {
+            $alertas['error'][] = 'Tu sesión terminó o cambió tu acceso. Inicia sesión de nuevo para continuar.';
+            unset($_SESSION['aviso_sesion_expirada']);
+        }
+
+        if ($portal === 'equipo' && ($_GET['invitacion'] ?? '') === 'aceptada' && $_SERVER['REQUEST_METHOD'] === 'GET') {
+            $alertas['exito'][] = 'Invitación aceptada. Ingresa con tu correo y tu contraseña para entrar al equipo.';
+        }
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exigir_csrf();
 
-            $emailRaw = $_POST['email'] ?? null;
-            $passwordRaw = $_POST['password'] ?? null;
-
-            if (!is_string($emailRaw) || !is_string($passwordRaw)) {
-                http_response_code(422);
-                Usuario::setAlerta('error', 'Los campos email y password deben ser cadenas de texto válidas');
-                $alertas = Usuario::getAlertas();
-                $router->render('auth/login', [
-                    'alertas' => $alertas,
-                    'auth' => $auth,
-                ]);
-                return;
-            }
-
-            $auth = new Usuario($_POST);
-            $alertas = $auth->validarLogin();
-
             $ip = RateLimiter::obtenerIP();
-            $email = trim($emailRaw);
+            $resultado = self::obtenerAuthService()->login($_POST, $ip);
 
-            if (!empty($alertas)) {
-                $router->render('auth/login', [
-                    'alertas' => $alertas,
-                    'auth' => $auth,
-                ]);
-                return;
+            if ($resultado['usuario'] instanceof Usuario) {
+                $auth = $resultado['usuario'];
             }
+            $alertas = $resultado['alertas'];
 
-            // Admisión y reserva atómica de intento previa a la verificación costosa (bcrypt)
-            $admision = $db ? RateLimiter::admitirIntentoLogin($db, $ip, $email) : ['admitido' => true, 'segundos_restantes' => 0];
+            if ($resultado['status'] === AuthService::STATUS_OK && $resultado['usuario'] instanceof Usuario) {
+                $usuario = $resultado['usuario'];
 
-            if (!$admision['admitido']) {
-                http_response_code(429);
-                $espera = max(1, (int)$admision['segundos_restantes']);
-                header("Retry-After: {$espera}");
-                $minutos = ceil($espera / 60);
-                Usuario::setAlerta('error', "Demasiados intentos fallidos. Por seguridad, intente de nuevo en {$minutos} minutos.");
-            } else {
-                $usuario = Usuario::where('email', $email);
-
-                if ($usuario && $usuario->comprobarPasswordAndVerificado($auth->password)) {
-                    if ($db) {
-                        // Política de rate limiting: Un login exitoso limpia ÚNICAMENTE el contador
-                        // de la cuenta (email) autenticada. El presupuesto de la IP es compartido y
-                        // NO se reinicia aquí; solo expira naturalmente por ventana temporal para
-                        // evitar que un atacante eluda el límite de IP intercalando accesos válidos
-                        // a una cuenta de control con ataques de fuerza bruta hacia otras cuentas.
-                        RateLimiter::limpiarIntentos($db, RateLimiter::TIPO_EMAIL_LOGIN, $email);
-                    }
-
-                    // Reconstruir sesión: limpiar datos y roles previos antes de poblar
-                    $_SESSION = [];
-                    session_regenerate_id(true);
-
-                    $_SESSION['id'] = $usuario->id;
-                    $_SESSION['nombre'] = $usuario->nombre;
-                    $_SESSION['apellido'] = $usuario->apellido;
-                    $_SESSION['email'] = $usuario->email;
-                    $_SESSION['login'] = true;
-
-                    if ((string)$usuario->admin === '1') {
-                        $_SESSION['admin'] = '1';
-                        header('Location: /admin');
-                    } else {
-                        unset($_SESSION['admin']);
-                        header('Location: /cita');
-                    }
-                    detener_ejecucion(302);
+                // El contexto se resuelve ANTES de abrir sesión. Si la autorización no está disponible
+                // (conexión, consulta, esquema sin migrar) se propaga ServiceUnavailableException → 503;
+                // jamás se presenta como "cuenta inactiva". Sólo un estado explícito suspende el acceso.
+                $autorizacion = new \Services\AuthorizationService();
+                $acceso = $autorizacion->contexto((int)$usuario->id);
+                if ($acceso === null) {
+                    http_response_code(401);
+                    $alertas = ['error' => ['No pudimos validar tu cuenta. Inténtalo de nuevo.']];
+                    $router->render('auth/login', ['alertas' => $alertas, 'auth' => $auth]);
                     return;
-                } else {
-                    Usuario::setAlerta('error', 'Credenciales incorrectas o la cuenta no ha sido verificada');
                 }
+                $esEquipo = $acceso['rol'] !== 'cliente';
+                $clienteSuspendido = $acceso['cliente_estado'] === 'suspendido';
+                if ($portal === 'cliente') {
+                    if ($esEquipo && $acceso['cliente_estado'] === null) {
+                        // Cuenta solo laboral: no entra como cliente ni conserva privilegios; se la orienta a su portal.
+                        http_response_code(422);
+                        $alertas = ['error' => ['Esta cuenta pertenece al equipo del salón. Ingresa desde el acceso del equipo.']];
+                        $router->render('auth/login', ['alertas' => $alertas, 'auth' => $auth, 'enlaceEquipo' => true]);
+                        return;
+                    }
+                    if ($clienteSuspendido || (!$esEquipo && (int)$acceso['activo'] !== 1)) {
+                        $_SESSION = [];
+                        \Classes\ErrorResponse::render(403, ['mensaje' => 'Tu cuenta de cliente está suspendida. Escribe o llama al salón para que revisen tu caso.']);
+                        detener_ejecucion(403);
+                    }
+                    if (!$esEquipo && $acceso['cliente_estado'] === null) {
+                        // Cuenta anterior a la membresía explícita: se materializa activa, nunca reactiva una suspendida.
+                        $autorizacion->asegurarMembresiaCliente((int)$usuario->id);
+                    }
+                } else {
+                    if (!$esEquipo) {
+                        http_response_code(403);
+                        $pendiente = ($acceso['colaborador_estado'] ?? null) === 'invitado';
+                        $alertas = ['error' => [$pendiente
+                            ? 'Tu invitación al equipo sigue pendiente. Acéptala desde el enlace que recibiste por correo; hasta entonces no tienes acceso laboral.'
+                            : 'Esta cuenta no tiene acceso al equipo. Si eres cliente, ingresa desde el acceso de clientes.']];
+                        $router->render('auth/login-equipo', ['alertas' => $alertas, 'auth' => $auth]);
+                        return;
+                    }
+                    if ((int)$acceso['activo'] !== 1) {
+                        $_SESSION = [];
+                        \Classes\ErrorResponse::render(403, ['mensaje' => 'Tu acceso al equipo está suspendido. Consulta con la administración del salón.']);
+                        detener_ejecucion(403);
+                    }
+                }
+
+                // La pantalla pedida antes de iniciar sesión (solo del catálogo, la guardó isAuth) se lee antes de reconstruir la sesión.
+                $intencion = is_array($_SESSION['destino_tras_login'] ?? null) ? $_SESSION['destino_tras_login'] : null;
+
+                // Reconstruir sesión: limpiar datos y roles previos antes de poblar
+                $_SESSION = [];
+                session_regenerate_id(true);
+
+                $_SESSION['id'] = $usuario->id;
+                $_SESSION['nombre'] = $usuario->nombre;
+                $_SESSION['apellido'] = $usuario->apellido;
+                $_SESSION['email'] = $usuario->email;
+                $_SESSION['login'] = true;
+                $_SESSION['version_sesion'] = (int)$acceso['version_sesion'];
+                $_SESSION['portal'] = $portal;
+                // El rol de la sesión es el del portal: en el portal de clientes nunca se heredan permisos laborales.
+                $_SESSION['rol'] = $portal === 'equipo' ? $acceso['rol'] : 'cliente';
+
+                if ($portal === 'equipo') {
+                    if (in_array($acceso['rol'], ['propietario','gerente'], true)) { $_SESSION['admin'] = '1'; }
+                    else { unset($_SESSION['admin']); }
+                } else {
+                    unset($_SESSION['admin']);
+                }
+                // Mismo portal que la intención guardada y permiso vigente → esa pantalla; si no, el inicio del rol en su portal.
+                redirigir(destino_tras_login($intencion, $portal));
+                return;
+            } elseif ($resultado['status'] === AuthService::STATUS_INVALID_TYPE) {
+                http_response_code(422);
+            } elseif ($resultado['status'] === AuthService::STATUS_RATE_LIMITED) {
+                http_response_code(429);
+                $espera = max(1, (int)($resultado['segundos_restantes'] ?? RateLimiter::DURACION_BLOQUEO));
+                header("Retry-After: {$espera}");
+            } elseif ($resultado['status'] === AuthService::STATUS_ERROR) {
+                http_response_code(500);
             }
         }
 
-        $alertas = Usuario::getAlertas();
-
-        $router->render('auth/login', [
+        $router->render($portal === 'equipo' ? 'auth/login-equipo' : 'auth/login', [
             'alertas' => $alertas,
-            'auth' => $auth,
+            'auth' => $auth
         ]);
     }
 
@@ -122,19 +194,24 @@ class LoginController
 
         exigir_csrf();
 
+        $destino = destino_portal(($_SESSION['portal'] ?? '') === 'equipo' ? 'login_equipo' : 'login_cliente');
         $_SESSION = [];
 
-        if (ini_get("session.use_cookies")) {
+        if (ini_get('session.use_cookies')) {
             $params = session_get_cookie_params();
-            setcookie(session_name(), '', time() - 42000,
-                $params["path"], $params["domain"],
-                $params["secure"], $params["httponly"]
+            setcookie(
+                session_name(),
+                '',
+                time() - 42000,
+                $params['path'],
+                $params['domain'],
+                $params['secure'],
+                $params['httponly']
             );
         }
 
         session_destroy();
-        header('Location: /');
-        detener_ejecucion(302);
+        redirigir($destino);
     }
 
     /**
@@ -143,68 +220,26 @@ class LoginController
     public static function olvide(Router $router)
     {
         iniciar_sesion_segura();
+        Usuario::limpiarAlertas();
         $alertas = [];
-        $db = ActiveRecord::getDB();
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exigir_csrf();
 
-            $emailRaw = $_POST['email'] ?? null;
-            if (!is_string($emailRaw)) {
-                http_response_code(422);
-                Usuario::setAlerta('error', 'El email debe ser una cadena de texto válida');
-                $alertas = Usuario::getAlertas();
-                $router->render('auth/olvide-password', [
-                    'alertas' => $alertas
-                ]);
-                return;
-            }
-
-            $email = trim($emailRaw);
-            $auth = new Usuario(['email' => $email]);
-            $alertas = $auth->validarEmail();
-
             $ip = RateLimiter::obtenerIP();
+            $resultado = self::obtenerAuthService()->solicitarRecuperacion($_POST, $ip);
+            $alertas = $resultado['alertas'];
 
-            if (!empty($alertas)) {
-                $router->render('auth/olvide-password', [
-                    'alertas' => $alertas
-                ]);
-                return;
-            }
-
-            $admision = $db ? RateLimiter::admitirIntentoRecovery($db, $ip, $email) : ['admitido' => true, 'segundos_restantes' => 0];
-
-            if (!$admision['admitido']) {
+            if ($resultado['status'] === AuthService::STATUS_INVALID_TYPE) {
+                http_response_code(422);
+            } elseif ($resultado['status'] === AuthService::STATUS_RATE_LIMITED) {
                 http_response_code(429);
-                $espera = max(1, (int)$admision['segundos_restantes']);
+                $espera = max(1, (int)($resultado['segundos_restantes'] ?? RateLimiter::DURACION_BLOQUEO));
                 header("Retry-After: {$espera}");
-                $minutos = ceil($espera / 60);
-                Usuario::setAlerta('error', "Demasiadas solicitudes de recuperación. Intente en {$minutos} minutos.");
-            } else {
-                $usuario = Usuario::where('email', $email);
-                if ($usuario && (string)$usuario->confirmado === '1') {
-                    // Actualización preparada atómica exclusiva de los campos del token condicionada a confirmado = '1'.
-                    // No sobreescribe password, rol admin ni datos del perfil ante peticiones concurrentes.
-                    $tokenRaw = $usuario->generarYPersistirTokenRecuperacion(2);
-
-                    if ($tokenRaw !== null) {
-                        $emailObj = new Email($usuario->nombre, $usuario->email, $tokenRaw);
-                        $enviado = $emailObj->enviarInstrucciones();
-                        if (!$enviado) {
-                            error_log("LoginController::olvide fallo al despachar correo de recuperacion para usuario ID {$usuario->id}");
-                        }
-                    } else {
-                        error_log("LoginController::olvide fallo al persistir token de recuperacion para usuario ID {$usuario->id}");
-                    }
-                }
-
-                // Mensaje genérico para prevenir enumeración de usuarios
-                Usuario::setAlerta('exito', 'Si el correo electrónico está registrado, recibirás las instrucciones para restablecer tu contraseña en breve.');
+            } elseif ($resultado['status'] === AuthService::STATUS_ERROR) {
+                http_response_code(500);
             }
         }
-
-        $alertas = Usuario::getAlertas();
 
         $router->render('auth/olvide-password', [
             'alertas' => $alertas
@@ -217,71 +252,38 @@ class LoginController
     public static function reenviarConfirmacion(Router $router)
     {
         iniciar_sesion_segura();
+        Usuario::limpiarAlertas();
         $alertas = [];
-        $db = ActiveRecord::getDB();
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exigir_csrf();
 
-            $emailRaw = $_POST['email'] ?? null;
-            if (!is_string($emailRaw)) {
-                http_response_code(422);
-                Usuario::setAlerta('error', 'El email debe ser una cadena de texto válida');
-                $alertas = Usuario::getAlertas();
-                $router->render('auth/reenviar-confirmacion', [
-                    'alertas' => $alertas
-                ]);
-                return;
-            }
-
-            $email = trim($emailRaw);
-            $auth = new Usuario(['email' => $email]);
-            $alertas = $auth->validarEmail();
-
             $ip = RateLimiter::obtenerIP();
+            $resultado = self::obtenerAuthService()->reenviarConfirmacion($_POST, $ip);
+            $alertas = $resultado['alertas'];
 
-            if (!empty($alertas)) {
-                $router->render('auth/reenviar-confirmacion', [
-                    'alertas' => $alertas
-                ]);
-                return;
-            }
-
-            $admision = $db ? RateLimiter::admitirIntentoReconfirm($db, $ip, $email) : ['admitido' => true, 'segundos_restantes' => 0];
-
-            if (!$admision['admitido']) {
+            if ($resultado['status'] === AuthService::STATUS_INVALID_TYPE) {
+                http_response_code(422);
+            } elseif ($resultado['status'] === AuthService::STATUS_RATE_LIMITED) {
                 http_response_code(429);
-                $espera = max(1, (int)$admision['segundos_restantes']);
+                $espera = max(1, (int)($resultado['segundos_restantes'] ?? RateLimiter::DURACION_BLOQUEO));
                 header("Retry-After: {$espera}");
-                $minutos = ceil($espera / 60);
-                Usuario::setAlerta('error', "Demasiadas solicitudes de confirmación. Intente de nuevo en {$minutos} minutos.");
-            } else {
-                $usuario = Usuario::where('email', $email);
-                if ($usuario && (string)$usuario->confirmado !== '1') {
-                    // Actualización preparada atómica exclusiva de los campos del token condicionada a confirmado = '0'.
-                    // No sobreescribe password, rol admin ni estado de confirmación ante peticiones concurrentes.
-                    $tokenRaw = $usuario->generarYPersistirTokenConfirmacion(24);
-
-                    if ($tokenRaw !== null) {
-                        $emailObj = new Email($usuario->nombre, $usuario->email, $tokenRaw);
-                        $enviado = $emailObj->enviarConfirmacion();
-                        if (!$enviado) {
-                            error_log("LoginController::reenviarConfirmacion fallo al despachar correo para usuario ID {$usuario->id}");
-                        }
-                    } else {
-                        error_log("LoginController::reenviarConfirmacion fallo al persistir token para usuario ID {$usuario->id}");
-                    }
-                }
-
-                // Respuesta genérica para prevenir enumeración de cuentas
-                Usuario::setAlerta('exito', 'Si la cuenta existe y está pendiente de confirmación, hemos enviado un nuevo enlace a tu correo electrónico.');
+            } elseif ($resultado['status'] === AuthService::STATUS_ERROR) {
+                http_response_code(500);
             }
         }
 
-        $alertas = Usuario::getAlertas();
         $router->render('auth/reenviar-confirmacion', [
             'alertas' => $alertas
         ]);
+    }
+
+    /**
+     * Alias de compatibilidad para reenviarConfirmacion().
+     */
+    public static function reenviar(Router $router)
+    {
+        self::reenviarConfirmacion($router);
     }
 
     /**
@@ -290,50 +292,43 @@ class LoginController
     public static function recuperar(Router $router)
     {
         iniciar_sesion_segura();
+        Usuario::limpiarAlertas();
         $alertas = [];
         $error = false;
-        $token = is_string($_GET['token'] ?? null) ? trim($_GET['token']) : '';
 
-        $usuario = Usuario::buscarPorTokenSeguro($token, 'recuperacion');
-        if (!$usuario) {
-            Usuario::setAlerta('error', 'Token no válido o expirado');
-            $error = true;
+        $token = is_string($_GET['token'] ?? null) ? trim($_GET['token']) : '';
+        $validacionToken = self::obtenerAuthService()->validarTokenRecuperacion($token);
+        $error = (bool)$validacionToken['error'];
+        $alertas = $validacionToken['alertas'];
+
+        if ($validacionToken['status'] === AuthService::STATUS_ERROR) {
+            http_response_code(500);
+        } elseif ($error) {
+            http_response_code(410);
         }
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exigir_csrf();
 
-            $passwordInput = $_POST['password'] ?? null;
-            if (!is_string($passwordInput)) {
-                http_response_code(422);
-                Usuario::setAlerta('error', 'El password debe ser una cadena de texto válida');
-                $alertas = Usuario::getAlertas();
-                $router->render('auth/recuperar-password', [
-                    'alertas' => $alertas,
-                    'error' => $error
-                ]);
+            $resultadoReset = self::obtenerAuthService()->restablecerPassword($token, $_POST);
+            $alertas = $resultadoReset['alertas'];
+
+            if ($resultadoReset['status'] === AuthService::STATUS_OK) {
+                redirigir(destino_portal(($_GET['portal'] ?? '') === 'equipo' ? 'login_equipo' : 'login_cliente'));
                 return;
-            }
-
-            $password = new Usuario(['password' => $passwordInput]);
-            $alertas = $password->validarPassword();
-
-            if (empty($alertas)) {
-                $hashNuevo = password_hash($password->password, PASSWORD_BCRYPT);
-                $actualizado = Usuario::restablecerPasswordPorToken($token, $hashNuevo);
-
-                if ($actualizado) {
-                    header('Location: /');
-                    detener_ejecucion(302);
-                    return;
-                } else {
-                    Usuario::setAlerta('error', 'El token no es válido, ya fue utilizado o ha expirado.');
-                    $error = true;
-                }
+            } elseif ($resultadoReset['status'] === AuthService::STATUS_INVALID_TYPE) {
+                http_response_code(422);
+            } elseif ($resultadoReset['status'] === AuthService::STATUS_ERROR) {
+                http_response_code(500);
+                $error = true;
+            } elseif (!empty($resultadoReset['error'])) {
+                $error = true;
+                http_response_code(410);
+            } else {
+                http_response_code(422);
             }
         }
 
-        $alertas = Usuario::getAlertas();
         $router->render('auth/recuperar-password', [
             'alertas' => $alertas,
             'error' => $error
@@ -346,40 +341,42 @@ class LoginController
     public static function crear(Router $router)
     {
         iniciar_sesion_segura();
-        $usuario = new Usuario;
+        Usuario::limpiarAlertas();
+        $usuario = new Usuario();
         $alertas = [];
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exigir_csrf();
 
-            $usuario->sincronizarRegistro($_POST);
-            $alertas = $usuario->validarNuevaCuenta();
-
-            if (empty($alertas)) {
-                if ($usuario->existeUsuario()) {
-                    $alertas = Usuario::getAlertas();
-                } else {
-                    $usuario->hashPassword();
-                    $tokenRaw = $usuario->generarTokenSeguro('confirmacion', 24);
-
-                    $resultado = $usuario->guardar();
-
-                    if ($resultado && !empty($resultado['resultado'])) {
-                        $email = new Email($usuario->nombre, $usuario->email, $tokenRaw);
-                        $enviado = $email->enviarConfirmacion();
-                        if (!$enviado) {
-                            error_log("LoginController::crear fallo al despachar correo de confirmacion para usuario ID {$usuario->id}");
-                        }
-
-                        header('Location: /mensaje');
-                        detener_ejecucion(302);
-                        return;
-                    } else {
-                        error_log("LoginController::crear fallo al persistir usuario y token en base de datos");
-                        Usuario::setAlerta('error', 'Hubo un error al procesar el registro. Intente nuevamente.');
-                    }
-                }
+            $clave = clave_operacion_enviada();
+            if ($clave === null) {
+                // El formulario siempre incluye su clave de operación; sin ella no se admite el alta.
+                $resultado = ['status' => AuthService::STATUS_INVALID, 'usuario' => new Usuario(),
+                    'alertas' => ['error' => ['El formulario venció. Recárgalo para crear tu cuenta.']]];
+            } else {
+                $resultado = self::obtenerAuthService()->registrar($_POST, RateLimiter::obtenerIP(), $clave, \Classes\Idempotencia::actorAnonimo());
             }
+            if ($resultado['usuario'] instanceof Usuario) {
+                $usuario = $resultado['usuario'];
+            }
+            $alertas = $resultado['alertas'];
+
+            if ($resultado['status'] === AuthService::STATUS_OK) {
+                // Respuesta pública UNIFORME (DEF-13): idéntica para correo nuevo, cliente confirmado o sin confirmar,
+                // personal laboral y cuentas suspendidas. No se añade ningún dato de la cuenta ni se distingue `repetida`.
+                redirigir('/mensaje');
+                return;
+            } elseif ($resultado['status'] === AuthService::STATUS_RATE_LIMITED) {
+                http_response_code(429);
+                header('Retry-After: ' . max(1,(int)($resultado['segundos_restantes'] ?? 900)));
+            } elseif ($resultado['status'] === AuthService::STATUS_CONFLICT_CLAVE) {
+                http_response_code(409);
+            } elseif ($resultado['status'] === AuthService::STATUS_EN_CURSO) {
+                http_response_code(409);
+                header('Retry-After: ' . max(1,(int)($resultado['segundos_restantes'] ?? 3)));
+            } elseif ($resultado['status'] === AuthService::STATUS_ERROR) {
+                http_response_code(500);
+            } else { http_response_code(422); }
         }
 
         $router->render('auth/crear-cuenta', [
@@ -393,26 +390,131 @@ class LoginController
         $router->render('auth/mensaje', []);
     }
 
+    /** Cabeceras del enlace de activación: la página contiene el token, no debe cachearse ni filtrarse por Referer. */
+    private static function cabecerasActivacion(): void
+    {
+        if (!headers_sent()) {
+            header('Cache-Control: no-store');
+        }
+        if (!headers_sent()) {
+            header('Referrer-Policy: no-referrer');
+            header('Content-Type: text/html; charset=utf-8');
+        }
+    }
+
     /**
-     * Confirmación de cuenta atómica condicionada por hash, tipo y vencimiento.
+     * `GET`/`HEAD /confirmar-cuenta?token=…`: SOLO VALIDAN el enlace. Nunca activan ni consumen el token (los escáneres de
+     * enlaces, vistas previas y reintentos del navegador hacen GET). GET muestra el formulario de activación; HEAD
+     * devuelve únicamente el estado (200 válido, 410 inválido/vencido/usado, 500 fallo técnico) sin cuerpo.
      */
     public static function confirmar(Router $router)
     {
         iniciar_sesion_segura();
-        $alertas = [];
+        Usuario::limpiarAlertas();
+        self::cabecerasActivacion();
+
         $token = is_string($_GET['token'] ?? null) ? trim($_GET['token']) : '';
+        $validacion = self::obtenerAuthService()->validarTokenConfirmacion($token);
+        $estado = $validacion['status'];
+        http_response_code($estado === AuthService::STATUS_ERROR ? 500 : ($estado === AuthService::STATUS_OK ? 200 : 410));
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'HEAD') {
+            return;
+        }
+        // Se precargan nombre, apellido y teléfono con lo que ya hay en la cuenta: los escribió quien registró el correo ANTES de
+        // verificarlo y el titular debe poder revisarlos y corregirlos. Riesgo residual documentado: un escáner de enlaces del
+        // proveedor de correo que haga GET verá esos datos; son los del propio registro y van al mismo buzón (HEAD no los muestra).
+        $datos = [];
+        if ($estado === AuthService::STATUS_OK && $validacion['usuario'] instanceof Usuario) {
+            $u = $validacion['usuario'];
+            $datos = ['nombre' => self::limpiarParaMostrar((string)$u->nombre), 'apellido' => self::limpiarParaMostrar((string)$u->apellido), 'telefono' => self::limpiarParaMostrar((string)$u->telefono)];
+        }
+        self::renderActivacion($router, $estado === AuthService::STATUS_OK ? 'formulario' : ($estado === AuthService::STATUS_ERROR ? 'error' : 'invalido'),
+            $validacion['alertas'], $token, $datos);
+    }
 
-        $exito = Usuario::confirmarCuentaPorToken($token);
+    /**
+     * `POST /confirmar-cuenta`: ACTIVA la cuenta. CSRF obligatorio, token en el cuerpo (nunca en la query), contraseña
+     * definitiva elegida por quien abrió el enlace (password + password2), clave de operación del formulario (doble clic),
+     * límite de intentos por IP y por huella del token. No inicia sesión; regenera el identificador de sesión del navegador.
+     */
+    public static function activar(Router $router)
+    {
+        iniciar_sesion_segura();
+        Usuario::limpiarAlertas();
+        self::cabecerasActivacion();
+        exigir_csrf();
 
-        if ($exito) {
-            Usuario::setAlerta('exito', 'Cuenta confirmada correctamente');
+        $clave = clave_operacion_enviada();
+        $token = is_string($_POST['token'] ?? null) ? trim($_POST['token']) : '';
+        if ($clave === null) {
+            // Sin clave de operación no se admite la activación (el formulario siempre la incluye); no se toca nada.
+            $resultado = ['status' => AuthService::STATUS_INVALID, 'enlace' => true,
+                'alertas' => ['error' => ['El formulario venció. Abre de nuevo el enlace de tu correo.']]];
         } else {
-            Usuario::setAlerta('error', 'Token no válido, ya utilizado o expirado');
+            $resultado = self::obtenerAuthService()->activarCuenta(
+                ['token' => $_POST['token'] ?? null, 'password' => $_POST['password'] ?? null, 'password2' => $_POST['password2'] ?? null,
+                    'nombre' => $_POST['nombre'] ?? null, 'apellido' => $_POST['apellido'] ?? null, 'telefono' => $_POST['telefono'] ?? null],
+                RateLimiter::obtenerIP(),
+                $clave,
+                // El actor se liga al enlace (no a la sesión): la sesión se regenera al activar y un reintento no debe perder la idempotencia.
+                'activacion:' . substr(hash('sha256', $token), 0, 32)
+            );
         }
 
-        $alertas = Usuario::getAlertas();
-        $router->render('auth/confirmar-cuenta', [
-            'alertas' => $alertas
-        ]);
+        switch ($resultado['status']) {
+            case AuthService::STATUS_OK:
+                // Sin auto-login: nuevo identificador de sesión para este navegador y a iniciar sesión con la contraseña elegida.
+                session_regenerate_id(true);
+                http_response_code(200);
+                self::renderActivacion($router, 'exito', $resultado['alertas'], '');
+                return;
+            case AuthService::STATUS_RATE_LIMITED:
+                http_response_code(429);
+                header('Retry-After: ' . max(1, (int)($resultado['segundos_restantes'] ?? RateLimiter::DURACION_BLOQUEO)));
+                break;
+            case AuthService::STATUS_CONFLICT_CLAVE:
+                http_response_code(409);
+                break;
+            case AuthService::STATUS_EN_CURSO:
+                http_response_code(409);
+                header('Retry-After: ' . max(1, (int)($resultado['segundos_restantes'] ?? 3)));
+                break;
+            case AuthService::STATUS_ERROR:
+                http_response_code(500);
+                self::renderActivacion($router, 'error', $resultado['alertas'], '');
+                return;
+            default:
+                // Contraseña inválida o formulario vencido: el enlace sigue vigente, se vuelve a mostrar el formulario (422).
+                // Enlace inválido/vencido/usado: pantalla genérica (410) sin distinguir la causa.
+                if (($resultado['enlace'] ?? true) === false || $token === '') {
+                    http_response_code(410);
+                    self::renderActivacion($router, 'invalido', $resultado['alertas'], '');
+                    return;
+                }
+                http_response_code(422);
+        }
+        // Se conserva lo escrito en los datos de contacto (nunca la contraseña) y solo si son texto.
+        $escrito = [];
+        foreach (['nombre', 'apellido', 'telefono'] as $campo) {
+            $escrito[$campo] = is_string($_POST[$campo] ?? null) ? self::limpiarParaMostrar($_POST[$campo]) : '';
+        }
+        self::renderActivacion($router, 'formulario', $resultado['alertas'], $token, $escrito);
+    }
+
+    /** Quita bytes de control y UTF-8 inválido antes de volver a escribir un dato en el formulario (higiene de salida, QA R4-1/R4-12b). */
+    private static function limpiarParaMostrar(string $valor): string
+    {
+        return preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', '', mb_scrub($valor, 'UTF-8')) ?? '';
+    }
+
+    private static function renderActivacion(Router $router, string $modo, array $alertas, string $token, array $datos = []): void
+    {
+        // El Router vuelve a emitir las cabeceras de seguridad al renderizar: la política se fija solo durante este render.
+        $GLOBALS['__appsalon_referrer_policy'] = 'no-referrer';
+        try {
+            $router->render('auth/confirmar-cuenta', ['modo' => $modo, 'alertas' => $alertas, 'token' => $token, 'datos' => $datos]);
+        } finally {
+            unset($GLOBALS['__appsalon_referrer_policy']);
+        }
     }
 }

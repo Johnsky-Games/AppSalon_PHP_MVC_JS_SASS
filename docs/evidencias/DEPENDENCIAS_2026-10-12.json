@@ -1,0 +1,243 @@
+{
+  "date": "2026-10-12",
+  "code_sha": "d8e00f8f25ab61c5c074746305a82b4d4cb30fd6",
+  "npm": {
+    "method": "npm audit --json, consulta nueva del árbol instalado; ver package-lock SHA256",
+    "metadata": {
+      "vulnerabilities": {
+        "info": 0,
+        "low": 3,
+        "moderate": 65,
+        "high": 47,
+        "critical": 2,
+        "total": 117
+      },
+      "dependencies": {
+        "prod": 1,
+        "dev": 1096,
+        "optional": 33,
+        "peer": 3,
+        "peerOptional": 0,
+        "total": 1096
+      }
+    },
+    "critical_packages": [
+      {
+        "name": "decompress",
+        "severity": "critical",
+        "nodes": [
+          "node_modules/decompress"
+        ],
+        "via": [
+          {
+            "source": 1122670,
+            "name": "decompress",
+            "dependency": "decompress",
+            "title": "Decompress: Archive extraction can create files and links outside of the target directory",
+            "url": "https://github.com/advisories/GHSA-mp2f-45pm-3cg9",
+            "severity": "critical",
+            "cwe": [
+              "CWE-22",
+              "CWE-59",
+              "CWE-732"
+            ],
+            "cvss": {
+              "score": 9.1,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+            },
+            "range": "<=4.2.1"
+          },
+          {
+            "source": 1130126,
+            "name": "decompress",
+            "dependency": "decompress",
+            "title": "decompress: Arbitrary File Write via Archive Extraction (Zip Slip)",
+            "url": "https://github.com/advisories/GHSA-h39j-r5qq-r9mm",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-22",
+              "CWE-29"
+            ],
+            "cvss": {
+              "score": 6.4,
+              "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:H/A:L"
+            },
+            "range": "<=4.2.1"
+          },
+          {
+            "source": 1139405,
+            "name": "decompress",
+            "dependency": "decompress",
+            "title": "decompress allows arbitrary hardlink creation during archive extraction",
+            "url": "https://github.com/advisories/GHSA-jwp9-9v96-94mx",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-59"
+            ],
+            "cvss": {
+              "score": 5.5,
+              "vectorString": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:N/A:N"
+            },
+            "range": "<=4.2.1"
+          },
+          {
+            "source": 1240094,
+            "name": "decompress",
+            "dependency": "decompress",
+            "title": "@xhmikosr/decompress: Path traversal via symlink chain",
+            "url": "https://github.com/advisories/GHSA-hrh2-vp3x-79xf",
+            "severity": "critical",
+            "cwe": [
+              "CWE-22",
+              "CWE-59"
+            ],
+            "cvss": {
+              "score": 9.1,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+            },
+            "range": "<=4.2.1"
+          }
+        ],
+        "fixAvailable": {
+          "name": "gulp-webp",
+          "version": "3.0.0",
+          "isSemVerMajor": true
+        }
+      },
+      {
+        "name": "fast-xml-parser",
+        "severity": "critical",
+        "nodes": [
+          "node_modules/fast-xml-parser"
+        ],
+        "via": [
+          {
+            "source": 1100054,
+            "name": "fast-xml-parser",
+            "dependency": "fast-xml-parser",
+            "title": "fast-xml-parser vulnerable to ReDOS at currency parsing",
+            "url": "https://github.com/advisories/GHSA-mpg4-rc92-vx8v",
+            "severity": "high",
+            "cwe": [
+              "CWE-400",
+              "CWE-1333"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": ">=4.3.5 <4.4.1"
+          },
+          {
+            "source": 1113567,
+            "name": "fast-xml-parser",
+            "dependency": "fast-xml-parser",
+            "title": "fast-xml-parser has an entity encoding bypass via regex injection in DOCTYPE entity names",
+            "url": "https://github.com/advisories/GHSA-m7jm-9gc2-mpf2",
+            "severity": "critical",
+            "cwe": [
+              "CWE-185"
+            ],
+            "cvss": {
+              "score": 9.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:L/I:H/A:N"
+            },
+            "range": ">=4.1.3 <4.5.4"
+          },
+          {
+            "source": 1113570,
+            "name": "fast-xml-parser",
+            "dependency": "fast-xml-parser",
+            "title": "fast-xml-parser affected by DoS through entity expansion in DOCTYPE (no expansion limit)",
+            "url": "https://github.com/advisories/GHSA-jmr7-xgp7-cmfj",
+            "severity": "high",
+            "cwe": [
+              "CWE-776"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": ">=4.1.3 <4.5.4"
+          },
+          {
+            "source": 1114149,
+            "name": "fast-xml-parser",
+            "dependency": "fast-xml-parser",
+            "title": "fast-xml-parser has stack overflow in XMLBuilder with preserveOrder",
+            "url": "https://github.com/advisories/GHSA-fj3w-jwp8-x2g3",
+            "severity": "low",
+            "cwe": [
+              "CWE-120"
+            ],
+            "cvss": {
+              "score": 0,
+              "vectorString": null
+            },
+            "range": ">=4.0.0-beta.0 <4.5.4"
+          },
+          {
+            "source": 1115338,
+            "name": "fast-xml-parser",
+            "dependency": "fast-xml-parser",
+            "title": "fast-xml-parser affected by numeric entity expansion bypassing all entity expansion limits (incomplete fix for CVE-2026-26278)",
+            "url": "https://github.com/advisories/GHSA-8gc5-j5rx-235r",
+            "severity": "high",
+            "cwe": [
+              "CWE-776"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": ">=4.0.0-beta.3 <4.5.5"
+          },
+          {
+            "source": 1116308,
+            "name": "fast-xml-parser",
+            "dependency": "fast-xml-parser",
+            "title": "Entity Expansion Limits Bypassed When Set to Zero Due to JavaScript Falsy Evaluation in fast-xml-parser",
+            "url": "https://github.com/advisories/GHSA-jp2q-39xq-3w4g",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.9,
+              "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": ">=4.0.0-beta.3 <4.5.5"
+          },
+          {
+            "source": 1117911,
+            "name": "fast-xml-parser",
+            "dependency": "fast-xml-parser",
+            "title": "fast-xml-parser XMLBuilder: XML Comment and CDATA Injection via Unescaped Delimiters",
+            "url": "https://github.com/advisories/GHSA-gh4j-gqv2-49f6",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-91"
+            ],
+            "cvss": {
+              "score": 6.1,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
+            },
+            "range": "<5.7.0"
+          }
+        ],
+        "fixAvailable": true
+      }
+    ],
+    "scope": "Herramientas de compilación y sus dependencias; no prueba de explotación remota del PHP servido."
+  },
+  "composer": {
+    "method": "API pública de advisories de Packagist para los 33 paquetes fijados; rangos comparados con semver, sin rangos sin interpretar; no ejecución de composer audit CLI",
+    "result": {
+      "checked": 33,
+      "matchingAdvisories": [],
+      "unparsed": []
+    }
+  },
+  "package_lock_sha256": "bd303b114fd0804aa6a1cae4735b27e064949dfcecda131ddc7e73919998d610",
+  "composer_lock_sha256": "66755d72b00b5c1955d0744285513bfec49b6caef0844c0c50012cbeddcbf9af"
+}

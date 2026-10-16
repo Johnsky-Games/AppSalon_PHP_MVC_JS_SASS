@@ -1,39 +1,118 @@
 {
-  "timestamp": "2026-10-10T05:49:44.463Z",
+  "timestamp": "2026-10-11T21:56:46.337Z",
   "navegador": "Chrome Headless (Puppeteer-Core)",
-  "citaCreadaId": 1,
+  "citaCreadaId": 3,
+  "citaTemporalEliminadaId": 1,
   "fechaReservaEsperada": "2026-10-12",
   "fechaRechazoFinDeSemana": "2026-10-17",
   "testResults": [
     {
-      "id": "PRE-01",
-      "name": "Login interactivo y redirección autorizada a /cita",
+      "id": "ADMIN-01",
+      "name": "Acceso de administrador a /servicios y listado inicial del catálogo",
       "success": true,
-      "details": "URL: http://localhost:3000/cita"
+      "details": "3 servicios listados en /servicios."
+    },
+    {
+      "id": "ADMIN-02",
+      "name": "Validación de entradas inválidas y creación de nuevo servicio con duración en /servicios/crear",
+      "success": true,
+      "details": "Entradas inválidas rechazadas con alertas (3); 'Masaje Capilar Relax' ($95.50, 45 min) creado."
+    },
+    {
+      "id": "ADMIN-03",
+      "name": "Actualización de servicio existente y su duración en /servicios/actualizar",
+      "success": true,
+      "details": "'Masaje Capilar Relax' actualizado a 'Masaje Capilar Premium' ($115.00, 60 min)."
+    },
+    {
+      "id": "ADMIN-04",
+      "name": "Eliminación de servicio con CSRF en /servicios/eliminar",
+      "success": true,
+      "details": "'Servicio Temporal Borrar' eliminado; catálogo conserva 4 servicios activos."
+    },
+    {
+      "id": "PROF-01",
+      "name": "Gestión de profesionales, servicios asociados, horarios, descansos, bloqueos y desactivación/reactivación",
+      "success": true,
+      "details": "'Sofía Andrade' creada con servicios, horario Lunes 09:00-18:00, descanso 13:00-14:00, bloqueo 2026-10-12 15:00-16:30 y ciclo Inactivo/Activo verificado."
+    },
+    {
+      "id": "PROF-02",
+      "name": "Carga de múltiples franjas del mismo día, guardado sin cambios verificado en MySQL y retirada explícita de franja individual",
+      "success": true,
+      "details": "Martes 08:00-12:00 y 14:00-18:00 preservados en MySQL al guardar sin cambios; retirada explícita eliminó solo 08:00-12:00 conservando 14:00-18:00."
+    },
+    {
+      "id": "PRE-01",
+      "name": "Login interactivo de cliente y redirección autorizada a /cita",
+      "success": true,
+      "details": "URL: http://localhost:32815/cita"
+    },
+    {
+      "id": "DISP-01",
+      "name": "Consulta autenticada en GET /api/disponibilidad (intervalos [inicio, fin), servicios incompatibles y disponibilidad vacía)",
+      "success": true,
+      "details": "Duración catálogo 60 min respetada (17 intervalos en 2026-10-12); incompatibilidad 422 y disponibilidad vacía 200 verificadas."
     },
     {
       "id": "REC-01",
-      "name": "Carga asíncrona de servicios y alternancia de clase .seleccionado",
+      "name": "Carga asíncrona de /api/servicios reflejando CRUD, duración de servicios y alternancia accesible de .seleccionado",
       "success": true,
-      "details": "3 servicios renderizados; selección y deselección verificadas; IDs seleccionados: [1, 3]"
+      "details": "4 servicios renderizados con duración (incluye 'Masaje Capilar Premium' 60 min); IDs seleccionados: [1, 4]"
     },
     {
       "id": "REC-02",
-      "name": "Navegación fluida por paginador y tabs con preservación de estado en cliente",
+      "name": "Navegación fluida por paginador y tabs, filtrado de profesionales compatibles y preservación de estado",
       "success": true,
-      "details": "Paso 1 -> Paso 2 -> Paso 1 -> Paso 2 comprobado; nombre prellenado: 'Carlos Mendoza'; selección preservada."
+      "details": "Paso 1 -> Paso 2 -> Paso 1 -> Paso 2 comprobado; profesional compatible filtrado ('Valeria Castro'); selección preservada."
     },
     {
       "id": "REC-03",
-      "name": "Validación interactiva de restricciones en fecha (no FDS) y horario (10:00-18:00)",
+      "name": "Carga dinámica de intervalos desde GET /api/disponibilidad, estado vacío en sábado e invalidación reactiva al cambiar servicios",
       "success": true,
-      "details": "Fines de semana rechazados con alerta (sábado probado: 2026-10-17); horas no comerciales rechazadas; fecha válida '2026-10-12' y hora '11:30' aceptadas."
+      "details": "Estado vacío en sábado (2026-10-17) verificado; invalidación reactiva de horario/profesional comprobada; intervalo '11:30 - 13:00' (90 min) seleccionado en '2026-10-12'."
+    },
+    {
+      "id": "RES-01",
+      "name": "Reserva con profesional en POST /api/citas, descuento de ocupación, rechazo 409 por solapamiento y cancelación desde #mis-citas en UI",
+      "success": true,
+      "details": "Cita ID 1 [10:00, 11:00) creada y descontada; solape 10:30 rechazado con 409; cita 2 [14:00, 15:00) visualizada y cancelada por el cliente en #mis-citas."
     },
     {
       "id": "REC-04",
-      "name": "Renderizado de resumen, envío asíncrono con CSRF, respuesta 200 JSON y alerta SweetAlert2",
+      "name": "Renderizado de resumen con profesional, intervalo [11:30, 13:00), duración 90 min y total $195.00, envío con CSRF y SweetAlert2",
       "success": true,
-      "details": "Resumen validado; POST /api/citas exitoso (id: 1); SweetAlert2 ('Cita Creada') desplegado en pantalla."
+      "details": "Resumen completo validado; POST /api/citas exitoso (id: 3, profesionalId: 2, 11:30-13:00, 90 min); SweetAlert2 ('Cita Creada') desplegado."
+    },
+    {
+      "id": "ADMIN-05",
+      "name": "Consulta administrativa por fecha en /admin (profesional, intervalo y snapshot), eliminación en /api/eliminar y liberación de ocupación",
+      "success": true,
+      "details": "Citas consultadas en /admin?fecha=2026-10-12 con profesional e intervalo; cita temporal ID 1 eliminada liberando 10:00-11:00; cita principal ID 3 ($195, Valeria Castro, 11:30-13:00) conservada."
+    },
+    {
+      "id": "REP-01",
+      "name": "Reportes administrativos (/admin/reportes y /admin/reportes/exportar): ocupación sobre horas disponibles, importe reservado histórico vs ingreso pagado y exportación CSV",
+      "success": true,
+      "details": "Valeria Castro 16.67% (90/540 min), Sofía Andrade 0.00% (0/390 min); reservado $195.00 vs pagado $0.00; filtro servicio #4 ($115.00) y exportación CSV verificados."
+    },
+    {
+      "id": "PAG-01",
+      "name": "Flujo de pago con MockPaymentGateway (/api/pagos/iniciar, /pago/resultado, /api/pagos/webhook) y reflejo de ingreso pagado en /admin/reportes",
+      "success": true,
+      "details": "Referencia PAY-20261011-DECFDF660DC5D481 calculada en servidor ($195.00 ignorando $1.00 cliente); rechazo 422 de tarjeta y bloqueo de redirect verificados; webhook HMAC idempotente y /admin/reportes actualizado a $195.00 pagado."
+    },
+    {
+      "id": "AUTH-01",
+      "name": "Ciclo de autenticación y ciclo de vida de cuenta (/logout, /crear-cuenta, login no confirmado, /reenviar-confirmacion, /olvide)",
+      "success": true,
+      "details": "Registro redirigió a /mensaje; login sin confirmar rechazado con mensaje unificado; /reenviar-confirmacion y /olvide respondieron sin enumeración."
+    },
+    {
+      "id": "NOTIF-01",
+      "name": "Despacho SMTP de correos transaccionales de confirmación y cancelación de citas en buzón de pruebas",
+      "success": true,
+      "details": "8 correos capturados en buzón SMTP mock; confirmación de cita #3 (Valeria Castro, 11:30 - 13:00) y cancelaciones verificadas."
     },
     {
       "id": "REC-05",

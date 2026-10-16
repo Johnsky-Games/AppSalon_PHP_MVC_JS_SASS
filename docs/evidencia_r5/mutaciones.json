@@ -1,0 +1,260 @@
+{
+  "base": "39c4fc5921bbdb450ce1df12416fe134268547f6",
+  "hashes": {
+    "repositories/CitaRepository.php": "c811f5f844e72b9abc7d5ef73c07e72467f9d7cb68eab769d323e0b14754bc50",
+    "models/ActiveRecord.php": "4b1719d042120fc98661f1617b0fceaa53c543d8be3c11ed46d4ff15225a01be",
+    "views/errores/tarjeta.php": "4f42a44e3c8c14fb69bf9d610bf6bd17bf2c87c74a5aaf68b07b273f53878c69"
+  },
+  "resultados": [
+    {
+      "mutacion": "sin_guarda_atomica",
+      "prueba": "testUnCobroConfirmadoMientrasSeEliminaFrenaLaEliminacion",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Integration/R5EliminacionProtegidaIntegrationTest.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter testUnCobroConfirmadoMientrasSeEliminaFrenaLaEliminacion tests/Integration/R5EliminacionProtegidaIntegrationTest.php"
+    },
+    {
+      "mutacion": "sin_for_update_cita",
+      "prueba": "testUnCobroConfirmadoMientrasSeEliminaFrenaLaEliminacion",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Integration/R5EliminacionProtegidaIntegrationTest.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter testUnCobroConfirmadoMientrasSeEliminaFrenaLaEliminacion tests/Integration/R5EliminacionProtegidaIntegrationTest.php"
+    },
+    {
+      "mutacion": "orden_cita_antes_profesional",
+      "prueba": "test_E_orden_de_bloqueo_profesional_antes_de_cita",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Qa/R5bQaFase3Test.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter test_E_orden_de_bloqueo_profesional_antes_de_cita tests/Qa/R5bQaFase3Test.php"
+    },
+    {
+      "mutacion": "sin_evidencia_pagos.cita_referencia_id",
+      "prueba": "test_E_cada_evidencia_aislada.*pagos\\.cita_referencia_id",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Qa/R5bQaFase3Test.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter test_E_cada_evidencia_aislada.*pagos\\.cita_referencia_id tests/Qa/R5bQaFase3Test.php"
+    },
+    {
+      "mutacion": "sin_evidencia_pagos.cita_id",
+      "prueba": "test_E_cada_evidencia_aislada.*pagos\\.cita_id",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Qa/R5bQaFase3Test.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter test_E_cada_evidencia_aislada.*pagos\\.cita_id tests/Qa/R5bQaFase3Test.php"
+    },
+    {
+      "mutacion": "sin_evidencia_comprobantes",
+      "prueba": "test_E_cada_evidencia_aislada.*comprobantes",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Qa/R5bQaFase3Test.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter test_E_cada_evidencia_aislada.*comprobantes tests/Qa/R5bQaFase3Test.php"
+    },
+    {
+      "mutacion": "sin_evidencia_cobros_eventos",
+      "prueba": "test_E_cada_evidencia_aislada.*cobros_eventos",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Qa/R5bQaFase3Test.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter test_E_cada_evidencia_aislada.*cobros_eventos tests/Qa/R5bQaFase3Test.php"
+    },
+    {
+      "mutacion": "sin_evidencia_cobros_devoluciones",
+      "prueba": "test_E_cada_evidencia_aislada.*cobros_devoluciones",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Qa/R5bQaFase3Test.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter test_E_cada_evidencia_aislada.*cobros_devoluciones tests/Qa/R5bQaFase3Test.php"
+    },
+    {
+      "mutacion": "sin_evidencia_agenda_eventos",
+      "prueba": "test_E_cada_evidencia_aislada.*agenda_eventos",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Qa/R5bQaFase3Test.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter test_E_cada_evidencia_aislada.*agenda_eventos tests/Qa/R5bQaFase3Test.php"
+    },
+    {
+      "mutacion": "sin_evidencia_citas_reasignaciones",
+      "prueba": "test_E_cada_evidencia_aislada.*citas_reasignaciones",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Qa/R5bQaFase3Test.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter test_E_cada_evidencia_aislada.*citas_reasignaciones tests/Qa/R5bQaFase3Test.php"
+    },
+    {
+      "mutacion": "sin_evidencia_fidelidad_movimientos",
+      "prueba": "test_E_cada_evidencia_aislada.*fidelidad_movimientos",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Qa/R5bQaFase3Test.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter test_E_cada_evidencia_aislada.*fidelidad_movimientos tests/Qa/R5bQaFase3Test.php"
+    },
+    {
+      "mutacion": "sin_evidencia_regularizaciones",
+      "prueba": "test_E_cada_evidencia_aislada.*citas_regularizaciones",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Qa/R5bQaFase3Test.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter test_E_cada_evidencia_aislada.*citas_regularizaciones tests/Qa/R5bQaFase3Test.php"
+    },
+    {
+      "mutacion": "sin_tabla_protegida_citas",
+      "prueba": "testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Integration/R5EliminacionProtegidaIntegrationTest.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce tests/Integration/R5EliminacionProtegidaIntegrationTest.php"
+    },
+    {
+      "mutacion": "sin_tabla_protegida_citasservicios",
+      "prueba": "testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Integration/R5EliminacionProtegidaIntegrationTest.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce tests/Integration/R5EliminacionProtegidaIntegrationTest.php"
+    },
+    {
+      "mutacion": "sin_tabla_protegida_citas_regularizaciones",
+      "prueba": "testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Integration/R5EliminacionProtegidaIntegrationTest.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce tests/Integration/R5EliminacionProtegidaIntegrationTest.php"
+    },
+    {
+      "mutacion": "sin_tabla_protegida_usuarios",
+      "prueba": "testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Integration/R5EliminacionProtegidaIntegrationTest.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce tests/Integration/R5EliminacionProtegidaIntegrationTest.php"
+    },
+    {
+      "mutacion": "sin_tabla_protegida_clientes",
+      "prueba": "testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Integration/R5EliminacionProtegidaIntegrationTest.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce tests/Integration/R5EliminacionProtegidaIntegrationTest.php"
+    },
+    {
+      "mutacion": "sin_tabla_protegida_pagos",
+      "prueba": "testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Integration/R5EliminacionProtegidaIntegrationTest.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce tests/Integration/R5EliminacionProtegidaIntegrationTest.php"
+    },
+    {
+      "mutacion": "sin_tabla_protegida_comprobantes",
+      "prueba": "testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Integration/R5EliminacionProtegidaIntegrationTest.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce tests/Integration/R5EliminacionProtegidaIntegrationTest.php"
+    },
+    {
+      "mutacion": "sin_tabla_protegida_cobros_eventos",
+      "prueba": "testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Integration/R5EliminacionProtegidaIntegrationTest.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce tests/Integration/R5EliminacionProtegidaIntegrationTest.php"
+    },
+    {
+      "mutacion": "sin_tabla_protegida_cobros_devoluciones",
+      "prueba": "testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Integration/R5EliminacionProtegidaIntegrationTest.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce tests/Integration/R5EliminacionProtegidaIntegrationTest.php"
+    },
+    {
+      "mutacion": "sin_tabla_protegida_caja_movimientos",
+      "prueba": "testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Integration/R5EliminacionProtegidaIntegrationTest.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce tests/Integration/R5EliminacionProtegidaIntegrationTest.php"
+    },
+    {
+      "mutacion": "sin_tabla_protegida_comisiones_movimientos",
+      "prueba": "testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Integration/R5EliminacionProtegidaIntegrationTest.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce tests/Integration/R5EliminacionProtegidaIntegrationTest.php"
+    },
+    {
+      "mutacion": "sin_tabla_protegida_agenda_eventos",
+      "prueba": "testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Integration/R5EliminacionProtegidaIntegrationTest.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce tests/Integration/R5EliminacionProtegidaIntegrationTest.php"
+    },
+    {
+      "mutacion": "sin_tabla_protegida_citas_reasignaciones",
+      "prueba": "testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Integration/R5EliminacionProtegidaIntegrationTest.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce tests/Integration/R5EliminacionProtegidaIntegrationTest.php"
+    },
+    {
+      "mutacion": "sin_tabla_protegida_fidelidad_movimientos",
+      "prueba": "testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Integration/R5EliminacionProtegidaIntegrationTest.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce tests/Integration/R5EliminacionProtegidaIntegrationTest.php"
+    },
+    {
+      "mutacion": "sin_tabla_protegida_equipo_auditoria",
+      "prueba": "testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Integration/R5EliminacionProtegidaIntegrationTest.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce tests/Integration/R5EliminacionProtegidaIntegrationTest.php"
+    },
+    {
+      "mutacion": "filtracion_id_url",
+      "prueba": "testElAvisoSoloLoVeQuienPuedeDarDeAltaYNoFiltraDatosAOtrosRoles",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Integration/AltaHomonimosIntegrationTest.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter testElAvisoSoloLoVeQuienPuedeDarDeAltaYNoFiltraDatosAOtrosRoles tests/Integration/AltaHomonimosIntegrationTest.php"
+    },
+    {
+      "mutacion": "filtracion_id_json",
+      "prueba": "testElAvisoSoloLoVeQuienPuedeDarDeAltaYNoFiltraDatosAOtrosRoles",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Integration/AltaHomonimosIntegrationTest.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter testElAvisoSoloLoVeQuienPuedeDarDeAltaYNoFiltraDatosAOtrosRoles tests/Integration/AltaHomonimosIntegrationTest.php"
+    },
+    {
+      "mutacion": "filtracion_id_campo",
+      "prueba": "testElAvisoSoloLoVeQuienPuedeDarDeAltaYNoFiltraDatosAOtrosRoles",
+      "salida": 1,
+      "detectada": true,
+      "archivo": "tests/Integration/AltaHomonimosIntegrationTest.php",
+      "comando": "php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --filter testElAvisoSoloLoVeQuienPuedeDarDeAltaYNoFiltraDatosAOtrosRoles tests/Integration/AltaHomonimosIntegrationTest.php"
+    }
+  ],
+  "entorno": {
+    "php": "8.3.6",
+    "mysql": "8.0.46",
+    "metodo": "mutaciones en un árbol separado; cada archivo se restaura antes del siguiente caso"
+  },
+  "hashes_pruebas": {
+    "tests/Qa/R5bQaFase3Test.php": "7f00816173af0fb541051f3af3f2e886358823a5f615231e9182ff3e41afef0f",
+    "tests/Integration/R5EliminacionProtegidaIntegrationTest.php": "ba87a805cb409391dde0da187a82d14bc39b2640bc986662454493a4475c8a3b",
+    "tests/Integration/AltaHomonimosIntegrationTest.php": "c74d1a7938c6a969605e1a8d5527e501657967342b96a78621bc8d53c3534519"
+  }
+}

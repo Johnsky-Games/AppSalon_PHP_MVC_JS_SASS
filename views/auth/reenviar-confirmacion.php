@@ -1,3 +1,4 @@
+<p class="ui-eyebrow">BIENVENIDO A APPSALÓN</p>
 <h1 class="nombre-pagina">Reenviar Confirmación</h1>
 <p class="descripcion-pagina">Ingresa tu email para recibir un nuevo enlace de confirmación</p>
 

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Suite de QA adversarial independiente (concurrencia con procesos reales, HTTP real, navegador, esquema y respaldo).
+     NO forma parte del CI por defecto: es lenta (~4 min) y crea/borra bases appsalon_qa_*_test.
+     Uso: DB_NAME=appsalon_qa_test (migrada) ... php -d variables_order=EGPCS vendor/bin/phpunit -c phpunit.qa.xml
+     Ver docs/QA_INDEPENDIENTE_IDENTIDADES.md §1 para el entorno completo. -->
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/10.5/phpunit.xsd"
+         bootstrap="tests/bootstrap.php"
+         colors="true"
+         executionOrder="depends,defects"
+         failOnRisky="true"
+         failOnWarning="true">
+    <testsuites>
+        <testsuite name="Qa">
+            <directory>tests/Qa</directory>
+        </testsuite>
+    </testsuites>
+</phpunit>

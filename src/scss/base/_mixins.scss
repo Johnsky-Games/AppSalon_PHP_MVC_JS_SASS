@@ -1,51 +1,13 @@
 @use 'variables' as v;
-
-/** Media Queries **/
-@mixin telefono {
-    @media (min-width: v.$telefono) {
-        @content;
-    }
-}
-@mixin tablet {
-    @media (min-width: v.$tablet) {
-        @content;
-    }
-}
-@mixin desktop {
-    @media (min-width: v.$desktop) {
-        @content;
-    }
-}
-
-
+@mixin telefono { @media (min-width: v.$telefono) { @content; } }
+@mixin tablet { @media (min-width: v.$tablet) { @content; } }
+@mixin desktop { @media (min-width: v.$desktop) { @content; } }
 @mixin boton($bgColor, $colorTexto) {
-    background-color: $bgColor;
-    padding: 1.5rem 4rem;
-    color: $colorTexto;
-    margin-top: 2rem;
-    font-size: 2rem;
-    font-weight: 400;
-    display: inline-block;
-    font-weight: 700;
-    border: none;
-    transition-property: background-color;
-    transition-duration: .3s;
-    text-align: center;
-    display: block;
-    width: 100%;
-    margin: 5rem 0;
-
-    @include tablet {
-        width: auto;
-    }
-    &:hover {
-        background-color: darken( $bgColor, 10% );
-        cursor: pointer;
-    }
+    background: $bgColor; color: $colorTexto; border: 1px solid transparent; border-radius: 1.1rem; min-height: 4.6rem; padding: 1.2rem 2rem; font-size: 1.4rem; font-weight: 650; line-height: 1.4; display: inline-flex; gap: .8rem; align-items: center; justify-content: center; text-align: center; text-decoration: none; cursor: pointer; margin: 1rem 0; max-width: 100%; white-space: normal;
+    transition: transform .2s ease, box-shadow .2s ease, background-color .2s ease;
+    &:hover { filter: brightness(.96); text-decoration: none; transform: translateY(-2px); box-shadow: 0 5px 14px rgba(24, 52, 62, .12); }
+    &:active { transform: translateY(0); }
+    &:disabled { cursor: not-allowed; opacity: .55; transform: none; box-shadow: none; }
+    svg { width: 1.8rem; height: 1.8rem; }
 }
-
-@mixin grid($columnas, $espaciado ) {
-    display: grid;
-    gap: $espaciado;
-    grid-template-columns: repeat($columnas, 1fr);
-}
+@mixin grid($columnas, $espaciado) { display: grid; gap: $espaciado; grid-template-columns: repeat($columnas, minmax(0, 1fr)); }

@@ -14,7 +14,7 @@ if (!$socket) {
 }
 
 echo "Servidor SMTP mock escuchando en 0.0.0.0:{$port}...\n";
-$mailboxFile = __DIR__ . '/mailbox.json';
+$mailboxFile = getenv('TEST_MAILBOX_PATH') ?: __DIR__ . '/mailbox.json';
 file_put_contents($mailboxFile, json_encode([]));
 
 while ($conn = @stream_socket_accept($socket, -1)) {

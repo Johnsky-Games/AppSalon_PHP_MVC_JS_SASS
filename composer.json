@@ -7,7 +7,10 @@
             "MVC\\": "./",
             "Controllers\\": "./controllers",
             "Model\\": "./models",
-            "Classes\\": "./classes"
+            "Classes\\": "./classes",
+            "Interfaces\\": "./interfaces",
+            "Repositories\\": "./repositories",
+            "Services\\": "./services"
         }
     },
     "authors": [
@@ -22,5 +25,13 @@
     },
     "require-dev": {
         "phpunit/phpunit": "^10.5"
+    },
+    "scripts": {
+        "test": "phpunit --do-not-cache-result --colors=never",
+        "migrate:status": "php database/migrador.php status",
+        "migrate:up": "php database/migrador.php up",
+        "migrate:down": "php database/migrador.php down",
+        "db:backup": "php scripts/backup_db.php",
+        "db:restore": "php scripts/restore_db.php"
     }
 }

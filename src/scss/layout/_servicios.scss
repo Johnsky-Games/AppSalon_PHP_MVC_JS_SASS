@@ -1,44 +1,10 @@
-@use 'base/variables' as v;
-@use 'base/mixins' as m;
-
-.listado-servicios {
-    display: grid;
-    gap: 2rem;
-
-    @include m.tablet {
-        @include m.grid(2, 1fr);
-    }
-
-    .servicio {
-        background-color: v.$blanco;
-        padding: 3rem;
-        border-radius: 1rem;
-        transition-property: transform;
-        transition-duration: 300ms;
-        text-align: center;
-
-        &:hover {
-            transform: scale(1.1);
-        }
-
-        &.seleccionado {
-            background-color: v.$azul;
-
-            p {
-                color: v.$blanco;
-            }
-        }
-
-        p {
-            color: v.$negro;
-            margin: 0 0 calc(v.$separacion / 4);
-        }
-
-        .precio-servicio {
-            color: v.$azul;
-            font-weight: v.$bold;
-            font-size: 3rem;
-            margin: 0;
-        }
-    }
-}
+.listado-servicios { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr)); gap: 1.5rem; }
+.listado-servicios .servicio { position: relative; background: #fff; color: var(--ui-ink); padding: 2.5rem; border: 1px solid var(--ui-border); border-radius: 1.6rem; cursor: pointer; text-align: left; transition: transform .22s, border-color .22s, box-shadow .22s, background .22s; }
+.listado-servicios .servicio:hover { transform: translateY(-4px); border-color: #90b7a5; box-shadow: 0 8px 25px rgba(24,52,62,.08); }
+.listado-servicios .servicio.seleccionado { border-color: var(--ui-accent); background: #edf5ee; box-shadow: 0 0 0 1px var(--ui-accent); }
+.listado-servicios .servicio.seleccionado::after { content: '✓'; position: absolute; top: 1.3rem; right: 1.3rem; background: var(--ui-accent); color: #fff; border-radius: 50%; width: 2.5rem; height: 2.5rem; display: grid; place-items: center; font-size: 1.4rem; }
+.listado-servicios .servicio p { color: var(--ui-ink); margin: 0 0 1rem; font-weight: 650; font-size: 1.65rem; }
+.listado-servicios .servicio .duracion-servicio { color: var(--ui-muted); font-size: 1.2rem; font-weight: 400; }
+.listado-servicios .servicio .precio-servicio { color: var(--ui-accent); font-size: 2.6rem; letter-spacing: -.03em; margin-bottom: 0; font-weight: 700; }
+.service-icon { width: 4.6rem; height: 4.6rem; border-radius: 1.2rem; background: #f1eae0; color: #996544; display: grid; place-items: center; margin-bottom: 2rem; font-size: 2.1rem; }
+.service-icon svg { width: 2.4rem; height: 2.4rem; }

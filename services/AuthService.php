@@ -1,0 +1,1069 @@
+<?php
+
+namespace Services;
+
+use Classes\ConflictoIdempotenciaException;
+use Classes\Email;
+use Classes\Idempotencia;
+use Classes\OperacionEnCursoException;
+use Classes\RateLimiter;
+use Model\Usuario;
+use Repositories\CorreoSalidaRepository;
+use Repositories\DuplicateEntryException;
+use Repositories\PersistenceException;
+use Repositories\UsuarioRepository;
+
+/**
+ * Servicio de dominio para autenticación, registro, confirmación de cuenta
+ * y recuperación de contraseña.
+ *
+ * Recibe datos y contexto explícitos; no accede directamente a $_POST, $_GET ni $_SESSION.
+ */
+class AuthService
+{
+    public const STATUS_OK = 'ok';
+    public const STATUS_INVALID = 'invalid';
+    public const STATUS_INVALID_TYPE = 'invalid_type';
+    public const STATUS_UNAUTHORIZED = 'unauthorized';
+    public const STATUS_CONFLICT = 'conflict';
+    public const STATUS_RATE_LIMITED = 'rate_limited';
+    public const STATUS_ERROR = 'error';
+    /** Misma clave de operación reutilizada con datos distintos. */
+    public const STATUS_CONFLICT_CLAVE = 'conflict_key';
+    /** Otra solicitud con la misma clave sigue procesándose. */
+    public const STATUS_EN_CURSO = 'in_progress';
+
+    /** Hash bcrypt (coste 10) de una cadena descartable; solo sirve para igualar el tiempo de login de correos inexistentes. */
+    private const HASH_SENUELO = '$2y$10$luI5hG7XjLbS/l2OEYcLrONW5Bg4fFubWgfSB2maV/17K7KCR774m';
+
+    private const MENSAJE_ENLACE_NO_VALIDO = 'El enlace no es válido, ya fue utilizado o venció.';
+
+    private UsuarioRepository $repository;
+    /** @var callable|null */
+    private $emailDispatcher;
+    private ?CorreoSalidaService $correoSalida;
+
+    /**
+     * @param UsuarioRepository|null $repository Repositorio de usuarios.
+     * @param callable|null $emailDispatcher Callback opcional `fn(string $tipo, string $email, string $nombre, string $tokenPlano): bool`.
+     *        Si se inyecta, `registrar` lo invoca TRAS el commit en lugar de usar la cola de correos (compatibilidad con
+     *        pruebas unitarias). Recibe `confirmacion` (cuenta nueva o sin confirmar) o `aviso_cuenta_existente` (token vacío).
+     * @param CorreoSalidaService|null $correoSalida Cola de correos para `registrar` (por defecto se construye con la conexión del repositorio).
+     */
+    public function __construct(?UsuarioRepository $repository = null, ?callable $emailDispatcher = null, ?CorreoSalidaService $correoSalida = null)
+    {
+        $this->repository = $repository ?? new UsuarioRepository();
+        $this->emailDispatcher = $emailDispatcher;
+        $this->correoSalida = $correoSalida;
+    }
+
+    /**
+     * Autentica a un usuario validando tipos escalares, campos obligatorios, presupuesto de rate limiting,
+     * hash de contraseña y estado de confirmación de la cuenta.
+     *
+     * Garantías preservadas:
+     * - Un login exitoso limpia únicamente el contador por cuenta (`TIPO_EMAIL_LOGIN`) y NUNCA reinicia
+     *   el presupuesto compartido por IP (`TIPO_IP_LOGIN`).
+     * - Diferencia entradas no escalares (`STATUS_INVALID_TYPE`), errores de validación (`STATUS_INVALID`),
+     *   bloqueo por rate limit (`STATUS_RATE_LIMITED`), credenciales inválidas / cuenta no confirmada
+     *   (`STATUS_UNAUTHORIZED`) y fallos SQL (`STATUS_ERROR`), sin revelar existencia de cuentas ni detalles SQL.
+     *
+     * @param array $datos Datos de entrada (`email`, `password`).
+     * @param string $ip Dirección IP del cliente para rate limiting.
+     * @return array Resultado estructurado con `status`, `resultado`, `usuario` y `alertas`.
+     */
+    public function login(array $datos, string $ip = '127.0.0.1'): array
+    {
+        Usuario::limpiarAlertas();
+
+        $emailRaw = $datos['email'] ?? null;
+        $passwordRaw = $datos['password'] ?? null;
+
+        if (!is_string($emailRaw) || !is_string($passwordRaw)) {
+            return $this->construirRespuesta(
+                self::STATUS_INVALID_TYPE,
+                false,
+                new Usuario(),
+                ['error' => ['Los campos email y password deben ser cadenas de texto válidas']]
+            );
+        }
+
+        $auth = new Usuario($datos);
+        $alertas = $auth->validarLogin();
+        if (!empty($alertas)) {
+            return $this->construirRespuesta(
+                self::STATUS_INVALID,
+                false,
+                $auth,
+                $alertas
+            );
+        }
+
+        $email = trim($emailRaw);
+
+        try {
+            $db = $this->repository->getDb();
+            $admision = RateLimiter::admitirIntentoLogin($db, $ip, $email);
+            if (!$admision['admitido']) {
+                $espera = max(1, (int)$admision['segundos_restantes']);
+                $minutos = (int)ceil($espera / 60);
+                return $this->construirRespuesta(
+                    self::STATUS_RATE_LIMITED,
+                    false,
+                    $auth,
+                    ['error' => ["Demasiados intentos fallidos. Por seguridad, intente de nuevo en {$minutos} minutos."]],
+                    ['segundos_restantes' => $espera]
+                );
+            }
+
+            $usuario = $this->repository->findByEmail($email);
+        } catch (PersistenceException $e) {
+            return $this->construirRespuesta(
+                self::STATUS_ERROR,
+                false,
+                $auth,
+                ['error' => ['No fue posible procesar el inicio de sesión en este momento. Intenta nuevamente.']]
+            );
+        }
+
+        if ($usuario !== null && $usuario->comprobarPasswordAndVerificado($auth->password)) {
+            // Política de rate limiting: Un login exitoso limpia ÚNICAMENTE el contador
+            // de la cuenta (email) autenticada. El presupuesto de la IP es compartido y
+            // NO se reinicia aquí; solo expira naturalmente por ventana temporal para
+            // evitar que un atacante eluda el límite de IP intercalando accesos válidos
+            // a una cuenta de control con ataques de fuerza bruta hacia otras cuentas.
+            try {
+                RateLimiter::limpiarIntentos($this->repository->getDb(), RateLimiter::TIPO_EMAIL_LOGIN, $email);
+            } catch (\Throwable $e) {
+                // No interrumpir el login ya verificado si falla la limpieza auxiliar
+            }
+
+            return $this->construirRespuesta(
+                self::STATUS_OK,
+                true,
+                $usuario,
+                []
+            );
+        }
+
+        if ($usuario === null) {
+            // Equipara el coste de bcrypt con el de una cuenta existente: sin esto, un correo inexistente responde ~10 veces
+            // más rápido y el tiempo de respuesta permite enumerar cuentas (hallazgo de la ronda 2, DEF-13).
+            password_verify($auth->password, self::HASH_SENUELO);
+        }
+
+        // Mensaje unificado para credenciales inválidas o cuenta no verificada (sin enumeración de cuentas)
+        return $this->construirRespuesta(
+            self::STATUS_UNAUTHORIZED,
+            false,
+            $auth,
+            ['error' => ['Credenciales incorrectas o la cuenta no ha sido verificada']]
+        );
+    }
+
+    /**
+     * Registro público de CLIENTES con respuesta UNIFORME (anti-enumeración de cuentas, DEF-13).
+     *
+     * Contrato público: para cualquier correo bien formado el resultado visible es el mismo
+     * (`STATUS_OK`, sin alertas, sin diferencias en `repetida`/`token` observables por el controlador): correo nuevo,
+     * cliente confirmado, cliente sin confirmar, personal laboral (colaborador/propietario) y cuenta suspendida.
+     * Solo los errores de VALIDACIÓN del propio formulario (`STATUS_INVALID`), el límite de intentos
+     * (`STATUS_RATE_LIMITED`, mismo presupuesto para todo correo) y los conflictos de CLAVE de operación
+     * (`STATUS_CONFLICT_CLAVE`/`STATUS_EN_CURSO`, que dependen solo de la clave y no de la cuenta) se distinguen.
+     * `STATUS_CONFLICT` ya no lo devuelve este método: «el usuario ya está registrado» dejó de ser información pública.
+     *
+     * Efectos en el servidor (no visibles para quien solicita), todos en UNA transacción con la reserva de idempotencia:
+     *  - correo nuevo ........................ alta de identidad + membresía cliente + evento «confirmación» en la cola;
+     *  - cliente sin confirmar ............... NO crea otra cuenta, NO toca su contraseña PROVISIONAL (la definitiva la elige quien activa
+     *                                          con el enlace del correo, que la reemplaza; ver activarCuenta), emite token nuevo y encola confirmación;
+     *  - cliente confirmado / personal / suspendida: NO modifica nada y encola un «aviso de cuenta existente» al titular
+     *    (portal 'equipo' si la cuenta es laboral sin membresía cliente), máximo uno por hora y correo (clave única de la cola).
+     *
+     * Entrega: tras el commit se llama a `CorreoSalidaService::despacharTrasCommit` (intento inmediato; si falla, el evento queda
+     * reintentable por el worker). Si se inyectó `$emailDispatcher`, se usa ÉL tras el commit en lugar de la cola (modo
+     * compatibilidad de pruebas unitarias; sin cola no hay límite horario de avisos).
+     *
+     * Equiparación de superficie lateral: `password_hash` se calcula en TODAS las ramas antes de decidir, la admisión del
+     * límite de intentos ocurre antes de consultar la cuenta y cada rama termina en la misma secuencia
+     * (reserva de idempotencia, escritura/aviso en cola, actualización de la reserva, commit, despacho). No se afirma tiempo
+     * constante: ver docs/GUIA_ACTUALIZACION_IDENTIDADES.md §10 para la medición y el residuo.
+     *
+     * Idempotencia: con `$claveOperacion` toda solicitud (incluidas las de correos ya existentes) es repetible. Un doble clic,
+     * un reintento tras perder la respuesta o una solicitud concurrente con la misma clave devuelven el mismo resultado sin repetir
+     * efectos. La misma clave con datos distintos produce STATUS_CONFLICT_CLAVE. Sin clave (llamadas heredadas) el UNIQUE de correo
+     * normalizado sigue impidiendo identidades duplicadas.
+     *
+     * @param array $datos Datos del formulario de registro.
+     * @param string|null $ip IP del cliente (límite de intentos); null para llamadas de dominio.
+     * @param string|null $claveOperacion Clave de operación generada al mostrar el formulario.
+     * @param string|null $actor Actor de la operación (p. ej. Idempotencia::actorAnonimo()).
+     * @return array Resultado estructurado con `status`, `resultado`, `id` (solo si esta llamada creó la cuenta), `usuario`, `token`, `repetida` y `alertas`.
+     */
+    public function registrar(array $datos, ?string $ip = null, ?string $claveOperacion = null, ?string $actor = null): array
+    {
+        Usuario::limpiarAlertas();
+
+        $usuario = new Usuario();
+        $usuario->sincronizarRegistro($datos);
+
+        $alertas = $usuario->validarNuevaCuenta();
+        if (!empty($alertas)) {
+            return $this->construirRespuesta(
+                self::STATUS_INVALID,
+                false,
+                $usuario,
+                $alertas,
+                ['id' => null, 'token' => null]
+            );
+        }
+
+        $usaIdempotencia = $claveOperacion !== null && $actor !== null;
+        $contenido = [
+            'nombre' => (string)$usuario->nombre, 'apellido' => (string)$usuario->apellido,
+            'telefono' => (string)$usuario->telefono, 'email' => mb_strtolower(trim((string)$usuario->email)),
+            'password' => (string)$usuario->password,
+        ];
+
+        try {
+            if ($usaIdempotencia) {
+                if (!Idempotencia::claveValida($claveOperacion)) {
+                    return $this->construirRespuesta(self::STATUS_INVALID, false, $usuario,
+                        ['error' => ['El formulario venció. Recárgalo para crear tu cuenta.']], ['id' => null, 'token' => null]);
+                }
+                // Un reintento de una solicitud ya procesada (sea cual sea la cuenta) no consume el límite ni repite efectos.
+                $previa = Idempotencia::buscar($this->repository->getDb(), 'cliente.registro', $actor, $claveOperacion, $contenido);
+                if ($previa !== null) {
+                    return $this->respuestaRegistroUniforme($usuario, $previa['recurso_tipo'] === 'usuario' ? $previa['recurso_id'] : null, null, true);
+                }
+            }
+            // El transporte público siempre suministra IP; llamadas de dominio existentes conservan compatibilidad.
+            if ($ip !== null) {
+                $admision = RateLimiter::admitirDosVectores($this->repository->getDb(), 'ip_register', $ip, 'email_register', strtolower((string)$usuario->email), 10, 3);
+                if (!$admision['admitido']) {
+                    return $this->construirRespuesta(self::STATUS_RATE_LIMITED, false, $usuario,
+                        ['error' => ['Demasiadas solicitudes de registro. Intenta más tarde.']],
+                        ['segundos_restantes' => max(1,(int)$admision['segundos_restantes']), 'id' => null, 'token' => null]);
+                }
+            }
+
+            // El coste de bcrypt se paga SIEMPRE, exista o no la cuenta (el hash se descarta si no hay alta).
+            $usuario->hashPassword();
+
+            $efecto = null;
+            $op = null;
+            for ($intento = 1; $op === null; $intento++) {
+                $efecto = null;
+                try {
+                    $alta = function () use ($usuario, &$efecto): array {
+                        return $this->altaOAvisoDeRegistro($usuario, $efecto);
+                    };
+                    $op = $usaIdempotencia
+                        ? Idempotencia::ejecutar($this->repository->getDb(), 'cliente.registro', $actor, $claveOperacion, $contenido, $alta)
+                        : ['repetida' => false] + $this->repository->enTransaccion($alta);
+                } catch (DuplicateEntryException $e) {
+                    // Otra solicitud (otra clave) creó este mismo correo entre la lectura y el INSERT: toda la transacción se
+                    // revirtió; se repite y esta vez el correo ya existe, así que sigue la rama de cuenta existente.
+                    if ($intento >= 3) {
+                        throw $e;
+                    }
+                    $usuario->id = null;
+                }
+            }
+        } catch (ConflictoIdempotenciaException $e) {
+            return $this->construirRespuesta(self::STATUS_CONFLICT_CLAVE, false, $usuario,
+                ['error' => ['Esta solicitud ya se procesó con otros datos. Recarga el formulario para crear una cuenta nueva.']],
+                ['id' => null, 'token' => null]);
+        } catch (OperacionEnCursoException $e) {
+            return $this->construirRespuesta(self::STATUS_EN_CURSO, false, $usuario,
+                ['error' => ['Tu solicitud anterior sigue procesándose. Espera unos segundos y revisa tu correo.']],
+                ['id' => null, 'token' => null, 'segundos_restantes' => 3]);
+        } catch (PersistenceException $e) {
+            return $this->construirRespuesta(
+                self::STATUS_ERROR,
+                false,
+                $usuario,
+                ['error' => ['Hubo un error al procesar el registro. Intente nuevamente.']],
+                ['id' => null, 'token' => null]
+            );
+        }
+
+        if ($op['repetida']) {
+            // Otra solicitud concurrente con la misma clave ganó: ella ya encoló y despachó.
+            return $this->respuestaRegistroUniforme($usuario, $op['recurso_tipo'] === 'usuario' ? $op['recurso_id'] : null, null, true);
+        }
+
+        // Correo/aviso únicamente después de confirmar la transacción.
+        $this->despacharEfectoRegistro($efecto);
+
+        $creada = ($efecto['tipo'] ?? '') === 'alta';
+        return $this->respuestaRegistroUniforme($usuario, $creada ? $efecto['usuario_id'] : null, $creada ? $efecto['token'] : null, false);
+    }
+
+    /**
+     * Respuesta OK idéntica para todas las ramas. `id`/`token` solo se rellenan cuando ESTA llamada creó la cuenta
+     * (los llamadores de dominio y las pruebas los necesitan; el controlador público no los usa ni los muestra).
+     */
+    private function respuestaRegistroUniforme(Usuario $usuario, ?int $id, ?string $token, bool $repetida): array
+    {
+        return $this->construirRespuesta(self::STATUS_OK, true, $usuario, [], ['id' => $id, 'token' => $token, 'repetida' => $repetida]);
+    }
+
+    /**
+     * Cuerpo transaccional del registro: decide la rama según la cuenta y encola SU evento dentro de la misma transacción.
+     * Llena `$efecto` (datos para el despacho post-commit; incluye el token en claro solo en memoria).
+     *
+     * @param array|null $efecto
+     * @return array{recurso_tipo:string,recurso_id:int,datos:array}
+     */
+    private function altaOAvisoDeRegistro(Usuario $usuario, ?array &$efecto): array
+    {
+        $efecto = null;
+        $existente = $this->repository->findByEmail((string)$usuario->email);
+
+        if ($existente === null) {
+            $tokenPlano = $usuario->generarTokenSeguro('confirmacion', 24);
+            // Identidad y membresía cliente en una sola transacción; el registro público nunca produce acceso laboral.
+            $id = $this->repository->createCliente($usuario, 'registro_publico');
+            $efecto = $this->encolarEfectoRegistro('alta', $id, (string)$usuario->email, (string)$usuario->nombre, $tokenPlano, 'cliente');
+            return ['recurso_tipo' => 'usuario', 'recurso_id' => $id, 'datos' => ['accion' => 'alta']];
+        }
+
+        $cuenta = $this->clasificarCuentaExistente((int)$existente->id);
+        // La contraseña enviada se ignora: jamás se pisa la de una cuenta existente.
+        if ((string)$existente->confirmado !== '1' && $cuenta['portal'] === 'cliente' && !$cuenta['suspendida']) {
+            $tokenPlano = $this->repository->issueConfirmationToken($existente, 24);
+            if ($tokenPlano !== null) {
+                $efecto = $this->encolarEfectoRegistro('reconfirmacion', (int)$existente->id, (string)$existente->email, (string)$existente->nombre, $tokenPlano, 'cliente');
+                return ['recurso_tipo' => 'registro_existente', 'recurso_id' => 0, 'datos' => ['accion' => 'reconfirmacion']];
+            }
+            // Se confirmó entre la lectura y la emisión: se trata como cuenta ya activa.
+        }
+
+        // Cliente confirmado, personal laboral o cuenta suspendida: solo se avisa al titular real del correo.
+        $efecto = $this->encolarEfectoRegistro('aviso', (int)$existente->id, (string)$existente->email, (string)$existente->nombre, '', $cuenta['portal']);
+        return ['recurso_tipo' => 'registro_existente', 'recurso_id' => 0, 'datos' => ['accion' => 'aviso']];
+    }
+
+    /**
+     * Encola (dentro de la transacción en curso) el evento de la rama elegida; con dispatcher inyectado no usa la cola.
+     * @return array{tipo:string,usuario_id:int,email:string,nombre:string,token:string,portal:string,evento:?int}
+     */
+    private function encolarEfectoRegistro(string $tipo, int $usuarioId, string $email, string $nombre, string $tokenPlano, string $portal): array
+    {
+        $evento = null;
+        if ($this->emailDispatcher === null) {
+            $cola = $this->colaCorreos();
+            $evento = $tipo === 'aviso'
+                ? $cola->encolarAvisoCuentaExistente($email, $nombre, $portal, gmdate('YmdH'))
+                : $cola->encolarConfirmacionCuenta($usuarioId, $email, $nombre, $tokenPlano);
+        }
+        return ['tipo' => $tipo, 'usuario_id' => $usuarioId, 'email' => $email, 'nombre' => $nombre, 'token' => $tokenPlano, 'portal' => $portal, 'evento' => $evento];
+    }
+
+    /** Intento inmediato de entrega TRAS el commit; un fallo nunca revierte el alta (el evento queda reintentable). */
+    private function despacharEfectoRegistro(?array $efecto): void
+    {
+        if ($efecto === null) {
+            return;
+        }
+        if ($this->emailDispatcher !== null) {
+            $tipo = $efecto['tipo'] === 'aviso' ? 'aviso_cuenta_existente' : 'confirmacion';
+            $enviado = (bool)call_user_func($this->emailDispatcher, $tipo, $efecto['email'], $efecto['nombre'], $efecto['token']);
+            if (!$enviado) {
+                error_log("AuthService::registrar fallo al despachar correo '{$tipo}' para usuario ID {$efecto['usuario_id']}");
+            }
+            return;
+        }
+        if ($efecto['evento'] !== null) {
+            // Devuelve false tanto si el envío falló (queda reintentable por el worker) como si otro proceso/solicitud ya lo
+            // entregó (aviso ya enviado en esta hora): no es un error, por eso no se registra.
+            $this->colaCorreos()->despacharTrasCommit((int)$efecto['evento']);
+        }
+    }
+
+    private function colaCorreos(): CorreoSalidaService
+    {
+        return $this->correoSalida ??= new CorreoSalidaService(new CorreoSalidaRepository($this->repository->getDb()));
+    }
+
+    /**
+     * Portal y estado de una cuenta existente. Un fallo técnico NO se interpreta como cuenta activa ni inactiva:
+     * se asume la rama más conservadora (solo aviso, sin emitir token).
+     * @return array{portal:string,suspendida:bool}
+     */
+    private function clasificarCuentaExistente(int $usuarioId): array
+    {
+        try {
+            $c = (new AuthorizationService($this->repository->getDb()))->contexto($usuarioId);
+        } catch (\Throwable) {
+            return ['portal' => 'cliente', 'suspendida' => true];
+        }
+        if ($c === null) {
+            return ['portal' => 'cliente', 'suspendida' => true];
+        }
+        return [
+            'portal' => $c['rol'] !== 'cliente' && $c['cliente_estado'] === null ? 'equipo' : 'cliente',
+            'suspendida' => $c['cliente_estado'] === 'suspendido' || (int)$c['activo'] !== 1,
+        ];
+    }
+
+    /**
+     * ACTIVA una cuenta (única vía de confirmación, `POST /confirmar-cuenta`): quien demuestra controlar el buzón elige la
+     * contraseña DEFINITIVA, que reemplaza a la provisional del registro en la misma sentencia atómica que consume el token
+     * (ver UsuarioRepository::activateAccountByToken). Un GET/HEAD jamás activa: solo `validarTokenConfirmacion`.
+     *
+     * Garantías: el token es de un solo uso, vence a las 24 h y solo sirve a cuentas sin confirmar (un token residual no toca
+     * una cuenta ya confirmada); de dos activaciones simultáneas gana una y la perdedora recibe «enlace no válido o ya
+     * utilizado» sin cambiar la contraseña del ganador. Con `$claveOperacion`+`$actor` es idempotente (Idempotencia::ejecutar):
+     * un doble clic devuelve el mismo resultado sin repetir efectos y la misma clave con otra contraseña/enlace es un conflicto.
+     * Límite de intentos por IP y por huella del token. Los mensajes no distinguen vencido / usado / inexistente.
+     * No inicia sesión: la persona entra después con la contraseña elegida por /cliente/login.
+     *
+     * @param array $datos `token`, `password`, `password2`, `nombre`, `apellido`, `telefono` (los tres últimos son obligatorios: el titular
+     *        revisa lo que escribió quien registró el correo; se aplican con la contraseña en la MISMA sentencia atómica; son datos declarados, no verificados).
+     * @return array `status`, `resultado`, `alertas`, `repetida` (y `segundos_restantes` si hay bloqueo).
+     */
+    public function activarCuenta(array $datos, ?string $ip = null, ?string $claveOperacion = null, ?string $actor = null): array
+    {
+        Usuario::limpiarAlertas();
+        $token = $datos['token'] ?? null;
+        $password = $datos['password'] ?? null;
+        $password2 = $datos['password2'] ?? null;
+        if (!is_string($token) || !is_string($password) || !is_string($password2)) {
+            return $this->construirRespuesta(self::STATUS_INVALID_TYPE, false, null,
+                ['error' => ['Los datos enviados no son válidos.']], ['repetida' => false]);
+        }
+        $token = trim($token);
+        if ($token === '') {
+            return $this->construirRespuesta(self::STATUS_INVALID, false, null, ['error' => [self::MENSAJE_ENLACE_NO_VALIDO]], ['repetida' => false, 'enlace' => false]);
+        }
+
+        // Misma política de contraseña que el registro; no depende de que el token exista.
+        $nueva = new Usuario(['password' => $password]);
+        $alertas = $nueva->validarPassword();
+        if ($password !== $password2) {
+            $alertas['error'][] = 'Las contraseñas no coinciden';
+        }
+        // Datos de contacto que el TITULAR revisa y corrige (los escribió antes quien registró el correo): también se validan
+        // sin depender de que el token exista. Si falta alguno de los tres (formulario antiguo en caché) o no es texto, se
+        // responde 422 con el formulario, sin consumir el token ni contar contra el límite.
+        $nombre = $datos['nombre'] ?? null;
+        $apellido = $datos['apellido'] ?? null;
+        $telefono = $datos['telefono'] ?? null;
+        if (!is_string($nombre) || !is_string($apellido) || !is_string($telefono)) {
+            $alertas['error'][] = 'Revisa tu nombre, apellido y teléfono: el formulario está incompleto. Vuelve a abrir el enlace del correo.';
+            $nombre = is_string($nombre) ? $nombre : '';
+            $apellido = is_string($apellido) ? $apellido : '';
+            $telefono = is_string($telefono) ? $telefono : '';
+        }
+        $contactoUsuario = new Usuario(['nombre' => $nombre, 'apellido' => $apellido, 'telefono' => $telefono]);
+        foreach ($contactoUsuario->validarDatosContacto() as $tipo => $mensajes) {
+            foreach ($mensajes as $mensaje) { $alertas[$tipo][] = $mensaje; }
+        }
+        $contacto = ['nombre' => (string)$contactoUsuario->nombre, 'apellido' => (string)$contactoUsuario->apellido, 'telefono' => (string)$contactoUsuario->telefono];
+        if (!empty($alertas)) {
+            return $this->construirRespuesta(self::STATUS_INVALID, false, null, $alertas, ['repetida' => false, 'enlace' => true]);
+        }
+
+        $usaIdempotencia = $claveOperacion !== null && $actor !== null;
+        $huellaToken = hash('sha256', $token);
+        $contenido = ['token' => $huellaToken, 'password' => $password, 'nombre' => $contacto['nombre'], 'apellido' => $contacto['apellido'], 'telefono' => $contacto['telefono']];
+        try {
+            if ($usaIdempotencia) {
+                if (!Idempotencia::claveValida($claveOperacion)) {
+                    return $this->construirRespuesta(self::STATUS_INVALID, false, null,
+                        ['error' => ['El formulario venció. Recarga el enlace del correo para continuar.']], ['repetida' => false, 'enlace' => true]);
+                }
+                if (Idempotencia::buscar($this->repository->getDb(), 'cliente.activacion', $actor, $claveOperacion, $contenido) !== null) {
+                    return $this->respuestaActivacionOk(true);
+                }
+            }
+            if ($ip !== null) {
+                $admision = RateLimiter::admitirDosVectores($this->repository->getDb(), 'ip_activate', $ip, 'token_activate', substr($huellaToken, 0, 40), RateLimiter::MAX_INTENTOS_IP, RateLimiter::MAX_INTENTOS_EMAIL);
+                if (!$admision['admitido']) {
+                    return $this->construirRespuesta(self::STATUS_RATE_LIMITED, false, null,
+                        ['error' => ['Demasiados intentos de activación. Intenta de nuevo más tarde.']],
+                        ['segundos_restantes' => max(1, (int)$admision['segundos_restantes']), 'repetida' => false, 'enlace' => true]);
+                }
+            }
+
+            // El coste de bcrypt se paga aunque el enlace no sea válido: el tiempo no distingue enlaces vigentes de inexistentes.
+            $hash = password_hash($password, PASSWORD_BCRYPT);
+            $alta = function () use ($token, $hash, $contacto): array {
+                $cuenta = $this->repository->activateAccountByToken($token, $hash, $contacto);
+                if ($cuenta === null) {
+                    // Revierte la reserva de idempotencia: un enlace inválido no deja rastro de «éxito».
+                    throw new EnlaceActivacionNoValidoException();
+                }
+                return ['recurso_tipo' => 'usuario', 'recurso_id' => (int)$cuenta['id'], 'datos' => []];
+            };
+            // Dos activaciones simultáneas compiten por la misma fila: InnoDB puede abortar a una con interbloqueo (1213) o espera
+            // agotada (1205). Es un fallo transitorio de concurrencia, no un error de negocio: se reintenta y la perdedora termina
+            // viendo «enlace no válido o ya utilizado» (CI: test_seis_activaciones_simultaneas…).
+            for ($intento = 1; ; $intento++) {
+                try {
+                    $op = $usaIdempotencia
+                        ? Idempotencia::ejecutar($this->repository->getDb(), 'cliente.activacion', $actor, $claveOperacion, $contenido, $alta)
+                        : ['repetida' => false] + $this->repository->enTransaccion($alta);
+                    break;
+                } catch (PersistenceException $e) {
+                    if ($intento >= 5 || !self::esFalloTransitorioDeConcurrencia($e)) { throw $e; }
+                    usleep(random_int(15000, 60000) * $intento);
+                }
+            }
+        } catch (EnlaceActivacionNoValidoException $e) {
+            return $this->construirRespuesta(self::STATUS_INVALID, false, null, ['error' => [self::MENSAJE_ENLACE_NO_VALIDO]], ['repetida' => false, 'enlace' => false]);
+        } catch (ConflictoIdempotenciaException $e) {
+            return $this->construirRespuesta(self::STATUS_CONFLICT_CLAVE, false, null,
+                ['error' => ['Esta solicitud ya se procesó con otros datos. Abre de nuevo el enlace de tu correo.']], ['repetida' => false, 'enlace' => true]);
+        } catch (OperacionEnCursoException $e) {
+            return $this->construirRespuesta(self::STATUS_EN_CURSO, false, null,
+                ['error' => ['Tu solicitud anterior sigue procesándose. Espera unos segundos.']], ['repetida' => false, 'enlace' => true, 'segundos_restantes' => 3]);
+        } catch (PersistenceException $e) {
+            return $this->construirRespuesta(self::STATUS_ERROR, false, null,
+                ['error' => ['No fue posible activar la cuenta en este momento. Intenta nuevamente.']], ['repetida' => false, 'enlace' => true]);
+        }
+
+        if (!$op['repetida']) {
+            // Los correos de confirmación o recuperación aún en cola ya no sirven (su enlace desapareció con la activación).
+            try {
+                if ($this->emailDispatcher === null) {
+                    $cola = $this->colaCorreos();
+                    $cola->cancelarConfirmacionesAnteriores((int)$op['recurso_id'], 0);
+                    $cola->cancelarRecuperacionesAnteriores((int)$op['recurso_id'], 0);
+                }
+            } catch (\Throwable $e) {
+                error_log('AuthService::activarCuenta: no se pudieron cancelar los correos pendientes del usuario ' . (int)$op['recurso_id']);
+            }
+        }
+        return $this->respuestaActivacionOk($op['repetida']);
+    }
+
+    /** ¿La excepción (o su causa) es un interbloqueo o una espera de bloqueo agotada de MySQL (1213 / 1205)? */
+    private static function esFalloTransitorioDeConcurrencia(\Throwable $e): bool
+    {
+        for ($x = $e; $x !== null; $x = $x->getPrevious()) {
+            if (in_array((int)$x->getCode(), [1213, 1205], true) || preg_match('/deadlock|lock wait timeout|\b(1213|1205)\b/i', $x->getMessage())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private function respuestaActivacionOk(bool $repetida): array
+    {
+        return $this->construirRespuesta(self::STATUS_OK, true, null,
+            ['exito' => ['Tu cuenta quedó activada. Inicia sesión con la contraseña que acabas de elegir.']], ['repetida' => $repetida]);
+    }
+
+    /**
+     * Procesa la solicitud de recuperación de contraseña (`/olvide`).
+     * Preserva anti-enumeración de cuentas, rate limiting por IP/email, actualización atómica
+     * exclusiva de columnas de token y envío de correo solo tras persistir el token.
+     *
+     * @param array $datos Datos de entrada (`email`).
+     * @param string $ip Dirección IP del cliente.
+     * @return array Resultado estructurado con `status`, `resultado`, `usuario` y `alertas`.
+     */
+    public function solicitarRecuperacion(array $datos, string $ip = '127.0.0.1'): array
+    {
+        Usuario::limpiarAlertas();
+
+        $emailRaw = $datos['email'] ?? null;
+        if (!is_string($emailRaw)) {
+            return $this->construirRespuesta(
+                self::STATUS_INVALID_TYPE,
+                false,
+                new Usuario(),
+                ['error' => ['El email debe ser una cadena de texto válida']]
+            );
+        }
+
+        $email = trim($emailRaw);
+        $auth = new Usuario(['email' => $email]);
+
+        $alertas = $auth->validarEmail();
+        if (!empty($alertas)) {
+            return $this->construirRespuesta(
+                self::STATUS_INVALID,
+                false,
+                $auth,
+                $alertas
+            );
+        }
+
+        try {
+            $db = $this->repository->getDb();
+            $admision = RateLimiter::admitirIntentoRecovery($db, $ip, $email);
+            if (!$admision['admitido']) {
+                $espera = max(1, (int)$admision['segundos_restantes']);
+                $minutos = (int)ceil($espera / 60);
+                return $this->construirRespuesta(
+                    self::STATUS_RATE_LIMITED,
+                    false,
+                    $auth,
+                    ['error' => ["Demasiadas solicitudes de recuperación. Intente en {$minutos} minutos."]],
+                    ['segundos_restantes' => $espera]
+                );
+            }
+
+            $usuario = $this->repository->findByEmail($email);
+            if ($usuario !== null && (string)$usuario->confirmado === '1') {
+                if ($this->emailDispatcher === null) {
+                    // Por la cola persistente: sin envío en la petición (el tiempo de respuesta no delata la cuenta) y con reintentos.
+                    if (!$this->emitirRecuperacionEnCola($usuario)) {
+                        error_log("AuthService::solicitarRecuperacion fallo al persistir token de recuperacion para usuario ID {$usuario->id}");
+                        return $this->construirRespuesta(
+                            self::STATUS_ERROR,
+                            false,
+                            $auth,
+                            ['error' => ['No fue posible procesar la solicitud en este momento. Intenta nuevamente.']]
+                        );
+                    }
+                } else {
+                    $tokenPlano = $this->repository->issueRecoveryToken($usuario, 2);
+                    if ($tokenPlano === null) {
+                        error_log("AuthService::solicitarRecuperacion fallo al persistir token de recuperacion para usuario ID {$usuario->id}");
+                        return $this->construirRespuesta(
+                            self::STATUS_ERROR,
+                            false,
+                            $auth,
+                            ['error' => ['No fue posible procesar la solicitud en este momento. Intenta nuevamente.']]
+                        );
+                    }
+
+                    // Despachador inyectado (pruebas unitarias): comportamiento original, síncrono y sin cola.
+                    $enviado = $this->despacharCorreo('recuperacion', (string)$usuario->email, (string)$usuario->nombre, $tokenPlano, $this->portalDeCuenta((int)$usuario->id));
+                    if (!$enviado) {
+                        error_log("AuthService::solicitarRecuperacion fallo al despachar correo de recuperacion para usuario ID {$usuario->id}");
+                    }
+                }
+            }
+        } catch (PersistenceException $e) {
+            return $this->construirRespuesta(
+                self::STATUS_ERROR,
+                false,
+                $auth,
+                ['error' => ['No fue posible procesar la solicitud en este momento. Intenta nuevamente.']]
+            );
+        }
+
+        // Mensaje genérico uniforme para evitar enumeración de usuarios/estados
+        return $this->construirRespuesta(
+            self::STATUS_OK,
+            true,
+            $auth,
+            ['exito' => ['Si el correo electrónico está registrado, recibirás las instrucciones para restablecer tu contraseña en breve.']]
+        );
+    }
+
+    /**
+     * Procesa la solicitud de reenvío de confirmación de cuenta (`/reenviar-confirmacion`).
+     * Preserva anti-enumeración de cuentas, rate limiting por IP/email, actualización atómica
+     * con condición `confirmado = '0'` y envío de correo solo tras persistir el token.
+     *
+     * Entrega: por la COLA PERSISTENTE de correos (`correos_salida`). El token nuevo (que invalida el anterior al
+     * reemplazar su hash), el evento de correo y la cancelación de los eventos pendientes de tokens anteriores del
+     * usuario se confirman en UNA transacción; después se intenta un envío inmediato y, si el SMTP falla, el worker
+     * (`scripts/procesar_correos.php`) reintenta con retroceso exponencial. Los reenvíos concurrentes del mismo usuario
+     * se serializan por el bloqueo de su fila: al final queda UN token válido (el último) y UN evento activo.
+     * Con `$emailDispatcher` inyectado (pruebas unitarias) se conserva el envío síncrono sin cola ni transacción.
+     *
+     * @param array $datos Datos de entrada (`email`).
+     * @param string $ip Dirección IP del cliente.
+     * @return array Resultado estructurado con `status`, `resultado`, `usuario` y `alertas`.
+     */
+    public function reenviarConfirmacion(array $datos, string $ip = '127.0.0.1'): array
+    {
+        Usuario::limpiarAlertas();
+
+        $emailRaw = $datos['email'] ?? null;
+        if (!is_string($emailRaw)) {
+            return $this->construirRespuesta(
+                self::STATUS_INVALID_TYPE,
+                false,
+                new Usuario(),
+                ['error' => ['El email debe ser una cadena de texto válida']]
+            );
+        }
+
+        $email = trim($emailRaw);
+        $auth = new Usuario(['email' => $email]);
+
+        $alertas = $auth->validarEmail();
+        if (!empty($alertas)) {
+            return $this->construirRespuesta(
+                self::STATUS_INVALID,
+                false,
+                $auth,
+                $alertas
+            );
+        }
+
+        try {
+            $db = $this->repository->getDb();
+            $admision = RateLimiter::admitirIntentoReconfirm($db, $ip, $email);
+            if (!$admision['admitido']) {
+                $espera = max(1, (int)$admision['segundos_restantes']);
+                $minutos = (int)ceil($espera / 60);
+                return $this->construirRespuesta(
+                    self::STATUS_RATE_LIMITED,
+                    false,
+                    $auth,
+                    ['error' => ["Demasiadas solicitudes de confirmación. Intente de nuevo en {$minutos} minutos."]],
+                    ['segundos_restantes' => $espera]
+                );
+            }
+
+            $usuario = $this->repository->findByEmail($email);
+            if ($usuario !== null && (string)$usuario->confirmado !== '1') {
+                $emitido = is_callable($this->emailDispatcher)
+                    ? $this->emitirConfirmacionSincrona($usuario)
+                    : $this->emitirConfirmacionEnCola($usuario);
+                if (!$emitido) {
+                    error_log("AuthService::reenviarConfirmacion fallo al persistir token para usuario ID {$usuario->id}");
+                    return $this->construirRespuesta(
+                        self::STATUS_ERROR,
+                        false,
+                        $auth,
+                        ['error' => ['No fue posible procesar la solicitud en este momento. Intenta nuevamente.']]
+                    );
+                }
+            }
+        } catch (PersistenceException $e) {
+            return $this->construirRespuesta(
+                self::STATUS_ERROR,
+                false,
+                $auth,
+                ['error' => ['No fue posible procesar la solicitud en este momento. Intenta nuevamente.']]
+            );
+        }
+
+        // Respuesta genérica uniforme para prevenir enumeración de cuentas
+        return $this->construirRespuesta(
+            self::STATUS_OK,
+            true,
+            $auth,
+            ['exito' => ['Si la cuenta existe y está pendiente de confirmación, hemos enviado un nuevo enlace a tu correo electrónico.']]
+        );
+    }
+
+    /**
+     * Recuperación por la cola persistente. En UNA transacción: emite el token (reemplaza el anterior), encola el correo y
+     * cancela los eventos de recuperación previos aún no entregados. Reintenta interbloqueos (1213/1205) como la confirmación.
+     * @return bool false si no se pudo emitir el token
+     * @throws PersistenceException si la base de datos falla de forma persistente
+     */
+    private function emitirRecuperacionEnCola(Usuario $usuario): bool
+    {
+        $db = $this->repository->getDb();
+        $cola = new CorreoSalidaService(new \Repositories\CorreoSalidaRepository($db));
+        $portal = $this->portalDeCuenta((int)$usuario->id);
+        $eventoId = null;
+        for ($intento = 1; ; $intento++) {
+            $errno = 0;
+            try {
+                $eventoId = \Classes\Transaccion::ejecutar($db, function () use ($usuario, $cola, $db, $portal, &$errno): ?int {
+                    try {
+                        $tokenPlano = $this->repository->issueRecoveryToken($usuario, 2);
+                        if ($tokenPlano === null) {
+                            return null;
+                        }
+                        $id = $cola->encolarRecuperacionCuenta((int)$usuario->id, (string)$usuario->email, (string)$usuario->nombre, $tokenPlano, $portal);
+                        $cola->cancelarRecuperacionesAnteriores((int)$usuario->id, $id);
+                        return $id;
+                    } catch (\Throwable $e) {
+                        $errno = (int)$db->errno ?: ($e->getCode() > 0 ? (int)$e->getCode() : 0);
+                        throw $e;
+                    }
+                });
+                break;
+            } catch (\Throwable $e) {
+                if (in_array($errno, [1213, 1205], true) && $intento < 4) {
+                    usleep(random_int(20000, 80000) * $intento);
+                    continue;
+                }
+                throw $e instanceof PersistenceException ? $e : new PersistenceException('No se pudo emitir la recuperación', 0, $e);
+            }
+        }
+        if ($eventoId === null) {
+            return false;
+        }
+        $cola->despacharTrasCommit($eventoId);
+        return true;
+    }
+
+    /** Reenvío con despachador inyectado (pruebas unitarias): comportamiento original, síncrono y sin cola. */
+    private function emitirConfirmacionSincrona(Usuario $usuario): bool
+    {
+        $tokenPlano = $this->repository->issueConfirmationToken($usuario, 24);
+        if ($tokenPlano === null) {
+            return false;
+        }
+        // Enviar correo de confirmación únicamente después de persistir exitosamente el token
+        $enviado = $this->despacharCorreo('confirmacion', (string)$usuario->email, (string)$usuario->nombre, $tokenPlano);
+        if (!$enviado) {
+            error_log("AuthService::reenviarConfirmacion fallo al despachar correo para usuario ID {$usuario->id}");
+        }
+        return true;
+    }
+
+    /**
+     * Reenvío por la cola persistente. En UNA transacción: emite el token (reemplaza el hash anterior, así que el
+     * enlace previo deja de servir), encola el correo y cancela los eventos anteriores aún no entregados del usuario.
+     * La fila del usuario queda bloqueada hasta el commit, de modo que dos reenvíos concurrentes se ejecutan en serie
+     * y el último en confirmar deja su token como el único válido y su evento como el único activo.
+     * Un interbloqueo (1213) con el worker u otro reenvío se reintenta, como en Classes\Idempotencia.
+     *
+     * @return bool false si no se emitió token (cuenta ya confirmada entre tanto)
+     * @throws PersistenceException si la base de datos falla de forma persistente
+     */
+    private function emitirConfirmacionEnCola(Usuario $usuario): bool
+    {
+        $db = $this->repository->getDb();
+        $cola = new CorreoSalidaService(new \Repositories\CorreoSalidaRepository($db));
+        $eventoId = null;
+        for ($intento = 1; ; $intento++) {
+            $errno = 0;
+            try {
+                $eventoId = \Classes\Transaccion::ejecutar($db, function () use ($usuario, $cola, $db, &$errno): ?int {
+                    try {
+                        $tokenPlano = $this->repository->issueConfirmationToken($usuario, 24);
+                        if ($tokenPlano === null) {
+                            return null;
+                        }
+                        $id = $cola->encolarConfirmacionCuenta((int)$usuario->id, (string)$usuario->email, (string)$usuario->nombre, $tokenPlano);
+                        $cola->cancelarConfirmacionesAnteriores((int)$usuario->id, $id);
+                        return $id;
+                    } catch (\Throwable $e) {
+                        $errno = (int)$db->errno ?: ($e->getCode() > 0 ? (int)$e->getCode() : 0);
+                        throw $e;
+                    }
+                });
+                break;
+            } catch (\Throwable $e) {
+                if (in_array($errno, [1213, 1205], true) && $intento < 4) {
+                    usleep(random_int(20000, 80000) * $intento);
+                    continue;
+                }
+                throw $e instanceof PersistenceException ? $e : new PersistenceException('No se pudo emitir la confirmación', 0, $e);
+            }
+        }
+        if ($eventoId === null) {
+            return false;
+        }
+        // Intento inmediato tras el commit: si el SMTP falla, el evento ya es durable y el worker lo reintenta.
+        $cola->despacharTrasCommit($eventoId);
+        return true;
+    }
+
+    /**
+     * Verifica un enlace de confirmación SIN consumirlo ni activar nada (GET que muestra el formulario y HEAD).
+     *
+     * @param mixed $tokenRaw Token recibido por query string.
+     * @return array Resultado estructurado con `status`, `resultado`, `usuario` y `alertas`.
+     */
+    public function validarTokenConfirmacion($tokenRaw): array
+    {
+        $token = is_string($tokenRaw) ? trim($tokenRaw) : '';
+        try {
+            $usuario = $token !== '' ? $this->repository->findByValidToken($token, 'confirmacion') : null;
+        } catch (PersistenceException $exception) {
+            return $this->construirRespuesta(self::STATUS_ERROR, false, null,
+                ['error' => ['No fue posible verificar el enlace en este momento.']]);
+        }
+        // Un token residual de una cuenta ya confirmada no es un enlace de activación válido.
+        return $usuario !== null && (string)$usuario->confirmado === '0'
+            ? $this->construirRespuesta(self::STATUS_OK, true, $usuario, [])
+            : $this->construirRespuesta(self::STATUS_INVALID, false, null,
+                ['error' => [self::MENSAJE_ENLACE_NO_VALIDO]]);
+    }
+
+    /** Verifica la vigencia del enlace antes de mostrar el formulario de recuperación. */
+    public function validarTokenRecuperacion($tokenRaw): array
+    {
+        Usuario::limpiarAlertas();
+
+        $token = is_string($tokenRaw) ? trim($tokenRaw) : '';
+        if ($token === '') {
+            return $this->construirRespuesta(
+                self::STATUS_INVALID,
+                false,
+                null,
+                ['error' => ['Token no válido o expirado']],
+                ['error' => true]
+            );
+        }
+
+        try {
+            $usuario = $this->repository->findByValidToken($token, 'recuperacion');
+        } catch (PersistenceException $e) {
+            return $this->construirRespuesta(
+                self::STATUS_ERROR,
+                false,
+                null,
+                ['error' => ['No fue posible verificar el token en este momento. Intenta nuevamente.']],
+                ['error' => true]
+            );
+        }
+
+        if ($usuario === null) {
+            return $this->construirRespuesta(
+                self::STATUS_INVALID,
+                false,
+                null,
+                ['error' => ['Token no válido o expirado']],
+                ['error' => true]
+            );
+        }
+
+        return $this->construirRespuesta(
+            self::STATUS_OK,
+            true,
+            $usuario,
+            [],
+            ['error' => false]
+        );
+    }
+
+    /**
+     * Valida la nueva contraseña y consume atómicamente el token de recuperación de un solo uso.
+     *
+     * @param mixed $tokenRaw Token de recuperación en texto plano.
+     * @param array $datos Datos enviados en el formulario (`password`).
+     * @return array Resultado estructurado con `status`, `resultado`, `error` y `alertas`.
+     */
+    public function restablecerPassword($tokenRaw, array $datos): array
+    {
+        Usuario::limpiarAlertas();
+
+        $token = is_string($tokenRaw) ? trim($tokenRaw) : '';
+        $passwordInput = $datos['password'] ?? null;
+
+        if (!is_string($passwordInput)) {
+            return $this->construirRespuesta(
+                self::STATUS_INVALID_TYPE,
+                false,
+                null,
+                ['error' => ['El password debe ser una cadena de texto válida']],
+                ['error' => false]
+            );
+        }
+
+        if ($token === '') {
+            return $this->construirRespuesta(
+                self::STATUS_INVALID,
+                false,
+                null,
+                ['error' => ['El token no es válido, ya fue utilizado o ha expirado.']],
+                ['error' => true]
+            );
+        }
+
+        $passwordNuevo = new Usuario(['password' => $passwordInput]);
+        $alertas = $passwordNuevo->validarPassword();
+        if (!empty($alertas)) {
+            return $this->construirRespuesta(
+                self::STATUS_INVALID,
+                false,
+                null,
+                $alertas,
+                ['error' => false]
+            );
+        }
+
+        $hashNuevo = password_hash((string)$passwordNuevo->password, PASSWORD_BCRYPT);
+
+        try {
+            $actualizado = $this->repository->resetPasswordByToken($token, $hashNuevo);
+        } catch (PersistenceException $e) {
+            return $this->construirRespuesta(
+                self::STATUS_ERROR,
+                false,
+                null,
+                ['error' => ['No fue posible restablecer la contraseña en este momento. Intenta nuevamente.']],
+                ['error' => true]
+            );
+        }
+
+        if (!$actualizado) {
+            return $this->construirRespuesta(
+                self::STATUS_INVALID,
+                false,
+                null,
+                ['error' => ['El token no es válido, ya fue utilizado o ha expirado.']],
+                ['error' => true]
+            );
+        }
+
+        return $this->construirRespuesta(
+            self::STATUS_OK,
+            true,
+            null,
+            [],
+            ['error' => false]
+        );
+    }
+
+    /** Portal al que pertenece la cuenta: 'equipo' solo si es laboral y no tiene membresía de cliente. */
+    private function portalDeCuenta(int $usuarioId): string
+    {
+        try {
+            $c = (new AuthorizationService($this->repository->getDb()))->contexto($usuarioId);
+            return $c && $c['rol'] !== 'cliente' && $c['cliente_estado'] === null ? 'equipo' : 'cliente';
+        } catch (\Throwable) {
+            return 'cliente';
+        }
+    }
+
+    /**
+     * Despacha el correo transaccional correspondiente utilizando el dispatcher inyectado o `Classes\Email`.
+     */
+    private function despacharCorreo(string $tipo, string $emailDestino, string $nombre, string $tokenPlano, string $portal = 'cliente'): bool
+    {
+        if (is_callable($this->emailDispatcher)) {
+            return (bool)call_user_func($this->emailDispatcher, $tipo, $emailDestino, $nombre, $tokenPlano);
+        }
+
+        $email = new Email($nombre, $emailDestino, $tokenPlano);
+        $email->portal = $portal;
+        if ($tipo === 'recuperacion') {
+            return $email->enviarInstrucciones();
+        }
+
+        return $email->enviarConfirmacion();
+    }
+
+    /**
+     * Construye el arreglo de respuesta estándar y sincroniza las alertas estáticas en `Usuario`
+     * para mantener compatibilidad con vistas y pruebas existentes.
+     */
+    private function construirRespuesta(
+        string $status,
+        bool $resultado,
+        ?Usuario $usuario,
+        array $alertas,
+        array $extra = []
+    ): array {
+        Usuario::limpiarAlertas();
+        foreach ($alertas as $tipo => $mensajes) {
+            if (is_array($mensajes)) {
+                foreach ($mensajes as $mensaje) {
+                    Usuario::setAlerta((string)$tipo, (string)$mensaje);
+                }
+            }
+        }
+
+        return array_merge([
+            'status' => $status,
+            'resultado' => $resultado,
+            'usuario' => $usuario,
+            'alertas' => $alertas
+        ], $extra);
+    }
+}
+
+/** Interno de AuthService::activarCuenta: el enlace no activó ninguna cuenta (revierte la reserva de idempotencia). */
+final class EnlaceActivacionNoValidoException extends \RuntimeException
+{
+}

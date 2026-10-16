@@ -102,4 +102,63 @@ class EmailTest extends TestCase
 
         $this->assertCount(0, Email::$emailsEnviados, 'No deben registrarse como enviados si el transporte falló');
     }
+
+    public function testInvitacionUsaEnlaceDeAceptacionPropioNuncaElDeRecuperacion(): void
+    {
+        $capturado = null;
+        Email::setTransport(static function (PHPMailer $mailer, string $proposito) use (&$capturado): bool {
+            $capturado = $mailer;
+            return $proposito === 'invitacion';
+        });
+        $token = 'token+con/espacio &comillas"';
+        $email = new Email('María <script>alert(1)</script>', 'maria@dominio.com', $token);
+        $email->detallesExtra = ['Rol' => 'Recepción'];
+
+        $this->assertTrue($email->enviarInvitacion());
+        $this->assertSame('Tu invitación al equipo', $capturado->Subject);
+        $this->assertSame('invitacion', Email::$emailsEnviados[0]['proposito']);
+        $this->assertStringContainsString('/equipo/aceptar?token=' . rawurlencode($token), $capturado->Body);
+        $this->assertStringContainsString('/equipo/aceptar?token=' . rawurlencode($token), $capturado->AltBody);
+        $this->assertStringNotContainsString('/recuperar', $capturado->AltBody, 'El propósito invitación no se mezcla con la recuperación de contraseña');
+        $this->assertStringContainsString('Aceptar mi invitación', $capturado->AltBody);
+        $this->assertStringContainsString('herramientas disponibles para tu rol', $capturado->AltBody);
+        $this->assertStringContainsString('Portal del equipo', $capturado->AltBody);
+        $this->assertStringContainsString('Recepción', $capturado->AltBody);
+        $this->assertStringNotContainsString('<script>', $capturado->Body);
+        $this->assertStringContainsString('&lt;script&gt;alert(1)&lt;/script&gt;', $capturado->Body);
+    }
+
+    public function testConfirmacionYRecuperacionIncluyenTextoPlanoLegibleYEnlacePersonal(): void
+    {
+        $email = new Email('Juan Pérez', 'juan@dominio.com', 'token123');
+        foreach (['confirmacion' => '/confirmar-cuenta?token=token123', 'recuperacion' => '/recuperar?token=token123'] as $proposito => $ruta) {
+            $mailer = $email->prepararMailer($proposito, 'https://salon.example' . $ruta);
+            $this->assertStringContainsString('Juan Pérez', $mailer->AltBody);
+            $this->assertStringContainsString('juan@dominio.com', $mailer->AltBody);
+            $this->assertStringContainsString('https://salon.example' . $ruta, $mailer->AltBody);
+            $this->assertStringNotContainsString('font-size', $mailer->AltBody);
+            $this->assertStringNotContainsString('<html', $mailer->AltBody);
+            $this->assertSame('UTF-8', $mailer->CharSet);
+        }
+    }
+
+    public function testPasswordSmtpAceptaEmailPassYEmailPasswordConPrioridadDelSegundo(): void
+    {
+        $previo = [$_ENV['EMAIL_PASSWORD'] ?? null, $_ENV['EMAIL_PASS'] ?? null];
+        try {
+            unset($_ENV['EMAIL_PASSWORD'], $_ENV['EMAIL_PASS']);
+            putenv('EMAIL_PASSWORD'); putenv('EMAIL_PASS');
+            $this->assertSame('', Email::resolverPasswordSmtp());
+            $_ENV['EMAIL_PASS'] = 'desde-plantilla';
+            $this->assertSame('desde-plantilla', Email::resolverPasswordSmtp());
+            $_ENV['EMAIL_PASSWORD'] = 'nombre-historico';
+            $this->assertSame('nombre-historico', Email::resolverPasswordSmtp());
+            $mailer = (new Email('A', 'a@dominio.com', 't'))->prepararMailer('confirmacion', 'https://salon.example/x');
+            $this->assertSame('nombre-historico', $mailer->Password);
+        } finally {
+            foreach (['EMAIL_PASSWORD', 'EMAIL_PASS'] as $i => $k) {
+                if ($previo[$i] === null) { unset($_ENV[$k]); } else { $_ENV[$k] = $previo[$i]; }
+            }
+        }
+    }
 }

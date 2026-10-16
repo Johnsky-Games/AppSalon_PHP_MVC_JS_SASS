@@ -1,0 +1,163 @@
+name: CI — AppSalon PHP MVC
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - "feature/**"
+      - "claude/**"
+  pull_request:
+    branches:
+      - main
+      - "feature/**"
+
+jobs:
+  tests:
+    name: PHP 8.2 + MySQL 8.0 (Migraciones, Frontend, Linter, PHPUnit y Backup/Restore)
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: appsalon_ci_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=15
+
+    env:
+      APP_ENV: testing
+      APP_URL: http://localhost:3000
+      APP_TIMEZONE: America/Guayaquil
+      DB_HOST: 127.0.0.1
+      DB_PORT: 3306
+      DB_USER: root
+      DB_PASS: root
+      DB_NAME: appsalon_ci_test
+      PAYMENT_WEBHOOK_SECRET: ci_test_webhook_secret_hmac_2026
+
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar PHP 8.2
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.2"
+          extensions: mysqli, pdo_mysql, mbstring, zlib, gd, fileinfo, sodium, curl, pcntl, posix
+          ini-values: variables_order=EGPCS
+          coverage: none
+
+      - name: Configurar Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Instalar dependencias de Composer
+        run: composer install --prefer-dist --no-progress --no-interaction
+
+      - name: Instalar dependencias de NPM y compilar frontend
+        run: |
+          npm ci
+          npm run build
+          node tests/ui_client_failure_test.js
+
+      - name: Verificar sintaxis PHP (php -l)
+        run: |
+          find Router.php classes controllers database includes interfaces models public repositories scripts services tests views -name "*.php" -print0 | xargs -0 -n1 php -l
+
+      - name: Cargar esquema base y aplicar todas las migraciones incrementales
+        run: |
+          mysql -h 127.0.0.1 -P 3306 -uroot -proot appsalon_ci_test < database/schema_base.sql
+          php database/migrador.php up
+          php database/migrador.php status
+
+      - name: Instalador idempotente del primer propietario (base nueva aislada)
+        run: |
+          mysql -h 127.0.0.1 -P 3306 -uroot -proot -e "CREATE DATABASE appsalon_ci_install_test CHARACTER SET utf8mb4"
+          export DB_NAME=appsalon_ci_install_test OWNER_EMAIL=propietario@ci.test APP_URL=http://localhost:3000
+          php scripts/instalar.php | tee /tmp/instalar1.log
+          grep -q "ENLACE DE ACTIVACIÓN" /tmp/instalar1.log
+          php scripts/instalar.php | tee /tmp/instalar2.log
+          grep -q "activación de propietario pendiente" /tmp/instalar2.log
+          test "$(mysql -h 127.0.0.1 -P 3306 -uroot -proot -N -e 'SELECT COUNT(*) FROM appsalon_ci_install_test.colaboradores')" = "1"
+          mysql -h 127.0.0.1 -P 3306 -uroot -proot -e "DROP DATABASE appsalon_ci_install_test"
+
+      - name: Ejecutar suite completa de PHPUnit (sin caché y orden aleatorio)
+        run: php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --order-by=random --colors=never
+
+      # La validación independiente de los XLSX exportados (ronda 5) usa dos lectores ajenos a nuestro escritor: openpyxl y LibreOffice.
+      - name: Instalar lectores independientes de XLSX (openpyxl y LibreOffice Calc)
+        run: |
+          # Instalación del sistema: el QA lanza python3 con un entorno mínimo (sin HOME) y no vería el sitio de usuario.
+          sudo python3 -m pip install --break-system-packages 'openpyxl==3.1.5'
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends libreoffice-calc
+          python3 -c "import openpyxl; print('openpyxl', openpyxl.__version__)"
+          soffice --version
+
+      - name: QA independiente (tests/Qa) en base MySQL aislada — obligatorio
+        # Incluye las pruebas de concurrencia con procesos reales (DEF-02, DEF-06), HTTP real, correo, esquema y navegador.
+        # El arnés (tests/Qa/QaCase.php) aborta si DB_NAME no cumple appsalon_qa_*_test; nunca toca appsalon_ci_test.
+        env:
+          DB_NAME: appsalon_qa_test
+          EMAIL_HOST: 127.0.0.1
+          EMAIL_PORT: "2599"
+          EMAIL_USER: qa
+          EMAIL_PASSWORD: qa
+          CHROME_BIN: /usr/bin/google-chrome
+          QA_EXIGIR_NAVEGADOR: "1"
+        run: |
+          export MYSQL_PWD=root
+          mysql -h 127.0.0.1 -P 3306 -uroot -e "CREATE DATABASE appsalon_qa_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+          mysql -h 127.0.0.1 -P 3306 -uroot appsalon_qa_test < database/schema_base.sql
+          php database/migrador.php up
+          test -x "$CHROME_BIN"
+          php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --colors=never --log-junit "$RUNNER_TEMP/qa-junit.xml" tests/Qa
+          php scripts/ci_verificar_omitidas.php "$RUNNER_TEMP/qa-junit.xml" .github/qa_omitidas_permitidas.txt
+
+      - name: Conservar informe JUnit de QA
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-junit
+          path: ${{ runner.temp }}/qa-junit.xml
+          if-no-files-found: ignore
+
+      - name: Construir y verificar imagen Docker oficial (Apache + PHP 8.2 + mbstring)
+        run: |
+          docker build -t appsalon-web-ci .
+          docker run --rm appsalon-web-ci php -m | grep -i mbstring
+          docker run --rm appsalon-web-ci php -m | grep -i mysqli
+          docker run --rm appsalon-web-ci php -m | grep -i gd
+          docker run --rm appsalon-web-ci php -m | grep -i sodium
+          docker run --rm appsalon-web-ci apache2ctl -M | grep rewrite_module
+
+      - name: Recorrido E2E aislado en Apache, MySQL y SMTP mock
+        env:
+          E2E_WEB_IMAGE: appsalon-web-ci
+          E2E_ARTIFACT_DIR: ${{ runner.temp }}/appsalon-e2e
+        run: bash tests/run_browser_e2e.sh
+
+      - name: Conservar resultados y registros E2E
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apache-browser-e2e
+          path: ${{ runner.temp }}/appsalon-e2e
+          if-no-files-found: ignore
+
+      - name: Verificar ciclo completo de respaldo y restauración con validación SHA-256
+        run: |
+          php scripts/backup_db.php --db=appsalon_ci_test --output=/tmp/appsalon_ci_backup.sql.gz --gzip
+          test -f /tmp/appsalon_ci_backup.sql.gz.manifest.json
+          BACKUP_HASH=$(sha256sum /tmp/appsalon_ci_backup.sql.gz | awk '{print $1}')
+          mysql -h 127.0.0.1 -P 3306 -uroot -proot -e "CREATE DATABASE IF NOT EXISTS appsalon_ci_restore_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+          php scripts/restore_db.php --db=appsalon_ci_restore_test --input=/tmp/appsalon_ci_backup.sql.gz --hash=$BACKUP_HASH
+          rm -f /tmp/appsalon_ci_backup.sql.gz /tmp/appsalon_ci_backup.sql.gz.manifest.json

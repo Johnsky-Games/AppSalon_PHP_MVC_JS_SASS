@@ -1,0 +1,111 @@
+services:
+  db:
+    image: mysql:8.0
+    container_name: ${APPSALON_DB_CONTAINER:-appsalon-db-stack}
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASS:-root}
+      MYSQL_DATABASE: ${DB_NAME:-appsalon_mvc}
+    command:
+      - --default-authentication-plugin=mysql_native_password
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    ports:
+      - "127.0.0.1:${DB_EXTERNAL_PORT:-33060}:3306"
+    volumes:
+      - appsalon_db_data:/var/lib/mysql
+      - ./database/schema_base.sql:/docker-entrypoint-initdb.d/00_schema_base.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${DB_PASS:-root}"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+    networks:
+      - appsalon_network
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ${APPSALON_WEB_CONTAINER:-appsalon-web-stack}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      instalador:
+        condition: service_completed_successfully
+    environment: &app_environment
+      APP_ENV: ${APP_ENV:-production}
+      APP_URL: ${APP_URL:-http://localhost:8085}
+      APP_TIMEZONE: ${APP_TIMEZONE:-America/Guayaquil}
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_USER: ${DB_USER:-root}
+      DB_PASS: ${DB_PASS:-root}
+      DB_NAME: ${DB_NAME:-appsalon_mvc}
+      EMAIL_HOST: ${EMAIL_HOST:-sandbox.smtp.mailtrap.io}
+      EMAIL_PORT: ${EMAIL_PORT:-2525}
+      EMAIL_USER: ${EMAIL_USER:-}
+      EMAIL_PASS: ${EMAIL_PASS:-}
+      EMAIL_FROM: ${EMAIL_FROM:-no-reply@appsalon.local}
+      EMAIL_FROM_NAME: ${EMAIL_FROM_NAME:-AppSalon Reservas}
+      NOTIFICACIONES_RECORDATORIO_HORAS: ${NOTIFICACIONES_RECORDATORIO_HORAS:-24}
+      RESERVA_EXIGIR_PROFESIONAL: ${RESERVA_EXIGIR_PROFESIONAL:-1}
+      PAYMENT_GATEWAY_PROVIDER: ${PAYMENT_GATEWAY_PROVIDER:-mock}
+      PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:-change_me_in_production_32_bytes_secret}
+      APP_KEY: ${APP_KEY:-}
+      OWNER_EMAIL: ${OWNER_EMAIL:-}
+      OWNER_NOMBRE: ${OWNER_NOMBRE:-}
+      OWNER_APELLIDO: ${OWNER_APELLIDO:-}
+      APPSALON_OWNER_PASSWORD: ${APPSALON_OWNER_PASSWORD:-}
+      APPSALON_AUTO_MIGRATE: ${APPSALON_AUTO_MIGRATE:-0}
+      CORREOS_INTERVALO_SEGUNDOS: ${CORREOS_INTERVALO_SEGUNDOS:-5}
+    ports:
+      - "${WEB_EXTERNAL_PORT:-8085}:80"
+    volumes:
+      - ./:/var/www/html
+    networks:
+      - appsalon_network
+
+  # Instalador de un solo paso: migra una base NUEVA y aprovisiona al primer propietario. Es idempotente:
+  # al reiniciar no crea otro propietario ni cambia contraseñas. En una base con datos NO migra por sí solo
+  # (haz respaldo y usa `docker compose run --rm instalador php scripts/instalar.php --migrar`).
+  instalador:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment: *app_environment
+    command: ["php", "scripts/instalar.php"]
+    volumes:
+      - ./:/var/www/html
+    networks:
+      - appsalon_network
+
+  # Worker de notificaciones de citas y cola de correos de cuenta (reintentos). Arranca con `docker compose up`.
+  notificaciones:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      <<: *app_environment
+      NOTIFICACIONES_INTERVALO_SEGUNDOS: ${NOTIFICACIONES_INTERVALO_SEGUNDOS:-60}
+    command: ["php", "scripts/notificaciones_worker.php"]
+    volumes:
+      - ./:/var/www/html
+    networks:
+      - appsalon_network
+
+volumes:
+  appsalon_db_data:
+
+networks:
+  appsalon_network:
+    name: ${APPSALON_NETWORK:-appsalon-net-stack}

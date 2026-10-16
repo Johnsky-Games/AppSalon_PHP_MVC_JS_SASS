@@ -1,6 +1,8 @@
 node_modules
 vendor
 .env
+includes/.env
+storage/
 DS_Store
 .vscode
 .phpunit.result.cache
@@ -9,3 +11,9 @@ tests/*.cookie
 tests/*.cookies
 tests/ck_*
 ck_*
+
+# Recursos de interfaz distribuidos para ejecutar la app tras checkout
+!public/build/vendor/
+!public/build/vendor/*.js
+!public/build/vendor/*.css
+!public/build/vendor/*.LICENSE

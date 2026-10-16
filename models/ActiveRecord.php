@@ -294,10 +294,25 @@ class ActiveRecord
         return $ejecutado;
     }
 
+    /**
+     * Tablas con historial o evidencia que NUNCA se eliminan por esta vía genérica: citas (se cancelan o regularizan; su eliminación
+     * física solo existe, con guardas, en CitaRepository::eliminarCitaAtomica), usuarios (se desactivan; la identidad histórica se
+     * conserva) y todo el rastro financiero/de auditoría. Hoy ningún modelo extiende esta clase; la lista evita que uno futuro lo haga.
+     */
+    private const TABLAS_PROTEGIDAS = [
+        'citas', 'citasservicios', 'citas_regularizaciones', 'usuarios', 'clientes', 'pagos', 'comprobantes', 'cobros_eventos',
+        'cobros_devoluciones', 'caja_movimientos', 'comisiones_movimientos', 'agenda_eventos', 'citas_reasignaciones',
+        'fidelidad_movimientos', 'equipo_auditoria',
+    ];
+
     // Eliminar un Registro por su ID usando consulta preparada
     public function eliminar()
     {
         if (!self::$db || is_null($this->id) || !is_numeric($this->id)) {
+            return false;
+        }
+        if (in_array(strtolower((string)static::$tabla), self::TABLAS_PROTEGIDAS, true)) {
+            error_log('[ActiveRecord::eliminar] rechazado: la tabla ' . static::$tabla . ' no admite eliminación genérica');
             return false;
         }
 

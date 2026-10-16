@@ -1,0 +1,16 @@
+// Navegación por portal y avisos de portal (ronda 5 · n5). Clases con prefijo «nav-equipo-» para no tocar CSS compartido.
+.nav-equipo-aviso {
+    display: flex; align-items: flex-start; gap: 1rem; margin: 0 0 2rem; padding: 1.3rem 1.6rem; border-radius: 1.1rem;
+    border: 1px solid #d6e3e0; background: #f1f7f6; color: #1d4a46; font-size: 1.35rem; line-height: 1.6;
+    > span { font-size: 1.6rem; line-height: 1.4; flex-shrink: 0; }
+    > p { margin: 0; overflow-wrap: anywhere; }
+}
+// Tarjeta de error pintada dentro del layout del portal: ocupa el ancho del contenido y no estira el alto de la pantalla.
+.nav-equipo-error { width: 100%; margin-block: 1rem 2rem;
+    .ui-error-art { min-height: 26rem; }
+}
+// El menú del equipo puede tener hasta 14 accesos: en pantallas bajas se desplaza dentro de su panel (ya lo hace .ui-sidebar-scroll).
+.nav-equipo .ui-nav-link:focus-visible { outline: 3px solid #123b42; outline-offset: 2px; }
+@media (max-width: 700px) {
+    .nav-equipo-error .ui-error-art { min-height: 14rem; }
+}

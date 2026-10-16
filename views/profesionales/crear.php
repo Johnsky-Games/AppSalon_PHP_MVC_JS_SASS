@@ -1,0 +1,19 @@
+<header class="ui-page-header"><p class="ui-eyebrow">Gestión del salón</p><h1 class="nombre-pagina">Nuevo Profesional</h1><p class="descripcion-pagina">Añade talento a tu salón y asigna sus especialidades.</p></header>
+
+<?php
+include __DIR__ . '/../templates/barra.php';
+$alertas = $alertas ?? [];
+include __DIR__ . '/../templates/alertas.php';
+?>
+
+<form action="/profesionales/crear" method="POST" class="formulario ui-card" data-una-vez>
+    <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
+    <input type="hidden" name="idem_key" value="<?php echo s(clave_operacion_formulario()); ?>">
+    <?php include __DIR__ . '/formulario.php'; ?>
+    <?php if (!empty($homonimos)) { $puedeVerFicha = true; include __DIR__ . '/../equipo/_aviso_homonimos_profesional.php'; } else { ?>
+    <input type="submit" value="Guardar Profesional" class="boton">
+    <?php } ?>
+</form>
+
+<p class="ui-form-help">Esta ficha organiza la agenda y no crea una cuenta de acceso. Para que la persona ingrese con su propio correo, invítala desde <a href="/admin/equipo">Equipo y permisos</a> (allí puedes vincular una ficha existente o crear una nueva junto con la invitación).</p>
+<div class="acciones"><a href="/profesionales" class="ui-back-link">← Volver a profesionales</a></div>

@@ -1,43 +1,36 @@
-@use 'base/variables' as v;
-
-.citas {
-    list-style: none;
-    padding: 0;
-
-    li {
-        padding: 1rem;
-        border-top: 1px solid v.$blanco;
-
-        p {
-            font-weight: v.$bold;
-            color: v.$azul;
-        }
-
-        span,
-        .servicio {
-            font-weight: v.$regular;
-            color: v.$blanco;
-        }
-
-        &:hover {
-            /* From https://css.glass */
-            background: rgba(13, 166, 243, 0.12);
-            border-radius: 16px;
-            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
-            backdrop-filter: blur(0px);
-            -webkit-backdrop-filter: blur(0px);
-        }
-    }
-}
-
-.servicios {
-    @extend .citas;
-
-    .acciones {
-    margin: 0;
-    }
-    .boton,
-    .boton-eliminar {
-        margin: 0;
-    }
-}
+.citas, .servicios { list-style: none; padding: 0; margin: 0; display: grid; gap: 1.6rem; }
+.citas > li, .servicios > li { background: #fff; border: 1px solid var(--ui-border); border-radius: 1.7rem; padding: 2.4rem; box-shadow: var(--ui-shadow); min-width: 0; transition: border-color .2s, box-shadow .2s; }
+.citas > li:hover, .servicios > li:hover { border-color: #c3d6ca; box-shadow: 0 6px 20px rgba(24,52,62,.065); }
+.citas li p, .servicios li p { color: var(--ui-muted); font-size: 1.25rem; margin-bottom: .9rem; overflow-wrap: anywhere; }
+.citas li span, .servicios li span { color: var(--ui-ink); font-weight: 550; }
+.citas li .servicio { color: #52685b; margin-left: 0; padding: .7rem 0; border-bottom: 1px solid #edf1ec; }
+.citas li h3 { font-size: 1.45rem; margin-top: 1.5rem; }
+.citas li .total { margin-top: 1.7rem; padding-top: 1.5rem; border-top: 1px solid var(--ui-border); font-weight: 650; }
+.citas li .total span { font-size: 2rem; color: var(--ui-accent); }
+.citas .boton, .citas .boton-eliminar, .servicios .boton, .servicios .boton-eliminar { margin: .6rem 0 0; }
+.servicios .acciones { margin: 1.6rem 0 0; }
+.citas-admin > .citas, .ui-service-list, .ui-professional-list { grid-template-columns: repeat(auto-fit, minmax(min(100%, 30rem), 1fr)); }
+.acciones-reportes { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 2rem; }
+.acciones-reportes .boton { margin: 0; }
+.reportes-seccion { margin-top: 3rem; padding-top: 1rem; }
+.reportes-nota-pagos, .reportes-vacio { font-size: 1.3rem; color: var(--ui-muted); }
+.reportes-vacio { padding: 2rem; text-align: center; border: 1px dashed #cedcd3; border-radius: 1.2rem; }
+.reportes-kpis, .ui-dashboard-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); gap: 1.5rem; margin-bottom: 2.5rem; }
+.reporte-kpi { background: #fff; border: 1px solid var(--ui-border); border-radius: 1.7rem; padding: 2rem; text-align: left; box-shadow: var(--ui-shadow); }
+.reporte-kpi h3 { font-size: 1.15rem; color: var(--ui-muted); font-weight: 550; letter-spacing: 0; margin-bottom: 1.2rem; }
+.reporte-kpi .kpi-valor { font-size: 3rem; color: var(--ui-ink); font-weight: 700; letter-spacing: -.04em; margin: 0 0 .5rem; }
+.reporte-kpi .kpi-detalle { font-size: 1.1rem; color: var(--ui-muted); margin: 0; }
+.tabla-contenedor, .ui-table-scroll { width: 100%; overflow-x: auto; margin-top: 1.5rem; border: 1px solid var(--ui-border); border-radius: 1.3rem; overscroll-behavior-inline: contain; }
+.tabla-reportes { width: 100%; border-collapse: collapse; font-size: 1.2rem; color: var(--ui-ink); background: #fff; }
+.tabla-reportes th, .tabla-reportes td { padding: 1.3rem 1.6rem; text-align: left; border-bottom: 1px solid #edf1ee; }
+.tabla-reportes th { background: #f0f5ef; color: #526b59; font-size: 1.1rem; font-weight: 650; white-space: nowrap; }
+.tabla-reportes tbody tr:hover { background: #fafcf9; }
+.tabla-reportes tbody tr:last-child td { border-bottom: 0; }
+.tabla-reportes .etiqueta-historico { display: inline-block; font-size: 1rem; color: var(--ui-muted); margin-left: .5rem; }
+.ui-report-charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 33rem), 1fr)); gap: 2rem; margin-top: 2rem; }
+.ui-report-charts figure { margin: 0; }
+.ui-chart-bar-negative { background: #c06650; }
+.ui-list-filter { display: flex; flex-direction: column; gap: .5rem; min-width: min(100%, 22rem); }
+.ui-list-filter input { width: 100%; min-height: 4.6rem; border: 1px solid var(--ui-border); border-radius: 1rem; padding: 1rem 1.3rem; background: #fff; }
+.ui-list-filter label { font-size: 1.1rem; font-weight: 600; }
+@media (max-width: 500px) { .citas > li, .servicios > li { padding: 1.8rem; } .tabla-reportes th, .tabla-reportes td { padding: 1rem; } }

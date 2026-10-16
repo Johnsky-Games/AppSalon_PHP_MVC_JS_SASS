@@ -10,11 +10,8 @@ class CsrfTest extends TestCase
 {
     protected function setUp(): void
     {
-        if (session_status() === PHP_SESSION_ACTIVE) {
-            $_SESSION = [];
-        } else {
-            $_SESSION = [];
-        }
+        iniciar_sesion_segura();
+        $_SESSION = [];
         $_POST = [];
         unset($_SERVER['HTTP_X_CSRF_TOKEN']);
     }

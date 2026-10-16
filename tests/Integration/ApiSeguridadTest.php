@@ -9,6 +9,9 @@ use Model\Servicio;
 use Model\Cita;
 use Model\CitaServicio;
 use Controllers\APIController;
+use Repositories\CitaRepository;
+use Repositories\ServicioRepository;
+use Repositories\UsuarioRepository;
 use AppTerminationException;
 use mysqli;
 
@@ -33,6 +36,7 @@ class ApiSeguridadTest extends TestCase
     {
         validar_base_datos_prueba(self::$db);
 
+        self::$db->query("DELETE FROM notificaciones_citas");
         self::$db->query("DELETE FROM citasservicios");
         self::$db->query("DELETE FROM citas");
         self::$db->query("DELETE FROM usuarios");
@@ -43,8 +47,29 @@ class ApiSeguridadTest extends TestCase
         }
         $_SESSION = [];
         $_POST = [];
+        $_GET = [];
         $_SERVER['HTTP_X_CSRF_TOKEN'] = null;
+        $_SERVER['HTTP_REFERER'] = null;
+        unset($_SERVER['HTTP_ACCEPT'], $_SERVER['CONTENT_TYPE'], $_SERVER['HTTP_X_REQUESTED_WITH']);
         $_SERVER['REQUEST_METHOD'] = 'POST';
+        $_SERVER['REQUEST_URI'] = '/';
+        APIController::setServicioService(null);
+        APIController::setCitaService(null);
+        http_response_code(200);
+    }
+
+    protected function tearDown(): void
+    {
+        $_SESSION = [];
+        $_POST = [];
+        $_GET = [];
+        $_SERVER['HTTP_X_CSRF_TOKEN'] = null;
+        $_SERVER['HTTP_REFERER'] = null;
+        unset($_SERVER['HTTP_ACCEPT'], $_SERVER['CONTENT_TYPE'], $_SERVER['HTTP_X_REQUESTED_WITH']);
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_SERVER['REQUEST_URI'] = '/';
+        APIController::setServicioService(null);
+        APIController::setCitaService(null);
         http_response_code(200);
     }
 
@@ -77,6 +102,8 @@ class ApiSeguridadTest extends TestCase
     {
         // Sesión válida pero CSRF ausente o alterado
         $_SESSION['login'] = true;
+        ActiveRecord::setDB(self::$db);
+        \Tests\ensureActiveIdentity(10, false);
         $_SESSION['id'] = 10;
         $_SESSION['csrf_token'] = 'token_sesion_valido';
         $_POST['csrf_token'] = 'token_falso_alterado';
@@ -98,29 +125,29 @@ class ApiSeguridadTest extends TestCase
 
     public function testClienteNoPuedeEliminarCitaDeOtroClienteIdor(): void
     {
+        $usuarioRepo = new UsuarioRepository(self::$db);
+
         // 1. Crear Usuario A (dueño de la cita) y Usuario B (atacante)
         $usuarioA = new Usuario([
             'nombre' => 'Dueño', 'apellido' => 'A', 'email' => 'dueno@correo.com',
             'password' => '123456', 'telefono' => '1111111111', 'confirmado' => '1'
         ]);
-        $resA = $usuarioA->guardar();
-        $idA = (int)$resA['id'];
+        $idA = $usuarioRepo->create($usuarioA);
 
         $usuarioB = new Usuario([
             'nombre' => 'Atacante', 'apellido' => 'B', 'email' => 'atacante@correo.com',
             'password' => '123456', 'telefono' => '2222222222', 'confirmado' => '1'
         ]);
-        $resB = $usuarioB->guardar();
-        $idB = (int)$resB['id'];
+        $idB = $usuarioRepo->create($usuarioB);
 
         // 2. Crear cita perteneciente al Usuario A
+        $citaRepo = new CitaRepository(self::$db);
         $citaA = new Cita([
             'fecha' => '2026-10-20',
             'hora' => '14:00',
             'usuarioId' => $idA
         ]);
-        $resCita = $citaA->guardar();
-        $idCita = (int)$resCita['id'];
+        $idCita = $citaRepo->createCita($citaA);
 
         // 3. Usuario B intenta eliminar la cita de Usuario A enviando id de la cita de A
         $_SESSION['login'] = true;
@@ -144,7 +171,7 @@ class ApiSeguridadTest extends TestCase
         $this->assertSame(403, http_response_code(), 'Eliminar cita ajena debe retornar 403 Forbidden');
 
         // 4. Demostrar que la cita sigue intacta en la base de datos
-        $citaVerificada = Cita::find($idCita);
+        $citaVerificada = $citaRepo->findById($idCita);
         $this->assertNotNull($citaVerificada, 'La cita del Usuario A no debe ser eliminada por el Usuario B');
     }
 
@@ -154,16 +181,15 @@ class ApiSeguridadTest extends TestCase
             'nombre' => 'Propietario', 'apellido' => 'P', 'email' => 'prop@correo.com',
             'password' => '123456', 'telefono' => '3333333333', 'confirmado' => '1'
         ]);
-        $resU = $usuario->guardar();
-        $idUsuario = (int)$resU['id'];
+        $idUsuario = (new UsuarioRepository(self::$db))->create($usuario);
 
+        $citaRepo = new CitaRepository(self::$db);
         $cita = new Cita([
             'fecha' => '2026-10-22',
             'hora' => '15:00',
             'usuarioId' => $idUsuario
         ]);
-        $resC = $cita->guardar();
-        $idCita = (int)$resC['id'];
+        $idCita = $citaRepo->createCita($cita);
 
         $_SESSION['login'] = true;
         $_SESSION['id'] = $idUsuario;
@@ -183,9 +209,11 @@ class ApiSeguridadTest extends TestCase
             ob_end_clean();
         }
 
-        // Verificar que la cita fue eliminada
-        $citaEliminada = Cita::find($idCita);
-        $this->assertNull($citaEliminada, 'El propietario debe poder eliminar su propia cita');
+        // Verificar que la cita fue cancelada lógicamente (preservando registro con estado 'cancelada')
+        $citaCancelada = $citaRepo->findById($idCita);
+        $this->assertNotNull($citaCancelada, 'El registro de la cita debe preservarse en base de datos');
+        $this->assertSame('cancelada', $citaCancelada->estado, 'La cita debe encontrarse en estado cancelada');
+        $this->assertSame('cliente', $citaCancelada->cancelado_por);
     }
 
     public function testReservaValidaGuardaCitaConUsuarioDeSesion(): void
@@ -195,15 +223,13 @@ class ApiSeguridadTest extends TestCase
             'nombre' => 'Cliente', 'apellido' => 'Real', 'email' => 'real@correo.com',
             'password' => '123456', 'telefono' => '4444444444', 'confirmado' => '1'
         ]);
-        $resU = $usuario->guardar();
-        $idUsuarioReal = (int)$resU['id'];
+        $idUsuarioReal = (new UsuarioRepository(self::$db))->create($usuario);
 
         $servicio = new Servicio([
             'nombre' => 'Corte Cabello',
             'precio' => '50.00'
         ]);
-        $resS = $servicio->guardar();
-        $idServicio = (int)$resS['id'];
+        $idServicio = (new ServicioRepository(self::$db))->create($servicio);
 
         // 2. Sesión activa para Usuario Real
         $_SESSION['login'] = true;
@@ -230,7 +256,7 @@ class ApiSeguridadTest extends TestCase
         $this->assertTrue((bool)$json['resultado']['resultado']);
 
         $idCitaCreada = (int)$json['resultado']['id'];
-        $citaGuardada = Cita::find($idCitaCreada);
+        $citaGuardada = (new CitaRepository(self::$db))->findById($idCitaCreada);
 
         $this->assertNotNull($citaGuardada);
         // Debe haberse asignado a la sesión del usuario real (idUsuarioReal), NUNCA a 9999
@@ -244,13 +270,15 @@ class ApiSeguridadTest extends TestCase
     public function testGuardarRechazaReservaMismoDiaOFechaPasada(): void
     {
         $_SESSION['login'] = true;
+        ActiveRecord::setDB(self::$db);
+        \Tests\ensureActiveIdentity(1, false);
         $_SESSION['id'] = 1;
         $token = bin2hex(random_bytes(32));
         $_SESSION['csrf_token'] = $token;
         $_POST['csrf_token'] = $token;
 
-        // Intento de reservar para hoy
-        $_POST['fecha'] = date('Y-m-d');
+        // Intento de reservar para hoy (en zona horaria America/Guayaquil)
+        $_POST['fecha'] = (new \DateTimeImmutable('now', new \DateTimeZone('America/Guayaquil')))->format('Y-m-d');
         $_POST['hora'] = '11:00';
         $_POST['servicios'] = '1';
 
@@ -273,6 +301,8 @@ class ApiSeguridadTest extends TestCase
     public function testGuardarRechazaHorarioInvalidoPasadoLimite(): void
     {
         $_SESSION['login'] = true;
+        ActiveRecord::setDB(self::$db);
+        \Tests\ensureActiveIdentity(1, false);
         $_SESSION['id'] = 1;
         $token = bin2hex(random_bytes(32));
         $_SESSION['csrf_token'] = $token;
@@ -300,12 +330,17 @@ class ApiSeguridadTest extends TestCase
 
     public function testGuardarDesduplicaServiciosRepetidosPoliticaExplicita(): void
     {
+        $usuario = new Usuario([
+            'nombre' => 'Cliente', 'apellido' => 'Deduplicacion', 'email' => 'dedup@correo.com',
+            'password' => '123456', 'telefono' => '5555555555', 'confirmado' => '1'
+        ]);
+        $idUsuario = (new UsuarioRepository(self::$db))->create($usuario);
+
         $servicio = new Servicio(['nombre' => 'Manicure', 'precio' => '30.00']);
-        $resS = $servicio->guardar();
-        $idS = (int)$resS['id'];
+        $idS = (new ServicioRepository(self::$db))->create($servicio);
 
         $_SESSION['login'] = true;
-        $_SESSION['id'] = 1;
+        $_SESSION['id'] = $idUsuario;
         $token = bin2hex(random_bytes(32));
         $_SESSION['csrf_token'] = $token;
         $_POST['csrf_token'] = $token;
@@ -331,10 +366,11 @@ class ApiSeguridadTest extends TestCase
     public function testGuardarRechazaFormatoHoraConSegundos(): void
     {
         $servicio = new Servicio(['nombre' => 'Corte Varón', 'precio' => '50.00']);
-        $resS = $servicio->guardar();
-        $idS = (int)$resS['id'];
+        $idS = (new ServicioRepository(self::$db))->create($servicio);
 
         $_SESSION['login'] = true;
+        ActiveRecord::setDB(self::$db);
+        \Tests\ensureActiveIdentity(1, false);
         $_SESSION['id'] = 1;
         $token = bin2hex(random_bytes(32));
         $_SESSION['csrf_token'] = $token;
@@ -384,26 +420,24 @@ class ApiSeguridadTest extends TestCase
             'nombre' => 'Cliente', 'apellido' => 'Test', 'email' => 'cliente_elim@correo.com',
             'password' => 'password', 'telefono' => '1234567890', 'confirmado' => '1'
         ]);
-        $resC = $cliente->guardar();
-        $clienteId = (int)$resC['id'];
+        $clienteId = (new UsuarioRepository(self::$db))->create($cliente);
 
         $servicio = new Servicio(['nombre' => 'Barba', 'precio' => '40.00']);
-        $resS = $servicio->guardar();
-        $servicioId = (int)$resS['id'];
+        $servicioId = (new ServicioRepository(self::$db))->create($servicio);
 
+        $citaRepo = new CitaRepository(self::$db);
         $cita = new Cita([
             'fecha' => date('Y-m-d', strtotime('next Thursday')),
             'hora' => '15:00',
             'usuarioId' => $clienteId
         ]);
-        $resCita = $cita->guardar();
-        $citaId = (int)$resCita['id'];
+        $citaId = $citaRepo->createCita($cita);
 
         $cs = new CitaServicio([
             'citaId' => $citaId,
             'servicioId' => $servicioId
         ]);
-        $cs->guardar();
+        $citaRepo->createCitaServicio($cs);
 
         // Autenticar al cliente propietario
         $_SESSION['login'] = true;
@@ -413,18 +447,24 @@ class ApiSeguridadTest extends TestCase
         $_POST['csrf_token'] = $token;
         $_POST['id'] = (string)$citaId;
 
+        ob_start();
         try {
             APIController::eliminar();
             $this->fail('Debe terminar con redirección 302');
         } catch (AppTerminationException $e) {
             $this->assertSame(302, $e->getStatusCode(), 'La eliminación exitosa debe redirigir con 302');
+        } finally {
+            ob_end_clean();
         }
 
-        // Verificar que el commit persistió y la cita y sus servicios fueron eliminados
-        $checkCita = self::$db->query("SELECT * FROM citas WHERE id = {$citaId}");
-        $this->assertSame(0, $checkCita->num_rows, 'La cita debe haber sido eliminada tras el commit exitoso');
+        // Verificar que el commit persistió y la cita quedó cancelada preservando servicios asociados
+        $checkCita = self::$db->query("SELECT estado, cancelado_por FROM citas WHERE id = {$citaId}")->fetch_assoc();
+        $this->assertNotNull($checkCita, 'La cita debe conservarse en base de datos');
+        $this->assertSame('cancelada', $checkCita['estado'], 'La cita debe haber sido cancelada tras el commit exitoso');
+        $this->assertSame('cliente', $checkCita['cancelado_por']);
 
         $checkCS = self::$db->query("SELECT * FROM citasservicios WHERE citaId = {$citaId}");
-        $this->assertSame(0, $checkCS->num_rows, 'Los servicios asociados deben haber sido eliminados');
+        $this->assertSame(1, $checkCS->num_rows, 'Los servicios asociados deben haberse preservado para trazabilidad histórica');
     }
 }
+

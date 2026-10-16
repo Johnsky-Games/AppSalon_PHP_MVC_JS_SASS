@@ -1,0 +1,102 @@
+{
+  "base_commit": "c87863a3d72a140e295603c5eb079c02a0057f39",
+  "branch": "feature/responsividad-correos-errores",
+  "checked_at": "2026-10-13T04:00:27.727Z",
+  "environment": {
+    "php": "8.3.6",
+    "database": "MariaDB 10.11.14",
+    "web": "PHP development server",
+    "browser": "Chrome Headless Shell 155.0.8059.39"
+  },
+  "phpunit": {
+    "tests": 323,
+    "assertions": 3617,
+    "failures": 0,
+    "warnings": 0,
+    "random_order_seed": 1791863465
+  },
+  "responsive": {
+    "checks": 489,
+    "widths": [
+      320,
+      360,
+      390,
+      768,
+      1024,
+      1440
+    ],
+    "layout_failures": 0,
+    "javascript_errors": 0
+  },
+  "error_pages": {
+    "renders": 72,
+    "statuses": [
+      400,
+      401,
+      403,
+      404,
+      405,
+      409,
+      410,
+      419,
+      422,
+      429,
+      500,
+      503
+    ]
+  },
+  "email": {
+    "renders": 28,
+    "widths": [
+      320,
+      375,
+      768,
+      1280
+    ],
+    "minimum_button_height": 56,
+    "horizontal_overflow": 0
+  },
+  "navigation": {
+    "passed": true,
+    "viewport_cases": 7,
+    "tested_without_javascript": true
+  },
+  "php_lint": {
+    "files": 165,
+    "errors": 0
+  },
+  "frontend_failure_scenarios": 3,
+  "build": "passed",
+  "remote_ci": {
+    "status": "success",
+    "workflow_run_id": 38349231242,
+    "code_commit": "af470d2ee9a95704fce87000f70e4212a4186214",
+    "url": "https://github.com/Johnsky-Games/AppSalon_PHP_MVC_JS_SASS/actions/runs/38349231242",
+    "environment": {
+      "php": "8.2",
+      "database": "MySQL 8.0",
+      "web": "Apache"
+    },
+    "phpunit": {
+      "tests": 323,
+      "assertions": 3617,
+      "random_order_seed": 1791867695
+    },
+    "responsive": {
+      "checks": 474,
+      "layout_failures": 0,
+      "javascript_errors": 0
+    },
+    "error_renders": 72,
+    "email_renders": 28,
+    "navigation_viewport_cases": 7,
+    "navigation_roles": 4,
+    "backup_restore": {
+      "passed": true,
+      "tables": 30,
+      "sha256_verified": true
+    }
+  },
+  "deployed": false,
+  "real_email_sent": false
+}

@@ -2,24 +2,264 @@
 
 namespace Controllers;
 
-use Model\Cita;
-use Model\Servicio;
-use Model\CitaServicio;
 use Model\ActiveRecord;
+use Repositories\CitaRepository;
+use Repositories\ProfesionalRepository;
+use Repositories\ServicioRepository;
+use Services\CitaService;
+use Services\DisponibilidadService;
+use Services\ProfesionalService;
+use Services\ServicioService;
 
 class APIController
 {
+    private static ?ServicioService $servicioService = null;
+    private static ?CitaService $citaService = null;
+    private static ?DisponibilidadService $disponibilidadService = null;
+    private static ?ProfesionalService $profesionalService = null;
+
+    public static function setServicioService(?ServicioService $service): void
+    {
+        self::$servicioService = $service;
+    }
+
+    public static function setCitaService(?CitaService $service): void
+    {
+        self::$citaService = $service;
+    }
+
+    public static function setDisponibilidadService(?DisponibilidadService $service): void
+    {
+        self::$disponibilidadService = $service;
+    }
+
+    public static function setProfesionalService(?ProfesionalService $service): void
+    {
+        self::$profesionalService = $service;
+    }
+
+    private static function obtenerServicioService(): ServicioService
+    {
+        if (self::$servicioService !== null) {
+            return self::$servicioService;
+        }
+
+        return new ServicioService(new ServicioRepository(ActiveRecord::getDB()));
+    }
+
+    private static function obtenerCitaService(): CitaService
+    {
+        if (self::$citaService !== null) {
+            return self::$citaService;
+        }
+
+        $db = ActiveRecord::getDB();
+        return new CitaService(
+            new CitaRepository($db),
+            new ServicioRepository($db)
+        );
+    }
+
+    private static function obtenerDisponibilidadService(): DisponibilidadService
+    {
+        if (self::$disponibilidadService !== null) {
+            return self::$disponibilidadService;
+        }
+
+        $db = ActiveRecord::getDB();
+        return new DisponibilidadService(
+            new ProfesionalRepository($db),
+            new ServicioRepository($db),
+            null,
+            new CitaRepository($db)
+        );
+    }
+
+    private static function obtenerProfesionalService(): ProfesionalService
+    {
+        if (self::$profesionalService !== null) {
+            return self::$profesionalService;
+        }
+
+        $db = ActiveRecord::getDB();
+        return new ProfesionalService(
+            new ProfesionalRepository($db),
+            new ServicioRepository($db)
+        );
+    }
+
+    private static function solicitaRespuestaJsonExplicita(): bool
+    {
+        $accept = $_SERVER['HTTP_ACCEPT'] ?? '';
+        $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
+        $requestedWith = $_SERVER['HTTP_X_REQUESTED_WITH'] ?? '';
+
+        return str_contains($accept, 'application/json')
+            || str_contains($contentType, 'application/json')
+            || strtolower($requestedWith) === 'xmlhttprequest';
+    }
+
     public static function index()
     {
-        $servicios = Servicio::all();
         header('Content-Type: application/json; charset=utf-8');
-        echo json_encode($servicios);
+        $resultado = self::obtenerServicioService()->listar();
+
+        if ($resultado['status'] === ServicioService::STATUS_ERROR) {
+            http_response_code(500);
+            echo json_encode([
+                'resultado' => false,
+                'error' => 'No fue posible consultar el catálogo de servicios'
+            ]);
+            detener_ejecucion(500);
+            return;
+        }
+
+        http_response_code(200);
+        echo json_encode($resultado['servicios']);
+    }
+
+    /**
+     * Endpoint autenticado `GET /api/profesionales` (Fase 5).
+     * Devuelve los profesionales activos (`activo = 1`) junto con los IDs de servicios que cada uno
+     * puede realizar y su compatibilidad con los servicios solicitados (`?servicios=1,2`).
+     */
+    public static function profesionales()
+    {
+        iniciar_sesion_segura();
+        header('Content-Type: application/json; charset=utf-8');
+
+        $idSesion = $_SESSION['id'] ?? null;
+        $esIdValido = is_int($idSesion)
+            ? $idSesion >= 1
+            : (is_string($idSesion) && ctype_digit(trim($idSesion)) && (int)trim($idSesion) >= 1);
+
+        if (!isset($_SESSION['login']) || $_SESSION['login'] !== true || !$esIdValido) {
+            http_response_code(401);
+            echo json_encode([
+                'resultado' => false,
+                'status' => 'unauthorized',
+                'codigo' => 'no_autenticado',
+                'profesionales' => [],
+                'profesionales_compatibles' => [],
+                'error' => 'No autenticado'
+            ]);
+            detener_ejecucion(401);
+            return;
+        }
+
+        isAuth();
+
+        $resultado = self::obtenerProfesionalService()->consultarParaReserva($_GET);
+        $httpCode = (int)($resultado['httpCode'] ?? 200);
+        unset($resultado['httpCode']);
+
+        http_response_code($httpCode);
+        echo json_encode($resultado);
+        if ($httpCode !== 200) {
+            detener_ejecucion($httpCode);
+        }
+    }
+
+    /**
+     * Endpoint autenticado `GET /api/mis-citas` (Fase 5).
+     * Consulta únicamente las citas pertenecientes al cliente autenticado en sesión (`$_SESSION['id']`),
+     * incluyendo profesional asignado o indicación de cita histórica sin profesional, intervalo `[hora_inicio, hora_fin)`,
+     * snapshot histórico de servicios, total e indicador `puede_cancelar`.
+     */
+    public static function misCitas()
+    {
+        iniciar_sesion_segura();
+        header('Content-Type: application/json; charset=utf-8');
+
+        $idSesion = $_SESSION['id'] ?? null;
+        $esIdValido = is_int($idSesion)
+            ? $idSesion >= 1
+            : (is_string($idSesion) && ctype_digit(trim($idSesion)) && (int)trim($idSesion) >= 1);
+
+        if (!isset($_SESSION['login']) || $_SESSION['login'] !== true || !$esIdValido) {
+            http_response_code(401);
+            echo json_encode([
+                'resultado' => false,
+                'status' => 'unauthorized',
+                'codigo' => 'no_autenticado',
+                'citas' => [],
+                'error' => 'No autenticado'
+            ]);
+            detener_ejecucion(401);
+            return;
+        }
+
+        isAuth();
+
+        $resultado = self::obtenerCitaService()->consultarCitasCliente($_SESSION['id'], false);
+        $httpCode = (int)($resultado['httpCode'] ?? 200);
+        unset($resultado['httpCode']);
+
+        http_response_code($httpCode);
+        echo json_encode($resultado);
+        if ($httpCode !== 200) {
+            detener_ejecucion($httpCode);
+        }
+    }
+
+    /**
+     * Endpoint de lectura autenticado `GET /api/disponibilidad` (Fases 4A y 4B).
+     *
+     * Calcula los intervalos disponibles `[inicio, fin)` según la configuración de agenda del profesional,
+     * descontando descansos, bloqueos y citas existentes en `America/Guayaquil`, y calculando la duración
+     * total desde el catálogo para los servicios seleccionados.
+     *
+     * Distingue:
+     * - No autenticado (`HTTP 401`, `status: 'unauthorized'`, `codigo: 'no_autenticado'`).
+     * - Solicitud inválida (`HTTP 422`, `status: 'invalid'`, `codigo: 'solicitud_invalida'`).
+     * - Profesional inexistente (`HTTP 404`, `status: 'professional_not_found'`, `codigo: 'profesional_no_encontrado'`).
+     * - Profesional inactivo (`HTTP 409`, `status: 'professional_inactive'`, `codigo: 'profesional_inactivo'`).
+     * - Servicios incompatibles (`HTTP 422`, `status: 'incompatible_services'`, `codigo: 'servicios_incompatibles'`).
+     * - Disponibilidad vacía (`HTTP 200`, `status: 'empty'`, `codigo: 'disponibilidad_vacia'`, `disponible: false`, `intervalos: []`).
+     * - Disponibilidad con intervalos (`HTTP 200`, `status: 'ok'`, `codigo: 'disponibilidad_encontrada'`, `disponible: true`, `intervalos: [...]`).
+     * - Fallo SQL (`HTTP 500`, `status: 'error'`, `codigo: 'error_persistencia'`).
+     */
+    public static function disponibilidad()
+    {
+        iniciar_sesion_segura();
+        header('Content-Type: application/json; charset=utf-8');
+
+        $idSesion = $_SESSION['id'] ?? null;
+        $esIdValido = is_int($idSesion)
+            ? $idSesion >= 1
+            : (is_string($idSesion) && ctype_digit(trim($idSesion)) && (int)trim($idSesion) >= 1);
+
+        if (!isset($_SESSION['login']) || $_SESSION['login'] !== true || !$esIdValido) {
+            http_response_code(401);
+            echo json_encode([
+                'resultado' => false,
+                'disponible' => false,
+                'status' => 'unauthorized',
+                'codigo' => 'no_autenticado',
+                'intervalos' => [],
+                'error' => 'No autenticado'
+            ]);
+            detener_ejecucion(401);
+            return;
+        }
+
+        isAuth();
+
+        $resultado = self::obtenerDisponibilidadService()->consultarDesdeParametros($_GET);
+        $httpCode = (int)($resultado['httpCode'] ?? 200);
+        unset($resultado['httpCode']);
+
+        http_response_code($httpCode);
+        echo json_encode($resultado);
+        if ($httpCode !== 200) {
+            detener_ejecucion($httpCode);
+        }
     }
 
     /**
      * Guarda una cita y sus servicios dentro de una transacción atómica.
-     * Valida autenticación, CSRF, tipos, reglas de negocio en servidor y asigna la cita
-     * estrictamente a la sesión autenticada (mitigando IDOR).
+     * Valida autenticación y CSRF en el controlador, y delega reglas de negocio
+     * y persistencia a CitaService entregando la identidad verificada de la sesión.
      */
     public static function guardar()
     {
@@ -27,12 +267,19 @@ class APIController
         header('Content-Type: application/json; charset=utf-8');
 
         // 1. Verificación de Autenticación
-        if (!isset($_SESSION['login']) || $_SESSION['login'] !== true || empty($_SESSION['id'])) {
+        $idSesion = $_SESSION['id'] ?? null;
+        $esIdValido = is_int($idSesion)
+            ? $idSesion >= 1
+            : (is_string($idSesion) && ctype_digit(trim($idSesion)) && (int)trim($idSesion) >= 1);
+
+        if (!isset($_SESSION['login']) || $_SESSION['login'] !== true || !$esIdValido) {
             http_response_code(401);
             echo json_encode(['resultado' => false, 'error' => 'No autenticado']);
             detener_ejecucion(401);
             return;
         }
+
+        isAuth();
 
         // 2. Verificación de CSRF
         if (!validar_csrf()) {
@@ -42,157 +289,90 @@ class APIController
             return;
         }
 
-        // 3. Sanitización y Validación de Tipos en el Servidor
-        $fecha = is_string($_POST['fecha'] ?? null) ? trim($_POST['fecha']) : '';
-        $hora = is_string($_POST['hora'] ?? null) ? trim($_POST['hora']) : '';
-        $serviciosRaw = is_string($_POST['servicios'] ?? null) ? trim($_POST['servicios']) : '';
+        // 3. Delegar validación de negocio y persistencia atómica a CitaService
+        // entregando la identidad verificada desde la sesión (nunca del POST)
+        $usuarioIdAutenticado = $_SESSION['id'];
+        $resultado = self::obtenerCitaService()->reservar($usuarioIdAutenticado, $_POST);
+        if (($resultado['status'] ?? '') === CitaService::STATUS_OK) {
+            // Quien reserva es cliente a efectos de CRM aunque su cuenta sea también laboral (idempotente).
+            try { (new \Services\AuthorizationService())->asegurarMembresiaCliente((int)$usuarioIdAutenticado); } catch (\Throwable $e) { /* la reserva ya se confirmó */ }
+        }
 
-        // Validar formato estricto de fecha (AAAA-MM-DD)
-        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $fecha)) {
+        if ($resultado['status'] === CitaService::STATUS_UNAUTHORIZED) {
+            http_response_code(401);
+            echo json_encode(['resultado' => false, 'error' => $resultado['error']]);
+            detener_ejecucion(401);
+            return;
+        }
+
+        if ($resultado['status'] === CitaService::STATUS_CONFLICT) {
+            http_response_code(409);
+            echo json_encode([
+                'resultado' => false,
+                'status' => $resultado['status'],
+                'codigo' => $resultado['codigo'] ?? 'conflicto_ocupacion',
+                'error' => $resultado['error']
+            ]);
+            detener_ejecucion(409);
+            return;
+        }
+
+        if (
+            $resultado['status'] === CitaService::STATUS_NOT_FOUND
+            && (int)($resultado['httpCode'] ?? 422) === 404
+        ) {
+            http_response_code(404);
+            echo json_encode([
+                'resultado' => false,
+                'status' => $resultado['status'],
+                'codigo' => $resultado['codigo'] ?? 'profesional_no_encontrado',
+                'error' => $resultado['error']
+            ]);
+            detener_ejecucion(404);
+            return;
+        }
+
+        if (
+            $resultado['status'] === CitaService::STATUS_INVALID
+            || $resultado['status'] === CitaService::STATUS_NOT_FOUND
+        ) {
             http_response_code(422);
-            echo json_encode(['resultado' => false, 'error' => 'Formato de fecha inválido. Se requiere AAAA-MM-DD.']);
+            echo json_encode([
+                'resultado' => false,
+                'status' => $resultado['status'],
+                'codigo' => $resultado['codigo'] ?? 'solicitud_invalida',
+                'error' => $resultado['error']
+            ]);
             detener_ejecucion(422);
             return;
         }
 
-        $partesFecha = explode('-', $fecha);
-        if (!checkdate((int)$partesFecha[1], (int)$partesFecha[2], (int)$partesFecha[0])) {
-            http_response_code(422);
-            echo json_encode(['resultado' => false, 'error' => 'La fecha ingresada no corresponde a un día de calendario válido.']);
-            detener_ejecucion(422);
-            return;
-        }
-
-        // Validar que la fecha sea estrictamente futura (mínimo mañana, alineado con min del input y política comercial)
-        $fechaHoy = date('Y-m-d');
-        if ($fecha <= $fechaHoy) {
-            http_response_code(422);
-            echo json_encode(['resultado' => false, 'error' => 'No se pueden agendar citas para el mismo día ni para fechas pasadas. La reserva debe ser con al menos un día de anticipación.']);
-            detener_ejecucion(422);
-            return;
-        }
-
-        // Validar exclusión de fines de semana (0 = Domingo, 6 = Sábado)
-        $diaSemana = (int)date('w', strtotime($fecha));
-        if (in_array($diaSemana, [0, 6], true)) {
-            http_response_code(422);
-            echo json_encode(['resultado' => false, 'error' => 'No se puede agendar citas en fines de semana (sábados o domingos).']);
-            detener_ejecucion(422);
-            return;
-        }
-
-        // Validar formato estricto de hora (HH:MM únicamente)
-        if (!preg_match('/^(?:[01]\d|2[0-3]):[0-5]\d$/', $hora)) {
-            http_response_code(422);
-            echo json_encode(['resultado' => false, 'error' => 'Formato de hora inválido. Se requiere HH:MM.']);
-            detener_ejecucion(422);
-            return;
-        }
-
-        $partesHora = explode(':', $hora);
-        $horaInt = (int)$partesHora[0];
-        $minutosInt = (int)$partesHora[1];
-
-        // Horario de atención: 10:00 a 18:00 horas inclusive (límite superior 18:00)
-        if ($horaInt < 10 || $horaInt > 18 || ($horaInt === 18 && $minutosInt > 0)) {
-            http_response_code(422);
-            echo json_encode(['resultado' => false, 'error' => 'El horario de atención es de 10:00 a 18:00 horas.']);
-            detener_ejecucion(422);
-            return;
-        }
-
-        // Validar servicios seleccionados: enteros positivos y política explícita de desduplicación
-        $partesServicios = array_filter(array_map('trim', explode(',', $serviciosRaw)), fn($s) => $s !== '');
-        if (empty($partesServicios)) {
-            http_response_code(422);
-            echo json_encode(['resultado' => false, 'error' => 'Debes seleccionar al menos un servicio']);
-            detener_ejecucion(422);
-            return;
-        }
-
-        $idServicios = [];
-        foreach ($partesServicios as $p) {
-            $idVal = filter_var($p, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
-            if ($idVal === false) {
-                http_response_code(422);
-                echo json_encode(['resultado' => false, 'error' => 'Uno o más identificadores de servicio son inválidos. Deben ser enteros positivos.']);
-                detener_ejecucion(422);
-                return;
-            }
-            $idServicios[] = $idVal;
-        }
-
-        // Desduplicar servicios repetidos
-        $idServicios = array_values(array_unique($idServicios));
-
-        // Comprobar existencia real de los servicios en la base de datos
-        foreach ($idServicios as $idServicio) {
-            if (!Servicio::find($idServicio)) {
-                http_response_code(422);
-                echo json_encode(['resultado' => false, 'error' => 'Uno o más servicios seleccionados no existen o no son válidos']);
-                detener_ejecucion(422);
-                return;
-            }
-        }
-
-        // 4. Construcción de Cita con Usuario forzado desde la SESIÓN (Nunca del POST)
-        $cita = new Cita([
-            'fecha' => $fecha,
-            'hora' => $hora,
-            'usuarioId' => (int)$_SESSION['id']
-        ]);
-
-        // 5. Persistencia Atómica con Transacción
-        $db = ActiveRecord::getDB();
-        if (!$db) {
+        if ($resultado['status'] === CitaService::STATUS_ERROR) {
             http_response_code(500);
-            echo json_encode(['resultado' => false, 'error' => 'Servicio de base de datos no disponible']);
-            detener_ejecucion(500);
+            echo json_encode(['resultado' => false, 'error' => $resultado['error']]);
             return;
         }
 
-        if (!$db->begin_transaction()) {
-            http_response_code(500);
-            echo json_encode(['resultado' => false, 'error' => 'No se pudo iniciar la transacción']);
-            detener_ejecucion(500);
-            return;
+        http_response_code(200);
+        // Conservar el contrato JSON esperado por src/js/app.js (resultado.resultado truthy)
+        $respuesta = ['resultado' => $resultado['resultado']];
+        if (isset($resultado['profesionalId'])) {
+            $respuesta['id'] = $resultado['id'];
+            $respuesta['profesionalId'] = $resultado['profesionalId'];
+            $respuesta['fecha'] = $resultado['fecha'];
+            $respuesta['hora_inicio'] = $resultado['hora_inicio'];
+            $respuesta['hora_fin'] = $resultado['hora_fin'];
+            $respuesta['duracion_total_minutos'] = $resultado['duracion_total_minutos'];
         }
-
-        try {
-            $resultado = $cita->guardar();
-            if (empty($resultado['resultado']) || empty($resultado['id'])) {
-                throw new \RuntimeException("Error al registrar la cita principal");
-            }
-
-            $idCita = (int)$resultado['id'];
-
-            foreach ($idServicios as $idServicio) {
-                $citaServicio = new CitaServicio([
-                    'citaId' => $idCita,
-                    'servicioId' => $idServicio
-                ]);
-                $resultadoServicio = $citaServicio->guardar();
-                if (empty($resultadoServicio['resultado'])) {
-                    throw new \RuntimeException("Error al registrar el servicio asociado ID: " . $idServicio);
-                }
-            }
-
-            if (!$db->commit()) {
-                throw new \RuntimeException("Fallo al confirmar la transacción de la reserva");
-            }
-
-            http_response_code(200);
-            // Conservar el contrato JSON esperado por src/js/app.js (resultado.resultado truthy)
-            echo json_encode(['resultado' => $resultado]);
-        } catch (\Throwable $e) {
-            $db->rollback();
-            http_response_code(500);
-            echo json_encode(['resultado' => false, 'error' => 'No se pudo procesar la reserva. Operación cancelada.']);
-        }
+        echo json_encode($respuesta);
     }
 
     /**
-     * Eliminación de cita con verificación de pertenencia (IDOR), autenticación y CSRF.
+     * Eliminación de cita con verificación de autenticación y CSRF en el controlador,
+     * delegando la verificación de pertenencia (propietario o administrador) y el
+     * borrado transaccional a CitaService.
+     * Soporta tanto envíos de formulario tradicional (302 Location) como peticiones
+     * asíncronas JSON con `Accept: application/json`.
      */
     public static function eliminar()
     {
@@ -202,79 +382,177 @@ class APIController
             exigir_csrf();
             isAuth();
 
-            $id = filter_var($_POST['id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
-            if ($id === false) {
-                header('Location: /admin');
-                detener_ejecucion(302);
-                return;
-            }
+            $usuarioIdAutenticado = $_SESSION['id'] ?? null;
+            $esAdmin = puede('agenda.gestionar');
+            $esJsonExplicito = self::solicitaRespuestaJsonExplicita();
 
-            $cita = Cita::find($id);
-            if (!$cita) {
-                header('Location: ' . ($_SERVER['HTTP_REFERER'] ?? '/admin'));
-                detener_ejecucion(302);
-                return;
-            }
+            // Toda cancelación pública (cliente o administrador, con o sin flags de cancelación)
+            // debe aplicar cancelación lógica preservando la cita, sus servicios históricos y pagos.
+            self::cancelar();
+            return;
+        }
+    }
 
-            // Comprobación de pertenencia: Solo el dueño de la cita o un Administrador pueden eliminarla
-            $esAdmin = isset($_SESSION['admin']) && (string)$_SESSION['admin'] === '1';
-            $esPropietario = (string)$cita->usuarioId === (string)$_SESSION['id'];
+    /**
+     * Error de un envío de formulario (no JSON) con «Volver» al mismo portal: el destino sale del catálogo (campos `volver`/`r_*` del
+     * formulario o el predeterminado del portal), nunca del `Referer`. HTML aunque la ruta sea /api (contrato del formulario legado).
+     */
+    private static function errorHtml(int $codigo, string $mensaje, string $porDefecto): void
+    {
+        [$volver, $clave] = destino_volver_con_clave($porDefecto);
+        \Classes\ErrorResponse::render($codigo, ['format' => 'html', 'mensaje' => $mensaje, 'volver' => $volver, 'volver_etiqueta' => etiqueta_destino($clave)]);
+    }
 
-            if (!$esAdmin && !$esPropietario) {
-                http_response_code(403);
-                if (es_peticion_json()) {
+    /**
+     * Cita inexistente o identificador inválido en un formulario (página vieja): vuelve al destino del catálogo del portal con un
+     * aviso visible en la pantalla de destino (sin callejón y sin depender de un toast).
+     */
+    private static function redirigirConAviso(string $mensaje, string $porDefecto): void
+    {
+        aviso_portal($mensaje);
+        header('Location: ' . destino_volver($porDefecto));
+        detener_ejecucion(302);
+    }
+
+    /** ¿La cita existe y pertenece a la persona de la sesión? (consulta de solo lectura; un fallo cuenta como «no»). */
+    private static function esCitaPropia($idRaw, $usuarioId): bool
+    {
+        $id = filter_var($idRaw, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+        if (!$id) { return false; }
+        try {
+            $cita = (new \Repositories\CitaRepository())->findById($id);
+        } catch (\Throwable $e) {
+            return false;
+        }
+        return $cita !== null && (int)$cita->usuarioId === (int)$usuarioId;
+    }
+
+    /**
+     * Endpoint para cancelación lógica de citas:
+     * Valida autenticación y CSRF en el controlador, y delega a CitaService::cancelarCita.
+     */
+    public static function cancelar()
+    {
+        iniciar_sesion_segura();
+
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            exigir_csrf();
+            isAuth();
+
+            $usuarioIdAutenticado = $_SESSION['id'] ?? null;
+            $esAdmin = puede('agenda.gestionar');
+            $esJsonExplicito = self::solicitaRespuestaJsonExplicita();
+            // Destino por portal (catálogo central; sin Referer): el equipo vuelve a las citas del día, el cliente a sus citas.
+            $porDefecto = portal_sesion() === 'equipo' ? 'admin_citas' : 'cliente_citas';
+
+            // Una sesión del equipo sin agenda.gestionar no cancela citas por esta vía: ni las ajenas (lo niega el servicio) ni sus citas
+            // personales si también es clienta, que se gestionan desde el portal de clientes (cada portal ve y modifica solo lo suyo).
+            if (portal_sesion() === 'equipo' && !$esAdmin && self::esCitaPropia($_POST['id'] ?? null, $usuarioIdAutenticado)) {
+                $mensajePortal = 'Tu sesión es la del portal del equipo y no incluye cancelar citas. Las citas personales se gestionan desde el portal de clientes.';
+                if ($esJsonExplicito) {
+                    http_response_code(403);
                     header('Content-Type: application/json; charset=utf-8');
-                    echo json_encode(['resultado' => false, 'error' => 'No tienes autorización para eliminar esta cita']);
+                    echo json_encode(['resultado' => false, 'status' => 'forbidden', 'codigo' => 'portal_incorrecto', 'error' => $mensajePortal], JSON_UNESCAPED_UNICODE);
                 } else {
-                    echo "Error 403: No tienes autorización para eliminar esta cita.";
+                    self::errorHtml(403, $mensajePortal, $porDefecto);
                 }
                 detener_ejecucion(403);
                 return;
             }
 
-            $db = ActiveRecord::getDB();
-            if (!$db) {
-                header('Location: ' . ($_SERVER['HTTP_REFERER'] ?? '/admin'));
-                detener_ejecucion(302);
+            $motivo = $_POST['motivo'] ?? ($_POST['motivo_cancelacion'] ?? null);
+            $resultado = self::obtenerCitaService()->cancelarCita(
+                $_POST['id'] ?? null,
+                $usuarioIdAutenticado,
+                $esAdmin,
+                $motivo
+            );
+
+            if ($resultado['status'] === CitaService::STATUS_INVALID) {
+                $httpCode = (int)($resultado['httpCode'] ?? 422);
+                if ($esJsonExplicito) {
+                    http_response_code($httpCode);
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode([
+                        'resultado' => false,
+                        'status' => 'invalid',
+                        'codigo' => $resultado['codigo'] ?? 'solicitud_invalida',
+                        'error' => $resultado['error'] ?? 'Identificador de cita inválido.'
+                    ]);
+                    detener_ejecucion($httpCode);
+                    return;
+                }
+                self::redirigirConAviso((string)($resultado['error'] ?? 'Identificador de cita inválido.'), $porDefecto);
                 return;
             }
 
-            if (!$db->begin_transaction()) {
-                header('Location: ' . ($_SERVER['HTTP_REFERER'] ?? '/admin'));
-                detener_ejecucion(302);
+            if ($resultado['status'] === CitaService::STATUS_NOT_FOUND) {
+                if ($esJsonExplicito) {
+                    http_response_code(404);
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode([
+                        'resultado' => false,
+                        'status' => 'not_found',
+                        'codigo' => $resultado['codigo'] ?? 'cita_no_encontrada',
+                        'error' => $resultado['error'] ?? 'La cita solicitada no existe.'
+                    ]);
+                    detener_ejecucion(404);
+                    return;
+                }
+                self::redirigirConAviso('La cita ya no existe o fue retirada. Revisa el listado actualizado.', $porDefecto);
                 return;
             }
 
-            $eliminadoExitoso = false;
-            try {
-                // Eliminar servicios asociados en citasservicios
-                $stmt = $db->prepare("DELETE FROM citasservicios WHERE citaId = ?");
-                if (!$stmt) {
-                    throw new \RuntimeException("Fallo al preparar eliminación de servicios");
+            if (
+                $resultado['status'] === CitaService::STATUS_FORBIDDEN
+                || $resultado['status'] === CitaService::STATUS_UNAUTHORIZED
+            ) {
+                http_response_code(403);
+                if ($esJsonExplicito) {
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode([
+                        'resultado' => false,
+                        'status' => 'forbidden',
+                        'codigo' => $resultado['codigo'] ?? 'no_autorizado',
+                        'error' => $resultado['error'] ?? 'No tienes autorización para eliminar esta cita'
+                    ]);
+                } else {
+                    self::errorHtml(403, 'No tienes autorización para cancelar esta cita.', $porDefecto);
                 }
-
-                $stmt->bind_param('i', $id);
-                if (!$stmt->execute()) {
-                    $stmt->close();
-                    throw new \RuntimeException("Fallo al ejecutar eliminación de servicios");
-                }
-                $stmt->close();
-
-                if (!$cita->eliminar()) {
-                    throw new \RuntimeException("Fallo al eliminar registro de cita");
-                }
-
-                if (!$db->commit()) {
-                    throw new \RuntimeException("Fallo al confirmar la transacción");
-                }
-
-                $eliminadoExitoso = true;
-            } catch (\Throwable $e) {
-                $db->rollback();
+                detener_ejecucion(403);
+                return;
             }
 
-            $destino = $_SERVER['HTTP_REFERER'] ?? ($esAdmin ? '/admin' : '/cita');
-            header('Location: ' . $destino);
+            if ($resultado['status'] === CitaService::STATUS_ERROR) {
+                http_response_code(500);
+                $mensajeError = $resultado['error'] ?? 'No fue posible cancelar la cita';
+                if ($esJsonExplicito) {
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode([
+                        'resultado' => false,
+                        'error' => $mensajeError
+                    ]);
+                } else {
+                    self::errorHtml(500, 'No fue posible cancelar la cita. Revisa su estado antes de intentarlo de nuevo.', $porDefecto);
+                }
+                detener_ejecucion(500);
+                return;
+            }
+
+            if ($esJsonExplicito) {
+                http_response_code(200);
+                header('Content-Type: application/json; charset=utf-8');
+                echo json_encode([
+                    'resultado' => true,
+                    'status' => 'ok',
+                    'id' => (int)($_POST['id'] ?? 0),
+                    'mensaje' => $resultado['mensaje'] ?? 'Cita cancelada correctamente'
+                ]);
+                detener_ejecucion(200);
+                return;
+            }
+
+            header('Location: ' . destino_volver($porDefecto));
             detener_ejecucion(302);
             return;
         }

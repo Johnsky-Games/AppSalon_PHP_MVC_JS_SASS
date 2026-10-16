@@ -1,0 +1,189 @@
+{
+  "fecha": "2026-10-12",
+  "rama": "feature/plataforma-integral",
+  "sha_codigo_validado": "b1605d216940b76bd2c779f637d5084f78614450",
+  "ci": {
+    "run_id": 38318865612,
+    "url": "https://github.com/Johnsky-Games/AppSalon_PHP_MVC_JS_SASS/actions/runs/38318865612",
+    "conclusion": "success",
+    "php": "8.2",
+    "mysql": "8.0",
+    "servidor": "Apache"
+  },
+  "phpunit": {
+    "pruebas": 283,
+    "aserciones": 3371,
+    "orden": "aleatorio",
+    "codigo_salida": 0
+  },
+  "navegador": {
+    "pruebas": 27,
+    "aprobadas": 27,
+    "errores_consola": [],
+    "peticiones_fallidas": [],
+    "capturas_ui": 44,
+    "casos": [
+      {
+        "id": "UI-02",
+        "nombre": "Controles accesibles: contraseña, salto por teclado, movimiento reducido y notificación segura",
+        "aprobado": true
+      },
+      {
+        "id": "ADMIN-01",
+        "nombre": "Acceso de administrador a /servicios y listado inicial del catálogo",
+        "aprobado": true
+      },
+      {
+        "id": "ADMIN-02",
+        "nombre": "Validación de entradas inválidas y creación de nuevo servicio con duración en /servicios/crear",
+        "aprobado": true
+      },
+      {
+        "id": "ADMIN-03",
+        "nombre": "Actualización de servicio existente y su duración en /servicios/actualizar",
+        "aprobado": true
+      },
+      {
+        "id": "ADMIN-04",
+        "nombre": "Eliminación de servicio con CSRF en /servicios/eliminar",
+        "aprobado": true
+      },
+      {
+        "id": "PROF-01",
+        "nombre": "Gestión de profesionales, servicios asociados, horarios, descansos, bloqueos y desactivación/reactivación",
+        "aprobado": true
+      },
+      {
+        "id": "PROF-02",
+        "nombre": "Carga de múltiples franjas del mismo día, guardado sin cambios verificado en MySQL y retirada explícita de franja individual",
+        "aprobado": true
+      },
+      {
+        "id": "PRE-01",
+        "nombre": "Login interactivo de cliente y redirección autorizada a /cita",
+        "aprobado": true
+      },
+      {
+        "id": "DISP-01",
+        "nombre": "Consulta autenticada en GET /api/disponibilidad (intervalos [inicio, fin), servicios incompatibles y disponibilidad vacía)",
+        "aprobado": true
+      },
+      {
+        "id": "REC-01",
+        "nombre": "Carga asíncrona de /api/servicios reflejando CRUD, duración de servicios y alternancia accesible de .seleccionado",
+        "aprobado": true
+      },
+      {
+        "id": "REC-02",
+        "nombre": "Navegación fluida por paginador y tabs, filtrado de profesionales compatibles y preservación de estado",
+        "aprobado": true
+      },
+      {
+        "id": "REC-03",
+        "nombre": "Carga dinámica de intervalos desde GET /api/disponibilidad, estado vacío en sábado e invalidación reactiva al cambiar servicios",
+        "aprobado": true
+      },
+      {
+        "id": "RES-01",
+        "nombre": "Reserva con profesional en POST /api/citas, descuento de ocupación, rechazo 409 por solapamiento y cancelación desde #mis-citas en UI",
+        "aprobado": true
+      },
+      {
+        "id": "REC-04",
+        "nombre": "Renderizado de resumen con profesional, intervalo [11:30, 13:00), duración 90 min y total $195.00, envío con CSRF y SweetAlert2",
+        "aprobado": true
+      },
+      {
+        "id": "ADMIN-05",
+        "nombre": "Consulta administrativa por fecha en /admin (profesional, intervalo y snapshot), eliminación en /api/eliminar y liberación de ocupación",
+        "aprobado": true
+      },
+      {
+        "id": "UI-01",
+        "nombre": "Diseño responsivo sin desbordamiento horizontal en cuatro pantallas",
+        "aprobado": true
+      },
+      {
+        "id": "REP-01",
+        "nombre": "Reportes administrativos (/admin/reportes y /admin/reportes/exportar): ocupación sobre horas disponibles, importe reservado histórico vs ingreso pagado y exportación CSV",
+        "aprobado": true
+      },
+      {
+        "id": "PAG-01",
+        "nombre": "Flujo de pago con MockPaymentGateway (/api/pagos/iniciar, /pago/resultado, /api/pagos/webhook) y reflejo de ingreso pagado en /admin/reportes",
+        "aprobado": true
+      },
+      {
+        "id": "AUTH-01",
+        "nombre": "Ciclo de autenticación y ciclo de vida de cuenta (/logout, /crear-cuenta, login no confirmado, /reenviar-confirmacion, /olvide)",
+        "aprobado": true
+      },
+      {
+        "id": "NOTIF-01",
+        "nombre": "Despacho SMTP de correos transaccionales de confirmación y cancelación de citas en buzón de pruebas",
+        "aprobado": true
+      },
+      {
+        "id": "PLAT-01",
+        "nombre": "Módulos administrativos reales y responsive",
+        "aprobado": true
+      },
+      {
+        "id": "PLAT-02",
+        "nombre": "Modales de inventario, precisión y rechazo de stock negativo",
+        "aprobado": true
+      },
+      {
+        "id": "PLAT-03",
+        "nombre": "Registro manual de caja desde modal",
+        "aprobado": true
+      },
+      {
+        "id": "PLAT-04",
+        "nombre": "Perfil, consentimiento, upload real y privacidad entre clientes",
+        "aprobado": true
+      },
+      {
+        "id": "PLAT-06",
+        "nombre": "Ajustes y formularios: modales, POST con CSRF, persistencia y escaping",
+        "aprobado": true
+      },
+      {
+        "id": "PLAT-05",
+        "nombre": "Matriz negativa y revocación en siguiente petición",
+        "aprobado": true
+      },
+      {
+        "id": "REC-05",
+        "nombre": "Ausencia estricta de errores de consola y peticiones de red fallidas",
+        "aprobado": true
+      }
+    ]
+  },
+  "node": {
+    "escenarios_fallo_cliente": 3,
+    "codigo_salida": 0
+  },
+  "migraciones": {
+    "desde": "001",
+    "hasta": "015",
+    "tablas_respaldadas": 30,
+    "restauracion": "aprobada_con_SHA256"
+  },
+  "npm_audit": {
+    "info": 0,
+    "low": 0,
+    "moderate": 0,
+    "high": 0,
+    "critical": 0,
+    "total": 0
+  },
+  "limitaciones": [
+    "Pasarela mock: no cobra dinero real.",
+    "Cobros y liquidaciones manuales registran operaciones verificadas por el personal.",
+    "Sin facturación fiscal, transferencias automáticas ni nómina.",
+    "El saldo de movimientos no sustituye un arqueo físico de caja.",
+    "La preferencia de contacto personal queda registrada para recepción; no genera envíos automáticos.",
+    "La validación no certifica un despliegue público en producción."
+  ]
+}
