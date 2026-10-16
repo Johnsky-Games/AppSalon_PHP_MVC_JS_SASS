@@ -54,12 +54,13 @@ Validación local con PHP 8.3.6 y MySQL 8.0.46, sobre bases sintéticas aisladas
 
 | Comprobación | Resultado |
 |---|---|
-| Suite completa de pruebas unitarias e integración, orden aleatorio y semilla `1792160001` (revisión `0a51feb`) | 1.137 pruebas y 17.012 aserciones, sin fallos. |
+| Suite completa de pruebas unitarias e integración, orden aleatorio y semilla `1792173759` (revisión `5a83f6a`) | 1.137 pruebas y 17.005 aserciones, sin fallos. |
+| Repetición completa con semilla `1792173856` (revisión `5a83f6a`) | 1.137 pruebas y 17.007 aserciones, sin fallos. |
 | QA HTTP de rutas nuevas, inventario de rutas, CSRF, menús por rol, separación de portales y recorrido indicador → listado → descarga (revisión `fb4c8ed`) | 38 pruebas y 3.338 aserciones, sin fallos. |
 | `npm run build` | Compilación correcta. |
 | `node tests/ui_client_failure_test.js` | Tres escenarios aprobados. |
 | Sintaxis PHP/JavaScript y `git diff --check` | Sin errores en los archivos modificados. |
 
-La restricción de sockets del entorno local impide arrancar Chromium; esa ejecución no cuenta como una validación de navegador. El recorrido se exige sin omisiones en CI, junto con el QA general y la validación en PHP 8.2. Esas comprobaciones siguen pendientes.
+La restricción de sockets del entorno local impide arrancar Chromium; esa ejecución no cuenta como una validación de navegador. El recorrido se exige sin omisiones en CI, junto con el QA general y la validación en PHP 8.2.
 
 Seguimiento de la entrega: [PR #2](https://github.com/Johnsky-Games/AppSalon_PHP_MVC_JS_SASS/pull/2), rama `feature/clientes-rh-horarios`. Los resultados de CI y la revisión visual se registran en la descripción del PR.
