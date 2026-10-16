@@ -575,7 +575,18 @@ final class AltaHomonimosIntegrationTest extends TestCase
             foreach (['GET', 'POST'] as $metodo) {
                 $r = $this->invocar($metodo, $post);
                 $this->assertSame(403, $r['http'], "{$rol} {$metodo}");
-                foreach (['Julia', 'Secreta', 'julia', 'privado-hom', '3210', (string)$previo, 'Posibles personas'] as $pista) { $this->assertStringNotContainsString($pista, $r['cuerpo'], "{$rol} {$metodo} filtra «{$pista}»"); }
+                foreach (['Julia', 'Secreta', 'julia', 'privado-hom', '3210', 'Posibles personas', 'token_confirmacion', 'crm-homonimo'] as $pista) { $this->assertStringNotContainsString($pista, $r['cuerpo'], "{$rol} {$metodo} filtra «{$pista}»"); }
+                // Un id corto (p. ej. 1) puede aparecer en SVG, estilos o metadatos sin revelar una identidad.
+                // Se prohíben sus referencias de cliente en URL, JSON y campos, en lugar del dígito en todo el HTML.
+                $this->assertDoesNotMatchRegularExpression('~(?:[?&](?:amp;)?(?:id|cliente_id|usuario_id)=|["\'](?:id|cliente_id|usuario_id)["\']\s*:\s*)' . $previo . '(?!\d)~u', $r['cuerpo'], "{$rol} {$metodo} filtra una referencia al cliente");
+                $erroresPrevios = libxml_use_internal_errors(true);
+                try {
+                    $dom = new \DOMDocument();
+                    $this->assertTrue($dom->loadHTML($r['cuerpo']));
+                } finally { libxml_clear_errors(); libxml_use_internal_errors($erroresPrevios); }
+                $xpath = new \DOMXPath($dom);
+                $campos = '//input[(@name="id" or @name="cliente_id" or @name="usuario_id" or @name="usuarioId" or @name="clienteId") and @value="' . $previo . '"] | //*[@data-cliente-id="' . $previo . '" or @data-usuario-id="' . $previo . '"]';
+                $this->assertSame(0, $xpath->query($campos)->length, "{$rol} {$metodo} filtra el id del cliente en un campo");
             }
         }
         $_SESSION = [];
