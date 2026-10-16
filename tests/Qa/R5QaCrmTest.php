@@ -476,7 +476,7 @@ final class R5QaCrmTest extends R5Case
     public function test_K7_listado_de_segmentos_abre_una_lista_con_descarga(): void
     {
         $n = $this->eq('dueno');
-        $r = $n->get('/admin/clientes');
+        $r = $n->get('/admin/clientes/indicadores');
         $this->assertSame(200, $r['status']);
         $x = self::xp($r['body']);
         $filas = [];
