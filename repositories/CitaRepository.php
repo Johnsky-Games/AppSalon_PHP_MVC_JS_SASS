@@ -1210,12 +1210,27 @@ class CitaRepository
         return $hay;
     }
 
-    /** Motivo por el que la cita no puede eliminarse físicamente (`regularizacion` | `cobros`) o null si puede. */
+    /** Motivo por el que la cita no puede eliminarse físicamente (`regularizacion` | `cobros` | `auditoria`) o null si puede. */
     public function motivoProteccionEliminacion(int $citaId): ?string
     {
         if ($this->tieneRegularizaciones($citaId)) return 'regularizacion';
         if ($this->tieneRegistrosFinancieros($citaId)) return 'cobros';
+        // Auditoría de la agenda (inicio, finalización, ausencia, reprogramación…), reasignaciones y puntos de fidelidad: sus claves
+        // foráneas son CASCADE (se perderían con la cita) o SET NULL (quedarían sin cita); se conservan.
+        foreach ([['agenda_eventos', 'citaId'], ['citas_reasignaciones', 'cita_id'], ['fidelidad_movimientos', 'cita_id']] as [$tabla, $col]) {
+            if ($this->existeFila($tabla, $col, $citaId)) return 'auditoria';
+        }
         return null;
+    }
+
+    private function existeFila(string $tabla, string $columna, int $citaId): bool
+    {
+        $stmt = $this->resolveDb()->prepare("SELECT 1 FROM {$tabla} WHERE {$columna} = ? LIMIT 1");
+        if (!$stmt) throw new PersistenceException('No se pudo comprobar el historial de la cita.');
+        $stmt->bind_param('i', $citaId);
+        if (!$stmt->execute()) { $stmt->close(); throw new PersistenceException('No se pudo comprobar el historial de la cita.'); }
+        $hay = (bool)$stmt->get_result()->fetch_row(); $stmt->close();
+        return $hay;
     }
 
     /** ¿La cita tiene pagos, comprobantes o eventos de cobro? (evidencia financiera sin FK por diseño: no se elimina). */
@@ -1233,13 +1248,55 @@ class CitaRepository
         return false;
     }
 
+    /**
+     * Elimina físicamente una cita SIN evidencia (ver motivoProteccionEliminacion). El orden de bloqueo es el de las demás
+     * mutaciones de la agenda (profesional → cita): lo contrario produce interbloqueos con los cambios de estado. Si la cita cambia de
+     * profesional entre la lectura y el bloqueo, se reintenta (acotado).
+     */
     public function eliminarCitaAtomica(int $citaId): bool
+    {
+        for ($intento = 0; $intento < 3; $intento++) {
+            $r = $this->eliminarCitaAtomicaUnaVez($citaId);
+            if ($r !== null) return $r;
+        }
+        throw new PersistenceException('La cita cambió de profesional repetidamente durante la eliminación.');
+    }
+
+    /** @return bool|null null = reintentar (la cita cambió de profesional entre la lectura y el bloqueo) */
+    private function eliminarCitaAtomicaUnaVez(int $citaId): ?bool
     {
         if ($citaId <= 0) {
             return false;
         }
 
         $db = $this->resolveDb();
+
+        // Lectura previa FUERA de la transacción (autocommit): así la transacción no fija su instantánea antes de bloquear la cita y las
+        // comprobaciones de evidencia posteriores ven lo que se confirmó mientras esperaba el candado.
+        $stmtPre = $db->prepare("SELECT id, profesionalId FROM citas WHERE id = ? LIMIT 1");
+        if (!$stmtPre) {
+            throw new PersistenceException("Fallo al preparar lectura previa de cita: " . $db->error);
+        }
+        $stmtPre->bind_param('i', $citaId);
+        if (!$stmtPre->execute()) {
+            $err = $stmtPre->error;
+            $stmtPre->close();
+            throw new PersistenceException("Fallo al ejecutar lectura previa de cita: " . $err);
+        }
+        $resPre = $stmtPre->get_result();
+        if ($resPre === false) {
+            $err = $stmtPre->error;
+            $stmtPre->close();
+            throw new PersistenceException("Fallo al obtener lectura previa de cita: " . $err);
+        }
+        $filaPre = $resPre->fetch_assoc();
+        $resPre->free();
+        $stmtPre->close();
+
+        if (!$filaPre) {
+            return false;
+        }
+
 
         try {
             if (!$db->begin_transaction()) {
@@ -1254,38 +1311,6 @@ class CitaRepository
         }
 
         try {
-            $stmtPre = $db->prepare("SELECT id, profesionalId FROM citas WHERE id = ? LIMIT 1 FOR UPDATE");
-            if (!$stmtPre) {
-                throw new PersistenceException("Fallo al preparar lectura previa de cita: " . $db->error);
-            }
-            $stmtPre->bind_param('i', $citaId);
-            if (!$stmtPre->execute()) {
-                $err = $stmtPre->error;
-                $stmtPre->close();
-                throw new PersistenceException("Fallo al ejecutar lectura previa de cita: " . $err);
-            }
-            $resPre = $stmtPre->get_result();
-            if ($resPre === false) {
-                $err = $stmtPre->error;
-                $stmtPre->close();
-                throw new PersistenceException("Fallo al obtener lectura previa de cita: " . $err);
-            }
-            $filaPre = $resPre->fetch_assoc();
-            $resPre->free();
-            $stmtPre->close();
-
-            if (!$filaPre) {
-                $db->rollback();
-                return false;
-            }
-
-            // Con la cita bloqueada (los cobros y las regularizaciones la bloquean también), la comprobación y la eliminación son
-            // atómicas: ningún cobro puede colarse entre la guarda y el DELETE. Es la guarda autoritativa; la del servicio solo da un mensaje antes.
-            $motivoProteccion = $this->motivoProteccionEliminacion($citaId);
-            if ($motivoProteccion !== null) {
-                throw new CitaProtegidaException($motivoProteccion);
-            }
-
             if ($filaPre['profesionalId'] !== null && (int)$filaPre['profesionalId'] > 0) {
                 $profId = (int)$filaPre['profesionalId'];
                 $stmtLockProf = $db->prepare("SELECT id FROM profesionales WHERE id = ? LIMIT 1 FOR UPDATE");
@@ -1302,6 +1327,35 @@ class CitaRepository
                     $resLockProf->free();
                 }
                 $stmtLockProf->close();
+            }
+
+            // Bloqueo de la cita (después del profesional, como en mutarAgenda) y verificación de que sigue siendo del mismo profesional.
+            $stmtLockCita = $db->prepare("SELECT profesionalId FROM citas WHERE id = ? LIMIT 1 FOR UPDATE");
+            if (!$stmtLockCita) {
+                throw new PersistenceException("Fallo al preparar bloqueo de cita en eliminación: " . $db->error);
+            }
+            $stmtLockCita->bind_param('i', $citaId);
+            if (!$stmtLockCita->execute()) {
+                $err = $stmtLockCita->error;
+                $stmtLockCita->close();
+                throw new PersistenceException("Fallo al bloquear la cita en eliminación: " . $err);
+            }
+            $filaLock = $stmtLockCita->get_result()->fetch_assoc();
+            $stmtLockCita->close();
+            if (!$filaLock) {
+                $db->rollback();
+                return false;
+            }
+            if ((int)($filaLock['profesionalId'] ?? 0) !== (int)($filaPre['profesionalId'] ?? 0)) {
+                $db->rollback();
+                return null;
+            }
+
+            // Con la cita bloqueada (los cobros y las regularizaciones la bloquean también), la comprobación y la eliminación son
+            // atómicas: ningún cobro puede colarse entre la guarda y el DELETE. Es la guarda autoritativa; la del servicio solo da un mensaje antes.
+            $motivoProteccion = $this->motivoProteccionEliminacion($citaId);
+            if ($motivoProteccion !== null) {
+                throw new CitaProtegidaException($motivoProteccion);
             }
 
             $stmtServicios = $db->prepare("DELETE FROM citasservicios WHERE citaId = ?");

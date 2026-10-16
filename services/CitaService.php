@@ -683,9 +683,11 @@ class CitaService
     /** 409 uniforme para una cita protegida contra la eliminación física, con la alternativa auditada que corresponde. */
     private function respuestaCitaProtegida(string $motivo): array
     {
-        $error = $motivo === 'regularizacion'
+        $error = $motivo === 'auditoria'
+            ? 'Esta cita tiene historial de agenda (atención, ausencia, reprogramación o reasignación) y no se puede eliminar para conservar su auditoría. Cancélala si ya no se realizará.'
+            : ($motivo === 'regularizacion'
             ? 'Esta cita tiene una regularización de la atención registrada y no se puede eliminar para conservar su auditoría. Si no se realizó, cancélala o regístrala como ausencia.'
-            : 'Esta cita tiene cobros, devoluciones o comprobantes registrados y no se puede eliminar. Cancélala (conserva todo el historial) o, si un cobro fue erróneo, corrígelo con una devolución auditada.';
+            : 'Esta cita tiene cobros, devoluciones o comprobantes registrados y no se puede eliminar. Cancélala (conserva todo el historial) o, si un cobro fue erróneo, corrígelo con una devolución auditada.');
         return ['status' => self::STATUS_CONFLICT, 'httpCode' => 409, 'resultado' => false, 'error' => $error];
     }
 

@@ -44,6 +44,7 @@ final class R5EliminacionProtegidaIntegrationTest extends TestCase
             $this->db->query("DELETE FROM caja_movimientos WHERE pago_id IN (SELECT id FROM pagos WHERE cita_id={$id} OR cita_referencia_id={$id})");
             $this->db->query("DELETE FROM pagos WHERE cita_id={$id} OR cita_referencia_id={$id}");
             $this->db->query("DELETE FROM citas_regularizaciones WHERE cita_id={$id}");
+            $this->db->query("DELETE FROM agenda_eventos WHERE citaId={$id}");
         }
         ActiveRecord::setDB($this->previa);
         $this->db->close();
@@ -144,7 +145,18 @@ final class R5EliminacionProtegidaIntegrationTest extends TestCase
         $p = proc_open([PHP_BINARY, __DIR__ . '/../fixtures/concurrent_eliminar_cita_worker.php', (string)$id], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, array_merge(getenv(), $_ENV, ['variables_order' => 'EGPCS']));
         $this->assertIsResource($p);
         $this->assertSame('READY', trim((string)fgets($pipes[1])));
-        usleep(700000); // el proceso ya está esperando el candado de la cita
+        // Espera DETERMINISTA: el proceso debe quedar bloqueado en el candado de la cita (no un sleep). Si no se bloquea nunca, la eliminación
+        // no toma el candado y la prueba falla aquí (protege contra quitar el FOR UPDATE).
+        $bloqueado = false;
+        for ($i = 0; $i < 60 && !$bloqueado; $i++) {
+            usleep(100000);
+            $bloqueado = (int)R5CajaFixture::escalar($this->db, "SELECT COUNT(*) FROM information_schema.innodb_trx WHERE trx_state='LOCK WAIT'") > 0;
+        }
+        if (!$bloqueado) {
+            $otra->rollback(); // libera para que el proceso termine y no quede huérfano
+            stream_get_contents($pipes[1]); foreach ($pipes as $pp) { fclose($pp); } proc_close($p); $otra->close();
+            $this->fail('la eliminación no esperó el candado de la cita: no la bloquea antes de comprobar la evidencia');
+        }
         // El «cobro» ocurre dentro de la transacción que tiene la cita bloqueada (como lo hace CobroCitaService) y se confirma al final.
         $otra->query("INSERT INTO pagos(usuario_id,cita_id,cita_referencia_id,referencia_pago,proveedor,monto,moneda,estado,metodo_pago,idempotency_key,pagado_at) VALUES ({$this->cliente},{$id},{$id},'carrera-{$id}','manual',30.00,'USD','completado','efectivo','carrera-{$id}-" . bin2hex(random_bytes(6)) . "',UTC_TIMESTAMP())");
         $err = $otra->error;
@@ -158,6 +170,26 @@ final class R5EliminacionProtegidaIntegrationTest extends TestCase
         $this->assertSame('', $stderr);
         $this->assertSame('protegida', json_decode($salida, true)['resultado'] ?? $salida, 'el proceso vio el cobro tras esperar el candado y no eliminó');
         $this->assertTrue($this->existe($id));
+    }
+
+    public function testLaListaDeTablasProtegidasDelBorradoGenericoNoSeReduce(): void
+    {
+        $lista = (new \ReflectionClassConstant(ActiveRecord::class, 'TABLAS_PROTEGIDAS'))->getValue();
+        $obligatorias = ['citas', 'citasservicios', 'citas_regularizaciones', 'usuarios', 'clientes', 'pagos', 'comprobantes', 'cobros_eventos',
+            'cobros_devoluciones', 'caja_movimientos', 'comisiones_movimientos', 'agenda_eventos', 'equipo_auditoria'];
+        $this->assertSame([], array_values(array_diff($obligatorias, $lista)), 'se quitó una tabla con historial de la lista protegida');
+    }
+
+    public function testUnaCitaConHistorialDeAgendaNoSeEliminaYSuAuditoriaSobrevive(): void
+    {
+        $id = $this->cita('confirmada');
+        $this->db->query("INSERT INTO agenda_eventos(citaId,actorId,tipo,antes_json,despues_json,creado_en) VALUES ({$id},{$this->gerente},'ausencia','{}','{}',UTC_TIMESTAMP())");
+        $this->assertSame('', $this->db->error, 'el evento de apoyo debe poder insertarse');
+        $this->assertSame('auditoria', (new CitaRepository($this->db))->motivoProteccionEliminacion($id));
+        $r = (new CitaService())->eliminar($id, $this->gerente, true);
+        $this->assertSame(409, $r['httpCode']);
+        $this->assertTrue($this->existe($id));
+        $this->assertSame(1, (int)R5CajaFixture::escalar($this->db, "SELECT COUNT(*) FROM agenda_eventos WHERE citaId={$id}"), 'la auditoría no se arrastró (CASCADE)');
     }
 
     public function testElBorradoGenericoHeredadoRechazaTablasConHistorial(): void
