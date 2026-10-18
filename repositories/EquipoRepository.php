@@ -62,15 +62,46 @@ class EquipoRepository
             // La versión también invalida sesiones antiguas después de cambio de rol.
             $admin=$rol==='propietario' || $rol==='gerente' ? 1 : 0;
             $s=$this->sql('UPDATE usuarios SET admin=?,version_sesion=version_sesion+1 WHERE id=?','ii',[$admin,$id]);$s->close();
-            // La ficha solo se desvincula si se vincula otra explícitamente o si la persona deja de ser profesional:
-            // guardar el mismo acceso, suspender y reactivar NO debe romper su agenda ni «Mis clientes».
-            if ($profesionalId!==null) {
-                $s=$this->sql('UPDATE profesionales SET usuarioId=NULL WHERE usuarioId=?','i',[$id]);$s->close();
-                $s=$this->sql('UPDATE profesionales SET usuarioId=? WHERE id=?','ii',[$id,$profesionalId]);$s->close();
-            } elseif ($rol!=='profesional') {
-                $s=$this->sql('UPDATE profesionales SET usuarioId=NULL WHERE usuarioId=?','i',[$id]);$s->close();
-            }
             $this->sincronizarColaborador($id,$rol,$activo,$estadoColaborador);
+            $s=$this->sql('SELECT id,estado FROM colaboradores WHERE usuario_id=? FOR UPDATE','i',[$id]);
+            $col=$s->get_result()->fetch_assoc();$s->close();
+            $s=$this->sql('SELECT id,usuarioId FROM profesionales WHERE colaborador_id=? FOR UPDATE','i',[(int)$col['id']]);
+            $ficha=$s->get_result()->fetch_assoc();$s->close();
+            if (!$ficha) {
+                $s=$this->sql('SELECT id,colaborador_id FROM profesionales WHERE usuarioId=? FOR UPDATE','i',[$id]);
+                $heredada=$s->get_result()->fetch_assoc();$s->close();
+                if ($heredada) {
+                    if ($heredada['colaborador_id'] !== null && (int)$heredada['colaborador_id'] !== (int)$col['id']) { throw new \DomainException('La cuenta profesional tiene un vínculo laboral inconsistente. Revisa la identidad antes de continuar.'); }
+                    $s=$this->sql('UPDATE profesionales SET colaborador_id=? WHERE id=?','ii',[(int)$col['id'],(int)$heredada['id']]);$s->close();
+                    $ficha=$heredada;
+                }
+            }
+            if ($profesionalId !== null && $ficha && (int)$ficha['id'] !== $profesionalId) {
+                throw new \DomainException('La persona ya tiene una ficha profesional. No se puede reemplazar su historial.');
+            }
+            if ($rol === 'profesional' && !$ficha) {
+                if ($profesionalId !== null) {
+                    $s=$this->sql('SELECT colaborador_id FROM profesionales WHERE id=? FOR UPDATE','i',[$profesionalId]);
+                    $p=$s->get_result()->fetch_assoc();$s->close();
+                    if (!$p || ($p['colaborador_id'] !== null && (int)$p['colaborador_id'] !== (int)$col['id'])) {
+                        throw new \DomainException('La ficha profesional pertenece a otra persona.');
+                    }
+                } else {
+                    // Una promoción crea la extensión operativa de la misma persona, sin inventar horarios ni servicios.
+                    $s=$this->sql('INSERT INTO profesionales(nombre,activo) SELECT TRIM(CONCAT(nombre,\' \',apellido)),0 FROM colaboradores WHERE id=?','i',[(int)$col['id']]);$s->close();
+                    $profesionalId=(int)$this->db->insert_id;
+                }
+                $s=$this->sql('UPDATE profesionales SET colaborador_id=? WHERE id=?','ii',[(int)$col['id'],$profesionalId]);$s->close();
+            }
+            if ($rol !== 'profesional' || $col['estado'] !== 'activo') {
+                $s=$this->sql("SELECT COUNT(*) n FROM citas c JOIN profesionales p ON p.id=c.profesionalId WHERE p.colaborador_id=? AND c.estado IN ('confirmada','en_servicio') AND c.fecha >= DATE(CONVERT_TZ(UTC_TIMESTAMP(),'+00:00','-05:00')) FOR SHARE",'i',[(int)$col['id']]);
+                $pendientes=(int)$s->get_result()->fetch_assoc()['n'];$s->close();
+                if ($pendientes > 0) { throw new \DomainException('Resuelve las citas futuras antes de suspender o cambiar el rol del profesional.'); }
+                $s=$this->sql('UPDATE profesionales SET activo=0,usuarioId=IF(?,?,NULL) WHERE colaborador_id=?','iii',[(int)($rol === 'profesional'),$id,(int)$col['id']]);$s->close();
+            } else {
+                // Reactivar / volver al rol restaura el mismo ID usado por citas, horarios y servicios.
+                $s=$this->sql('UPDATE profesionales SET usuarioId=?,activo=IF(?,1,activo) WHERE colaborador_id=?','iii',[$id,(int)($target['rol'] !== 'profesional' || (int)$target['activo'] !== 1),(int)$col['id']]);$s->close();
+            }
             $s=$this->sql("INSERT INTO equipo_auditoria(actor_id,usuario_id,accion,detalle) VALUES(?,?,'acceso_actualizado',?)",'iis',[$actor,$id,$rol . ($activo ? ':activo' : ':inactivo')]);$s->close();
         });
     }

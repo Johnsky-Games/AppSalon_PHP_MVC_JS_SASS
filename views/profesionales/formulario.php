@@ -1,17 +1,17 @@
 <div class="campo">
-    <label for="nombre">Nombre</label>
+    <label for="nombre">Nombre en la agenda</label>
     <input
         type="text"
         name="nombre"
         id="nombre"
-        placeholder="Nombre completo del Profesional"
+        placeholder="Nombre mostrado al reservar"
         maxlength="120"
         value="<?php echo s($profesional->nombre); ?>"
     >
 </div>
 
 <div class="campo">
-    <label for="activo">Estado</label>
+    <label for="activo">Estado de la agenda</label>
     <select name="activo" id="activo">
         <option value="1" <?php echo (string)$profesional->activo === '1' ? 'selected' : ''; ?>>Activo</option>
         <option value="0" <?php echo (string)$profesional->activo === '0' ? 'selected' : ''; ?>>Inactivo</option>

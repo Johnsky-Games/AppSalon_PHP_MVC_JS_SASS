@@ -604,6 +604,8 @@ final class ColaboradoresPortalesIntegrationTest extends TestCase
         $this->assertSame(ColaboradorService::FORBIDDEN, $bloqueo['status']);
         $this->assertStringContainsString('1 cita(s) futura(s)', $bloqueo['errores'][0]);
         $this->assertSame('activo', $this->db->query("SELECT estado FROM colaboradores WHERE id={$r['colaborador_id']}")->fetch_assoc()['estado']);
+        $operativo = new \Services\ProfesionalService();
+        $this->assertSame('invalid', $operativo->cambiarEstado($fichaId, '0')['status'], 'Desactivar desde Profesionales tampoco puede dejar citas futuras sin atención.');
         $this->db->query("UPDATE citas SET estado='cancelada' WHERE id=$citaId");
         $ok = $this->servicios()->cambiarAcceso($this->owner, $r['colaborador_id'], 'profesional', 'suspendido');
         $this->assertSame(ColaboradorService::OK, $ok['status']);
@@ -799,4 +801,194 @@ final class ColaboradoresPortalesIntegrationTest extends TestCase
         $this->assertSame(1, $this->n("SELECT COUNT(*) n FROM usuarios WHERE email='$email'"));
         $this->assertSame(1, $this->n("SELECT COUNT(*) n FROM usuario_accesos a JOIN usuarios u ON u.id=a.usuario_id WHERE u.email='$email'"));
     }
+    public function testAltaProfesionalHttpCreaLaMismaPersonaEnRhYAgenda(): void
+    {
+        $this->db->query("INSERT INTO servicios(nombre,precio,duracion_minutos) VALUES('Servicio ColabPortal',20,30)");
+        $sid = (int)$this->db->insert_id;
+        $_SESSION = ['id' => $this->owner, 'login' => true, 'portal' => 'equipo', 'version_sesion' => 1, 'csrf_token' => 'csrf-continuidad'];
+        $_SERVER['REQUEST_METHOD'] = 'POST';
+        $email = $this->email('alta-prof');
+        $_POST = ['csrf_token' => 'csrf-continuidad', 'idem_key' => Idempotencia::nuevaClave(), 'nombre' => 'ColabPortal', 'apellido' => 'Continuidad',
+            'email' => $email, 'servicios' => [(string)$sid], 'franjas' => [1 => [['inicio' => '09:00', 'fin' => '18:00']]]];
+        foreach ([1, 2] as $intento) {
+            ob_start();
+            try { \Controllers\ProfesionalController::crear(new Router()); } catch (AppTerminationException $e) { $this->assertSame(302, $e->getStatusCode()); }
+            finally { ob_end_clean(); }
+        }
+        $col = $this->db->query("SELECT * FROM colaboradores WHERE email_norm='$email'")->fetch_assoc();
+        $this->assertSame('invitado', $col['estado']);
+        $cid = (int)$col['id'];
+        $this->assertSame(1, $this->n("SELECT COUNT(*) n FROM profesionales WHERE colaborador_id=$cid"));
+        $p = $this->db->query("SELECT * FROM profesionales WHERE colaborador_id=$cid")->fetch_assoc();
+        $pid = (int)$p['id'];
+        $this->assertSame('0', $p['activo']);
+        $this->assertSame(1, $this->n("SELECT COUNT(*) n FROM horarios_profesionales WHERE profesionalId=$pid"));
+        $this->assertSame(1, $this->n("SELECT COUNT(*) n FROM profesionales_servicios WHERE profesionalId=$pid AND servicioId=$sid"));
+        $this->assertSame(1, $this->n("SELECT COUNT(*) n FROM colaborador_invitaciones WHERE colaborador_id=$cid"));
+        $this->assertNull($col['usuario_id'], 'Invitar no concede credenciales.');
+        $directorio = (new ColaboradorRepository($this->db))->directorio($email, null, null, 1);
+        $this->assertSame($pid, (int)$directorio['filas'][0]['profesional_id']);
+    }
+
+    public function testPromocionSuspensionYCambioDeRolConservanLaMismaFicha(): void
+    {
+        $usuario = $this->cuenta('recepcion');
+        $cid = (int)$this->db->query("SELECT id FROM colaboradores WHERE usuario_id=$usuario")->fetch_assoc()['id'];
+        $repo = new ColaboradorRepository($this->db);
+        $repo->cambiarAcceso($this->owner, $cid, 'profesional', 'activo');
+        $p = $this->db->query("SELECT * FROM profesionales WHERE colaborador_id=$cid")->fetch_assoc();
+        $pid = (int)$p['id'];
+        $this->db->query("UPDATE profesionales SET nombre='ColabPortal Promocion' WHERE id=$pid");
+        $this->assertSame($usuario, (int)$p['usuarioId']);
+        $this->assertSame('1', $p['activo']);
+        $repo->cambiarAcceso($this->owner, $cid, 'profesional', 'suspendido');
+        $this->assertSame($usuario, (int)$this->db->query("SELECT usuarioId FROM profesionales WHERE id=$pid")->fetch_assoc()['usuarioId'], 'La suspensión no pierde el vínculo con su cuenta.');
+        $servicio = new \Services\ProfesionalService(new \Repositories\ProfesionalRepository($this->db), new \Repositories\ServicioRepository($this->db));
+        $this->assertSame('invalid', $servicio->cambiarEstado($pid, '1')['status'], 'Un botón operativo no elude la suspensión laboral.');
+        // Una incoherencia antigua en el flag no vuelve reservable a una persona suspendida.
+        $this->db->query("UPDATE profesionales SET activo=1 WHERE id=$pid");
+        $this->assertFalse((new \Repositories\ProfesionalRepository($this->db))->findById($pid)->estaActivo());
+        $reserva = (new \Repositories\CitaRepository($this->db))->crearReservaConProfesionalAtomica($this->owner, $pid, (new \DateTimeImmutable('+10 days'))->format('Y-m-d'), '10:00:00', 1, []);
+        $this->assertSame('profesional_inactivo', $reserva['codigo'], 'La escritura de reserva también falla cerrada ante un flag incoherente.');
+        $this->assertNotContains($pid, array_map(static fn($p) => (int)$p->id, (new \Repositories\ProfesionalRepository($this->db))->findAll(true)));
+
+        $repo->cambiarAcceso($this->owner, $cid, 'profesional', 'activo');
+        $this->assertSame($pid, (int)(new AuthorizationService($this->db))->contexto($usuario)['profesional_id']);
+        $repo->cambiarAcceso($this->owner, $cid, 'recepcion', 'activo');
+        $this->assertSame('invalid', $servicio->aplicarGrupoSemanal($pid, ['dias' => ['1'], 'hora_inicio' => '09:00', 'hora_fin' => '18:00'], 'horario')['status']);
+        $this->assertNull((new AuthorizationService($this->db))->contexto($usuario)['profesional_id']);
+        $this->assertSame('invalid', $servicio->cambiarEstado($pid, '1')['status']);
+        $repo->cambiarAcceso($this->owner, $cid, 'profesional', 'activo');
+        $this->assertSame($pid, (int)(new AuthorizationService($this->db))->contexto($usuario)['profesional_id']);
+        $this->assertSame(1, $this->n("SELECT COUNT(*) n FROM profesionales WHERE colaborador_id=$cid"));
+    }
+
+    public function testReinvitarUnaInvitacionRevocadaReutilizaFichaSinCrearUnHomonimo(): void
+    {
+        $this->db->query("INSERT INTO servicios(nombre,precio,duracion_minutos) VALUES('Servicio ColabPortal',20,30)");
+        $sid = (int)$this->db->insert_id;
+        $email = $this->email('reinvitar');
+        $extra = ['nombre_profesional' => 'ColabPortal Reinvitar', 'servicios' => [(string)$sid]];
+        $r = $this->invitar($email, 'profesional', $extra);
+        $this->assertSame(ColaboradorService::OK, $r['status']);
+        $cid = (int)$r['colaborador_id']; $pid = (int)$r['profesional_id'];
+        $this->assertSame(ColaboradorService::OK, $this->servicios()->revocar($this->owner, $cid)['status']);
+        $nuevo = $this->invitar($email, 'profesional', $extra);
+        $this->assertSame(ColaboradorService::OK, $nuevo['status'], json_encode($nuevo));
+        $this->assertSame($cid, (int)$nuevo['colaborador_id']);
+        $this->assertSame($pid, (int)$nuevo['profesional_id']);
+        $this->assertSame(1, $this->n("SELECT COUNT(*) n FROM profesionales WHERE colaborador_id=$cid"));
+        $this->assertSame(1, $this->n("SELECT COUNT(*) n FROM profesionales_servicios WHERE profesionalId=$pid AND servicioId=$sid"));
+    }
+
+    public function testUnaFichaArchivadaEsDeConsultaEnAmbasVistasYNoAdmiteMutacionesDeAgenda(): void
+    {
+        $sid = $this->servicioId();
+        $email = $this->email('archivo');
+        $r = $this->invitar($email, 'profesional', ['nombre_profesional' => 'ColabPortal Archivo', 'servicios' => [(string)$sid]]);
+        $this->assertSame(ColaboradorService::OK, $this->nuevaAceptacion($this->tokenEnviado($email))['status']);
+        $cid = (int)$r['colaborador_id']; $pid = (int)$r['profesional_id'];
+        $svc = new \Services\ProfesionalService();
+        $horarios = [1 => ['dia_semana' => '1', 'activo' => '1', 'hora_inicio' => '09:00', 'hora_fin' => '18:00']];
+        $this->assertSame('ok', $svc->guardarHorariosSemanales($pid, $horarios)['status']);
+        $descanso = $svc->crearDescanso($pid, ['dia_semana' => '1', 'hora_inicio' => '13:00', 'hora_fin' => '14:00', 'motivo' => 'Comida']);
+        $this->assertSame('ok', $descanso['status']);
+        $fecha = (new \DateTimeImmutable('+10 days', new \DateTimeZone('America/Guayaquil')))->format('Y-m-d');
+        $bloqueo = $svc->crearBloqueo($pid, ['fecha' => $fecha, 'motivo' => 'Permiso']);
+        $this->assertSame('ok', $bloqueo['status']);
+        $this->assertSame('ok', $this->servicios()->cambiarAcceso($this->owner, $cid, 'profesional', 'baja')['status']);
+        $huella = function () use ($pid): string {
+            $filas = [];
+            foreach (['profesionales' => 'id', 'horarios_profesionales' => 'profesionalId', 'descansos_profesionales' => 'profesionalId', 'bloqueos_profesionales' => 'profesionalId', 'profesionales_servicios' => 'profesionalId'] as $tabla => $campo) {
+                $filas[$tabla] = $this->db->query("SELECT * FROM $tabla WHERE $campo=$pid")->fetch_all(MYSQLI_ASSOC);
+            }
+            return json_encode($filas);
+        };
+        $antes = $huella();
+        $acciones = [
+            'ficha' => fn() => $svc->actualizar($pid, ['nombre' => 'Modificada', 'activo' => '0', 'servicios' => [$sid]]),
+            'estado' => fn() => $svc->cambiarEstado($pid, '0'),
+            'horario' => fn() => $svc->guardarHorariosSemanales($pid, $horarios),
+            'grupo' => fn() => $svc->aplicarGrupoSemanal($pid, ['dias' => ['1'], 'hora_inicio' => '09:00', 'hora_fin' => '18:00'], 'horario'),
+            'descanso' => fn() => $svc->crearDescanso($pid, ['dia_semana' => '1', 'hora_inicio' => '12:00', 'hora_fin' => '12:30']),
+            'quitar_descanso' => fn() => $svc->eliminarDescanso($pid, $descanso['id']),
+            'bloqueo' => fn() => $svc->crearBloqueo($pid, ['fecha' => (new \DateTimeImmutable($fecha))->modify('+1 day')->format('Y-m-d'), 'motivo' => 'Cambio']),
+            'quitar_bloqueo' => fn() => $svc->eliminarBloqueo($pid, $bloqueo['id']),
+        ];
+        foreach ($acciones as $nombre => $accion) {
+            $res = $accion();
+            $this->assertSame('invalid', $res['status'], $nombre . ': ' . json_encode($res));
+            $this->assertSame('estado_laboral', $res['codigo'], $nombre . ': debe rechazarse por la misma regla laboral.');
+            $this->assertSame($antes, $huella(), $nombre . ' no debe alterar el archivo');
+        }
+        $_SESSION = ['id' => $this->owner, 'login' => true, 'portal' => 'equipo', 'version_sesion' => 1];
+        $_GET = ['id' => (string)$pid]; $_POST = []; $_SERVER['REQUEST_METHOD'] = 'GET';
+        foreach (['horarios', 'actualizar'] as $accion) {
+            ob_start(); \Controllers\ProfesionalController::$accion(new Router()); $html = (string)ob_get_clean();
+            $this->assertStringContainsString('consulta', mb_strtolower($html));
+            $this->assertStringNotContainsString('name="servicios[]"', $html);
+            $this->assertStringNotContainsString('name="accion"', $html);
+        }
+    }
+
+    /** Segunda conexión real mientras RH mantiene un bloqueo; falla si la agenda toma el candado inverso. */
+    private function ejecutarOperacionConcurrente(string $codigo, array $datos): array
+    {
+        $fuente = 'require ' . var_export(__DIR__ . '/../bootstrap.php', true) . '; $d=json_decode($argv[1],true); ' . $codigo . '; echo json_encode($r), "\n";';
+        $p = proc_open([PHP_BINARY, '-r', $fuente, json_encode($datos)], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        $this->assertIsResource($p);
+        try {
+            fclose($pipes[0]); stream_set_timeout($pipes[1], 5);
+            $linea = fgets($pipes[1]);
+            $this->assertNotFalse($linea, 'La agenda no debe bloquear colaboradores mientras RH espera el profesional.');
+            $res = json_decode($linea, true);
+            $this->assertIsArray($res, (string)$linea);
+            return $res;
+        } finally {
+            proc_terminate($p); fclose($pipes[1]); fclose($pipes[2]); proc_close($p);
+        }
+    }
+
+    public function testUnaConfiguracionConcurrenteConLaBajaSeSerializaSinInterbloquearRh(): void
+    {
+        $sid = $this->servicioId(); $email = $this->email('candado-agenda');
+        $r = $this->invitar($email, 'profesional', ['nombre_profesional' => 'ColabPortal Candado Agenda', 'servicios' => [(string)$sid]]);
+        $this->assertSame('ok', $this->nuevaAceptacion($this->tokenEnviado($email))['status']);
+        $cid = (int)$r['colaborador_id']; $pid = (int)$r['profesional_id'];
+        \Classes\Transaccion::ejecutar($this->db, function () use ($cid, $pid): void {
+            $this->db->query("SELECT id FROM colaboradores WHERE id=$cid FOR UPDATE");
+            $r = $this->ejecutarOperacionConcurrente('$r=(new Services\\ProfesionalService())->aplicarGrupoSemanal($d["pid"],["dias"=>["1"],"hora_inicio"=>"09:00","hora_fin"=>"18:00"],"horario")', ['pid' => $pid]);
+            $this->assertSame('ok', $r['status'], json_encode($r));
+            (new ColaboradorRepository($this->db))->cambiarAcceso($this->owner, $cid, 'profesional', 'baja');
+        });
+        $this->assertSame('baja', $this->db->query("SELECT estado FROM colaboradores WHERE id=$cid")->fetch_assoc()['estado']);
+        $this->assertSame(1, $this->n("SELECT COUNT(*) n FROM horarios_profesionales WHERE profesionalId=$pid"), 'La edición se confirmó antes de la baja, sin perder su configuración.');
+        $this->assertSame('invalid', (new \Services\ProfesionalService())->aplicarGrupoSemanal($pid, ['dias' => ['2'], 'hora_inicio' => '09:00', 'hora_fin' => '18:00'], 'horario')['status']);
+    }
+
+    public function testLaReservaConcurrenteImpideConfirmarUnaBajaQueDejariaSuCitaSinAtencion(): void
+    {
+        $sid = $this->servicioId(); $email = $this->email('candado-reserva');
+        $r = $this->invitar($email, 'profesional', ['nombre_profesional' => 'ColabPortal Candado Reserva', 'servicios' => [(string)$sid]]);
+        $this->assertSame('ok', $this->nuevaAceptacion($this->tokenEnviado($email))['status']);
+        $cid = (int)$r['colaborador_id']; $pid = (int)$r['profesional_id']; $cliente = $this->cuenta('cliente');
+        $dia = new \DateTimeImmutable('+10 days', new \DateTimeZone('America/Guayaquil')); $dow = (int)$dia->format('N');
+        $this->assertSame('ok', (new \Services\ProfesionalService())->guardarHorariosSemanales($pid, [$dow => ['dia_semana' => $dow, 'activo' => '1', 'hora_inicio' => '09:00', 'hora_fin' => '18:00']])['status']);
+        $cita = 0;
+        try {
+            \Classes\Transaccion::ejecutar($this->db, function () use ($cid, $pid, $cliente, $sid, $dia, $dow, &$cita): void {
+                $this->db->query("SELECT id FROM colaboradores WHERE id=$cid FOR UPDATE");
+                $this->db->query('SELECT COUNT(*) FROM citas')->fetch_row(); // Snapshot previo: la protección debe usar una lectura actual.
+                $r = $this->ejecutarOperacionConcurrente('$r=(new Repositories\\CitaRepository())->crearReservaConProfesionalAtomica($d["cliente"],$d["pid"],$d["fecha"],"10:00:00",$d["dow"],[$d["sid"]])', ['cliente' => $cliente, 'pid' => $pid, 'fecha' => $dia->format('Y-m-d'), 'dow' => $dow, 'sid' => $sid]);
+                $this->assertSame('ok', $r['status'], json_encode($r)); $cita = (int)$r['id'];
+                try { (new ColaboradorRepository($this->db))->cambiarAcceso($this->owner, $cid, 'profesional', 'baja'); $this->fail('La baja debía detectar la reserva confirmada por la otra conexión.'); }
+                catch (\DomainException $e) { $this->assertStringContainsString('cita(s) futura(s)', $e->getMessage()); }
+            });
+            $this->assertSame('activo', $this->db->query("SELECT estado FROM colaboradores WHERE id=$cid")->fetch_assoc()['estado']);
+            $this->assertSame('1', $this->db->query("SELECT activo FROM profesionales WHERE id=$pid")->fetch_assoc()['activo']);
+        } finally {
+            if ($cita) { $this->db->query("DELETE FROM citasservicios WHERE citaId=$cita"); $this->db->query("DELETE FROM citas WHERE id=$cita"); }
+        }
+    }
+
 }

@@ -45,7 +45,7 @@ $idemInvitacion = !empty($homonimos['clave']) ? $homonimos['clave'] : clave_oper
 <div class="campo"><label for="eq-ajustar"><input type="checkbox" id="eq-ajustar" name="ajustar_agenda" value="1" <?= ($previo['ajustar_agenda'] ?? '') === '1' ? 'checked' : '' ?>> Al vincular una ficha existente, reemplazar sus servicios y su horario por lo indicado abajo</label><small class="ui-form-help">Si no lo marcas, la ficha conserva su configuración actual y lo de abajo solo se usa para fichas nuevas.</small></div>
 <?php } ?>
 <?php $ag = ['prefijo' => 'eq', 'mostrarServicios' => true, 'servicios' => $servicios, 'seleccion' => (array)($previo['servicios'] ?? []), 'franjas' => (array)($previo['franjas'] ?? []), 'descansos' => (array)($previo['descansos'] ?? [])]; include __DIR__ . '/_agenda_asistente.php'; ?>
-<p class="ui-form-help">Una ficha nueva guarda su horario y servicios desde ya, pero no aparece en disponibilidad ni en reservas hasta que la persona acepte la invitación; entonces se activa con esta configuración (una ficha existente conserva su estado actual). Puedes ajustarla después en su ficha laboral.</p>
+<p class="ui-form-help">Una ficha nueva guarda su horario y servicios desde ya, pero no aparece en disponibilidad ni en reservas hasta que la persona acepte la invitación; entonces se activa con esta configuración (una ficha existente conserva servicios, horarios e historial y también espera la aceptación). Puedes ajustarla después en su ficha laboral.</p>
 </fieldset>
 <?php if (!empty($homonimos)) { $puedeVerFicha = !empty($puedeProfesionales); include __DIR__ . '/_aviso_homonimos_profesional.php'; } else { ?>
 <button class="boton" type="submit">Enviar invitación</button>

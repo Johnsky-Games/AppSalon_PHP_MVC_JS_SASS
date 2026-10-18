@@ -104,13 +104,13 @@ final class R2bAgendaTest extends R2bCase
         return $id;
     }
 
-    private function agendaHuella(int $pid): string
+    private function agendaHuella(int $pid, bool $incluirEstado = true): string
     {
         return json_encode([
             self::q('SELECT dia_semana,hora_inicio,hora_fin FROM horarios_profesionales WHERE profesionalId=? ORDER BY dia_semana,hora_inicio', [$pid]),
             self::q('SELECT dia_semana,hora_inicio,hora_fin,motivo FROM descansos_profesionales WHERE profesionalId=? ORDER BY dia_semana,hora_inicio', [$pid]),
             self::q('SELECT servicioId FROM profesionales_servicios WHERE profesionalId=? ORDER BY servicioId', [$pid]),
-            self::q('SELECT activo FROM profesionales WHERE id=?', [$pid]),
+            $incluirEstado ? self::q('SELECT activo FROM profesionales WHERE id=?', [$pid]) : null,
         ]);
     }
 
@@ -470,7 +470,7 @@ final class R2bAgendaTest extends R2bCase
     {
         $n = $this->nav('dueno');
         $heredada = $this->prof('Heredada', [self::$s1, self::$s2]);
-        $antes = $this->agendaHuella($heredada);
+        $antes = $this->agendaHuella($heredada, false);
         $enviar = function (array $extra) use ($n, $heredada): array {
             $csrf = Navegador::csrfDe($n->get('/admin/equipo')['body']);
             return $n->post('/admin/equipo/crear', http_build_query(['csrf_token' => $csrf, 'idem_key' => Idem::clave(), 'nombre' => 'He', 'apellido' => 'Redada', 'email' => self::correo('he'), 'telefono' => '', 'puesto' => '', 'rol' => 'profesional', 'fecha_ingreso' => '', 'profesional_id' => (string)$heredada] + $extra));
@@ -478,7 +478,7 @@ final class R2bAgendaTest extends R2bCase
         // 1. Sin la casilla, lo enviado en servicios/franjas NO se aplica a la ficha existente.
         $r = $enviar(['servicios' => [(string)self::$s3], 'franjas' => self::franjasSemana('10:00', '11:00')]);
         $this->assertSame(302, $r['status'], implode(' | ', self::alertasDe($r['body'])));
-        $this->assertSame($antes, $this->agendaHuella($heredada), 'se reescribió la ficha heredada sin la casilla');
+        $this->assertSame($antes, $this->agendaHuella($heredada, false), 'se reescribió la configuración heredada sin la casilla');
         $this->assertSame(1, (int)self::escalar('SELECT COUNT(*) FROM profesionales WHERE id=? AND colaborador_id IS NOT NULL', [$heredada]), 'la ficha debe quedar vinculada');
         // 2. Una ficha YA vinculada no se puede vincular a otra persona.
         $csrf = Navegador::csrfDe($n->get('/admin/equipo')['body']);

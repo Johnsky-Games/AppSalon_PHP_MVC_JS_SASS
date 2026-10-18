@@ -436,7 +436,7 @@ final class AsistenteProfesionalIntegrationTest extends TestCase
         $this->assertSame(ColaboradorService::OK, $this->svc()->revocar($this->owner, $r['colaborador_id'])['status']);
         $ficha = $this->db->query("SELECT activo,colaborador_id FROM profesionales WHERE id=$pid")->fetch_assoc();
         $this->assertSame('0', $ficha['activo']);
-        $this->assertNull($ficha['colaborador_id']);
+        $this->assertSame((int)$r['colaborador_id'], (int)$ficha['colaborador_id'], 'La revocación conserva la identidad laboral.');
         $this->assertSame(3, $this->n("SELECT COUNT(*) n FROM horarios_profesionales WHERE profesionalId=$pid"), 'No se pierde lo configurado');
         $this->assertSame(DisponibilidadService::STATUS_PROFESSIONAL_INACTIVE, (new DisponibilidadService())->consultar($pid, $this->proximo(1), [$this->servicios[0]])['status']);
         // Una baja (suspendido) de un profesional activo también retira su ficha de las reservas.
@@ -464,7 +464,7 @@ final class AsistenteProfesionalIntegrationTest extends TestCase
         $r = $this->invitar($this->email(), ['profesional_id' => (string)$id, 'nombre_profesional' => '']);
         $this->assertSame(ColaboradorService::OK, $r['status'], json_encode($r));
         $this->assertSame((int)$id, (int)$r['profesional_id']);
-        $this->assertSame('1', $this->db->query("SELECT activo FROM profesionales WHERE id=$id")->fetch_assoc()['activo'], 'Una ficha heredada conserva su estado');
+        $this->assertSame('0', $this->db->query("SELECT activo FROM profesionales WHERE id=$id")->fetch_assoc()['activo'], 'Toda ficha vinculada espera la aceptación de su persona.');
         $this->assertSame(1, $this->n("SELECT COUNT(*) n FROM horarios_profesionales WHERE profesionalId=$id AND dia_semana=5"), 'El horario heredado no se toca');
         $this->assertSame(0, $this->n("SELECT COUNT(*) n FROM horarios_profesionales WHERE profesionalId=$id AND dia_semana=1"));
         $this->assertSame(1, $this->n("SELECT COUNT(*) n FROM profesionales_servicios WHERE profesionalId=$id"));
