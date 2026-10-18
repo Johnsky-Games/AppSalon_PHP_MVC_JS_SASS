@@ -101,3 +101,15 @@ No ejecutar `down -v`, no eliminar `appsalon-validacion_appsalon_db_data` y no r
 12. Conciliar indicadores y exportaciones con sus fuentes y fechas. Verificar que las integraciones aún no configuradas siguen pendientes.
 
 Los resultados automatizados y el SHA validado se registrarán en el PR. Un CI anterior de `main` no acredita esta ampliación. La aprobación de un piloto real y la selección de proveedores siguen pendientes.
+
+## Continuidad: arqueo común de Caja y PDV
+
+`CajaArqueoService` enlaza los nuevos cobros por cita, devoluciones, movimientos libres y pagos de comisiones con la sesión abierta del operador que registra el dinero. El vínculo usa el mismo movimiento del libro general; no crea un segundo ingreso o egreso. Las transferencias solo se enlazan al confirmarse y no alteran el efectivo esperado. Una devolución o comisión se descuenta de la caja de quien entrega el dinero, aunque el cobro original lo registrara otra persona o sesión.
+
+Cada operación retiene el bloqueo de la sesión hasta confirmar su movimiento y vínculo. El cierre usa ese mismo bloqueo; los retiros en efectivo comprueban el saldo mediante lectura actual, incluso bajo REPEATABLE READ. El repositorio propaga también los fallos al recibir resultados de SELECT: un interbloqueo no puede interpretarse como sesión inexistente. El reintento revierte y repite toda la transacción.
+
+Compatibilidad explícita: las pantallas anteriores permiten movimientos sin sesión, que quedan únicamente en el libro general. Abrir «Mi caja» antes de operar permite incluirlos en el arqueo. El PDV sigue exigiendo apertura. No se importan movimientos anteriores ni se reasignan al abrir otra sesión; el fondo inicial ya representa el efectivo contado. Repetir una operación conserva su vínculo original. Los avisos de Caja y Finanzas explican esta regla y enlazan a «Mi caja».
+
+No hay migración nueva ni alteración de datos históricos. El enlace utiliza las tablas introducidas en 028. No se cambia la autoridad de las reglas de comisión antiguas frente a las del ERP; esta revisión conecta su pago con el arqueo.
+
+Regresión específica: diez pruebas de integración con 67 aserciones, incluidas dos conexiones concurrentes para retiros antiguos/PDV y cierre. Cubren cambio, transferencias, devolución repetida, insuficiencia de efectivo, pago de comisión, aislamiento entre operadores, reapertura y conservación del histórico. La suite principal y la QA independiente se registran por SHA en el PR; el resultado de un commit anterior no acredita esta continuación.

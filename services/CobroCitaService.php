@@ -227,11 +227,14 @@ final class CobroCitaService
                 throw new CobroRechazado('No se puede devolver $' . CobroCalculo::formato($monto) . ': de este cobro de $' . CobroCalculo::formato($fila['monto_centavos']) . ' solo quedan $' . CobroCalculo::formato($devolvible) . ' por devolver.', 422);
             }
             $ahora = OperacionRepository::ahora();
+            $arqueo = new CajaArqueoService($this->repo);
+            $sesion = $arqueo->preparar($actor, 'egreso', $monto, (string)$pago['metodo_pago']);
             $this->repo->consulta('INSERT INTO cobros_devoluciones (pago_id,cita_id,monto_centavos,metodo,motivo,actor_id,origen,registrado_en) VALUES (?,?,?,?,?,?,\'caja\',?)', 'iiissis', [$pagoId, $citaId, $monto, $pago['metodo_pago'], $motivo, $actor, $ahora]);
             $devolucionId = (int)$this->repo->db->insert_id;
             $this->repo->consulta("INSERT INTO caja_movimientos (actor_id,tipo,monto_centavos,concepto,metodo,pago_id,devolucion_id,idempotencia,huella,registrado_en) VALUES (?,'egreso',?,?,?,?,?,?,?,?)", 'iissiisss',
                 [$actor, $monto, mb_substr('Devolución de la cita #' . $citaId . ' · ' . $motivo, 0, 180), (string)$pago['metodo_pago'], $pagoId, $devolucionId, 'devolucion:' . $devolucionId, hash('sha256', json_encode(['devolucion', $devolucionId, $pagoId, $monto])), $ahora]);
             $cajaId = (int)$this->repo->db->insert_id;
+            $arqueo->vincular($cajaId, $sesion);
             $devueltoAhora = $fila['devuelto_centavos'] + $monto;
             if ($devueltoAhora >= $fila['monto_centavos']) {
                 $payload = json_decode((string)$pago['payload_proveedor'], true) ?: [];
@@ -373,8 +376,11 @@ final class CobroCitaService
     /** Ingreso en caja por el importe APLICADO (nunca el cambio) + devengo de comisión; ambos en la transacción del cobro. */
     private function confirmarEnCaja(int $actor, array $cita, int $pagoId, string $referenciaPago, int $monto, string $metodo, string $ahora): void
     {
+        $arqueo = new CajaArqueoService($this->repo);
+        $sesion = $arqueo->preparar($actor, 'ingreso', $monto, $metodo);
         $this->repo->consulta("INSERT INTO caja_movimientos (actor_id,tipo,monto_centavos,concepto,metodo,pago_id,idempotencia,huella,registrado_en) VALUES (?,'ingreso',?,?,?,?,?,?,?)", 'iississs',
             [$actor, $monto, 'Cobro de la cita #' . (int)$cita['id'] . ' (' . $metodo . ')', $metodo, $pagoId, 'cobro:' . $pagoId, hash('sha256', json_encode(['cobro', $pagoId, $monto])), $ahora]);
+        $arqueo->vincular((int)$this->repo->db->insert_id, $sesion);
         if ($cita['profesionalId']) { (new ComisionService($this->repo))->devengar((int)$cita['profesionalId'], $pagoId, $referenciaPago, $monto); }
     }
 
@@ -414,6 +420,8 @@ final class CobroCitaService
         @$db->query('SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED');
         try {
             return Idempotencia::ejecutar($db, self::SCOPE . $operacion, Idempotencia::actorUsuario($actor, 'equipo'), $clave, $contenido, static fn() => $alta());
+        } catch (\InvalidArgumentException $e) {
+            throw new CobroRechazado($e->getMessage(), 422, $e);
         } catch (ConflictoIdempotenciaException) {
             throw new CobroRechazado('Esta solicitud ya se había enviado con otros datos. No se cambió nada: vuelva a abrir la cita para ver su estado actual y registre la operación de nuevo.', 409);
         } catch (OperacionEnCursoException) {

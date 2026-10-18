@@ -3,6 +3,7 @@
 <header class="ui-page-header"><p class="ui-eyebrow">Caja y conciliación</p><h1 id="caja-titulo">Cobros por cita</h1>
 <p>Cobre desde la cita, sin teclear identificadores. Atención y cobro son independientes: una cita atendida puede quedar con saldo pendiente.</p></header>
 <?php include __DIR__ . '/../templates/barra.php'; include __DIR__ . '/../templates/alertas.php'; ?>
+<p class="ui-help">Los movimientos realizados con tu caja abierta se incluyen en su arqueo. Sin sesión abierta se conservan solo en el libro general. <a href="/gestion/caja">Abrir o revisar Mi caja</a>.</p>
 <?php
 $rango = ['desde' => $filtros['desde'], 'hasta' => $filtros['hasta']];
 $activos = [];

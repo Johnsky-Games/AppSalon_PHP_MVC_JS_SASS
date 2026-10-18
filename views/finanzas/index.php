@@ -1,5 +1,6 @@
 <header class="ui-page-header"><p class="ui-eyebrow">Control financiero</p><h1>Movimientos de caja</h1><p>Registre ingresos y gastos reales. Las simulaciones de pasarela aparecen separadas en reportes.</p></header>
 <?php include __DIR__.'/../templates/barra.php'; include __DIR__.'/../templates/alertas.php'; ?>
+<p class="ui-help">Los movimientos realizados con tu caja abierta se incluyen en su arqueo. Sin sesión abierta se conservan solo en el libro general. <a href="/gestion/caja">Abrir o revisar Mi caja</a>.</p>
 <div class="ui-grid ui-dashboard-stats">
 <article class="ui-card ui-stat"><p>Ingresos del período</p><strong>$<?php echo s(number_format($resumen['ingresos']/100,2)); ?></strong></article>
 <article class="ui-card ui-stat"><p>Egresos del período</p><strong>$<?php echo s(number_format($resumen['egresos']/100,2)); ?></strong></article>

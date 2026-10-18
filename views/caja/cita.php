@@ -9,6 +9,7 @@ $hayPorVerificar = false; foreach ($d['pagos'] as $p) { if ($p['por_verificar'])
 <header class="ui-page-header"><p class="ui-eyebrow">Cobro de cita</p><h1 id="cobro-titulo">Cita #<?php echo (int)$citaId; ?> · <?php echo s($c['cliente'] ?: 'Cliente'); ?></h1>
 <p><span class="caja-badge <?php echo s($clsPago); ?>"><?php echo s($etqPago); ?></span> · Atención: <strong><?php echo s(caja_estado_cita($c['estado'])); ?></strong></p></header>
 <?php include __DIR__ . '/../templates/barra.php'; include __DIR__ . '/../templates/alertas.php'; ?>
+<p class="ui-help">Los movimientos realizados con tu caja abierta se incluyen en su arqueo. Sin sesión abierta se conservan solo en el libro general. <a href="/gestion/caja">Abrir o revisar Mi caja</a>.</p>
 <nav class="ops-toolbar" aria-label="Navegación del cobro">
 <a class="boton ui-button-quiet" href="<?php echo s(destino_portal('caja', $ctx)); ?>">Volver a caja</a>
 <?php if (($a = destino_portal('agenda_cita', ['id' => $citaId] + $ctx)) !== ''): ?><a class="boton ui-button-quiet" href="<?php echo s($a); ?>">Ver atención de la cita</a><?php endif; ?>

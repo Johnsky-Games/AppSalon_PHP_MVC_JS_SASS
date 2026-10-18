@@ -37,8 +37,12 @@ final class FinanzasService
                 if (!hash_equals($anterior['huella'],$huella)) { throw new \InvalidArgumentException('El identificador ya pertenece a otra operación.'); }
                 return ['id'=>(int)$anterior['id'],'idempotente'=>true];
             }
+            $arqueo=new CajaArqueoService($this->repo);
+            $sesion=$arqueo->preparar($actor,$tipo,$monto,$metodo);
             $this->repo->consulta('INSERT INTO caja_movimientos (actor_id,tipo,monto_centavos,concepto,metodo,pago_id,idempotencia,huella,registrado_en) VALUES (?,?,?,?,?,?,?,?,?)','isississs',[$actor,$tipo,$monto,$concepto,$metodo,null,$clave,$huella,OperacionRepository::ahora()]);
-            return ['id'=>(int)$this->repo->db->insert_id,'idempotente'=>false];
+            $id=(int)$this->repo->db->insert_id;
+            $arqueo->vincular($id,$sesion);
+            return ['id'=>$id,'idempotente'=>false];
         });
     }
     /**

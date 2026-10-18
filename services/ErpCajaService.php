@@ -38,9 +38,7 @@ final class ErpCajaService extends ErpService
     }
     public function esperado(int $sesion):int
     {
-        $s=$this->r->uno('SELECT fondo_centavos FROM erp_caja_sesiones WHERE id=?',[$sesion])??throw new ErpException('Caja no encontrada.');
-        $m=$this->r->uno("SELECT COALESCE(SUM(IF(c.tipo='ingreso',c.monto_centavos,-c.monto_centavos)),0) saldo FROM erp_caja_movimientos e JOIN caja_movimientos c ON c.id=e.caja_id WHERE e.sesion_id=? AND c.metodo='efectivo'",[$sesion]);
-        return (int)$s['fondo_centavos']+(int)$m['saldo'];
+        return (new CajaArqueoService($this->r))->esperado($sesion);
     }
     public function asentar(int $actor,int $sesion,string $tipo,int $monto,string $metodo,string $concepto,string $clave,?int $pago=null,int $devolucion=0):int
     {

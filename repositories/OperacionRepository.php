@@ -15,6 +15,12 @@ class OperacionRepository
             if ($tipos !== '') { $stmt->bind_param($tipos, ...$valores); }
             if (!$stmt->execute()) { throw new PersistenceException('No se pudo ejecutar la operación.', $stmt->errno); }
             $resultado = $stmt->get_result();
+            // Un SELECT puede fallar al recibir sus filas, después de execute().
+            // No confundir un deadlock con «sin caja abierta»: InnoDB ya pudo
+            // revertir la transacción y una escritura posterior quedaría fuera.
+            if ($resultado === false && $stmt->errno !== 0) {
+                throw new PersistenceException('No se pudo leer el resultado de la operación.', $stmt->errno);
+            }
             return $resultado ? $resultado->fetch_all(MYSQLI_ASSOC) : [];
         } finally { $stmt->close(); }
     }
