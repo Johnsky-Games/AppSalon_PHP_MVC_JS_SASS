@@ -21,6 +21,9 @@ $srv = stream_socket_server("tcp://127.0.0.1:{$port}", $errno, $errstr);
 if (!$srv) { fwrite(STDERR, "No se pudo abrir $port: $errstr\n"); exit(1); }
 file_put_contents($buzon, '[]');
 file_put_contents($buzon . '.modo', $modoInicial);
+// Los sondeos de puerto no hablan SMTP: contar saludos detecta intentos reales sin medir la velocidad de la CPU.
+$saludos = 0;
+file_put_contents($buzon . '.saludos', '0');
 $colgadas = [];
 while ($c = @stream_socket_accept($srv, -1)) {
     $modo = trim((string)@file_get_contents($buzon . '.modo')) ?: 'ok';
@@ -61,7 +64,10 @@ while ($c = @stream_socket_accept($srv, -1)) {
             continue;
         }
         $t = trim($l); $u = strtoupper($t);
-        if (str_starts_with($u, 'EHLO') || str_starts_with($u, 'HELO')) { fwrite($c, "250-qa\r\n250-AUTH LOGIN PLAIN\r\n250 OK\r\n"); }
+        if (str_starts_with($u, 'EHLO') || str_starts_with($u, 'HELO')) {
+            file_put_contents($buzon . '.saludos', (string)++$saludos, LOCK_EX);
+            fwrite($c, "250-qa\r\n250-AUTH LOGIN PLAIN\r\n250 OK\r\n");
+        }
         elseif (str_starts_with($u, 'AUTH LOGIN')) { fwrite($c, "334 VXNlcm5hbWU6\r\n"); fgets($c); fwrite($c, "334 UGFzc3dvcmQ6\r\n"); fgets($c); fwrite($c, "235 ok\r\n"); }
         elseif (str_starts_with($u, 'AUTH PLAIN')) { fwrite($c, "235 ok\r\n"); }
         elseif (str_starts_with($u, 'MAIL FROM:')) { $msg['from'] = trim(substr($t, 10), '<> '); fwrite($c, "250 ok\r\n"); }
