@@ -83,7 +83,9 @@ const out = { medidas: [], eventos: [], objetivos: [], asistente: {}, teclado: [
     for (const w of [320, 768, 1440]) {
       await page.setViewport({ width: w, height: 900 });
       await page.goto(cfg.base + '/profesionales/crear', { waitUntil: 'networkidle0' });
-      await page.type('#nombre', cfg.profHomonimo);
+      await page.type('#nombre', 'Profesional'); await page.type('#apellido', 'Prueba');
+      await page.type('#nombre-agenda', cfg.profHomonimo); await page.type('#email', 'visual.' + w + '.' + Date.now() + '@example.test');
+      await page.$eval('input[name="servicios[]"]', el => { el.checked = true; });
       await Promise.all([page.waitForNavigation({ waitUntil: 'networkidle0' }), page.click('input[type=submit].boton')]);
       out.clienteSinSesion['avisoProf@' + w] = !!(await page.$('.crm-homonimos'));
       await medidaActual(page, '/profesionales/crear (aviso de homónimos)', w, 200);

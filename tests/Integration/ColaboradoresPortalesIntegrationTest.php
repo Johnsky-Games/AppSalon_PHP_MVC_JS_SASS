@@ -604,6 +604,8 @@ final class ColaboradoresPortalesIntegrationTest extends TestCase
         $this->assertSame(ColaboradorService::FORBIDDEN, $bloqueo['status']);
         $this->assertStringContainsString('1 cita(s) futura(s)', $bloqueo['errores'][0]);
         $this->assertSame('activo', $this->db->query("SELECT estado FROM colaboradores WHERE id={$r['colaborador_id']}")->fetch_assoc()['estado']);
+        $operativo = new \Services\ProfesionalService();
+        $this->assertSame('invalid', $operativo->cambiarEstado($fichaId, '0')['status'], 'Desactivar desde Profesionales tampoco puede dejar citas futuras sin atención.');
         $this->db->query("UPDATE citas SET estado='cancelada' WHERE id=$citaId");
         $ok = $this->servicios()->cambiarAcceso($this->owner, $r['colaborador_id'], 'profesional', 'suspendido');
         $this->assertSame(ColaboradorService::OK, $ok['status']);
@@ -799,4 +801,83 @@ final class ColaboradoresPortalesIntegrationTest extends TestCase
         $this->assertSame(1, $this->n("SELECT COUNT(*) n FROM usuarios WHERE email='$email'"));
         $this->assertSame(1, $this->n("SELECT COUNT(*) n FROM usuario_accesos a JOIN usuarios u ON u.id=a.usuario_id WHERE u.email='$email'"));
     }
+    public function testAltaProfesionalHttpCreaLaMismaPersonaEnRhYAgenda(): void
+    {
+        $this->db->query("INSERT INTO servicios(nombre,precio,duracion_minutos) VALUES('Servicio ColabPortal',20,30)");
+        $sid = (int)$this->db->insert_id;
+        $_SESSION = ['id' => $this->owner, 'login' => true, 'portal' => 'equipo', 'version_sesion' => 1, 'csrf_token' => 'csrf-continuidad'];
+        $_SERVER['REQUEST_METHOD'] = 'POST';
+        $email = $this->email('alta-prof');
+        $_POST = ['csrf_token' => 'csrf-continuidad', 'idem_key' => Idempotencia::nuevaClave(), 'nombre' => 'ColabPortal', 'apellido' => 'Continuidad',
+            'email' => $email, 'servicios' => [(string)$sid], 'franjas' => [1 => [['inicio' => '09:00', 'fin' => '18:00']]]];
+        foreach ([1, 2] as $intento) {
+            ob_start();
+            try { \Controllers\ProfesionalController::crear(new Router()); } catch (AppTerminationException $e) { $this->assertSame(302, $e->getStatusCode()); }
+            finally { ob_end_clean(); }
+        }
+        $col = $this->db->query("SELECT * FROM colaboradores WHERE email_norm='$email'")->fetch_assoc();
+        $this->assertSame('invitado', $col['estado']);
+        $cid = (int)$col['id'];
+        $this->assertSame(1, $this->n("SELECT COUNT(*) n FROM profesionales WHERE colaborador_id=$cid"));
+        $p = $this->db->query("SELECT * FROM profesionales WHERE colaborador_id=$cid")->fetch_assoc();
+        $pid = (int)$p['id'];
+        $this->assertSame('0', $p['activo']);
+        $this->assertSame(1, $this->n("SELECT COUNT(*) n FROM horarios_profesionales WHERE profesionalId=$pid"));
+        $this->assertSame(1, $this->n("SELECT COUNT(*) n FROM profesionales_servicios WHERE profesionalId=$pid AND servicioId=$sid"));
+        $this->assertSame(1, $this->n("SELECT COUNT(*) n FROM colaborador_invitaciones WHERE colaborador_id=$cid"));
+        $this->assertNull($col['usuario_id'], 'Invitar no concede credenciales.');
+        $directorio = (new ColaboradorRepository($this->db))->directorio($email, null, null, 1);
+        $this->assertSame($pid, (int)$directorio['filas'][0]['profesional_id']);
+    }
+
+    public function testPromocionSuspensionYCambioDeRolConservanLaMismaFicha(): void
+    {
+        $usuario = $this->cuenta('recepcion');
+        $cid = (int)$this->db->query("SELECT id FROM colaboradores WHERE usuario_id=$usuario")->fetch_assoc()['id'];
+        $repo = new ColaboradorRepository($this->db);
+        $repo->cambiarAcceso($this->owner, $cid, 'profesional', 'activo');
+        $p = $this->db->query("SELECT * FROM profesionales WHERE colaborador_id=$cid")->fetch_assoc();
+        $pid = (int)$p['id'];
+        $this->db->query("UPDATE profesionales SET nombre='ColabPortal Promocion' WHERE id=$pid");
+        $this->assertSame($usuario, (int)$p['usuarioId']);
+        $this->assertSame('1', $p['activo']);
+        $repo->cambiarAcceso($this->owner, $cid, 'profesional', 'suspendido');
+        $this->assertSame($usuario, (int)$this->db->query("SELECT usuarioId FROM profesionales WHERE id=$pid")->fetch_assoc()['usuarioId'], 'La suspensión no pierde el vínculo con su cuenta.');
+        $servicio = new \Services\ProfesionalService(new \Repositories\ProfesionalRepository($this->db), new \Repositories\ServicioRepository($this->db));
+        $this->assertSame('invalid', $servicio->cambiarEstado($pid, '1')['status'], 'Un botón operativo no elude la suspensión laboral.');
+        // Una incoherencia antigua en el flag no vuelve reservable a una persona suspendida.
+        $this->db->query("UPDATE profesionales SET activo=1 WHERE id=$pid");
+        $this->assertFalse((new \Repositories\ProfesionalRepository($this->db))->findById($pid)->estaActivo());
+        $reserva = (new \Repositories\CitaRepository($this->db))->crearReservaConProfesionalAtomica($this->owner, $pid, (new \DateTimeImmutable('+10 days'))->format('Y-m-d'), '10:00:00', 1, []);
+        $this->assertSame('profesional_inactivo', $reserva['codigo'], 'La escritura de reserva también falla cerrada ante un flag incoherente.');
+        $this->assertNotContains($pid, array_map(static fn($p) => (int)$p->id, (new \Repositories\ProfesionalRepository($this->db))->findAll(true)));
+
+        $repo->cambiarAcceso($this->owner, $cid, 'profesional', 'activo');
+        $this->assertSame($pid, (int)(new AuthorizationService($this->db))->contexto($usuario)['profesional_id']);
+        $repo->cambiarAcceso($this->owner, $cid, 'recepcion', 'activo');
+        $this->assertNull((new AuthorizationService($this->db))->contexto($usuario)['profesional_id']);
+        $this->assertSame('invalid', $servicio->cambiarEstado($pid, '1')['status']);
+        $repo->cambiarAcceso($this->owner, $cid, 'profesional', 'activo');
+        $this->assertSame($pid, (int)(new AuthorizationService($this->db))->contexto($usuario)['profesional_id']);
+        $this->assertSame(1, $this->n("SELECT COUNT(*) n FROM profesionales WHERE colaborador_id=$cid"));
+    }
+
+    public function testReinvitarUnaInvitacionRevocadaReutilizaFichaSinCrearUnHomonimo(): void
+    {
+        $this->db->query("INSERT INTO servicios(nombre,precio,duracion_minutos) VALUES('Servicio ColabPortal',20,30)");
+        $sid = (int)$this->db->insert_id;
+        $email = $this->email('reinvitar');
+        $extra = ['nombre_profesional' => 'ColabPortal Reinvitar', 'servicios' => [(string)$sid]];
+        $r = $this->invitar($email, 'profesional', $extra);
+        $this->assertSame(ColaboradorService::OK, $r['status']);
+        $cid = (int)$r['colaborador_id']; $pid = (int)$r['profesional_id'];
+        $this->assertSame(ColaboradorService::OK, $this->servicios()->revocar($this->owner, $cid)['status']);
+        $nuevo = $this->invitar($email, 'profesional', $extra);
+        $this->assertSame(ColaboradorService::OK, $nuevo['status'], json_encode($nuevo));
+        $this->assertSame($cid, (int)$nuevo['colaborador_id']);
+        $this->assertSame($pid, (int)$nuevo['profesional_id']);
+        $this->assertSame(1, $this->n("SELECT COUNT(*) n FROM profesionales WHERE colaborador_id=$cid"));
+        $this->assertSame(1, $this->n("SELECT COUNT(*) n FROM profesionales_servicios WHERE profesionalId=$pid AND servicioId=$sid"));
+    }
+
 }

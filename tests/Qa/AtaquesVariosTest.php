@@ -73,7 +73,7 @@ final class AtaquesVariosTest extends QaCase
             ['/profesionales/crear', ['nombre' => 'Hack', 'activo' => '1', 'idem_key' => Idem::clave()]],
         ];
         foreach ($ataques as [$ruta, $campos]) {
-            $esperado = in_array($quien, ['gerente'], true) && $ruta === '/profesionales/crear' ? [200, 302, 422] : [403];
+            $esperado = [403];
             $r = $n->post($ruta, $campos + ['csrf_token' => $csrf]);
             $this->assertContains($r['status'], $esperado, "$quien $ruta => {$r['status']}");
         }
@@ -257,7 +257,7 @@ final class AtaquesVariosTest extends QaCase
         $this->assertSame('ok', $r2['status'], 'Una invitación revocada deja una ficha en "baja" sin cuenta que bloquea el correo para siempre (UNIQUE email_norm) y que ninguna acción de la UI puede reactivar o reenviar: ' . json_encode($r2));
     }
 
-    public function test_Defecto_ficha_profesional_heredada_queda_inutilizable_tras_revocar_su_invitacion(): void
+    public function test_ficha_heredada_conserva_su_persona_y_se_puede_reinvitar_tras_revocar(): void
     {
         self::q("INSERT INTO profesionales(nombre,activo) VALUES ('Heredada QA',1)");
         $fid = (int)self::db()->insert_id;
@@ -265,10 +265,15 @@ final class AtaquesVariosTest extends QaCase
         $this->assertContains($fid, array_map('intval', array_column($repo->profesionalesSinCuenta(), 'id')));
         $svc = $this->svc();
         $dueno = self::$p['propietario']['id'];
-        $r = $svc->invitar($dueno, ['nombre' => 'He', 'apellido' => 'Re', 'email' => self::correo('her'), 'telefono' => '', 'puesto' => '', 'rol' => 'profesional', 'fecha_ingreso' => '', 'profesional_id' => (string)$fid], Idem::clave());
+        $email = self::correo('her');
+        $r = $svc->invitar($dueno, ['nombre' => 'He', 'apellido' => 'Re', 'email' => $email, 'telefono' => '', 'puesto' => '', 'rol' => 'profesional', 'fecha_ingreso' => '', 'profesional_id' => (string)$fid], Idem::clave());
         $this->assertSame('ok', $r['status'], json_encode($r));
         $this->assertSame('ok', $svc->revocar($dueno, $r['colaborador_id'])['status']);
-        $this->assertContains($fid, array_map('intval', array_column($repo->profesionalesSinCuenta(), 'id')), 'Tras revocar, la ficha heredada sigue vinculada al colaborador en baja (colaborador_id) y desaparece de las fichas invitables: no hay forma de asociarla a otra persona');
+        $this->assertNotContains($fid, array_map('intval', array_column($repo->profesionalesSinCuenta(), 'id')), 'La ficha mantiene su identidad laboral.');
+        $nuevo = $svc->invitar($dueno, ['nombre' => 'He', 'apellido' => 'Re', 'email' => $email, 'rol' => 'profesional', 'profesional_id' => (string)$fid], Idem::clave());
+        $this->assertSame('ok', $nuevo['status'], json_encode($nuevo));
+        $this->assertSame($r['colaborador_id'], $nuevo['colaborador_id']);
+        $this->assertSame($fid, (int)$nuevo['profesional_id']);
     }
 
     public function test_invitar_profesional_con_ficha_heredada_ya_vinculada_es_rechazado(): void

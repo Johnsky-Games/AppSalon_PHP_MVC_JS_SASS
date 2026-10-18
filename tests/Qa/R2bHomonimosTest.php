@@ -348,12 +348,15 @@ final class R2bHomonimosTest extends R2bCase
 
     // ------------------------------------------------------------------ profesionales
 
-    private function enviarProf(array $datos, ?string $clave = null, array $extra = [], string $quien = 'gerente'): array
+    private function enviarProf(array $datos, ?string $clave = null, array $extra = [], string $quien = 'dueno'): array
     {
         $n = $this->nav($quien);
         $pag = $n->get('/profesionales/crear');
         $this->assertSame(200, $pag['status'], $quien);
         $k = $clave ?? Navegador::campoDe($pag['body'], 'idem_key');
+        $datos['nombre_agenda'] = $datos['nombre'];
+        $datos['apellido'] = 'Prueba';
+        $datos['email'] = 'prof.' . substr(hash('sha256', $k), 0, 25) . '@example.test';
         $r = $n->post('/profesionales/crear', http_build_query(array_merge(['csrf_token' => Navegador::csrfDe($pag['body']), 'idem_key' => $k, 'decision' => 'crear', 'activo' => '1', 'servicios' => [(string)self::$sid]], $datos, $extra)));
         return $r + ['clave' => $k];
     }
@@ -398,7 +401,7 @@ final class R2bHomonimosTest extends R2bCase
             $this->assertSame(1, $cuenta());
         }
         // token de otro operador (propietario con el del gerente) y con otra clave
-        $this->assertSame(409, $this->enviarProf(['nombre' => $nombre], $a['clave'], ['decision' => 'confirmar', 'token_confirmacion' => $tok], 'dueno')['status'], 'token de otro operador');
+        $this->assertSame(409, $this->enviarProf(['nombre' => $nombre], Idem::clave(), ['decision' => 'confirmar', 'token_confirmacion' => $tok], 'dueno')['status'], 'token de otro operador');
         $this->assertSame(409, $this->enviarProf(['nombre' => $nombre], Idem::clave(), ['decision' => 'confirmar', 'token_confirmacion' => $tok])['status'], 'token con otra clave');
         // casilla vieja
         $this->assertNotSame(302, $this->enviarProf(['nombre' => $nombre], $a['clave'], ['confirmar_homonimo' => '1'])['status'], 'la casilla vieja confirma');
@@ -434,12 +437,12 @@ final class R2bHomonimosTest extends R2bCase
     public function test_alta_de_profesional_permisos_y_csrf(): void
     {
         $antes = (int)self::escalar('SELECT COUNT(*) FROM profesionales');
-        foreach (['recepcion', 'finanzas', 'profesional', 'cliente'] as $quien) {
+        foreach (['gerente', 'recepcion', 'finanzas', 'profesional', 'cliente'] as $quien) {
             $n = $this->nav($quien);
             $this->assertSame(403, $n->get('/profesionales/crear')['status'], $quien);
             $this->assertSame(403, $n->post('/profesionales/crear', http_build_query(['csrf_token' => 'x', 'nombre' => 'Intruso', 'activo' => '1', 'servicios' => [(string)self::$sid], 'idem_key' => Idem::clave()]))['status'], $quien);
         }
-        $n = $this->nav('gerente');
+        $n = $this->nav('dueno');
         $this->assertSame(403, $n->post('/profesionales/crear', http_build_query(['nombre' => 'SinCsrf', 'activo' => '1', 'servicios' => [(string)self::$sid], 'idem_key' => Idem::clave()]))['status']);
         $this->assertSame($antes, (int)self::escalar('SELECT COUNT(*) FROM profesionales'));
     }

@@ -602,6 +602,8 @@ class ProfesionalService
                 'profesional' => $existente,
                 'alertas' => []
             ];
+        } catch (\DomainException $e) {
+            return ['status' => self::STATUS_INVALID, 'resultado' => false, 'profesional' => $existente, 'alertas' => ['error' => [$e->getMessage()]]];
         } catch (PersistenceException $e) {
             return [
                 'status' => self::STATUS_ERROR,
@@ -662,6 +664,8 @@ class ProfesionalService
                 'activo' => $activo,
                 'alertas' => []
             ];
+        } catch (\DomainException $e) {
+            return ['status' => self::STATUS_INVALID, 'resultado' => false, 'profesional' => null, 'alertas' => ['error' => [$e->getMessage()]]];
         } catch (PersistenceException $e) {
             return [
                 'status' => self::STATUS_ERROR,

@@ -114,10 +114,17 @@ final class ColaboradorRepository
         return ['filas' => $filas, 'total' => $total, 'pagina' => $pagina, 'paginas' => $paginas];
     }
 
-    /** Fichas profesionales heredadas, sin cuenta ni colaborador: candidatas a invitación asistida. */
+    /** Fichas profesionales heredadas sin colaborador: candidatas a vinculación explícita. */
     public function profesionalesSinCuenta(): array
     {
-        return $this->todas('SELECT id, nombre, activo FROM profesionales WHERE usuarioId IS NULL AND colaborador_id IS NULL ORDER BY nombre, id LIMIT 300');
+        return $this->todas('SELECT id, nombre, activo FROM profesionales WHERE colaborador_id IS NULL ORDER BY nombre, id LIMIT 300');
+    }
+
+    /** Reinvitar la misma identidad revocada conserva su extensión profesional. */
+    public function fichaReinvitable(string $email): ?int
+    {
+        $r = $this->una("SELECT p.id FROM profesionales p JOIN colaboradores c ON c.id=p.colaborador_id WHERE c.email_norm=? AND c.estado='baja' AND c.aceptado_en IS NULL", 's', [\Classes\Identidad::normalizarEmail($email)]);
+        return $r ? (int)$r['id'] : null;
     }
 
     public function correo(string $clave): ?array
@@ -177,13 +184,25 @@ final class ColaboradorRepository
 
     private function vincularFicha(int $colaboradorId, array $d, int $profesionalHeredado): int
     {
+        $existente = $this->una('SELECT id FROM profesionales WHERE colaborador_id=? FOR UPDATE', 'i', [$colaboradorId]);
+        if ($existente) {
+            $id = (int)$existente['id'];
+            if ($profesionalHeredado > 0 && $profesionalHeredado !== $id) {
+                throw new \DomainException('La persona ya tiene una ficha profesional. Conserva su vínculo e historial.', 422);
+            }
+            if (!empty($d['agenda']['aplicar'])) {
+                (new ProfesionalRepository($this->db))->reemplazarConfiguracionAgenda($id, $d['servicios'], $d['agenda']['franjas'], $d['agenda']['descansos']);
+            }
+            return $id;
+        }
         if ($profesionalHeredado > 0) {
             // Invitación asistida a una ficha heredada: conserva su historial; no crea otra ficha ni cuenta.
             $ficha = $this->una('SELECT id, usuarioId, colaborador_id FROM profesionales WHERE id=? FOR UPDATE', 'i', [$profesionalHeredado]);
-            if (!$ficha || $ficha['usuarioId'] !== null || $ficha['colaborador_id'] !== null) {
+            $persona = $this->una('SELECT usuario_id FROM colaboradores WHERE id=?', 'i', [$colaboradorId]);
+            if (!$ficha || $ficha['colaborador_id'] !== null || ($ficha['usuarioId'] !== null && (int)$ficha['usuarioId'] !== (int)($persona['usuario_id'] ?? 0))) {
                 throw new \DomainException('La ficha profesional no existe o ya está vinculada a una cuenta');
             }
-            $this->sql('UPDATE profesionales SET colaborador_id=? WHERE id=?', 'ii', [$colaboradorId, $profesionalHeredado])->close();
+            $this->sql('UPDATE profesionales SET colaborador_id=?,activo=0 WHERE id=?', 'ii', [$colaboradorId, $profesionalHeredado])->close();
             // Solo se reescribe su configuración si el operador lo pidió expresamente (casilla del asistente).
             $agenda = $d['agenda'] ?? null;
             if ($agenda && !empty($agenda['aplicar'])) {
@@ -194,7 +213,7 @@ final class ColaboradorRepository
         $prof = new Profesional(['nombre' => $d['nombre_profesional'], 'activo' => '0']);
         $repo = new ProfesionalRepository($this->db);
         $id = $repo->createWithServicios($prof, []);
-        $this->sql('UPDATE profesionales SET colaborador_id=? WHERE id=?', 'ii', [$colaboradorId, $id])->close();
+        $this->sql('UPDATE profesionales SET colaborador_id=?,activo=0 WHERE id=?', 'ii', [$colaboradorId, $id])->close();
         // La ficha nace INACTIVA: servicios y horario definidos en el asistente quedan guardados (y validados: servicios
         // existentes, sin solapes) pero no son reservables, porque disponibilidad y reserva exigen activo=1, hasta que
         // la persona acepte la invitación.
@@ -263,8 +282,9 @@ final class ColaboradorRepository
                 (new CorreoSalidaRepository($this->db))->cancelar('invitacion:' . (int)$previa['id']);
             }
             $this->sql("UPDATE colaboradores SET estado='baja', baja_en=UTC_TIMESTAMP() WHERE id=?", 'i', [$colaboradorId])->close();
-            // La ficha operativa (sin cuenta) vuelve a estar disponible para otra invitación; no se borra.
-            $this->sql('UPDATE profesionales SET colaborador_id=NULL WHERE colaborador_id=? AND usuarioId IS NULL', 'i', [$colaboradorId])->close();
+            // La revocación conserva la identidad laboral y el historial de su ficha.
+            if ($this->citasFuturasDeProfesional($colaboradorId) > 0) { throw new \DomainException('Resuelve las citas futuras antes de revocar esta invitación.'); }
+            $this->sql('UPDATE profesionales SET activo=0 WHERE colaborador_id=?', 'i', [$colaboradorId])->close();
             $this->auditar($actor, $c['usuario_id'] !== null ? (int)$c['usuario_id'] : null, 'invitacion_revocada', (string)$c['codigo']);
         });
     }
@@ -481,6 +501,8 @@ final class ColaboradorRepository
         if (!in_array($estado, ['activo', 'suspendido', 'baja'], true)) { throw new \InvalidArgumentException('Estado laboral no válido'); }
         if (!isset(AuthorizationService::ROLES[$rol]) || $rol === 'cliente') { throw new \InvalidArgumentException('Rol no válido'); }
         Transaccion::ejecutar($this->db, function () use ($actor, $colaboradorId, $rol, $estado): void {
+            $this->sql('SELECT id FROM equipo_mutex WHERE id=1 FOR UPDATE')->close();
+            $this->exigirPropietario($actor);
             $c = $this->una('SELECT * FROM colaboradores WHERE id=? FOR UPDATE', 'i', [$colaboradorId]);
             if (!$c) { throw new \DomainException('Colaborador no encontrado'); }
             if ($c['estado'] === 'invitado' || $c['usuario_id'] === null) { throw new \DomainException('Aún no aceptó su invitación: reenvíala o revócala'); }
@@ -496,7 +518,7 @@ final class ColaboradorRepository
             if ($pierdeAgenda) {
                 $this->sql('UPDATE profesionales SET activo=0 WHERE colaborador_id=?', 'i', [$colaboradorId])->close();
             }
-            if ($estado === 'activo' && $rol === 'profesional' && $c['estado'] !== 'activo') {
+            if ($estado === 'activo' && $rol === 'profesional' && ($c['estado'] !== 'activo' || $c['rol'] !== 'profesional')) {
                 $this->sql('UPDATE profesionales SET activo=1 WHERE colaborador_id=?', 'i', [$colaboradorId])->close();
             }
         });

@@ -382,7 +382,7 @@ final class HomonimosProfesionalesIntegrationTest extends TestCase
         $existente = $this->ficha('HomProf Laura Gómez');
         $this->sesion($this->owner);
         $clave = Idempotencia::nuevaClave();
-        $post = ['csrf_token' => 'csrf-hom', 'idem_key' => $clave, 'nombre' => 'HomProf Laura Gomez', 'activo' => '1', 'servicios' => [(string)$this->servicio]];
+        $post = ['csrf_token' => 'csrf-hom', 'idem_key' => $clave, 'nombre' => 'Laura', 'apellido' => 'Gomez', 'nombre_agenda' => 'HomProf Laura Gomez', 'email' => 'alta-http' . self::SUF, 'activo' => '1', 'servicios' => [(string)$this->servicio]];
         $_POST = $post;
         [$http, $html] = $this->ejecutar(fn() => ProfesionalController::crear(new Router()));
         $this->assertSame(200, $http);
@@ -413,7 +413,7 @@ final class HomonimosProfesionalesIntegrationTest extends TestCase
         $this->assertSame(1, $this->n("SELECT COUNT(*) n FROM profesionales WHERE BINARY nombre='HomProf Laura Gomez'"));
         // Cancelar lleva a la ficha existente.
         $clave2 = Idempotencia::nuevaClave();
-        $_POST = ['csrf_token' => 'csrf-hom', 'idem_key' => $clave2, 'nombre' => 'HomProf Laura Gómez', 'activo' => '1', 'servicios' => [(string)$this->servicio], 'decision' => 'cancelar'];
+        $_POST = ['csrf_token' => 'csrf-hom', 'idem_key' => $clave2, 'nombre' => 'Laura', 'apellido' => 'Gomez', 'nombre_agenda' => 'HomProf Laura Gómez', 'email' => 'cancel-http' . self::SUF, 'activo' => '1', 'servicios' => [(string)$this->servicio], 'decision' => 'cancelar'];
         [$http] = $this->ejecutar(fn() => ProfesionalController::crear(new Router()));
         $this->assertSame(302, $http);
         $this->assertSame('/profesionales/actualizar?id=' . $existente, $GLOBALS['__appsalon_redireccion']);

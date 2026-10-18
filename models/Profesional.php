@@ -12,6 +12,9 @@ class Profesional
     public $nombre;
     public $activo;
     public $creado_en;
+    public ?int $colaborador_id = null;
+    public ?string $colaborador_estado = null;
+    public ?string $colaborador_rol = null;
 
     /** @var array<int, int> Identificadores de servicios asociados */
     public array $servicioIds = [];
@@ -33,6 +36,10 @@ class Profesional
         } else {
             $this->id = null;
         }
+
+        $this->colaborador_estado = $args['colaborador_estado'] ?? null;
+        $this->colaborador_rol = $args['colaborador_rol'] ?? null;
+        $this->colaborador_id = isset($args['colaborador_id']) ? (int)$args['colaborador_id'] : null;
 
         $this->nombre = isset($args['nombre']) && is_string($args['nombre'])
             ? trim($args['nombre'])

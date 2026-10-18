@@ -286,7 +286,7 @@ class ProfesionalAgendaIntegrationTest extends TestCase
         $_POST = [
             'csrf_token' => $csrf,
             'idem_key' => \Classes\Idempotencia::nuevaClave(),
-            'nombre' => 'Profesional No Debe Quedar Huerfano',
+            'nombre' => 'Profesional', 'apellido' => 'Prueba', 'nombre_agenda' => 'Profesional No Debe Quedar Huerfano', 'email' => 'rollback-prof@agenda.test',
             'activo' => '1',
             'servicios' => [(string)$s1]
         ];
@@ -296,7 +296,7 @@ class ProfesionalAgendaIntegrationTest extends TestCase
         $htmlCrear = ob_get_clean();
 
         $this->assertSame(500, http_response_code());
-        $this->assertStringContainsString('error de base de datos', $htmlCrear);
+        $this->assertStringContainsString('No se pudo guardar la invitación', $htmlCrear);
         $this->assertStringNotContainsString('Simulated failure', $htmlCrear);
 
         $conteoProf = (int)self::$db->query("SELECT COUNT(*) AS c FROM profesionales")->fetch_assoc()['c'];

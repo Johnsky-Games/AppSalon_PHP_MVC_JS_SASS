@@ -531,7 +531,7 @@ class CitaRepository
             $inTransaction = true;
 
             // 1. Lectura actual con bloqueo exclusivo sobre el profesional (`FOR UPDATE`)
-            $stmtProf = $db->prepare("SELECT id, nombre, activo FROM profesionales WHERE id = ? LIMIT 1 FOR UPDATE");
+            $stmtProf = $db->prepare("SELECT p.id,p.nombre,IF(c.id IS NULL OR (c.rol='profesional' AND c.estado='activo'),p.activo,0) activo FROM profesionales p LEFT JOIN colaboradores c ON c.id=p.colaborador_id WHERE p.id=? LIMIT 1 FOR UPDATE");
             if (!$stmtProf) {
                 throw new PersistenceException("Error al preparar bloqueo de profesional: " . $db->error);
             }
@@ -1777,7 +1777,7 @@ class CitaRepository
             if (!$db->begin_transaction()) throw new PersistenceException('No se pudo iniciar la operación.');
             $prof = null;
             if ($previa->profesionalId) {
-                $stmt = $db->prepare('SELECT id, activo, usuarioId FROM profesionales WHERE id = ? FOR UPDATE');
+                $stmt = $db->prepare("SELECT p.id,p.usuarioId,IF(c.id IS NULL OR (c.rol='profesional' AND c.estado='activo'),p.activo,0) activo FROM profesionales p LEFT JOIN colaboradores c ON c.id=p.colaborador_id WHERE p.id=? FOR UPDATE");
                 if (!$stmt) throw new PersistenceException('No se pudo bloquear el profesional.');
                 $pid = (int)$previa->profesionalId;
                 $stmt->bind_param('i', $pid); if (!$stmt->execute()) throw new PersistenceException('Fallo de escritura de agenda.');

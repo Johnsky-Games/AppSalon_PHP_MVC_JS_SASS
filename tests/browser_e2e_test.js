@@ -31,6 +31,26 @@ function consultarHorariosEnMySql(diaSemana) {
     return out.trim().split(/\r?\n/).filter(Boolean);
 }
 
+// En esta suite aislada la entrega SMTP se sustituye por un token de prueba; la aceptación se hace por la UI real.
+async function aceptarProfesionalDePrueba(browser, email, baseUrl) {
+    const dbContainer = process.env.TEST_DB_CONTAINER;
+    const dbName = process.env.TEST_DB_NAME || 'appsalon_browser_test';
+    if (!dbContainer || !dbName.endsWith('_test')) throw new Error('La aceptación E2E requiere TEST_DB_CONTAINER y una base _test.');
+    const token = crypto.randomBytes(32).toString('hex');
+    const sql = `UPDATE colaborador_invitaciones i JOIN colaboradores c ON c.id=i.colaborador_id SET i.token_hash=SHA2('${token}',256) WHERE c.email_norm='${email}' AND i.estado='pendiente'`;
+    execFileSync('docker', ['exec', dbContainer, 'mysql', '-uroot', '-proot', '-e', sql, dbName], { stdio: 'ignore' });
+    const context = await browser.createBrowserContext();
+    try {
+        const invitada = await context.newPage();
+        await invitada.goto(`${baseUrl}/equipo/aceptar?token=${token}`, { waitUntil: 'networkidle0' });
+        await invitada.type('#password', 'ClaveProfesionalE2E2026');
+        await invitada.type('#password_confirmacion', 'ClaveProfesionalE2E2026');
+        await invitada.click('#acepto');
+        await Promise.all([invitada.waitForNavigation({ waitUntil: 'networkidle0' }), invitada.click('input[type="submit"]')]);
+        if (invitada.url().includes('/equipo/aceptar')) throw new Error('No se pudo aceptar la invitación E2E.');
+    } finally { await context.close(); }
+}
+
 // Cargar puppeteer-core (prioriza PUPPETEER_CORE_PATH o instalación local en node_modules)
 const defaultCandidates = [
     process.env.PUPPETEER_CORE_PATH,
@@ -441,7 +461,8 @@ async function runBrowserTests() {
             page.click('a[href="/profesionales/crear"]')
         ]);
 
-        await page.type('#nombre', 'Sofía Andrade');
+        const correoSofia = `sofia.${Date.now()}@browser.test`;
+        await page.type('#nombre', 'Sofía'); await page.type('#apellido', 'Andrade'); await page.type('#email', correoSofia);
         await page.evaluate(() => {
             const checks = document.querySelectorAll('input[name="servicios[]"]');
             if (checks.length >= 2) {
@@ -459,6 +480,8 @@ async function runBrowserTests() {
             throw new Error(`Tras crear profesional debía redirigir a /profesionales, URL actual: ${page.url()}`);
         }
 
+        await aceptarProfesionalDePrueba(browser, correoSofia, BASE_URL);
+        await page.reload({ waitUntil: 'networkidle0' });
         const textoProfesionales = await page.$eval('ul.profesionales-lista', el => el.textContent);
         if (!textoProfesionales.includes('Sofía Andrade') || !textoProfesionales.includes('Activo')) {
             throw new Error('La profesional creada "Sofía Andrade" no aparece activa en /profesionales.');
@@ -663,7 +686,8 @@ async function runBrowserTests() {
         // Crear segunda profesional activa ("Valeria Castro") habilitada para Servicio 1 y "Masaje Capilar Premium" (Servicio 4)
         // con horario 09:00-18:00 en el día de reserva para probar filtrado de compatibilidad y reserva completa desde la UI en Fase 5
         await page.goto(`${BASE_URL}/profesionales/crear`, { waitUntil: 'networkidle0' });
-        await page.type('#nombre', 'Valeria Castro');
+        const correoValeria = `valeria.${Date.now()}@browser.test`;
+        await page.type('#nombre', 'Valeria'); await page.type('#apellido', 'Castro'); await page.type('#email', correoValeria);
         await page.evaluate(() => {
             const labels = Array.from(document.querySelectorAll('.servicios-asignables label, form.formulario label'));
             const checks = Array.from(document.querySelectorAll('input[name="servicios[]"]'));
@@ -683,6 +707,8 @@ async function runBrowserTests() {
             page.click('form.formulario input[type="submit"]')
         ]);
 
+        await aceptarProfesionalDePrueba(browser, correoValeria, BASE_URL);
+        await page.reload({ waitUntil: 'networkidle0' });
         const hrefHorariosValeria = await page.evaluate(() => {
             const items = Array.from(document.querySelectorAll('ul.profesionales-lista li'));
             const target = items.find(li => li.textContent.includes('Valeria Castro'));

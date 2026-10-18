@@ -55,11 +55,11 @@ class ProfesionalRepository
         $db = $this->resolveDb();
 
         try {
-            $sql = "SELECT id, nombre, activo, creado_en FROM profesionales";
+            $sql = "SELECT p.id, p.nombre, IF(c.id IS NULL OR (c.rol='profesional' AND c.estado='activo'),p.activo,0) activo, p.creado_en, p.colaborador_id, c.estado colaborador_estado, c.rol colaborador_rol FROM profesionales p LEFT JOIN colaboradores c ON c.id=p.colaborador_id";
             if ($soloActivos) {
-                $sql .= " WHERE activo = 1";
+                $sql .= " WHERE p.activo = 1 AND (c.id IS NULL OR (c.rol='profesional' AND c.estado='activo'))";
             }
-            $sql .= " ORDER BY id ASC";
+            $sql .= " ORDER BY p.id ASC";
 
             $stmt = $db->prepare($sql);
             if (!$stmt) {
@@ -119,7 +119,7 @@ class ProfesionalRepository
         $db = $this->resolveDb();
 
         try {
-            $stmt = $db->prepare("SELECT id, nombre, activo, creado_en FROM profesionales WHERE id = ? LIMIT 1");
+            $stmt = $db->prepare("SELECT p.id, p.nombre, IF(c.id IS NULL OR (c.rol='profesional' AND c.estado='activo'),p.activo,0) activo, p.creado_en, p.colaborador_id, c.estado colaborador_estado, c.rol colaborador_rol FROM profesionales p LEFT JOIN colaboradores c ON c.id=p.colaborador_id WHERE p.id = ? LIMIT 1");
             if (!$stmt) {
                 throw new PersistenceException("Error al preparar búsqueda de profesional: " . $db->error);
             }
@@ -289,6 +289,7 @@ class ProfesionalRepository
                 return false;
             }
 
+            $this->exigirEstadoLaboral($db, $id, (string)$profesional->activo === '1');
             $stmt = $db->prepare("UPDATE profesionales SET nombre = ?, activo = ? WHERE id = ? LIMIT 1");
             if (!$stmt) {
                 throw new PersistenceException("Error al preparar actualización de profesional: " . $db->error);
@@ -306,19 +307,7 @@ class ProfesionalRepository
 
             $stmt->close();
 
-            $stmtDel = $db->prepare("DELETE FROM profesionales_servicios WHERE profesionalId = ?");
-            if (!$stmtDel) {
-                throw new PersistenceException("Error al preparar limpieza de servicios del profesional: " . $db->error);
-            }
-            $stmtDel->bind_param('i', $id);
-            if (!$stmtDel->execute()) {
-                $err = $stmtDel->error;
-                $stmtDel->close();
-                throw new PersistenceException("Error al limpiar servicios del profesional: " . $err);
-            }
-            $stmtDel->close();
-
-            $this->insertarServiciosProfesional($db, $id, $servicioIds);
+            $this->sincronizarServiciosSeguros($db, $id, $servicioIds);
 
             if (!$db->commit()) {
                 throw new PersistenceException("Fallo al confirmar actualización de profesional: " . $db->error);
@@ -327,6 +316,9 @@ class ProfesionalRepository
 
             $profesional->servicioIds = array_values(array_unique(array_map('intval', $servicioIds)));
             return true;
+        } catch (\DomainException $e) {
+            if ($inTransaction) { $db->rollback(); }
+            throw $e;
         } catch (PersistenceException $e) {
             if ($inTransaction) {
                 @$db->rollback();
@@ -373,6 +365,7 @@ class ProfesionalRepository
                 return false;
             }
 
+            $this->exigirEstadoLaboral($db, $id, $estado === 1);
             $stmt = $db->prepare("UPDATE profesionales SET activo = ? WHERE id = ? LIMIT 1");
             if (!$stmt) {
                 throw new PersistenceException("Error al preparar cambio de estado de profesional: " . $db->error);
@@ -393,6 +386,9 @@ class ProfesionalRepository
             $inTransaction = false;
 
             return true;
+        } catch (\DomainException $e) {
+            if ($inTransaction) { $db->rollback(); }
+            throw $e;
         } catch (PersistenceException $e) {
             if ($inTransaction) {
                 @$db->rollback();
@@ -412,8 +408,24 @@ class ProfesionalRepository
      * Adquiere bloqueo exclusivo de fila (`FOR UPDATE`) sobre el registro del profesional
      * para serializar mutaciones de agenda/estado frente a reservas concurrentes en InnoDB.
      */
+    private function exigirEstadoLaboral(mysqli $db, int $id, bool $activar): void
+    {
+        $s = $db->prepare('SELECT p.activo,c.rol,c.estado FROM profesionales p LEFT JOIN colaboradores c ON c.id=p.colaborador_id WHERE p.id=?');
+        $s->bind_param('i', $id); $s->execute(); $fila = $s->get_result()->fetch_assoc(); $s->close();
+        if ($activar && $fila['estado'] !== null && ($fila['rol'] !== 'profesional' || $fila['estado'] !== 'activo')) {
+            throw new \DomainException('La agenda solo puede activarse para un colaborador activo con rol Profesional. Gestiona su estado desde Recursos Humanos.');
+        }
+        if (!$activar && (int)$fila['activo'] === 1) {
+            $s = $db->prepare("SELECT COUNT(*) n FROM citas WHERE profesionalId=? AND estado IN ('confirmada','en_servicio') AND fecha >= DATE(CONVERT_TZ(UTC_TIMESTAMP(),'+00:00','-05:00'))");
+            $s->bind_param('i', $id); $s->execute(); $n = (int)$s->get_result()->fetch_assoc()['n']; $s->close();
+            if ($n > 0) { throw new \DomainException('Resuelve las citas futuras antes de desactivar esta agenda.'); }
+        }
+    }
+
     private function bloquearProfesionalParaMutacion(mysqli $db, int $id): bool
     {
+        $col = $db->prepare('SELECT c.id FROM colaboradores c JOIN profesionales p ON p.colaborador_id=c.id WHERE p.id=? FOR SHARE');
+        $col->bind_param('i', $id); $col->execute(); $col->get_result()->fetch_assoc(); $col->close();
         $stmt = $db->prepare("SELECT id FROM profesionales WHERE id = ? LIMIT 1 FOR UPDATE");
         if (!$stmt) {
             throw new PersistenceException("Error al preparar bloqueo de profesional: " . $db->error);
