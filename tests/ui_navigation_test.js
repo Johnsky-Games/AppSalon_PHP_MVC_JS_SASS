@@ -19,8 +19,11 @@ const javascript = fs.readFileSync(path.join(root, 'src/js/ui.js'));
 const companyName = 'Estudio de bienestar, belleza y cuidado personal de nuestra comunidad';
 const ownerRoutes = [
     '/admin', '/agenda', '/caja', '/servicios', '/servicios/crear', '/profesionales',
-    '/admin/recursos-humanos', '/admin/equipo', '/admin/finanzas', '/admin/inventario',
-    '/admin/reportes', '/admin/crecimiento', '/admin/clientes', '/admin/clientes/indicadores', '/admin/ajustes', '/perfil'
+    '/admin/recursos-humanos', '/admin/equipo', '/gestion/personal', '/pdv', '/gestion/caja',
+    '/gestion/catalogo', '/gestion/compras', '/gestion/obligaciones', '/gestion/aprobaciones',
+    '/gestion/comisiones', '/gestion/promociones', '/gestion/seguimiento', '/admin/finanzas', '/admin/inventario',
+    '/gestion/recursos', '/gestion/indicadores', '/admin/reportes', '/admin/crecimiento',
+    '/admin/clientes', '/admin/clientes/indicadores', '/admin/ajustes', '/gestion/configuracion', '/gestion/integraciones', '/perfil'
 ];
 const fixture = `<?php
 namespace Repositories {
@@ -108,9 +111,9 @@ const server = http.createServer((request, response) => {
         }
         for (const [role, routes, home] of [
             ['cliente', ['/cita', '/mis-citas', '/perfil', '/mi-bienestar'], '/cita'],
-            ['profesional', ['/agenda', '/admin/clientes', '/perfil'], '/agenda'],
-            ['recepcion', ['/admin', '/agenda', '/admin/clientes', '/admin/clientes/indicadores', '/perfil'], '/admin'],
-            ['finanzas', ['/caja', '/admin/finanzas', '/admin/inventario', '/admin/reportes', '/admin/clientes/indicadores', '/perfil'], '/admin/finanzas']
+            ['profesional', ['/agenda', '/gestion/personal', '/admin/clientes', '/perfil'], '/agenda'],
+            ['recepcion', ['/admin', '/agenda', '/gestion/personal', '/pdv', '/gestion/caja', '/gestion/aprobaciones', '/gestion/seguimiento', '/admin/clientes', '/admin/clientes/indicadores', '/perfil'], '/admin'],
+            ['finanzas', ['/caja', '/gestion/personal', '/pdv', '/gestion/caja', '/gestion/catalogo', '/gestion/compras', '/gestion/obligaciones', '/gestion/aprobaciones', '/gestion/comisiones', '/gestion/seguimiento', '/admin/finanzas', '/admin/inventario', '/gestion/recursos', '/gestion/indicadores', '/admin/reportes', '/admin/clientes/indicadores', '/gestion/integraciones', '/perfil'], '/admin/finanzas']
         ]) {
             await page.goto(`${baseUrl}/perfil?role=${role}`, { waitUntil: 'load' });
             assert.deepEqual(await page.$$eval('.ui-nav-link', links => links.map(link => link.getAttribute('href'))), routes, `El rol ${role} ve sus accesos permitidos`);

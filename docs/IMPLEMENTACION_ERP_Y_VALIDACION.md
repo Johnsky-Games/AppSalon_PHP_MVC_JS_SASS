@@ -59,7 +59,7 @@ docker compose --env-file includes/.env -p appsalon-validacion stop web notifica
 docker compose --env-file includes/.env -p appsalon-validacion up -d db
 docker compose --env-file includes/.env -p appsalon-validacion build web instalador notificaciones
 
-docker compose --env-file includes/.env -p appsalon-validacion run --rm --no-deps -T instalador php scripts/backup_db.php --output=storage/backups/pre_erp.sql.gz --gzip
+docker compose --env-file includes/.env -p appsalon-validacion run --rm --no-deps -T instalador php scripts/backup_db.php --gzip
 docker compose --env-file includes/.env -p appsalon-validacion run --rm --no-deps -T instalador php scripts/instalar.php --migrar
 docker compose --env-file includes/.env -p appsalon-validacion run --rm --no-deps -T instalador php scripts/instalar.php --comprobar
 

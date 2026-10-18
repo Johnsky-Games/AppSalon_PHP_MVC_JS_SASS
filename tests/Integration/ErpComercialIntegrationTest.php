@@ -27,6 +27,14 @@ final class ErpComercialIntegrationTest extends TestCase
     {
         $v=$this->r->uno('SELECT version FROM erp_ventas WHERE id=?',[$id]);(new ErpVentaService($this->r))->confirmar($this->owner,$this->d(['venta_id'=>$id,'version'=>(int)$v['version']]));
     }
+    public function testCostoRealDeEntregaYDevolucionRecalculaPromedioSinCambiarPrecioVendido():void
+    {
+        $id=$this->venta('1');$this->confirmar($id);(new ErpCajaService($this->r))->abrir($this->owner,$this->d(['fondo'=>'0']));(new ErpPagoService($this->r))->cobrar($this->owner,$this->d(['venta_id'=>$id,'monto'=>'11.50','recibido'=>'11.50','metodo'=>'efectivo']));
+        $this->r->q('UPDATE inventario_productos SET costo_centavos=800 WHERE id=?',[$this->producto]);(new ErpEntregaService($this->r))->entregar($this->owner,$this->d(['venta_id'=>$id]));$linea=$this->r->uno('SELECT * FROM erp_venta_lineas WHERE venta_id=?',[$id]);self::assertSame(800,(int)$linea['costo_centavos']);self::assertSame(1150,(int)$linea['total_centavos']);
+        (new ErpEntregaService($this->r))->entregar($this->owner,$this->d(['venta_id'=>$id]));self::assertSame(1,(int)$this->r->uno("SELECT COUNT(*) n FROM erp_eventos WHERE tipo='productos_entregados' AND entidad_id=?",[$id])['n'],'Repetir entrega tampoco duplica el evento contable.');
+        $this->r->q('UPDATE inventario_productos SET costo_centavos=1000 WHERE id=?',[$this->producto]);(new ErpDevolucionService($this->r))->devolver($this->owner,$this->d(['venta_id'=>$id,'linea_id'=>$linea['id'],'cantidad'=>'1','reintegrar_stock'=>'1','motivo'=>'Devolución apta para venta']));
+        $p=$this->r->uno('SELECT stock_milesimas,costo_centavos FROM inventario_productos WHERE id=?',[$this->producto]);self::assertSame(5000,(int)$p['stock_milesimas']);self::assertSame(960,(int)$p['costo_centavos']);
+    }
     public function testVentaEntregaDevolucionYCierreConciliadosSinDuplicados():void
     {
         $svc=new ErpVentaService($this->r);$id=$this->venta();self::assertSame(2300,$svc->resumen($id)['total']);$this->confirmar($id);

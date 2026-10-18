@@ -402,6 +402,7 @@ class ServicioService
                 'alertas' => []
             ];
         } catch (PersistenceException $e) {
+            if($e instanceof \Repositories\PrecioServicioGestionadoException)return ['status'=>self::STATUS_INVALID,'resultado'=>false,'servicio'=>$existente,'alertas'=>['error'=>[$e->getMessage()]]];
             return [
                 'status' => self::STATUS_ERROR,
                 'resultado' => false,

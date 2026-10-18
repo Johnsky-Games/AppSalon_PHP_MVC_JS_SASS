@@ -40,7 +40,8 @@ final class ErpDevolucionService extends ErpService
                 $p=$this->r->uno('SELECT * FROM inventario_productos WHERE id=? FOR UPDATE',[(int)$l['producto_id']]);
                 if($stock){
                     $saldo=(int)$p['stock_milesimas']+$qty;$clave='erp.devolucion:'.$devolucion;
-                    $this->r->q('UPDATE inventario_productos SET stock_milesimas=? WHERE id=?',[$saldo,(int)$p['id']]);
+                    $costo=intdiv((int)$p['stock_milesimas']*(int)$p['costo_centavos']+$qty*(int)$l['costo_centavos']+intdiv($saldo,2),$saldo);
+                    $this->r->q('UPDATE inventario_productos SET stock_milesimas=?,costo_centavos=? WHERE id=?',[$saldo,$costo,(int)$p['id']]);
                     $this->r->q("INSERT INTO inventario_movimientos(producto_id,actor_id,tipo,cantidad_milesimas,saldo_milesimas,costo_centavos,motivo,idempotencia,huella,registrado_en) VALUES(?,?,'entrada',?,?,?,?,?,?,?)",[(int)$p['id'],$actor,$qty,$saldo,(int)$l['costo_centavos'],'Devolución venta #'.$id,$clave,hash('sha256',$clave),$this->r::ahora()]);
                     $this->r->q("INSERT INTO erp_stock_origenes(movimiento_id,venta_linea_id,documento_tipo,documento_id) VALUES(?,?,'devolucion',?)",[$this->r->id(),(int)$l['id'],$devolucion]);
                 }

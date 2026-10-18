@@ -20,5 +20,6 @@ final class ErpTarifaIntegrationTest extends TestCase
         self::assertSame(2000,(int)$ls[0]['total_centavos']);self::assertSame(0,(int)$ls[0]['impuesto_centavos'],'La línea anterior sin desglose conserva su precio histórico sin inventar impuesto.');
         self::assertSame(1000,(int)$ls[1]['precio_centavos']);self::assertSame(150,(int)$ls[1]['impuesto_centavos']);self::assertSame(1150,(int)$ls[1]['total_centavos']);
         $res=(new ServicioService(new \Repositories\ServicioRepository($this->db)))->actualizar($sid,['nombre'=>'Nuevo nombre','precio'=>'50','duracion_minutos'=>'30']);self::assertSame(ServicioService::STATUS_INVALID,$res['status']);self::assertSame('33.60',$this->r->uno('SELECT precio FROM servicios WHERE id=?',[$sid])['precio']);
+        $this->expectException(\Repositories\PrecioServicioGestionadoException::class);(new \Repositories\ServicioRepository($this->db))->update(new \Model\Servicio(['id'=>$sid,'nombre'=>'Intento directo','precio'=>'50','duracion_minutos'=>'30']));
     }
 }

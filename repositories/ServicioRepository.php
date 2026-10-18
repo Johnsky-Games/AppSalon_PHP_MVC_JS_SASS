@@ -209,6 +209,18 @@ class ServicioRepository
      */
     public function update(Servicio $servicio): bool
     {
+        $id=filter_var($servicio->id,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]]);if(!$id)return false;
+        $db=$this->resolveDb();
+        // Mismo orden que la configuración ERP: servicio primero, tarifa después. Protege también carreras entre ambos editores.
+        return \Classes\Transaccion::ejecutar($db,function()use($db,$servicio,$id){
+            $r=new ErpRepository($db);$actual=$r->uno('SELECT precio FROM servicios WHERE id=? FOR UPDATE',[$id]);if(!$actual)return false;
+            $tarifa=$r->uno('SELECT id FROM erp_catalogo WHERE servicio_id=? FOR SHARE',[$id]);
+            if($tarifa&&\Services\CobroCalculo::centavos($actual['precio'])!==\Services\CobroCalculo::centavos((string)$servicio->precio))throw new PrecioServicioGestionadoException('La tarifa de este servicio se gestiona en Precios y productos del PDV.',422);
+            return $this->actualizarFila($servicio);
+        });
+    }
+    private function actualizarFila(Servicio $servicio): bool
+    {
         $id = filter_var($servicio->id, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
         if ($id === false) {
             return false;

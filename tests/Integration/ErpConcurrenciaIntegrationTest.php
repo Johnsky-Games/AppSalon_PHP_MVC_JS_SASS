@@ -18,7 +18,7 @@ final class ErpConcurrenciaIntegrationTest extends TestCase
     private function venta():int{$s=new ErpVentaService($this->r);$id=$s->crear($this->owner,$this->d())['recurso_id'];$s->agregar($this->owner,$this->d(['venta_id'=>$id,'catalogo_id'=>$this->catalogo,'cantidad'=>'1']));return $id;}
     private function competir(string $accion,array $datos,string $tabla,int $id):array
     {
-        if(!in_array($tabla,['inventario_productos','erp_ventas'],true))throw new \LogicException('Tabla de barrera');
+        if(!in_array($tabla,['inventario_productos','erp_ventas','erp_recursos'],true))throw new \LogicException('Tabla de barrera');
         $holder=new \mysqli(getenv('DB_HOST'),getenv('DB_USER'),getenv('DB_PASS'),BaseDatosAislada::nombre($this->db),(int)getenv('DB_PORT'));
         $holder->begin_transaction();$holder->query("SELECT id FROM $tabla WHERE id=$id FOR UPDATE");$workers=[];$resultados=[];
         try{
@@ -39,5 +39,14 @@ final class ErpConcurrenciaIntegrationTest extends TestCase
         $id=$this->venta();(new ErpVentaService($this->r))->confirmar($this->owner,$this->d(['venta_id'=>$id,'version'=>$this->r->uno('SELECT version FROM erp_ventas WHERE id=?',[$id])['version']]));(new ErpCajaService($this->r))->abrir($this->owner,$this->d(['fondo'=>'0']));
         $d=$this->d(['venta_id'=>$id,'monto'=>'10','metodo'=>'efectivo','recibido'=>'10']);$res=$this->competir('cobrar',[$d,$d],'erp_ventas',$id);self::assertTrue($res[0]['ok']&&$res[1]['ok'],json_encode($res));
         self::assertSame(1,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_pago_aplicaciones')['n']);self::assertSame(1,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_recibos')['n']);self::assertSame(1000,(int)$this->r->uno('SELECT SUM(monto_centavos) n FROM caja_movimientos')['n']);
+    }
+    public function testDosProfesionalesCompitenPorCabinaYLaReservaPerdedoraSeRevierteCompleta():void
+    {
+        $cli=R5CajaFixture::usuario($this->db);$p1=R5CajaFixture::profesional($this->db);$p2=R5CajaFixture::profesional($this->db);
+        $this->r->q("INSERT INTO servicios(nombre,precio,duracion_minutos) VALUES('Cabina compartida',10,30)");$sid=$this->r->id();$dia=(int)(new \DateTimeImmutable('2030-03-04'))->format('N');
+        foreach([$p1,$p2] as $pid){$this->r->q('INSERT INTO profesionales_servicios(profesionalId,servicioId) VALUES(?,?)',[$pid,$sid]);$this->r->q("INSERT INTO horarios_profesionales(profesionalId,dia_semana,hora_inicio,hora_fin) VALUES(?,?,'09:00:00','18:00:00')",[$pid,$dia]);}
+        $svc=new \Services\ErpRecursoService($this->r);$recurso=$svc->crear($this->owner,$this->d(['nombre'=>'Cabina única','tipo'=>'cabina']))['recurso_id'];$svc->requisito($this->owner,$this->d(['servicio_id'=>$sid,'tipo'=>'cabina','cantidad'=>'1','desde'=>'2029-01-01']));
+        $datos=[];foreach([$p1,$p2] as $pid)$datos[]=['cliente_id'=>$cli,'profesional_id'=>$pid,'fecha'=>'2030-03-04','hora'=>'10:00','dia'=>$dia,'servicios'=>[$sid]];
+        $res=$this->competir('reservar',$datos,'erp_recursos',$recurso);self::assertCount(1,array_filter($res,fn($r)=>$r['ok']),json_encode($res));self::assertSame(1,(int)$this->r->uno('SELECT COUNT(*) n FROM citas')['n']);self::assertSame(1,(int)$this->r->uno('SELECT COUNT(*) n FROM citasservicios')['n']);self::assertSame(1,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_recurso_reservas')['n']);
     }
 }
