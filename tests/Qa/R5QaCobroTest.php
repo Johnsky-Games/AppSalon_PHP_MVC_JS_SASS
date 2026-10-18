@@ -793,7 +793,7 @@ final class R5QaCobroTest extends R5Case
         [$f, $h] = self::slotComenzado(5);
         $c = self::crearCita(['cliente' => self::$e['cliente']['id'], 'pro' => self::$e['proA']['profesional_id'], 'fecha' => $f, 'hora' => $h, 'estado' => 'en_servicio']);
         $n = $this->eq('dueno');
-        $pag = $n->get("/agenda?desde=$f&hasta=$f");
+        $pag = $this->agendaConCita($n, "/agenda?desde=$f&hasta=$f", $c);
         $t = self::tarjeta($pag['body'], $c);
         $a = self::accion((string)$t, '/Finalizar y cobrar/iu');
         $this->assertNotNull($a, 'la agenda no ofrece «Finalizar y cobrar»');

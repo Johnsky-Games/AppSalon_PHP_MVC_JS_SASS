@@ -431,7 +431,12 @@ final class R5DevAgendaTest extends R5DevAgendaCase
             $this->assertSame(200, $r['status'], $rol);
             $this->assertStringContainsString('Clara Cliente', $r['body'], $rol);
             $this->assertStringContainsString('Corte histórico', $r['body'], $rol);
-            foreach (['$20.00', 'Total de la visita', 'Estado de pago', 'Pagado', 'Cobrar', 'comprobante', '/caja'] as $prohibido) {
+            preg_match_all('~(?:href|action)="([^"]+)"~', $r['body'], $destinos);
+            foreach ($destinos[1] as $destino) {
+                $ruta = parse_url(html_entity_decode($destino), PHP_URL_PATH) ?: '';
+                $this->assertFalse($ruta === '/caja' || str_starts_with($ruta, '/caja/'), "$rol no accede a la caja histórica");
+            }
+            foreach (['$20.00', 'Total de la visita', 'Estado de pago', 'Pagado', 'Cobrar', 'comprobante'] as $prohibido) {
                 $this->assertStringNotContainsStringIgnoringCase($prohibido, $r['body'], "$rol no ve «{$prohibido}»");
             }
         }
@@ -505,10 +510,32 @@ final class R5DevAgendaTest extends R5DevAgendaCase
         $ya = $this->citaYaComenzada();
         $futura = $this->cita(self::diaNegocio(3), '11:00:00', 'confirmada', self::$proA['profesional_id']);
         $per = 'desde=' . self::diaNegocio(0) . '&hasta=' . self::diaNegocio(4);
-        $pag = $n->get("/agenda?$per");
-        $this->assertStringNotContainsString('data-modal-open="agenda-reprogramar-' . $ya . '"', $pag['body'], 'la cita ya comenzó: el servidor la rechazaría');
+        $pagYa = $this->agendaConCita($n, "/agenda?$per", $ya);
+        $this->assertStringContainsString('id="cita-' . $ya . '"', $pagYa['body']);
+        $this->assertStringNotContainsString('data-modal-open="agenda-reprogramar-' . $ya . '"', $pagYa['body'], 'la cita ya comenzó: el servidor la rechazaría');
+        $pag = $this->agendaConCita($n, "/agenda?$per", $futura);
         $this->assertStringContainsString('data-modal-open="agenda-reprogramar-' . $futura . '"', $pag['body']);
         $this->assertMatchesRegularExpression('~<dialog id="agenda-reprogramar-' . $futura . '".*?name="volver" value="agenda".*?</dialog>~s', $pag['body']);
+    }
+
+    public function test_detalle_conserva_pagina_y_estado_en_el_regreso_y_en_sus_formularios(): void
+    {
+        $n = $this->dueno();
+        $dia = self::diaNegocio(27);
+        for ($i = 0; $i < 26; $i++) {
+            $minutos = 9 * 60 + $i * 30;
+            $cita = $this->cita($dia, sprintf('%02d:%02d:00', intdiv($minutos, 60), $minutos % 60));
+        }
+        $consulta = "desde=$dia&hasta=$dia&estado=confirmada&pagina=2";
+        $agenda = $n->get('/agenda?' . $consulta);
+        $this->assertSame(200, $agenda['status']);
+        $detalleUrl = '/agenda/cita?id=' . $cita . '&' . $consulta;
+        $this->assertStringContainsString('href="' . htmlspecialchars($detalleUrl, ENT_QUOTES, 'UTF-8') . '"', $agenda['body']);
+        $detalle = $n->get($detalleUrl);
+        $this->assertSame(200, $detalle['status']);
+        $this->assertStringContainsString('href="' . htmlspecialchars('/agenda?' . $consulta, ENT_QUOTES, 'UTF-8') . '">Volver a la agenda', $detalle['body']);
+        $this->assertStringContainsString('name="r_estado" value="confirmada"', $detalle['body']);
+        $this->assertStringContainsString('name="r_pagina" value="2"', $detalle['body']);
     }
 
     public function test_peticiones_con_retorno_manipulado_no_redirigen_fuera_del_portal(): void

@@ -76,7 +76,8 @@ final class R5CajaMigracionIntegrationTest extends TestCase
         // reaplicar el SQL a mano (idempotente) no falla ni duplica
         $this->sql((string)file_get_contents(__DIR__ . '/../../database/migrations/024_cobros_verificacion.sql'));
         $this->sql((string)file_get_contents(__DIR__ . '/../../database/migrations/025_comprobantes.sql'));
-        $this->assertSame(1, (int)$this->uno('SELECT COUNT(*) FROM comprobantes_secuencia'));
+        $this->assertSame(1, (int)$this->uno("SELECT COUNT(*) FROM comprobantes_secuencia WHERE serie='CI'"));
+        $this->assertSame(1, (int)$this->uno("SELECT COUNT(*) FROM comprobantes_secuencia WHERE serie='PV'"), 'La reaplicación conserva también la serie independiente del PDV.');
     }
 
     public function testRetrocargaSinInventarDatosYCompatibilidadConPagosPrevios(): void

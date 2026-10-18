@@ -352,6 +352,7 @@ class CitaRepository
             }
 
             $citaServicio->id = (string)$insertId;
+            (new \Services\ErpTarifaService(new ErpRepository($db)))->registrarSnapshot($insertId,$servicioId,$precioServicio);
             return $insertId;
         } catch (PersistenceException $e) {
             error_log("[CitaRepository::createCitaServicio] " . $e->getMessage());
@@ -444,6 +445,7 @@ class CitaRepository
                 $this->createCitaServicio($citaServicio, $db);
             }
 
+            (new \Services\ErpRecursoAgendaService(new ErpRepository($db)))->reservar($idCita);
             // Registrar evento Outbox en la misma conexión y transacción antes del commit
             $notifRepo = new NotificacionCitaRepository($db);
             $ahoraUtc = gmdate('Y-m-d H:i:s');
@@ -725,6 +727,7 @@ class CitaRepository
                 ];
             }
 
+            (new \Services\ErpRecursoAgendaService(new ErpRepository($db)))->reservar($idCita);
             // Registrar evento Outbox en la misma conexión y transacción antes del commit
             $notifRepo = new NotificacionCitaRepository($db);
             $ahoraUtc = gmdate('Y-m-d H:i:s');
@@ -1237,7 +1240,7 @@ class CitaRepository
     public function tieneRegistrosFinancieros(int $citaId): bool
     {
         $db = $this->resolveDb();
-        foreach ([['pagos', 'cita_referencia_id'], ['pagos', 'cita_id'], ['cobros_devoluciones', 'cita_id'], ['comprobantes', 'cita_id'], ['cobros_eventos', 'cita_id']] as [$tabla, $col]) {
+        foreach ([['erp_ventas','cita_id'], ['pagos', 'cita_referencia_id'], ['pagos', 'cita_id'], ['cobros_devoluciones', 'cita_id'], ['comprobantes', 'cita_id'], ['cobros_eventos', 'cita_id']] as [$tabla, $col]) {
             $stmt = $db->prepare("SELECT 1 FROM {$tabla} WHERE {$col} = ? LIMIT 1");
             if (!$stmt) throw new PersistenceException('No se pudo comprobar los cobros de la cita.');
             $stmt->bind_param('i', $citaId);
@@ -1846,6 +1849,7 @@ class CitaRepository
                 $fin = sprintf('%02d:%02d:00', intdiv($finMin, 60), $finMin % 60);
                 $stmt = $db->prepare('UPDATE citas SET fecha = ?, hora = ?, hora_inicio = ?, hora_fin = ? WHERE id = ?');
                 $stmt->bind_param('ssssi', $fecha, $hora, $hora, $fin, $id); if (!$stmt->execute()) throw new PersistenceException('Fallo de escritura de agenda.'); $stmt->close();
+                (new \Services\ErpRecursoAgendaService(new ErpRepository($db)))->reservar($id);
                 $despues = json_encode(['fecha' => $fecha, 'hora' => $hora, 'hora_fin' => $fin] + ($pendienteRevision ? ['desde_pendiente_revision' => true] : []), JSON_THROW_ON_ERROR);
                 // Outbox durable dentro de la misma transacción; no se envía SMTP bajo bloqueo.
                 $stmt = $db->prepare("UPDATE notificaciones_citas SET estado = 'descartada', ultimo_error = 'Horario reemplazado por reprogramación', proximo_intento_at = NULL WHERE cita_id = ? AND tipo IN ('recordatorio', 'confirmacion') AND estado IN ('pendiente', 'fallido', 'reintentando')");
@@ -1872,6 +1876,7 @@ class CitaRepository
         } catch (\Throwable $e) {
             try { $db->rollback(); } catch (\Throwable $rollbackError) { error_log('[Agenda] Conexión perdida durante rollback.'); }
             error_log('[Agenda] Operación revertida: ' . $e->getMessage());
+            if ($e instanceof RecursoAgendaException) return $error(409, $e->getMessage());
             return $error(500, 'No se pudo actualizar la agenda. No se aplicaron cambios.');
         }
     }
@@ -1880,7 +1885,7 @@ class CitaRepository
      * Lista limitada de un período; el alcance profesional se aplica en SQL. `$estado` filtra por estado de la cita (null = todos).
      * Incluye quién inició, finalizó o registró la ausencia (nombres de las cuentas, no ids sueltos).
      */
-    public function listarAgenda(string $desde, string $hasta, ?int $profesionalUsuario = null, ?string $estado = null): array
+    public function listarAgenda(string $desde, string $hasta, ?int $profesionalUsuario = null, ?string $estado = null, int $pagina = 1, int $porPagina = 500): array
     {
         $db = $this->resolveDb();
         $sql = "SELECT c.*, CONCAT(u.nombre, ' ', u.apellido) cliente, p.nombre profesional_nombre,
@@ -1895,12 +1900,23 @@ class CitaRepository
         $tipos = 'ss'; $valores = [$desde, $hasta];
         if ($profesionalUsuario !== null) { $sql .= ' AND p.usuarioId = ?'; $tipos .= 'i'; $valores[] = $profesionalUsuario; }
         if ($estado !== null) { $sql .= ' AND c.estado = ?'; $tipos .= 's'; $valores[] = $estado; }
-        $sql .= ' ORDER BY c.fecha, c.hora, c.id LIMIT 500';
+        $porPagina=max(1,min(500,$porPagina)); $pagina=max(1,min(100000,$pagina));
+        $sql .= ' ORDER BY c.fecha, c.hora, c.id LIMIT '.$porPagina.' OFFSET '.(($pagina-1)*$porPagina);
         $stmt = $db->prepare($sql);
         if (!$stmt) throw new PersistenceException('No se pudo consultar la agenda.');
         $stmt->bind_param($tipos, ...$valores);
         if (!$stmt->execute()) throw new PersistenceException('No se pudo consultar la agenda.');
         $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC); $stmt->close(); return $rows;
+    }
+
+    public function contarAgenda(string $desde,string $hasta,?int $profesionalUsuario=null,?string $estado=null): int
+    {
+        $sql='SELECT COUNT(*) n FROM citas c JOIN usuarios u ON u.id=c.usuarioId LEFT JOIN profesionales p ON p.id=c.profesionalId WHERE c.fecha BETWEEN ? AND ?';
+        $tipos='ss'; $args=[$desde,$hasta];
+        if($profesionalUsuario!==null){$sql.=' AND p.usuarioId=?';$tipos.='i';$args[]=$profesionalUsuario;}
+        if($estado!==null){$sql.=' AND c.estado=?';$tipos.='s';$args[]=$estado;}
+        $st=$this->resolveDb()->prepare($sql);$st->bind_param($tipos,...$args);$st->execute();
+        $total=(int)$st->get_result()->fetch_assoc()['n'];$st->close();return $total;
     }
 
     /**

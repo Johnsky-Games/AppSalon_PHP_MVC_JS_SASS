@@ -10,8 +10,9 @@ final class FinanzasController
     {
         iniciar_sesion_segura(); exigir_permiso('finanzas.gestionar');
         $hoy=(new \DateTimeImmutable('now',new \DateTimeZone('America/Guayaquil')))->format('Y-m-d');
-        $inicio=is_string($_GET['inicio'] ?? null) ? $_GET['inicio'] : $hoy;
-        $fin=is_string($_GET['fin'] ?? null) ? $_GET['fin'] : $hoy;
+        $entrada=\Classes\PeriodoFiltro::aplicar($_GET,'inicio','fin',true);
+        $inicio=is_string($entrada['inicio'] ?? null) ? $entrada['inicio'] : $hoy;
+        $fin=is_string($entrada['fin'] ?? null) ? $entrada['fin'] : $hoy;
         foreach ([$inicio,$fin] as $fecha) {
             $d=\DateTimeImmutable::createFromFormat('!Y-m-d',$fecha);
             if (!$d || $d->format('Y-m-d')!==$fecha) { http_response_code(422); $inicio=$fin=$hoy; break; }

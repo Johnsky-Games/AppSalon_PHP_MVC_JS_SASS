@@ -1,0 +1,14 @@
+DO (SELECT 'Conserve activos antes de revertir' FROM erp_activos CROSS JOIN(SELECT 1 UNION ALL SELECT 2)x);
+DO (SELECT 'Conserve necesidades antes de revertir' FROM erp_servicio_recursos CROSS JOIN(SELECT 1 UNION ALL SELECT 2)x);
+DO (SELECT 'Conserve recursos antes de revertir' FROM erp_recursos CROSS JOIN(SELECT 1 UNION ALL SELECT 2)x);
+DO (SELECT 'Conserve recetas antes de revertir' FROM erp_recetas CROSS JOIN(SELECT 1 UNION ALL SELECT 2)x);
+DO (SELECT 'Conserve consumos antes de revertir' FROM erp_consumos CROSS JOIN(SELECT 1 UNION ALL SELECT 2)x);
+DO (SELECT 'Conserve documentos antes de revertir' FROM erp_documentos CROSS JOIN(SELECT 1 UNION ALL SELECT 2)x);
+DROP TABLE IF EXISTS erp_documentos;
+DROP TABLE IF EXISTS erp_consumos;
+DROP TABLE IF EXISTS erp_recetas;
+DROP TABLE IF EXISTS erp_activos;
+DROP TABLE IF EXISTS erp_mantenimientos;
+DROP TABLE IF EXISTS erp_recurso_reservas;
+DROP TABLE IF EXISTS erp_servicio_recursos;
+DROP TABLE IF EXISTS erp_recursos;

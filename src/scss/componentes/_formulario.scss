@@ -27,3 +27,13 @@
 .ui-form-status { min-height: 2.4rem; margin: 1rem 0 0; color: var(--ui-ink); font-size: 1.3rem; }
 .ui-form-status:empty { margin: 0; min-height: 0; }
 @media (prefers-reduced-motion: reduce) { .boton.is-busy, button.is-busy, input.is-busy { transition: none; } }
+
+/* Barra de filtros compartida: mismos controles y alineación en todos los módulos. */
+.ui-filtros, .ops-filter, .agenda-integral .agenda-filtros { display:flex; flex-wrap:wrap; align-items:flex-end; gap:1.6rem; }
+.ui-filtros > .campo, .ops-filter > .campo, .agenda-integral .agenda-filtros > .campo { display:flex; flex-direction:column; flex:1 1 18rem; margin:0; min-width:0; }
+.ui-periodo small { font-size:1.1rem; }
+.ui-filtros > button, .ops-filter > button, .agenda-integral .agenda-filtros > button { min-height:4.8rem; margin:0; }
+.ui-periodo { position:relative; padding-bottom:0; }
+.ui-periodo small { display:none; }
+@media(max-width:600px) { .ui-filtros > .campo, .ops-filter > .campo, .agenda-integral .agenda-filtros > .campo { flex-basis:100%; } }
+@media print { body:has(.erp-recibo) { .nav-equipo, .ops-toolbar, .ui-page-header, .barra, button {display:none!important;} .erp-recibo {border:0;box-shadow:none;} } }

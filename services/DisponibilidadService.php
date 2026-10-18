@@ -65,6 +65,8 @@ class DisponibilidadService
     private ServicioRepository $servicioRepository;
     private ?CitaRepository $citaRepository;
     private int $pasoMinutos;
+    private ?ErpRecursoAgendaService $recursos = null;
+    private ?ErpTarifaService $tarifas = null;
 
     public function __construct(
         ?ProfesionalRepository $profesionalRepository = null,
@@ -74,6 +76,7 @@ class DisponibilidadService
     ) {
         $this->profesionalRepository = $profesionalRepository ?? new ProfesionalRepository();
         $db = $this->profesionalRepository->getDb();
+        if ($db instanceof \mysqli) {$this->recursos = new ErpRecursoAgendaService(new \Repositories\ErpRepository($db));$this->tarifas=new ErpTarifaService(new \Repositories\ErpRepository($db));}
         $this->servicioRepository = $servicioRepository ?? new ServicioRepository($db);
         if ($citaRepository !== null) {
             $this->citaRepository = $citaRepository;
@@ -470,6 +473,7 @@ class DisponibilidadService
                 );
             }
 
+            if ($this->tarifas !== null && !$this->tarifas->serviciosActivos($servicioIds)) return $this->construirRespuestaError(self::STATUS_INVALID,self::CODIGO_SOLICITUD_INVALIDA,422,'Uno o más servicios ya no admiten nuevas reservas.');
             // Cargar cada servicio desde el catálogo oficial e ignorar duraciones del cliente
             $duracionTotalMinutos = 0;
             foreach ($servicioIds as $sid) {
@@ -631,6 +635,10 @@ class DisponibilidadService
             }
         }
 
+        if ($this->recursos !== null) {
+            $intervalosDisponibles = array_values(array_filter($intervalosDisponibles,
+                fn(array $i): bool => $this->recursos->disponibles($fecha, $i['inicio'], $i['fin'], $servicioIds) !== null));
+        }
         $hayDisponibilidad = !empty($intervalosDisponibles);
 
         return [

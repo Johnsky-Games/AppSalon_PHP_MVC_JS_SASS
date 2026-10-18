@@ -402,7 +402,11 @@ final class R3Test extends R3Case
             $m = $this->medirEnvio('r3_env_' . md5((string)$etiqueta), ['APP_ENV' => $valor]);
             foreach ($m as $paso => $x) {
                 $this->assertContains($x['status'], [200, 302], "APP_ENV=«{$etiqueta}», $paso: el servidor no respondió bien (HTTP {$x['status']})");
-                if ($x['correos'] > 0 || $x['ms'] > 300) { $fallos[] = "APP_ENV=«{$etiqueta}» $paso: {$x['correos']} correo(s) en la petición y {$x['ms']} ms"; }
+                // Registro calcula un hash de contraseña: su duración depende de la CPU, no solo de SMTP.
+                // El contrato es transporte inactivo y exactamente un evento pendiente sin intentos.
+                if ($x['correos'] !== 0 || $x['smtp_saludos'] !== 0 || $x['cola'] !== [['estado'=>'pendiente','intentos'=>0,'enviado'=>false]]) {
+                    $fallos[] = "APP_ENV=«{$etiqueta}» $paso: " . json_encode($x, JSON_UNESCAPED_UNICODE);
+                }
             }
         }
         $this->assertSame([], $fallos, "con APP_ENV fuera de desarrollo/pruebas CORREOS_ENVIO_INMEDIATO=1 NO debe enviar dentro de la petición (SMTP de 400 ms):\n" . implode("\n", $fallos));
@@ -410,6 +414,8 @@ final class R3Test extends R3Case
         foreach (['testing', 'test', 'development', 'dev', 'local'] as $env) {
             $m = $this->medirEnvio('r3_ctl_' . $env, ['APP_ENV' => $env]);
             foreach ($m as $paso => $x) {
+                $this->assertGreaterThan(0, $x['smtp_saludos'], "control positivo APP_ENV=$env, $paso: debía abrir una sesión SMTP");
+                $this->assertSame([['estado'=>'enviado','intentos'=>1,'enviado'=>true]], $x['cola'], "control positivo APP_ENV=$env, $paso: evento entregado una vez");
                 $this->assertSame(1, $x['correos'], "control positivo APP_ENV=$env, $paso: debía enviar en línea");
                 $this->assertGreaterThan(350, $x['ms'], "control positivo APP_ENV=$env, $paso: debía pagar la latencia del SMTP");
             }
@@ -426,7 +432,7 @@ final class R3Test extends R3Case
         $fallos = [];
         foreach (['TESTING', ' testing ', 'Development', 'DEV', 'Local', 'Test ', "testing\n"] as $valor) {
             $m = $this->medirEnvio('r3_var_' . md5($valor), ['APP_ENV' => $valor]);
-            foreach ($m as $paso => $x) { if ($x['correos'] > 0) { $fallos[] = 'APP_ENV=«' . addcslashes($valor, "\n") . "» $paso envió en línea"; } }
+            foreach ($m as $paso => $x) { if ($x['correos'] !== 0 || $x['smtp_saludos'] !== 0 || $x['cola'] !== [['estado'=>'pendiente','intentos'=>0,'enviado'=>false]]) { $fallos[] = 'APP_ENV=«' . addcslashes($valor, "\n") . "» $paso: " . json_encode($x, JSON_UNESCAPED_UNICODE); } }
         }
         $this->assertSame([], $fallos, implode("\n", $fallos));
     }

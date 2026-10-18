@@ -55,10 +55,10 @@ final class R5QaAtencionTest extends R5Case
         return [self::gye('-2 days')->format('Y-m-d'), self::gye('+3 days')->format('Y-m-d')];
     }
 
-    private function agenda(Navegador $n): array
+    private function agenda(Navegador $n, int $cita): array
     {
         [$d, $h] = $this->periodo();
-        $r = $n->get("/agenda?desde=$d&hasta=$h");
+        $r = $this->agendaConCita($n, "/agenda?desde=$d&hasta=$h", $cita);
         $this->assertSame(200, $r['status'], 'GET /agenda ' . substr(self::texto($r['body']), 0, 200));
         return $r;
     }
@@ -83,7 +83,7 @@ final class R5QaAtencionTest extends R5Case
     /** Envía el formulario de "Iniciar" de una cita comenzada auxiliar, cambiando solo el id y el estado (POST forjado con todos los campos de retorno reales). */
     private function postForjado(Navegador $n, int $citaDonante, int $citaObjetivo, string $estado): array
     {
-        $pag = $this->agenda($n);
+        $pag = $this->agenda($n, $citaDonante);
         [$f, $b] = $this->accionDe($pag, $citaDonante, '/Iniciar atenci[óo]n/iu');
         $cambios = ['id' => (string)$citaObjetivo, 'estado' => $estado];
         return self::enviar($n, $f, $cambios, [], $b);
@@ -106,7 +106,7 @@ final class R5QaAtencionTest extends R5Case
         $n = $this->equipo('dueno');
         $c = $this->citaComenzada();
         [$desde, $hasta] = $this->periodo();
-        $pag = $this->agenda($n);
+        $pag = $this->agenda($n, $c);
         [$f, $b] = $this->accionDe($pag, $c, '/Iniciar atenci[óo]n/iu');
         $r = self::enviar($n, $f, [], [], $b);
         $this->assertContains($r['status'], [302, 303], 'tras iniciar debe redirigir; recibió ' . $r['status'] . ': ' . substr(self::texto($r['body']), 0, 200));
@@ -151,7 +151,7 @@ final class R5QaAtencionTest extends R5Case
     {
         $n = $this->equipo('dueno');
         $c = $this->citaFutura();
-        $pag = $this->agenda($n);
+        $pag = $this->agenda($n, $c);
         $t = self::tarjeta($pag['body'], $c);
         $this->assertNotNull($t, 'la agenda no muestra la cita futura');
         $this->assertTrue(self::accion($t, '/Iniciar atenci[óo]n/iu') === null, 'la cita futura NO debe ofrecer un «Iniciar atención» habilitado (provoca un error al hacer clic)');
@@ -210,7 +210,7 @@ final class R5QaAtencionTest extends R5Case
             $this->assertNotEmpty(array_filter(self::destinos($r['body']), fn($d) => self::pathDe($d) === '/agenda'), "$nombre: sin «Volver» a la agenda");
         }
         // CSRF ausente: nunca cambia nada.
-        $pag = $this->agenda($n);
+        $pag = $this->agenda($n, $donante);
         [$f, $b] = $this->accionDe($pag, $donante, '/Iniciar atenci[óo]n/iu');
         $r = self::enviar($n, $f, [], ['csrf_token'], $b);
         $this->assertContains($r['status'], [403, 419], 'sin CSRF debe rechazarse: ' . $r['status']);
@@ -225,7 +225,7 @@ final class R5QaAtencionTest extends R5Case
     {
         $n = $this->equipo('dueno');
         $c = $this->citaComenzada('en_servicio');
-        $pag = $this->agenda($n);
+        $pag = $this->agenda($n, $c);
         [$f, $b] = $this->accionDe($pag, $c, '/^Finalizar atenci[óo]n$/iu');
         $r = self::enviar($n, $f, [], [], $b);
         $this->assertContains($r['status'], [302, 303], substr(self::texto($r['body']), 0, 200));
@@ -249,7 +249,7 @@ final class R5QaAtencionTest extends R5Case
         foreach (['dueno', 'gerente'] as $rol) {
             $n = $this->equipo($rol);
             $c = $this->citaComenzada('en_servicio');
-            $pag = $this->agenda($n);
+            $pag = $this->agenda($n, $c);
             [$f, $b] = $this->accionDe($pag, $c, '/Finalizar y cobrar/iu');
             $r = self::enviar($n, $f, [], [], $b);
             $this->assertContains($r['status'], [302, 303], "$rol: " . substr(self::texto($r['body']), 0, 200));
@@ -276,9 +276,9 @@ final class R5QaAtencionTest extends R5Case
     {
         $dueno = $this->equipo('dueno');
         $c = $this->citaComenzada('en_servicio');
-        $fDueno = $this->accionDe($this->agenda($dueno), $c, '/Finalizar y cobrar/iu');
+        $fDueno = $this->accionDe($this->agenda($dueno, $c), $c, '/Finalizar y cobrar/iu');
         $rec = $this->equipo('recepcion');
-        $t = self::tarjeta($this->agenda($rec)['body'], $c);
+        $t = self::tarjeta($this->agenda($rec, $c)['body'], $c);
         $this->assertNotNull($t);
         $this->assertNull(self::control($t, '/Finalizar y cobrar/iu'), 'recepción no debe ver «Finalizar y cobrar»');
         $this->assertNotNull(self::accion($t, '/^Finalizar atenci[óo]n$/iu'), 'recepción sí puede «Finalizar atención»');
@@ -297,7 +297,7 @@ final class R5QaAtencionTest extends R5Case
     {
         $n = $this->equipo('recepcion');
         $c = $this->citaComenzada();
-        [$f, $b] = $this->accionDe($this->agenda($n), $c, '/Registrar ausencia/iu');
+        [$f, $b] = $this->accionDe($this->agenda($n, $c), $c, '/Registrar ausencia/iu');
         $r = self::enviar($n, $f, [], [], $b);
         $this->assertContains($r['status'], [302, 303]);
         $this->assertSame('no_asistio', $this->estado($c));
@@ -354,8 +354,8 @@ final class R5QaAtencionTest extends R5Case
         $b = $this->equipo('gerente');
         for ($ronda = 1; $ronda <= 6; $ronda++) {
             $c = $this->citaComenzada('confirmada', null, null, $ronda);
-            [$fa, $ba] = $this->accionDe($this->agenda($a), $c, '/Iniciar atenci[óo]n/iu');
-            [$fb, $bb] = $this->accionDe($this->agenda($b), $c, '/Iniciar atenci[óo]n/iu');
+            [$fa, $ba] = $this->accionDe($this->agenda($a, $c), $c, '/Iniciar atenci[óo]n/iu');
+            [$fb, $bb] = $this->accionDe($this->agenda($b, $c), $c, '/Iniciar atenci[óo]n/iu');
             $cuerpoA = array_merge($fa['campos'], $ba['name'] ? [$ba['name'] => $ba['value']] : []);
             $cuerpoB = array_merge($fb['campos'], $bb['name'] ? [$bb['name'] => $bb['value']] : []);
             $res = self::rafaga(self::$base, [
@@ -374,7 +374,7 @@ final class R5QaAtencionTest extends R5Case
     {
         $n = $this->equipo('dueno');
         $c = $this->citaComenzada();
-        [$f, $b] = $this->accionDe($this->agenda($n), $c, '/Iniciar atenci[óo]n/iu');
+        [$f, $b] = $this->accionDe($this->agenda($n, $c), $c, '/Iniciar atenci[óo]n/iu');
         $r1 = self::enviar($n, $f, [], [], $b);
         $r2 = self::enviar($n, $f, [], [], $b);
         $this->assertContains($r1['status'], [302, 303]);
@@ -391,8 +391,8 @@ final class R5QaAtencionTest extends R5Case
         $b = $this->equipo('recepcion');
         for ($ronda = 1; $ronda <= 4; $ronda++) {
             $c = $this->citaComenzada('confirmada', null, null, 10 + $ronda);
-            [$fa, $ba] = $this->accionDe($this->agenda($a), $c, '/Iniciar atenci[óo]n/iu');
-            [$fb, $bb] = $this->accionDe($this->agenda($b), $c, '/Registrar ausencia/iu');
+            [$fa, $ba] = $this->accionDe($this->agenda($a, $c), $c, '/Iniciar atenci[óo]n/iu');
+            [$fb, $bb] = $this->accionDe($this->agenda($b, $c), $c, '/Registrar ausencia/iu');
             $res = self::rafaga(self::$base, [
                 ['cookie' => $a->cookieSesion(), 'metodo' => 'POST', 'ruta' => $fa['action'], 'body' => array_merge($fa['campos'], $ba['name'] ? [$ba['name'] => $ba['value']] : [])],
                 ['cookie' => $b->cookieSesion(), 'metodo' => 'POST', 'ruta' => $fb['action'], 'body' => array_merge($fb['campos'], $bb['name'] ? [$bb['name'] => $bb['value']] : [])],
@@ -449,7 +449,7 @@ final class R5QaAtencionTest extends R5Case
         $n = $this->equipo('dueno');
         $donante = $this->citaComenzada();
         $ayer = self::crearCita(['cliente' => self::$e['cliente']['id'], 'pro' => self::$e['proA']['profesional_id'], 'fecha' => self::gye('-1 day')->format('Y-m-d'), 'hora' => '10:00:00']);
-        $pag = $this->agenda($n);
+        $pag = $this->agenda($n, $ayer);
         $t = self::tarjeta($pag['body'], $ayer);
         $this->assertNotNull($t);
         $this->assertNull(self::accion($t, '/Iniciar atenci[óo]n/iu'), 'una cita de un día anterior no ofrece un formulario de inicio');
@@ -470,14 +470,14 @@ final class R5QaAtencionTest extends R5Case
         if ($slot === null) { $this->markTestIncomplete('Después de las 23:30 (America/Guayaquil) no existe un horario «dentro del margen» el mismo día; repetir a otra hora.'); }
         $n = $this->equipo('dueno');
         $c = self::crearCita(['cliente' => self::$e['cliente']['id'], 'pro' => self::$e['proA']['profesional_id'], 'fecha' => $slot[0], 'hora' => $slot[1]]);
-        [$f, $b] = $this->accionDe($this->agenda($n), $c, '/Iniciar atenci[óo]n/iu');
+        [$f, $b] = $this->accionDe($this->agenda($n, $c), $c, '/Iniciar atenci[óo]n/iu');
         $r = self::enviar($n, $f, [], [], $b);
         $this->assertContains($r['status'], [302, 303], 'dentro del margen de 60 min debe permitir iniciar: ' . substr(self::texto($r['body']), 0, 200));
         $this->assertSame('en_servicio', $this->estado($c));
         $dos = self::gye('+2 hours');
         if ($dos->format('Y-m-d') === self::gye()->format('Y-m-d')) {
             $lejos = self::crearCita(['cliente' => self::$e['cliente']['id'], 'pro' => self::$e['proA']['profesional_id'], 'fecha' => $dos->format('Y-m-d'), 'hora' => $dos->format('H:i:s')]);
-            $t = self::tarjeta($this->agenda($n)['body'], $lejos);
+            $t = self::tarjeta($this->agenda($n, $lejos)['body'], $lejos);
             $this->assertTrue(self::accion((string)$t, '/Iniciar atenci[óo]n/iu') === null, 'a 2 h del inicio no debe estar habilitado');
             $this->assertMatchesRegularExpression('/Disponible desde/iu', self::texto((string)$t));
         }
@@ -489,9 +489,9 @@ final class R5QaAtencionTest extends R5Case
         $c = $this->citaComenzada();
         $dueno = $this->equipo('dueno');
         $gerente = $this->equipo('gerente');
-        [$f, $b] = $this->accionDe($this->agenda($dueno), $c, '/Iniciar atenci[óo]n/iu');
+        [$f, $b] = $this->accionDe($this->agenda($dueno, $c), $c, '/Iniciar atenci[óo]n/iu');
         $this->assertContains(self::enviar($dueno, $f, [], [], $b)['status'], [302, 303]);
-        [$f, $b] = $this->accionDe($this->agenda($gerente), $c, '/^Finalizar atenci[óo]n$/iu');
+        [$f, $b] = $this->accionDe($this->agenda($gerente, $c), $c, '/^Finalizar atenci[óo]n$/iu');
         $this->assertContains(self::enviar($gerente, $f, [], [], $b)['status'], [302, 303]);
         $ev = $this->eventos($c);
         $this->assertCount(2, $ev);
@@ -516,7 +516,7 @@ final class R5QaAtencionTest extends R5Case
         $propia = $this->citaComenzada('confirmada', self::$e['proA']);
         $ajena = $this->citaComenzada('confirmada', self::$e['proB']);
         $pa = self::entrar(self::$base, self::$e['proA']);
-        $pag = $this->agenda($pa);
+        $pag = $this->agenda($pa, $propia);
         $this->assertNotNull(self::tarjeta($pag['body'], $propia));
         $this->assertNull(self::tarjeta($pag['body'], $ajena), 'el profesional ve una cita ajena en su agenda');
         [$f, $b] = $this->accionDe($pag, $propia, '/Iniciar atenci[óo]n/iu');
@@ -531,7 +531,7 @@ final class R5QaAtencionTest extends R5Case
         $this->assertSame(403, $pa->get('/admin/finanzas')['status']);
         // «Finalizar y cobrar» forjado por un profesional: nunca.
         $enServ = $this->citaComenzada('en_servicio', self::$e['proA']);
-        [$fy, $by] = $this->accionDe($this->agenda($this->equipo('dueno')), $enServ, '/Finalizar y cobrar/iu');
+        [$fy, $by] = $this->accionDe($this->agenda($this->equipo('dueno'), $enServ), $enServ, '/Finalizar y cobrar/iu');
         $propiaServ = (int)$fy['campos']['id'];
         $rr = self::enviar($pa, $fy, [], [], $by);
         $this->assertNotSame('/caja/cita', self::pathDe(self::ubicacion($rr)));
@@ -568,7 +568,7 @@ final class R5QaAtencionTest extends R5Case
     {
         $n = $this->equipo('dueno');
         $c = $this->citaComenzada();
-        [$f, $b] = $this->accionDe($this->agenda($n), $c, '/Iniciar atenci[óo]n/iu');
+        [$f, $b] = $this->accionDe($this->agenda($n, $c), $c, '/Iniciar atenci[óo]n/iu');
         self::q('RENAME TABLE agenda_eventos TO agenda_eventos_q5_bak');
         try {
             $r = self::enviar($n, $f, [], [], $b);

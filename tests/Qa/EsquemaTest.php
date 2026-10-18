@@ -225,17 +225,23 @@ final class EsquemaTest extends R2bCase
     }
 
     /**
-     * Límite DOCUMENTADO (GUIA §7.4 límite a): ejecutar a mano el `*_rollback.sql` se salta el guard y destruye datos de negocio
-     * (018) sin aviso. Se confirma que el límite es real; el procedimiento soportado es siempre el migrador.
+     * El SQL manual se salta el guard y puede aplicar DDL parcial. Tras 028 las referencias ERP bloquean
+     * el DROP fuera de orden de colaboradores; el procedimiento soportado sigue siendo el migrador.
      */
-    public function test_Limite_documentado_el_rollback_manual_de_018_se_salta_el_guard_y_elimina_colaboradores(): void
+    public function test_rollback_manual_fuera_de_orden_de_018_es_bloqueado_por_dependencias_ERP(): void
     {
         $nombre = $this->bd('rb18');
         self::crearBd($nombre);
         $this->semilla($nombre);
-        $this->revertirSolo($nombre, '018_colaboradores_invitaciones');
+        // El SQL manual omite el guard y puede aplicar DDL parcial; las FK nuevas impiden eliminar colaboradores.
+        try {
+            $this->revertirSolo($nombre, '018_colaboradores_invitaciones');
+            $this->fail('Un rollback fuera de orden no debe eliminar la tabla referenciada por ERP.');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString('referenced by a foreign key', $e->getMessage());
+        }
         $db = $this->conectar($nombre);
-        $this->assertSame([], $this->filas($db, "SHOW TABLES LIKE 'colaboradores'"), 'el rollback manual eliminó la tabla con datos, sin guard (límite documentado)');
+        $this->assertCount(1, $this->filas($db, "SELECT id FROM colaboradores WHERE email_norm='inv@rb.test'"), 'las referencias ERP protegen la ficha laboral');
         $db->close();
         $guia = (string)file_get_contents(self::RAIZ . '/docs/GUIA_ACTUALIZACION_IDENTIDADES.md');
         $this->assertStringContainsString('se salta el guard', $guia, 'el límite debe seguir documentado');
@@ -427,7 +433,8 @@ final class EsquemaTest extends R2bCase
         // CAMBIO DE CONTRATO (rondas 019-022): +7 tablas (resguardo_016, reasignaciones, decisiones de homónimos x2, auditoría CRM, versiones e historial de consentimiento).
         // CAMBIO DE CONTRATO (ronda 5, migraciones 023-026): +7 tablas (cobros/verificación y su historial, comprobantes y numeración, auditoría general de exportaciones…).
         // CAMBIO DE CONTRATO (regularización de citas antiguas, migración 027): +1 tabla (citas_regularizaciones).
-        $this->assertSame(50, $n, 'tablas del esquema migrado (incluye migraciones y equipo_mutex)');
+        // Migraciones ERP 028–033: +42 tablas, sin sustituir las 50 del esquema anterior.
+        $this->assertSame(92, $n, 'tablas del esquema migrado (incluye migraciones y equipo_mutex)');
         // La documentación citaba 30 (tras la 015) y el encabezado de backup_db.php "13 tablas": ya no describen la realidad.
         $this->assertFalse(str_contains((string)file_get_contents(self::RAIZ . '/scripts/backup_db.php'), '13 tablas en total'), 'documentación obsoleta en scripts/backup_db.php: dice "13 tablas en total" y el esquema migrado tiene 35');
     }

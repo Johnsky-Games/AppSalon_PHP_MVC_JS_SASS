@@ -179,6 +179,9 @@ final class ErrorResponse
 
     public static function fromThrowable(\Throwable $exception): void
     {
+        if($exception instanceof \Services\ErpException){
+            self::render(in_array($exception->getCode(),[403,404,409,422],true)?$exception->getCode():422,['mensaje'=>$exception->getMessage()]);return;
+        }
         $reference = substr(hash('sha256', uniqid('appsalon', true)), 0, 10);
         // Nunca registrar argumentos, consultas, tokens ni el mensaje de la excepción.
         error_log(sprintf(

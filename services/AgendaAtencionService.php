@@ -49,18 +49,21 @@ final class AgendaAtencionService
      * Citas del período con sus acciones. El profesional solo recibe su propia agenda (alcance aplicado en SQL).
      * @return array<int,array<string,mixed>>
      */
-    public function listar(string $desde, string $hasta, int $actorId, array $permisos, ?string $estado = null): array
+    public function listar(string $desde, string $hasta, int $actorId, array $permisos, ?string $estado = null, int $pagina=1, int $porPagina=500): array
     {
         $propios = !empty($permisos['gestiona']) ? null : $actorId;
         $ahora = $this->ahora();
         $tarjetas = [];
-        foreach ($this->citas->listarAgenda($desde, $hasta, $propios, $estado) as $cita) {
+        foreach ($this->citas->listarAgenda($desde, $hasta, $propios, $estado, $pagina, $porPagina) as $cita) {
             if (empty($permisos['finanzas'])) { unset($cita['estado_pago']); }
             $cita['acciones'] = self::accionesDe($cita, $ahora, $permisos);
             $tarjetas[] = $cita;
         }
         return $tarjetas;
     }
+
+    public function contar(string $desde,string $hasta,int $actor,array $permisos,?string $estado=null): int
+    { return $this->citas->contarAgenda($desde,$hasta,!empty($permisos['gestiona'])?null:$actor,$estado); }
 
     /**
      * Citas «pendientes de revisión» (sin resolver y de un día anterior) con sus acciones. El profesional solo ve las suyas.

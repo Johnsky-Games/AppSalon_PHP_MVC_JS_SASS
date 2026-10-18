@@ -32,20 +32,27 @@ class AgendaController
         if (!$gestiona) exigir_permiso('agenda.ver_propia');
         $service = new CitaService();
         $atencion = new AgendaAtencionService();
-        $desde = is_string($_GET['desde'] ?? null) ? $_GET['desde'] : $service->obtenerAhora()->format('Y-m-d');
-        $hasta = is_string($_GET['hasta'] ?? null) ? $_GET['hasta'] : $desde;
+        $entrada = \Classes\PeriodoFiltro::aplicar($_GET);
+        $desde = is_string($entrada['desde'] ?? null) ? $entrada['desde'] : $service->obtenerAhora()->format('Y-m-d');
+        $hasta = is_string($entrada['hasta'] ?? null) ? $entrada['hasta'] : $desde;
         $estado = AgendaAtencionService::estadoFiltro($_GET['estado'] ?? null);
+        $pagina=filter_var($entrada['pagina']??1,FILTER_VALIDATE_INT,['options'=>['min_range'=>1,'max_range'=>100000]])?:1;
+        $totalCitas=0; $paginas=1;
         $citas = []; $alertas = self::tomarAviso();
         if (!$service->obtenerDiaSemanaIso($desde) || !$service->obtenerDiaSemanaIso($hasta) || $hasta < $desde || strtotime($hasta) - strtotime($desde) > 31 * 86400) {
             http_response_code(422); $alertas['error'][] = 'Consulta un período válido de hasta 31 días.';
         } else {
-            try { $citas = $atencion->listar($desde, $hasta, (int)$_SESSION['id'], $permisos, $estado); }
+            try {
+                $totalCitas=$atencion->contar($desde,$hasta,(int)$_SESSION['id'],$permisos,$estado);
+                $paginas=max(1,(int)ceil($totalCitas/25)); $pagina=min($pagina,$paginas);
+                $citas = $atencion->listar($desde, $hasta, (int)$_SESSION['id'], $permisos, $estado,$pagina,25);
+            }
             catch (\Throwable $e) { http_response_code(500); $alertas['error'][] = 'Agenda no disponible. Intenta nuevamente.'; }
         }
         $ahora = $atencion->ahora();
         $pendientes = 0;
         try { $pendientes = $atencion->contarPendientesRevision((int)$_SESSION['id'], $permisos); } catch (\Throwable $e) { error_log('[Agenda] Pendientes de revisión no disponibles: ' . $e->getMessage()); }
-        $router->render('agenda/index', compact('citas', 'desde', 'hasta', 'gestiona', 'alertas', 'estado', 'permisos', 'ahora', 'pendientes') + ['script' => '<script src="/build/js/agenda-atencion.js"></script>']);
+        $router->render('agenda/index', compact('citas', 'desde', 'hasta', 'gestiona', 'alertas', 'estado', 'permisos', 'ahora', 'pendientes','pagina','paginas','totalCitas') + ['script' => '<script src="/build/js/agenda-atencion.js"></script>']);
     }
 
     /** Detalle de una cita para el equipo. Una cita ajena a la agenda del profesional es indistinguible de una inexistente (404). */
@@ -67,9 +74,12 @@ class AgendaController
         }
         $desde = is_string($_GET['desde'] ?? null) ? $_GET['desde'] : null;
         $hasta = is_string($_GET['hasta'] ?? null) ? $_GET['hasta'] : null;
-        $alertas = self::tomarAviso();
+        $estado = destino_valor_tipado('enum:confirmada,en_servicio,completada,no_asistio,cancelada', $_GET['estado'] ?? null);
+        $pagina = filter_var($_GET['pagina'] ?? 1, FILTER_VALIDATE_INT, ['options'=>['min_range'=>1,'max_range'=>99999]]) ?: 1;
+        $alertas = array_merge_recursive(self::tomarAviso(),$_SESSION['erp_alertas']??[]);unset($_SESSION['erp_alertas']);
+        $consumo=(new \Repositories\ErpRepository())->uno('SELECT id,creado_en,motivo FROM erp_consumos WHERE cita_id=?',[$id]);
         $ahora = (new AgendaAtencionService())->ahora();
-        $router->render('agenda/detalle', compact('cita', 'desde', 'hasta', 'alertas', 'permisos', 'ahora') + ['script' => '<script src="/build/js/agenda-atencion.js"></script>']);
+        $router->render('agenda/detalle', compact('cita', 'desde', 'hasta', 'estado', 'pagina', 'alertas', 'permisos', 'ahora','consumo') + ['script' => '<script src="/build/js/agenda-atencion.js"></script>']);
     }
     /** Citas antiguas sin resolver («pendientes de revisión»): nunca se marcan solas; aquí se revisan. El profesional ve solo las suyas. */
     public static function pendientes(Router $router): void

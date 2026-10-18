@@ -1,0 +1,3 @@
+<?php $titulo='Datos de la empresa';include __DIR__.'/_inicio.php'; ?>
+<section class="ui-card"><form class="formulario" method="POST" action="/gestion/accion"><?php $clave('empresa'); ?>
+<?php foreach(['nombre'=>['Nombre o razón social',120],'identificacion'=>['Identificación del emisor',30],'direccion'=>['Dirección',300]] as $k=>$c): ?><div class="campo"><label for="empresa-<?= s($k) ?>"><?= s($c[0]) ?></label><input id="empresa-<?= s($k) ?>" name="<?= s($k) ?>" maxlength="<?= (int)$c[1] ?>" value="<?= s($empresa[$k]??'') ?>" required></div><?php endforeach; ?><p>Moneda: USD. Completar estos datos no activa la emisión fiscal; requiere el proveedor configurado.</p><button class="boton">Guardar datos</button></form></section>

@@ -28,11 +28,29 @@
 function catalogo_destinos(): array
 {
     $rango = ['desde' => 'fecha', 'hasta' => 'fecha'];
+    $rangoAgenda=$rango+['estado'=>'enum:confirmada,en_servicio,completada,no_asistio,cancelada','pagina'=>'entero'];
     $verClientes = ['clientes.ver', 'clientes.analitica', 'clientes.ver_propios'];
     return [
         // ----- Portal del equipo
-        'agenda'            => ['equipo', '/agenda', ['agenda.gestionar', 'agenda.ver_propia'], $rango],
-        'agenda_cita'       => ['equipo', '/agenda/cita', ['agenda.gestionar', 'agenda.ver_propia'], ['id' => 'id'] + $rango],
+        'erp_compras'=>['equipo','/gestion/compras',['erp.compras'],['id'=>'id']],
+        'erp_obligaciones'=>['equipo','/gestion/obligaciones',['erp.obligaciones.pagar'],[]],
+        'erp_personal'=>['equipo','/gestion/personal',['erp.rh','agenda.gestionar','agenda.ver_propia','finanzas.gestionar','equipo.gestionar'],['id'=>'id']],
+        'erp_aprobaciones'=>['equipo','/gestion/aprobaciones',['erp.ventas.crear'],[]],
+        'erp_promociones'=>['equipo','/gestion/promociones',['erp.promociones'],[]],
+        'erp_comisiones'=>['equipo','/gestion/comisiones',['erp.comisiones'],[]],
+        'erp_seguimiento'=>['equipo','/gestion/seguimiento',['erp.ventas.crear'],['id'=>'id']],
+        'pdv'=>['equipo','/pdv',['erp.ventas.ver'],[]],
+        'erp_recibo'=>['equipo','/ventas/recibo',['erp.ventas.ver'],['id'=>'id']],
+        'erp_venta'=>['equipo','/ventas/detalle',['erp.ventas.ver'],['id'=>'id','q'=>'texto']],
+        'erp_caja'=>['equipo','/gestion/caja',['erp.caja'],[]],
+        'erp_catalogo'=>['equipo','/gestion/catalogo',['erp.catalogo'],[]],
+        'erp_contactos'=>['equipo','/gestion/contactos',['erp.ventas.crear'],['q'=>'texto']],
+        'erp_integraciones'=>['equipo','/gestion/integraciones',['erp.reportes'],[]],
+        'erp_indicadores'=>['equipo','/gestion/indicadores',['erp.reportes'],[]],
+        'erp_recursos'=>['equipo','/gestion/recursos',['erp.recursos'],[]],
+        'erp_configuracion'=>['equipo','/gestion/configuracion',['erp.configurar'],[]],
+        'agenda'            => ['equipo', '/agenda', ['agenda.gestionar', 'agenda.ver_propia'], $rangoAgenda],
+        'agenda_cita'       => ['equipo', '/agenda/cita', ['agenda.gestionar', 'agenda.ver_propia'], ['id' => 'id'] + $rangoAgenda],
         'agenda_pendientes' => ['equipo', '/agenda/pendientes', ['agenda.gestionar', 'agenda.ver_propia'], []],
         'admin_citas'       => ['equipo', '/admin', ['agenda.gestionar'], ['fecha' => 'fecha']],
         'caja'              => ['equipo', '/caja', ['finanzas.gestionar'], $rango + ['estado' => 'enum:pendiente,parcial,por_verificar,pagado,reembolsado', 'profesional' => 'id', 'metodo' => 'enum:efectivo,transferencia', 'q' => 'texto', 'pagina' => 'entero']],
@@ -344,11 +362,12 @@ function navegacion_portal(string $portal): array
         ['titulo' => 'Servicios y equipo', 'enlaces' => [
             $enlace('servicios', 'Servicios', 'sparkles'), $enlace('servicio_nuevo', 'Nuevo Servicio', 'plus'),
             $enlace('profesionales', 'Profesionales', 'users')]],
-        ['titulo' => 'Personas', 'enlaces' => [$enlace('rh', 'Recursos Humanos', 'users'), $enlace('equipo', 'Equipo y Permisos', 'users')]],
+        ['titulo' => 'Personas', 'enlaces' => [$enlace('rh', 'Recursos Humanos', 'users'), $enlace('equipo', 'Equipo y Permisos', 'users'), $enlace('erp_personal','Jornada y ausencias','users')]],
         ['titulo' => 'Gestión comercial', 'enlaces' => [
-            $enlace('finanzas', 'Finanzas', 'chart'), $enlace('inventario', 'Inventario', 'check'), $enlace('reportes', 'Reportes', 'chart'),
+            $enlace('pdv','Punto de venta','check'), $enlace('erp_caja','Mi caja','chart'), $enlace('erp_catalogo','Precios y productos','sparkles'), $enlace('erp_compras','Compras','check'), $enlace('erp_obligaciones','Cuentas por pagar','chart'), $enlace('erp_aprobaciones','Solicitudes','check'), $enlace('erp_comisiones','Comisiones','chart'), $enlace('erp_promociones','Promociones','sparkles'), $enlace('erp_seguimiento','Seguimiento comercial','users'),
+            $enlace('finanzas', 'Finanzas', 'chart'), $enlace('inventario', 'Inventario', 'check'), $enlace('erp_recursos','Recursos e insumos','check'), $enlace('erp_indicadores','Indicadores del negocio','chart'), $enlace('reportes', 'Reportes', 'chart'),
             $enlace('crecimiento', 'Crecimiento y fidelidad', 'sparkles'), $clientes, $enlace('clientes_indicadores', 'Indicadores de clientes', 'chart')]],
-        ['titulo' => 'Ajustes del negocio', 'enlaces' => [$enlace('ajustes', 'Ajustes del negocio', 'check')]],
+        ['titulo' => 'Ajustes del negocio', 'enlaces' => [$enlace('ajustes', 'Ajustes del negocio', 'check'), $enlace('erp_configuracion','Datos de la empresa','check'), $enlace('erp_integraciones','Integraciones','chart')]],
         ['titulo' => 'Mi cuenta', 'enlaces' => [['/perfil', 'Mi cuenta', 'users', 'perfil']]],
     ];
     foreach ($grupos as $i => $g) {

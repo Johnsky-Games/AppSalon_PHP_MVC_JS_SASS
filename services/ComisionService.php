@@ -89,8 +89,11 @@ final class ComisionService
             $filas=$this->repo->consulta("SELECT * FROM comisiones_movimientos WHERE profesional_id=? AND estado='pendiente' AND (registrado_en < DATE_ADD(?,INTERVAL 1 DAY) OR tipo='reversa') ORDER BY id FOR UPDATE",'is',[$prof,$hasta]);
             $total=array_sum(array_map(static fn($f)=>(int)$f['monto_centavos'],$filas));
             if ($total<=0) { throw new \InvalidArgumentException('No hay saldo positivo para liquidar. Los ajustes negativos se compensan con comisiones futuras.'); }
+            $arqueo=new CajaArqueoService($this->repo);
+            $sesion=$arqueo->preparar($actor,'egreso',$total,$metodo);
             $this->repo->consulta('INSERT INTO caja_movimientos (actor_id,tipo,monto_centavos,concepto,metodo,idempotencia,huella,registrado_en) VALUES (?,\'egreso\',?,?,?,?,?,?)','iisssss',[$actor,$total,mb_substr('Comisiones: '.$config['nombre'].' · '.$comprobante,0,180),$metodo,'comision:'.$clave,$huella,OperacionRepository::ahora()]);
             $caja=(int)$this->repo->db->insert_id;
+            $arqueo->vincular($caja,$sesion);
             $this->repo->consulta('INSERT INTO comisiones_liquidaciones (profesional_id,profesional_nombre,actor_id,hasta_fecha,monto_centavos,metodo,comprobante,caja_id,idempotencia,huella,registrado_en) VALUES (?,?,?,?,?,?,?,?,?,?,?)','isisississs',[$prof,$config['nombre'],$actor,$hasta,$total,$metodo,$comprobante,$caja,$clave,$huella,OperacionRepository::ahora()]);
             $id=(int)$this->repo->db->insert_id;
             foreach($filas as $fila) { $this->repo->consulta("UPDATE comisiones_movimientos SET estado='liquidada',liquidacion_id=? WHERE id=?",'ii',[$id,(int)$fila['id']]); }

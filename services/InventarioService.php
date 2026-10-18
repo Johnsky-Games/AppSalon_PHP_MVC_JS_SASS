@@ -35,6 +35,10 @@ final class InventarioService
             }
             $saldo = (int)$producto['stock_milesimas'] + ($tipo==='entrada' ? $cantidad : -$cantidad);
             if ($saldo<0 || $saldo>9999999999) { throw new \InvalidArgumentException('Stock insuficiente o cantidad fuera de rango.'); }
+            if($tipo==='salida'){
+                $reservas=$this->repo->consulta("SELECT cantidad_milesimas FROM erp_stock_reservas WHERE producto_id=? AND estado='activa' FOR SHARE",'i',[$id]);
+                if($saldo<array_sum(array_column($reservas,'cantidad_milesimas')))throw new \InvalidArgumentException('La salida afectaría productos reservados en ventas.');
+            }
             $this->repo->consulta('UPDATE inventario_productos SET stock_milesimas=? WHERE id=?','ii',[$saldo,$id]);
             $this->repo->consulta('INSERT INTO inventario_movimientos (producto_id,actor_id,tipo,cantidad_milesimas,saldo_milesimas,costo_centavos,motivo,idempotencia,huella,registrado_en) VALUES (?,?,?,?,?,?,?,?,?,?)','iisiiissss',[$id,$actor,$tipo,$cantidad,$saldo,(int)$producto['costo_centavos'],$motivo,$clave,$huella,OperacionRepository::ahora()]);
             return ['id'=>(int)$this->repo->db->insert_id,'idempotente'=>false];

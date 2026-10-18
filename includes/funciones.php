@@ -126,7 +126,7 @@ function version_sesion_vigente(array $contexto): bool
 function login_por_ruta(): string
 {
     $ruta = (string)(parse_url((string)($_SERVER['REQUEST_URI'] ?? '/'), PHP_URL_PATH) ?? '/');
-    foreach (['/agenda', '/caja', '/admin', '/profesionales', '/servicios'] as $prefijo) {
+    foreach (['/agenda', '/caja', '/admin', '/profesionales', '/servicios', '/pdv', '/ventas', '/gestion'] as $prefijo) {
         if ($ruta === $prefijo || str_starts_with($ruta, $prefijo . '/')) { return '/equipo/login'; }
     }
     return '/';

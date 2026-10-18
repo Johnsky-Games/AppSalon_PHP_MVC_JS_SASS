@@ -128,6 +128,8 @@ final class CajaController
         self::exigir();
         $id = self::idGet();
         if ($id === null) { self::fallo(422, 'Indica una cita válida para cobrar.'); return; }
+        $venta=(new \Repositories\ErpRepository())->uno("SELECT id FROM erp_ventas WHERE cita_id=? AND estado<>'anulada'",[$id]);
+        if($venta){redirigir('/ventas/detalle?id='.(int)$venta['id']);return;}
         $ctx = self::contexto($_GET);
         try {
             $svc = new CobroCitaService();

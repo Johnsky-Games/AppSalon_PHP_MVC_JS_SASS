@@ -31,11 +31,12 @@ foreach ($citas as $filaUi) {
 <h2 class="ui-section-title">Buscar Citas</h2>
 <p class="ui-form-help">Elige una fecha para consultar las citas y sus servicios.</p>
 <div class="busqueda ui-card">
-    <form action="" class="formulario" method="">
+    <form action="/admin" class="formulario ui-filtros" method="GET">
         <div class="campo">
             <label for="fecha">Fecha</label>
             <input type="date" name="fecha" id="fecha" value="<?php echo trim(s($fecha)); ?>">
         </div>
+        <button class="boton" type="submit">Consultar día</button>
     </form>
 </div>
 

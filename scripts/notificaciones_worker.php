@@ -20,6 +20,8 @@ while (!$detener) {
         $proceso = proc_open([PHP_BINARY, __DIR__.'/procesar_notificaciones.php', '--json'], [0=>['file','/dev/null','r'],1=>STDOUT,2=>STDERR], $pipes);
         if (!is_resource($proceso)) { fwrite(STDERR,"No se pudo iniciar procesador.\n"); exit(1); }
         $codigo = proc_close($proceso);
+        $erp=proc_open([PHP_BINARY,__DIR__.'/procesar_erp.php'],[0=>['file','/dev/null','r'],1=>STDOUT,2=>STDERR],$erpPipes);
+        if(is_resource($erp))proc_close($erp);
         if ($codigo !== 0) fwrite(STDERR, "Procesador terminó con código {$codigo}; reintentará según backoff persistido.\n");
     }
     // Cola de correos transaccionales: reintentos con retroceso exponencial, corte de tanda con SMTP caído y retención

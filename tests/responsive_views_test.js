@@ -66,6 +66,25 @@ async function geometry(page, label) {
                 issues.push({ element: describe(el), clipped: el.scrollWidth - el.clientWidth });
             }
         }
+        // A form can fit horizontally while its labels reserve a large empty vertical track.
+        // Verify the visible relationship between each filter label and its control at every viewport/text size.
+        for (const field of content.querySelectorAll('.ui-filtros > .campo, .ops-filter > .campo, .agenda-filtros > .campo')) {
+            const label = field.querySelector(':scope > label');
+            const control = field.querySelector(':scope > input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), :scope > select');
+            if (!label || !control || !label.getClientRects().length || !control.getClientRects().length) continue;
+            const labelBox = label.getBoundingClientRect();
+            const controlBox = control.getBoundingClientRect();
+            if (!labelBox.height || !controlBox.height) continue;
+            // Measure the painted text, not the label box: flex-basis can inflate an otherwise empty label.
+            const textRange = document.createRange();
+            textRange.selectNodeContents(label);
+            const textBox = textRange.getBoundingClientRect();
+            const gap = controlBox.top - textBox.bottom;
+            const lineHeight = parseFloat(getComputedStyle(label).lineHeight) || 20;
+            if (gap < -1 || gap > Math.max(24, lineHeight * 1.5)) {
+                issues.push({ element: describe(control), labelGap: Math.round(gap) });
+            }
+        }
         return {
             viewport: document.documentElement.clientWidth,
             document: Math.max(document.documentElement.scrollWidth, document.body.scrollWidth),

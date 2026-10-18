@@ -18,6 +18,26 @@ abstract class QaCase extends TestCase
     /** @var \mysqli|null */
     private static $conexion = null;
 
+    /** Recorre los enlaces reales de paginación hasta encontrar una cita, conservando su formulario y retorno. */
+    protected function agendaConCita(Navegador $n, string $url, int $cita): array
+    {
+        $visitadas = [];
+        while (!isset($visitadas[$url])) {
+            $visitadas[$url] = true;
+            $pagina = $n->get($url);
+            $this->assertSame(200, $pagina['status'], "GET $url");
+            $dom = new \DOMDocument();
+            @$dom->loadHTML('<?xml encoding="UTF-8">' . $pagina['body']);
+            $xpath = new \DOMXPath($dom);
+            if ($xpath->query('//*[@id="cita-' . $cita . '"]')->length > 0) { return $pagina; }
+            $siguiente = $xpath->query('//nav[@aria-label="Páginas de agenda"]//a[normalize-space(.)="Siguiente"]')->item(0);
+            if (!$siguiente) { return $pagina; }
+            $url = $siguiente->getAttribute('href');
+            $this->assertStringStartsWith('/agenda?', $url, 'paginación interna de agenda');
+        }
+        $this->fail('La paginación de agenda contiene un bucle.');
+    }
+
     /** Parámetro de conexión tomado del entorno (nunca se versionan credenciales). */
     protected static function cfg(string $k, string $defecto): string
     {

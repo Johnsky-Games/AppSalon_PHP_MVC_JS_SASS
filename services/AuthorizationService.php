@@ -11,13 +11,14 @@ class AuthorizationService
     public const PERMISOS = ['equipo.gestionar','servicios.gestionar','profesionales.gestionar','perfiles.gestionar','agenda.gestionar','agenda.ver_propia','agenda.regularizar','agenda.solicitar_regularizacion',
         'finanzas.gestionar','inventario.gestionar','marketing.gestionar','ajustes.gestionar','reportes.ver',
         // Fase identidades/CRM: alcance de datos de clientes y gestión de personal (RR. HH.).
-        'clientes.ver','clientes.ver_propios','clientes.analitica','clientes.exportar','rh.gestionar'];
+        'clientes.ver','clientes.ver_propios','clientes.analitica','clientes.exportar','rh.gestionar',
+        'erp.ventas.ver','erp.ventas.crear','erp.cobrar','erp.caja','erp.caja.movimientos','erp.catalogo','erp.configurar','erp.descuento','erp.verificar','erp.devolver','erp.compras','erp.rh','erp.promociones','erp.comisiones','erp.aprobaciones','erp.reportes','erp.consumos.propios','erp.obligaciones.pagar','erp.recursos','erp.consumos','erp.documentos.propios'];
     public const ROLES = [
         'propietario' => self::PERMISOS,
-        'gerente' => ['servicios.gestionar','profesionales.gestionar','perfiles.gestionar','agenda.gestionar','agenda.regularizar','finanzas.gestionar','inventario.gestionar','marketing.gestionar','ajustes.gestionar','reportes.ver','clientes.ver','clientes.analitica','clientes.exportar'],
-        'recepcion' => ['perfiles.gestionar','agenda.gestionar','clientes.ver'],
-        'profesional' => ['agenda.ver_propia','agenda.solicitar_regularizacion','clientes.ver_propios'],
-        'finanzas' => ['finanzas.gestionar','inventario.gestionar','reportes.ver','clientes.analitica'],
+        'gerente' => ['servicios.gestionar','profesionales.gestionar','perfiles.gestionar','agenda.gestionar','agenda.regularizar','finanzas.gestionar','inventario.gestionar','marketing.gestionar','ajustes.gestionar','reportes.ver','clientes.ver','clientes.analitica','clientes.exportar','erp.ventas.ver','erp.ventas.crear','erp.cobrar','erp.caja','erp.caja.movimientos','erp.catalogo','erp.descuento','erp.verificar','erp.devolver','erp.compras','erp.promociones','erp.comisiones','erp.aprobaciones','erp.reportes','erp.consumos.propios','erp.obligaciones.pagar','erp.recursos','erp.consumos','erp.documentos.propios'],
+        'recepcion' => ['perfiles.gestionar','agenda.gestionar','clientes.ver','erp.ventas.ver','erp.ventas.crear','erp.cobrar','erp.caja','erp.documentos.propios'],
+        'profesional' => ['agenda.ver_propia','agenda.solicitar_regularizacion','clientes.ver_propios','erp.consumos.propios','erp.documentos.propios'],
+        'finanzas' => ['finanzas.gestionar','inventario.gestionar','reportes.ver','clientes.analitica','erp.ventas.ver','erp.ventas.crear','erp.cobrar','erp.caja','erp.caja.movimientos','erp.catalogo','erp.verificar','erp.devolver','erp.compras','erp.comisiones','erp.aprobaciones','erp.reportes','erp.consumos.propios','erp.obligaciones.pagar','erp.recursos','erp.consumos','erp.documentos.propios'],
         'cliente' => [],
     ];
     private ?mysqli $db;

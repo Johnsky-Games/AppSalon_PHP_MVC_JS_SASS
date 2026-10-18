@@ -111,12 +111,12 @@ abstract class R3Case extends R2bCase
 
     /**
      * Arranca un servidor real con `$env`, un SMTP de 400 ms y CORREOS_ENVIO_INMEDIATO=1 y mide registro, /olvide y /reenviar-confirmacion.
-     * @return array<string,array{ms:float,correos:int}>
+     * @return array<string,array{ms:float,correos:int,status:int,smtp_saludos:int,cola:array}>
      */
     protected function medirEnvio(string $clave, array $env): array
     {
         self::detenerSmtpFallo(self::SMTP);
-        self::iniciarSmtpFallo(self::SMTP, 'lento', 0.4);
+        $buzon = self::iniciarSmtpFallo(self::SMTP, 'lento', 0.4);
         self::$smtpLento = true;
         $url = self::servidor($env + ['EMAIL_PORT' => (string)self::SMTP, 'CORREOS_ENVIO_INMEDIATO' => '1', 'APP_KEY' => str_repeat('k', 40)], $clave);
         $res = [];
@@ -132,11 +132,16 @@ abstract class R3Case extends R2bCase
             foreach ($pasos as $nombre => [$email, $f]) {
                 self::q('TRUNCATE intentos_login');
                 self::vaciarBuzonFallo(self::SMTP);
+                $saludosAntes = (int)file_get_contents($buzon . '.saludos');
                 $t0 = microtime(true);
                 $r = $f($email);
                 $ms = (microtime(true) - $t0) * 1000;
                 $correos = count(array_filter(self::buzonFallo(self::SMTP), static fn($m) => in_array($email, $m['to'], true)));
-                $res[$nombre] = ['ms' => round($ms), 'correos' => $correos, 'status' => $r['status']];
+                $cola = array_map(static fn(array $evento): array => [
+                    'estado'=>$evento['estado'], 'intentos'=>(int)$evento['intentos'], 'enviado'=>$evento['enviado_en'] !== null,
+                ], self::q('SELECT estado,intentos,enviado_en FROM correos_salida WHERE destinatario_email=? ORDER BY id', [$email]));
+                $res[$nombre] = ['ms' => round($ms), 'correos' => $correos, 'status' => $r['status'],
+                    'smtp_saludos'=>(int)file_get_contents($buzon . '.saludos') - $saludosAntes, 'cola'=>$cola];
             }
         } finally { self::pararServidor($clave); }
         return $res;

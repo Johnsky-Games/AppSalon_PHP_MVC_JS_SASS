@@ -110,6 +110,7 @@ $router->post('/admin/equipo/crear', [\Controllers\EquipoController::class, 'cre
 $router->post('/admin/equipo/actualizar', [\Controllers\EquipoController::class, 'actualizar']);
 $router->post('/admin/equipo/invitar', [\Controllers\EquipoController::class, 'invitar']);
 $router->post('/admin/equipo/revocar', [\Controllers\EquipoController::class, 'revocar']);
+$router->post('/admin/equipo/vincular', [\Controllers\EquipoController::class, 'vincular']);
 $router->get('/admin/equipo/ficha', [\Controllers\EquipoController::class, 'ficha']);
 $router->post('/admin/equipo/ficha', [\Controllers\EquipoController::class, 'ficha']);
 $router->post('/admin/equipo/ficha/agenda', [\Controllers\EquipoController::class, 'fichaAgenda']);
@@ -148,7 +149,7 @@ $router->get('/admin/clientes/nuevo', [\Controllers\AltaClienteController::class
 $router->post('/admin/clientes/nuevo', [\Controllers\AltaClienteController::class, 'nuevo']);
 
 // Ronda 5: rutas por módulo (agenda/atención, caja y cobros, portales y navegación, CRM y exportaciones).
-foreach (['agenda', 'caja', 'portales', 'crm'] as $modulo) { require __DIR__ . '/../includes/rutas/' . $modulo . '.php'; }
+foreach (['agenda', 'caja', 'portales', 'crm', 'erp'] as $modulo) { require __DIR__ . '/../includes/rutas/' . $modulo . '.php'; }
 
 // Comprueba y valida las rutas, que existan y les asigna las funciones del Controlador
     emitir_cabeceras_seguridad();

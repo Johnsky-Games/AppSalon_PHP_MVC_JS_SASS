@@ -82,6 +82,19 @@ class EquipoController
     public static function invitar(): void { self::mutar('reenviar'); }
     public static function revocar(): void { self::mutar('revocar'); }
 
+    public static function vincular(): void
+    {
+        exigir_permiso('equipo.gestionar'); exigir_csrf();
+        try {
+            $c=filter_var($_POST['colaborador_id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]]);
+            $p=filter_var($_POST['profesional_id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]]);
+            if (!$c || !$p) throw new \DomainException('Selecciona la persona y su ficha profesional.');
+            self::repo()->vincularProfesionalExistente((int)$_SESSION['id'],$c,$p);
+            $_SESSION['equipo_alertas']=['exito'=>['Ficha vinculada. Conserva servicios, horarios, citas e historial.']];
+        } catch (\DomainException $e) { $_SESSION['equipo_alertas']=['error'=>[$e->getMessage()]]; }
+        header('Location: /admin/recursos-humanos',true,303); detener_ejecucion(303);
+    }
+
     private static function mutar(string $accion): void
     {
         exigir_permiso('equipo.gestionar');

@@ -3,29 +3,32 @@ use Services\AgendaAtencionService;
 use Classes\ReglaAtencion;
 
 $periodo = ['desde' => $desde, 'hasta' => $hasta];
+if (!empty($estado)) { $periodo['estado'] = $estado; }
+if (($pagina ?? 1) > 1) { $periodo['pagina'] = $pagina; }
 $etiquetaEstado = static fn(string $e): string => ReglaAtencion::etiqueta($e);
 ?>
 <section class="agenda-integral">
     <div class="ui-page-heading"><div><p class="ui-eyebrow">Operación del salón</p><h1>Agenda de atención</h1><p>Gestiona cada visita, desde su reserva hasta su finalización.</p></div></div>
     <?php include __DIR__ . '/../templates/alertas.php'; ?>
-    <form class="agenda-filtros formulario" method="GET" action="/agenda">
-        <label>Desde <input type="date" name="desde" value="<?php echo s($desde); ?>" required></label>
-        <label>Hasta <input type="date" name="hasta" value="<?php echo s($hasta); ?>" required></label>
-        <label>Estado
-            <select name="estado">
+    <form class="agenda-filtros formulario ui-filtros" method="GET" action="/agenda">
+        <?php $periodoContexto="agenda"; include __DIR__."/../templates/_periodo_filtro.php"; ?>
+        <div class="campo"><label for="agenda-desde">Desde</label><input id="agenda-desde" type="date" name="desde" value="<?php echo s($desde); ?>" required></div>
+        <div class="campo"><label for="agenda-hasta">Hasta</label><input id="agenda-hasta" type="date" name="hasta" value="<?php echo s($hasta); ?>" required></div>
+        <div class="campo"><label for="agenda-estado">Estado</label>
+            <select id="agenda-estado" name="estado">
                 <option value="">Todos los estados</option>
                 <?php foreach (AgendaAtencionService::ESTADOS_FILTRO as $e): ?>
                 <option value="<?php echo s($e); ?>"<?php echo ($estado ?? null) === $e ? ' selected' : ''; ?>><?php echo s($etiquetaEstado($e)); ?></option>
                 <?php endforeach; ?>
             </select>
-        </label>
+        </div>
         <button class="boton" type="submit">Consultar agenda</button>
     </form>
     <?php if (!empty($pendientes)): $enlacePend = destino_portal('agenda_pendientes'); ?>
     <p class="agenda-aviso-pendientes" role="status"><span><strong><?php echo (int)$pendientes; ?></strong> cita<?php echo $pendientes === 1 ? '' : 's'; ?> de días anteriores <?php echo $pendientes === 1 ? 'espera' : 'esperan'; ?> revisión. No se marcan solas como atendidas ni como ausencias.</span>
         <?php if ($enlacePend !== ''): ?><a class="boton ui-button-quiet" href="<?php echo s($enlacePend); ?>">Revisar pendientes</a><?php endif; ?></p>
     <?php endif; ?>
-    <p class="agenda-ayuda">Hasta 31 días y 500 citas por consulta. Los profesionales ven exclusivamente sus visitas asignadas.</p>
+    <p class="agenda-ayuda">Hasta 31 días por consulta, con 25 citas por página. Los profesionales ven exclusivamente sus visitas asignadas.</p>
     <details class="agenda-leyenda">
         <summary>¿Qué significa cada estado?</summary>
         <ul>
@@ -37,7 +40,7 @@ $etiquetaEstado = static fn(string $e): string => ReglaAtencion::etiqueta($e);
         </ul>
     </details>
     <?php if (!$citas): ?><div class="agenda-vacia">No hay citas<?php echo !empty($estado) ? ' en estado «' . s($etiquetaEstado($estado)) . '»' : ''; ?> en este período.</div>
-    <?php else: ?><p class="agenda-conteo"><?php echo count($citas); ?> cita<?php echo count($citas) === 1 ? '' : 's'; ?> en el período.</p><?php endif; ?>
+    <?php else: ?><p class="agenda-conteo"><?php echo (int)($totalCitas??count($citas)); ?> cita<?php echo ($totalCitas??count($citas)) === 1 ? '' : 's'; ?> en el período.</p><?php endif; ?>
     <div class="ui-visually-hidden" role="status" aria-live="polite" data-atencion-estado></div>
     <div class="agenda-lista">
     <?php foreach ($citas as $cita):
@@ -61,4 +64,7 @@ $etiquetaEstado = static fn(string $e): string => ReglaAtencion::etiqueta($e);
         </article>
     <?php endforeach; ?>
     </div>
+<nav class="ops-toolbar" aria-label="Páginas de agenda"><span>Página <?= (int)($pagina??1) ?> de <?= (int)($paginas??1) ?></span>
+<?php if(($pagina??1)>1): ?><a href="/agenda?<?= s(http_build_query(array_replace($periodo,['pagina'=>$pagina-1]))) ?>">Anterior</a><?php endif; ?>
+<?php if(($pagina??1)<($paginas??1)): ?><a href="/agenda?<?= s(http_build_query(array_replace($periodo,['pagina'=>$pagina+1]))) ?>">Siguiente</a><?php endif; ?></nav>
 </section>

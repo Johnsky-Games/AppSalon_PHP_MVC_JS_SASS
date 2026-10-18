@@ -150,7 +150,7 @@ details > summary { min-height: 4.4rem; padding-block: 1rem; cursor: pointer; fo
   .horario-franja-fila > span { justify-self: start; }
   .horario-dia-cabecera .btn-agregar-franja { width: 100%; }
   .ui-toolbar > .campo, .ui-toolbar > .ui-list-filter,
-  .ops-filter > .campo, .agenda-integral .agenda-filtros label { flex-basis: 100%; width: 100%; }
+  .ops-filter > .campo, .agenda-integral .agenda-filtros > .campo { flex-basis: 100%; width: 100%; }
   .agenda-integral .agenda-filtros { padding: 1.6rem; gap: 1.2rem; }
   .agenda-integral .agenda-filtros .boton { width: 100%; margin: 0; }
   .acciones-reportes { margin-top: 0; }

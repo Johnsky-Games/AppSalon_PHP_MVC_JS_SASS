@@ -446,6 +446,7 @@ class CitaService
                 }
             }
         } catch (PersistenceException $e) {
+            if ($e instanceof \Repositories\ReservaComercialException) return ['status'=>self::STATUS_INVALID,'codigo'=>'servicio_no_disponible','httpCode'=>$e->getCode(),'resultado'=>false,'error'=>$e->getMessage()];
             return [
                 'status' => self::STATUS_ERROR,
                 'httpCode' => 500,
@@ -466,6 +467,7 @@ class CitaService
             $idCita = $this->citaRepository->crearReservaAtomica($cita, $idServicios);
             $cita->id = (string)$idCita;
         } catch (PersistenceException $e) {
+            if ($e instanceof \Repositories\ReservaComercialException) return ['status'=>self::STATUS_INVALID,'codigo'=>'servicio_no_disponible','httpCode'=>$e->getCode(),'resultado'=>false,'error'=>$e->getMessage()];
             return [
                 'status' => self::STATUS_ERROR,
                 'httpCode' => 500,
@@ -638,6 +640,8 @@ class CitaService
 
             $idCita = (int)$resRepo['id'];
         } catch (PersistenceException $e) {
+            if ($e instanceof \Repositories\ReservaComercialException) return ['status'=>self::STATUS_INVALID,'codigo'=>'servicio_no_disponible','httpCode'=>$e->getCode(),'resultado'=>false,'error'=>$e->getMessage()];
+            if ($e instanceof \Repositories\RecursoAgendaException) return ['status'=>self::STATUS_INVALID,'codigo'=>'recurso_ocupado','httpCode'=>409,'resultado'=>false,'error'=>$e->getMessage()];
             return [
                 'status' => self::STATUS_ERROR,
                 'codigo' => 'error_persistencia',
@@ -727,6 +731,7 @@ class CitaService
         try {
             $cita = $this->citaRepository->findById($idCita);
         } catch (PersistenceException $e) {
+            if ($e instanceof \Repositories\ReservaComercialException) return ['status'=>self::STATUS_INVALID,'codigo'=>'servicio_no_disponible','httpCode'=>$e->getCode(),'resultado'=>false,'error'=>$e->getMessage()];
             return [
                 'status' => self::STATUS_ERROR,
                 'httpCode' => 500,
@@ -760,6 +765,7 @@ class CitaService
         try {
             $motivoProteccion = $this->citaRepository->motivoProteccionEliminacion($idCita);
         } catch (PersistenceException $e) {
+            if ($e instanceof \Repositories\ReservaComercialException) return ['status'=>self::STATUS_INVALID,'codigo'=>'servicio_no_disponible','httpCode'=>$e->getCode(),'resultado'=>false,'error'=>$e->getMessage()];
             return ['status' => self::STATUS_ERROR, 'httpCode' => 500, 'resultado' => false, 'error' => 'No fue posible comprobar la cita debido a un error de base de datos.'];
         }
         if ($motivoProteccion !== null) {
@@ -791,6 +797,7 @@ class CitaService
         } catch (\Repositories\CitaProtegidaException $e) {
             return $this->respuestaCitaProtegida($e->motivo);
         } catch (PersistenceException $e) {
+            if ($e instanceof \Repositories\ReservaComercialException) return ['status'=>self::STATUS_INVALID,'codigo'=>'servicio_no_disponible','httpCode'=>$e->getCode(),'resultado'=>false,'error'=>$e->getMessage()];
             return [
                 'status' => self::STATUS_ERROR,
                 'httpCode' => 500,
@@ -895,6 +902,7 @@ class CitaService
         try {
             $cita = $this->citaRepository->findById($idCita);
         } catch (PersistenceException $e) {
+            if ($e instanceof \Repositories\ReservaComercialException) return ['status'=>self::STATUS_INVALID,'codigo'=>'servicio_no_disponible','httpCode'=>$e->getCode(),'resultado'=>false,'error'=>$e->getMessage()];
             return [
                 'status' => self::STATUS_ERROR,
                 'codigo' => 'error_persistencia',
@@ -979,6 +987,7 @@ class CitaService
                 ];
             }
         } catch (PersistenceException $e) {
+            if ($e instanceof \Repositories\ReservaComercialException) return ['status'=>self::STATUS_INVALID,'codigo'=>'servicio_no_disponible','httpCode'=>$e->getCode(),'resultado'=>false,'error'=>$e->getMessage()];
             return [
                 'status' => self::STATUS_ERROR,
                 'codigo' => 'error_persistencia',
@@ -1056,6 +1065,7 @@ class CitaService
                 'alertas' => []
             ];
         } catch (PersistenceException $e) {
+            if ($e instanceof \Repositories\ReservaComercialException) return ['status'=>self::STATUS_INVALID,'codigo'=>'servicio_no_disponible','httpCode'=>$e->getCode(),'resultado'=>false,'error'=>$e->getMessage()];
             return [
                 'status' => self::STATUS_ERROR,
                 'resultado' => false,
@@ -1116,6 +1126,7 @@ class CitaService
                 'citas' => $citas,
             ];
         } catch (PersistenceException $e) {
+            if ($e instanceof \Repositories\ReservaComercialException) return ['status'=>self::STATUS_INVALID,'codigo'=>'servicio_no_disponible','httpCode'=>$e->getCode(),'resultado'=>false,'error'=>$e->getMessage()];
             return [
                 'status' => self::STATUS_ERROR,
                 'codigo' => 'error_persistencia',
