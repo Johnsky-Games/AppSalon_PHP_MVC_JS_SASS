@@ -344,6 +344,9 @@ final class CrmIntegrationTest extends TestCase
 
     public function testPagoMockSeSeparaYNoSeSumaAIngresosReales(): void
     {
+        // El equipo con perfil de cliente tiene gasto propio, fuera del filtro externo predeterminado.
+        $equipo = $this->usuario('Equipo', 'Gasto ' . $this->tag, ['rol' => 'gerente', 'membresia' => 'activo']);
+        $this->pago(null, $equipo, '47.25', 'manual', 'completado', $this->dia(-4) . ' 11:00:00');
         $cli = $this->usuario('Mara', 'Mock ' . $this->tag);
         $c1 = $this->cita($cli, $this->dia(-5), 'completada');
         $c2 = $this->cita($cli, $this->dia(-4), 'completada');
@@ -357,7 +360,7 @@ final class CrmIntegrationTest extends TestCase
         $this->assertSame([12000, 2000], [(int)$fila['cobros_sim'], (int)$fila['dev_sim']]);
 
         // Conciliación global con un cálculo independiente (incluye cualquier otro dato que exista en la base).
-        $ref = $this->referencia($this->dia(-30), $this->dia(0), 90);
+        $ref = $this->referencia($this->dia(-30), $this->dia(0), 90, 'externo');
         $gasto = $this->panel(['desde' => $this->dia(-30), 'hasta' => $this->dia(0)])['resumen']['gasto'];
         $this->assertSame($ref['cobros_real'], $gasto['cobros_real']);
         $this->assertSame($ref['dev_real'], $gasto['devoluciones_real']);
@@ -368,6 +371,8 @@ final class CrmIntegrationTest extends TestCase
 
     public function testKpisGlobalesConcilianConCalculoIndependiente(): void
     {
+        $equipo = $this->usuario('Equipo', 'Visita ' . $this->tag, ['rol' => 'profesional', 'membresia' => 'activo']);
+        $this->cita($equipo, $this->dia(-5), 'completada');
         $a = $this->usuario('Ada', 'Kpi ' . $this->tag, ['alta' => $this->dia(-8) . ' 10:00:00']);
         $b = $this->usuario('Beni', 'Kpi ' . $this->tag, ['alta' => $this->dia(-300) . ' 10:00:00']);
         $c = $this->usuario('Cleo', 'Kpi ' . $this->tag, ['alta' => $this->dia(-300) . ' 10:00:00']);
@@ -377,7 +382,7 @@ final class CrmIntegrationTest extends TestCase
         $this->cita($c, $this->dia(-7), 'no_asistio');
         $this->cita($c, $this->dia(-6), 'completada');
         $desde = $this->dia(-45); $hasta = $this->dia(0);
-        $ref = $this->referencia($desde, $hasta, 60);
+        $ref = $this->referencia($desde, $hasta, 60, 'externo');
         $r = $this->panel(['desde' => $desde, 'hasta' => $hasta, 'dias_activo' => '60'])['resumen'];
         $this->assertSame($ref['total'], $r['clientes_total']);
         $this->assertSame($ref['nuevos'], $r['nuevos']);
@@ -808,7 +813,7 @@ final class CrmIntegrationTest extends TestCase
      * Cálculo independiente de las métricas globales: lee filas crudas y decide en PHP, sin reutilizar el SQL del módulo.
      * @return array<string,int>
      */
-    private function referencia(string $desde, string $hasta, int $diasActivo): array
+    private function referencia(string $desde, string $hasta, int $diasActivo, string $vinculo = 'todos'): array
     {
         $hoy = $this->dia(0);
         $usuarios = array_column($this->filas('SELECT id,admin FROM usuarios'), 'admin', 'id');
@@ -819,6 +824,7 @@ final class CrmIntegrationTest extends TestCase
         $esCliente = [];
         foreach ($usuarios as $id => $admin) {
             $rol = $roles[$id] ?? ((int)$admin === 1 ? 'propietario' : 'cliente');
+            if ($vinculo === 'externo' && $rol !== 'cliente') { continue; }
             if (isset($membresias[$id]) || $rol === 'cliente' || isset($conCitas[$id])) { $esCliente[$id] = true; }
         }
         $r = ['total' => count($esCliente), 'membresia_sin_registro' => 0, 'nuevos' => 0, 'activos' => 0, 'visitas' => 0, 'con_visita' => 0, 'repiten' => 0, 'citas_total' => 0,

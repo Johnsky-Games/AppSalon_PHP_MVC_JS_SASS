@@ -40,7 +40,7 @@ Las tarifas de servicios configuradas en el ERP actualizan el precio final mostr
 - El recurso se reserva para todo el intervalo de la visita; no hay asignación por etapas ni varios operadores simultáneos.
 - Las pantallas con consultas limitadas indican su alcance; ventas y agenda tienen paginación. No todos los directorios tienen todavía paginación/exportación completa.
 - La regla de comisión de esta entrega es por colaborador y vigencia; no ofrece una matriz por categoría/producto ni calcula prestaciones legales.
-- El CRM anterior y sus puntos/beneficios siguen disponibles. Paquetes prepagados, suscripciones, tarjetas regalo, propinas, saldos a favor y canjes convertidos en descuentos requieren un libro económico y reglas de reversión adicionales; esta entrega no los presenta como terminados.
+- El CRM anterior y sus puntos/beneficios siguen disponibles. La continuación 034 incorpora saldos prepagados y tarjetas regalo nominativas con su libro y reversión. Siguen pendientes paquetes de sesiones, suscripciones, propinas y canjes de fidelidad convertidos en descuentos.
 - Los cupones no se acumulan con descuentos manuales. No hay todavía segmentación de promoción por canal o categoría ni promoción automática por prioridad.
 - No se incorporan WMS avanzado, MRP, reclutamiento/evaluación de talento ni contabilidad de doble partida propia. Son alcances condicionales del plan maestro.
 
@@ -148,6 +148,8 @@ La nueva vista separa directorio y detalle. El directorio busca por beneficiario
 Migración 034: cuatro tablas nuevas, 96 en total con el esquema actual; no altera importes históricos. El rollback exige conservar las cuentas y su evidencia antes de eliminar el bloque. Ensayar sobre una copia con respaldo y APP_KEY conservada. El recorrido de navegador `PLAT-08` usa formularios reales para carga, impresión, compra con saldo, entrega, devolución y reintegro. Las pruebas de negocio cubren concurrencia, identidad del beneficiario, comisiones, banco, portales y comprobantes. La evidencia definitiva se registra por SHA en el PR de esta entrega.
 
 Pendientes posteriores: paquetes con derechos de sesiones y reglas de consumo/cancelación, suscripciones con ciclos y cobros recurrentes, fidelidad económica y proveedores fiscales/contables/nómina. Esta entrega no los activa ni declara resueltos.
+
+La revisión del CI del PR #5 corrigió dos conciliaciones de prueba de CRM: la referencia independiente incluía al equipo mientras la pantalla aplicaba el filtro predeterminado de clientes externos. La referencia respeta ahora ese vínculo; los casos incluyen colaboradores con visitas y cobros para verificar su exclusión. No se cambia el filtro del producto. La suite dirigida aprobó 25 pruebas/1080 aserciones; la validación completa del nuevo SHA se registra en el PR.
 
 La actualización de `main` instala las entregas ya fusionadas. Para ensayar este bloque 034 antes de su fusión, seleccionar explícitamente `feature/erp-prepagados` y actualizar esa rama antes de ejecutar el mismo procedimiento Docker. No confundir el piloto de una rama con una instalación ya disponible en `main`.
 
