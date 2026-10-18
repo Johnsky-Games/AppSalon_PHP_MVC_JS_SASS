@@ -13,6 +13,8 @@ La persona se registra una sola vez en `colaboradores` (Recursos Humanos). Su cu
 
 Suspender, dar de baja o retirar el rol Profesional desactiva su agenda y cierra sus sesiones. Si hay citas futuras deben resolverse primero. Volver al rol o reactivar conserva el ID profesional anterior y restaura el acceso a su agenda. Una activación desde Profesionales no puede eludir un estado laboral incompatible. Las consultas de disponibilidad y las escrituras de reservas/reasignaciones verifican también el estado laboral, incluso si quedó un flag operativo incoherente de versiones anteriores.
 
+Una ficha dada de baja o de una persona que dejó el rol Profesional es de consulta desde ambas vistas: no se pueden cambiar sus servicios, horarios, descansos ni bloqueos por otra pantalla. Una suspensión permite preparar la configuración, manteniendo la agenda sin nuevas reservas hasta reactivarla.
+
 Revocar una invitación conserva su ficha ligada a la persona y su configuración. Puede reinvitarse el mismo correo si nunca fue aceptada, conservando ambos IDs. No se libera silenciosamente la ficha para asociarla a otra persona.
 
 ## Fichas antiguas pendientes

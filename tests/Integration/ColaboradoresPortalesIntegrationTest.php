@@ -855,6 +855,7 @@ final class ColaboradoresPortalesIntegrationTest extends TestCase
         $repo->cambiarAcceso($this->owner, $cid, 'profesional', 'activo');
         $this->assertSame($pid, (int)(new AuthorizationService($this->db))->contexto($usuario)['profesional_id']);
         $repo->cambiarAcceso($this->owner, $cid, 'recepcion', 'activo');
+        $this->assertSame('invalid', $servicio->aplicarGrupoSemanal($pid, ['dias' => ['1'], 'hora_inicio' => '09:00', 'hora_fin' => '18:00'], 'horario')['status']);
         $this->assertNull((new AuthorizationService($this->db))->contexto($usuario)['profesional_id']);
         $this->assertSame('invalid', $servicio->cambiarEstado($pid, '1')['status']);
         $repo->cambiarAcceso($this->owner, $cid, 'profesional', 'activo');
@@ -878,6 +879,56 @@ final class ColaboradoresPortalesIntegrationTest extends TestCase
         $this->assertSame($pid, (int)$nuevo['profesional_id']);
         $this->assertSame(1, $this->n("SELECT COUNT(*) n FROM profesionales WHERE colaborador_id=$cid"));
         $this->assertSame(1, $this->n("SELECT COUNT(*) n FROM profesionales_servicios WHERE profesionalId=$pid AND servicioId=$sid"));
+    }
+
+    public function testUnaFichaArchivadaEsDeConsultaEnAmbasVistasYNoAdmiteMutacionesDeAgenda(): void
+    {
+        $sid = $this->servicioId();
+        $email = $this->email('archivo');
+        $r = $this->invitar($email, 'profesional', ['nombre_profesional' => 'ColabPortal Archivo', 'servicios' => [(string)$sid]]);
+        $this->assertSame(ColaboradorService::OK, $this->nuevaAceptacion($this->tokenEnviado($email))['status']);
+        $cid = (int)$r['colaborador_id']; $pid = (int)$r['profesional_id'];
+        $svc = new \Services\ProfesionalService();
+        $horarios = [1 => ['dia_semana' => '1', 'activo' => '1', 'hora_inicio' => '09:00', 'hora_fin' => '18:00']];
+        $this->assertSame('ok', $svc->guardarHorariosSemanales($pid, $horarios)['status']);
+        $descanso = $svc->crearDescanso($pid, ['dia_semana' => '1', 'hora_inicio' => '13:00', 'hora_fin' => '14:00', 'motivo' => 'Comida']);
+        $this->assertSame('ok', $descanso['status']);
+        $fecha = (new \DateTimeImmutable('+10 days', new \DateTimeZone('America/Guayaquil')))->format('Y-m-d');
+        $bloqueo = $svc->crearBloqueo($pid, ['fecha' => $fecha, 'motivo' => 'Permiso']);
+        $this->assertSame('ok', $bloqueo['status']);
+        $this->assertSame('ok', $this->servicios()->cambiarAcceso($this->owner, $cid, 'profesional', 'baja')['status']);
+        $huella = function () use ($pid): string {
+            $filas = [];
+            foreach (['profesionales' => 'id', 'horarios_profesionales' => 'profesionalId', 'descansos_profesionales' => 'profesionalId', 'bloqueos_profesionales' => 'profesionalId', 'profesionales_servicios' => 'profesionalId'] as $tabla => $campo) {
+                $filas[$tabla] = $this->db->query("SELECT * FROM $tabla WHERE $campo=$pid")->fetch_all(MYSQLI_ASSOC);
+            }
+            return json_encode($filas);
+        };
+        $antes = $huella();
+        $acciones = [
+            'ficha' => fn() => $svc->actualizar($pid, ['nombre' => 'Modificada', 'activo' => '0', 'servicios' => [$sid]]),
+            'estado' => fn() => $svc->cambiarEstado($pid, '0'),
+            'horario' => fn() => $svc->guardarHorariosSemanales($pid, $horarios),
+            'grupo' => fn() => $svc->aplicarGrupoSemanal($pid, ['dias' => ['1'], 'hora_inicio' => '09:00', 'hora_fin' => '18:00'], 'horario'),
+            'descanso' => fn() => $svc->crearDescanso($pid, ['dia_semana' => '1', 'hora_inicio' => '12:00', 'hora_fin' => '12:30']),
+            'quitar_descanso' => fn() => $svc->eliminarDescanso($pid, $descanso['id']),
+            'bloqueo' => fn() => $svc->crearBloqueo($pid, ['fecha' => (new \DateTimeImmutable($fecha))->modify('+1 day')->format('Y-m-d'), 'motivo' => 'Cambio']),
+            'quitar_bloqueo' => fn() => $svc->eliminarBloqueo($pid, $bloqueo['id']),
+        ];
+        foreach ($acciones as $nombre => $accion) {
+            $res = $accion();
+            $this->assertSame('invalid', $res['status'], $nombre . ': ' . json_encode($res));
+            $this->assertSame('estado_laboral', $res['codigo'], $nombre . ': debe rechazarse por la misma regla laboral.');
+            $this->assertSame($antes, $huella(), $nombre . ' no debe alterar el archivo');
+        }
+        $_SESSION = ['id' => $this->owner, 'login' => true, 'portal' => 'equipo', 'version_sesion' => 1];
+        $_GET = ['id' => (string)$pid]; $_POST = []; $_SERVER['REQUEST_METHOD'] = 'GET';
+        foreach (['horarios', 'actualizar'] as $accion) {
+            ob_start(); \Controllers\ProfesionalController::$accion(new Router()); $html = (string)ob_get_clean();
+            $this->assertStringContainsString('consulta', mb_strtolower($html));
+            $this->assertStringNotContainsString('name="servicios[]"', $html);
+            $this->assertStringNotContainsString('name="accion"', $html);
+        }
     }
 
 }

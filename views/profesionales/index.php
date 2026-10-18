@@ -33,7 +33,7 @@ include __DIR__ . '/../templates/alertas.php';
         <?php if ($prof->colaborador_id && !empty($puedeRh)): ?><p><a href="/admin/recursos-humanos/ficha?id=<?= (int)$prof->colaborador_id ?>">Ficha laboral</a></p>
         <?php elseif (!$prof->colaborador_id): ?><p class="ui-badge ui-badge--warning">Ficha antigua pendiente de vincular a Recursos Humanos</p><?php endif; ?>
         <div class="acciones">
-            <a class="boton" href="/profesionales/actualizar?id=<?php echo s($prof->id); ?>">Actualizar</a>
+            <a class="boton" href="/profesionales/actualizar?id=<?php echo s($prof->id); ?>"><?= $prof->permiteConfigurarAgenda() ? 'Actualizar' : 'Consultar ficha' ?></a>
             <a class="boton" href="/profesionales/horarios?id=<?php echo s($prof->id); ?>">Horarios y Agenda</a>
 
             <?php if (!$prof->estaActivo() && $prof->colaborador_id && ($prof->colaborador_estado !== 'activo' || $prof->colaborador_rol !== 'profesional')): ?>

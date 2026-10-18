@@ -26,6 +26,9 @@ final class R2bHomonimosTest extends R2bCase
         self::$base = self::servidor([], 'r2b_hom');
         $d = self::propietario(self::correo('dueno'));
         self::$p['dueno'] = $d + ['portal' => 'equipo'];
+        $otro = self::miembro($d['id'], 'recepcion');
+        (new \Repositories\ColaboradorRepository(self::db()))->cambiarAcceso($d['id'], $otro['colaborador_id'], 'propietario', 'activo');
+        self::$p['dueno2'] = $otro + ['portal' => 'equipo'];
         foreach (['gerente', 'recepcion', 'finanzas', 'profesional'] as $rol) { self::$p[$rol] = self::miembro($d['id'], $rol) + ['portal' => 'equipo']; }
         self::$p['cliente'] = self::cliente(['email' => self::correo('cli-sesion')]) + ['portal' => 'cliente'];
         self::$sid = self::servicio();
@@ -400,8 +403,8 @@ final class R2bHomonimosTest extends R2bCase
             $this->assertSame(409, $r['status'], 'token ' . json_encode($malo));
             $this->assertSame(1, $cuenta());
         }
-        // token de otro operador (propietario con el del gerente) y con otra clave
-        $this->assertSame(409, $this->enviarProf(['nombre' => $nombre], Idem::clave(), ['decision' => 'confirmar', 'token_confirmacion' => $tok], 'dueno')['status'], 'token de otro operador');
+        // token de otro propietario y con otra clave
+        $this->assertSame(409, $this->enviarProf(['nombre' => $nombre], $a['clave'], ['decision' => 'confirmar', 'token_confirmacion' => $tok], 'dueno2')['status'], 'token de otro operador');
         $this->assertSame(409, $this->enviarProf(['nombre' => $nombre], Idem::clave(), ['decision' => 'confirmar', 'token_confirmacion' => $tok])['status'], 'token con otra clave');
         // casilla vieja
         $this->assertNotSame(302, $this->enviarProf(['nombre' => $nombre], $a['clave'], ['confirmar_homonimo' => '1'])['status'], 'la casilla vieja confirma');

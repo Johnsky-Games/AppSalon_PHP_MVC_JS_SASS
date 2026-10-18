@@ -104,6 +104,12 @@ class Profesional
         }
     }
 
+    /** Las fichas históricas siguen siendo consultables; su configuración depende del mismo estado que RH. */
+    public function permiteConfigurarAgenda(): bool
+    {
+        return $this->colaborador_id === null || ($this->colaborador_rol === 'profesional' && $this->colaborador_estado !== 'baja');
+    }
+
     public function estaActivo(): bool
     {
         return (string)$this->activo === '1';

@@ -605,6 +605,7 @@ class ProfesionalService
         } catch (\DomainException $e) {
             return ['status' => self::STATUS_INVALID, 'resultado' => false, 'profesional' => $existente, 'alertas' => ['error' => [$e->getMessage()]]];
         } catch (PersistenceException $e) {
+            if ($e instanceof \Repositories\AgendaLaboralException) { return ['status' => self::STATUS_INVALID, 'resultado' => false, 'httpCode' => 422, 'codigo' => 'estado_laboral', 'profesional' => $existente ?? null, 'alertas' => ['error' => [$e->getMessage()]]]; }
             return [
                 'status' => self::STATUS_ERROR,
                 'resultado' => false,
@@ -667,6 +668,7 @@ class ProfesionalService
         } catch (\DomainException $e) {
             return ['status' => self::STATUS_INVALID, 'resultado' => false, 'profesional' => null, 'alertas' => ['error' => [$e->getMessage()]]];
         } catch (PersistenceException $e) {
+            if ($e instanceof \Repositories\AgendaLaboralException) { return ['status' => self::STATUS_INVALID, 'resultado' => false, 'httpCode' => 422, 'codigo' => 'estado_laboral', 'profesional' => $existente ?? null, 'alertas' => ['error' => [$e->getMessage()]]]; }
             return [
                 'status' => self::STATUS_ERROR,
                 'resultado' => false,
@@ -907,7 +909,7 @@ class ProfesionalService
             if ($e->getCode() === 422) {
                 return [
                     'status' => self::STATUS_INVALID,
-                    'codigo' => 'colision_citas_confirmadas',
+                    'codigo' => $e instanceof \Repositories\AgendaLaboralException ? 'estado_laboral' : 'colision_citas_confirmadas',
                     'httpCode' => 422,
                     'resultado' => false,
                     'horarios' => $entidadesPlanas,
@@ -954,6 +956,7 @@ class ProfesionalService
         } catch (\DomainException $e) {
             return ['status' => $e->getCode() === 404 ? self::STATUS_NOT_FOUND : self::STATUS_INVALID, 'resultado' => false, 'alertas' => ['error' => [$e->getMessage()]]];
         } catch (PersistenceException $e) {
+            if ($e instanceof \Repositories\AgendaLaboralException) { return ['status' => self::STATUS_INVALID, 'resultado' => false, 'httpCode' => 422, 'codigo' => 'estado_laboral', 'profesional' => $existente ?? null, 'alertas' => ['error' => [$e->getMessage()]]]; }
             return ['status' => self::STATUS_ERROR, 'resultado' => false, 'alertas' => ['error' => ['No se pudo guardar la configuración semanal. Inténtalo de nuevo.']]];
         }
     }
@@ -1121,7 +1124,7 @@ class ProfesionalService
             if ($e->getCode() === 422) {
                 return [
                     'status' => self::STATUS_INVALID,
-                    'codigo' => 'colision_citas_confirmadas',
+                    'codigo' => $e instanceof \Repositories\AgendaLaboralException ? 'estado_laboral' : 'colision_citas_confirmadas',
                     'httpCode' => 422,
                     'resultado' => false,
                     'id' => null,
@@ -1177,6 +1180,7 @@ class ProfesionalService
                 'alertas' => []
             ];
         } catch (PersistenceException $e) {
+            if ($e instanceof \Repositories\AgendaLaboralException) { return ['status' => self::STATUS_INVALID, 'resultado' => false, 'httpCode' => 422, 'codigo' => 'estado_laboral', 'profesional' => $existente ?? null, 'alertas' => ['error' => [$e->getMessage()]]]; }
             return [
                 'status' => self::STATUS_ERROR,
                 'resultado' => false,
@@ -1348,7 +1352,7 @@ class ProfesionalService
             if ($e->getCode() === 422) {
                 return [
                     'status' => self::STATUS_INVALID,
-                    'codigo' => 'colision_citas_confirmadas',
+                    'codigo' => $e instanceof \Repositories\AgendaLaboralException ? 'estado_laboral' : 'colision_citas_confirmadas',
                     'httpCode' => 422,
                     'resultado' => false,
                     'id' => null,
@@ -1404,6 +1408,7 @@ class ProfesionalService
                 'alertas' => []
             ];
         } catch (PersistenceException $e) {
+            if ($e instanceof \Repositories\AgendaLaboralException) { return ['status' => self::STATUS_INVALID, 'resultado' => false, 'httpCode' => 422, 'codigo' => 'estado_laboral', 'profesional' => $existente ?? null, 'alertas' => ['error' => [$e->getMessage()]]]; }
             return [
                 'status' => self::STATUS_ERROR,
                 'resultado' => false,

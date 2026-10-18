@@ -424,8 +424,11 @@ class ProfesionalRepository
 
     private function bloquearProfesionalParaMutacion(mysqli $db, int $id): bool
     {
-        $col = $db->prepare('SELECT c.id FROM colaboradores c JOIN profesionales p ON p.colaborador_id=c.id WHERE p.id=? FOR SHARE');
-        $col->bind_param('i', $id); $col->execute(); $col->get_result()->fetch_assoc(); $col->close();
+        $col = $db->prepare('SELECT c.id,c.rol,c.estado FROM colaboradores c JOIN profesionales p ON p.colaborador_id=c.id WHERE p.id=? FOR SHARE');
+        $col->bind_param('i', $id); $col->execute(); $laboral = $col->get_result()->fetch_assoc(); $col->close();
+        if ($laboral && ($laboral['rol'] !== 'profesional' || $laboral['estado'] === 'baja')) {
+            throw new AgendaLaboralException('Esta ficha conserva su historial, pero su estado o rol laboral no permite modificar la agenda. Gestiona primero a la persona desde Recursos Humanos.', 422);
+        }
         $stmt = $db->prepare("SELECT id FROM profesionales WHERE id = ? LIMIT 1 FOR UPDATE");
         if (!$stmt) {
             throw new PersistenceException("Error al preparar bloqueo de profesional: " . $db->error);
