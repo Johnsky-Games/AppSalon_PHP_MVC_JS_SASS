@@ -21,4 +21,6 @@ Revocar una invitación conserva su ficha ligada a la persona y su configuració
 
 RH muestra, en un apartado desplegable, las fichas sin vínculo laboral. “Vincular ficha laboral” abre una invitación con ese ID preseleccionado. La selección es explícita: nunca se decide que dos personas son la misma por su nombre. Si ya existe una cuenta enlazada a la ficha, el correo de la invitación debe corresponder a esa cuenta. Un vínculo ocupado por otra persona se rechaza y toda la transacción se revierte.
 
-Esta corrección no borra ni fusiona datos al actualizar el código y no requiere migración de esquema. Los registros antiguos sin información suficiente siguen visibles para su revisión; no se inventan correos, apellidos ni credenciales.
+Esta corrección no borra ni fusiona datos al actualizar el código y no requiere migración de esquema. Los cambios de agenda, reservas y baja se serializan por la ficha profesional. La consulta del vínculo laboral durante una reserva no toma un candado inverso al de RH: una reserva concurrente que se confirma antes de la baja obliga a resolver esa cita antes de cerrar la relación.
+
+Los registros antiguos sin información suficiente siguen visibles para su revisión; no se inventan correos, apellidos ni credenciales.

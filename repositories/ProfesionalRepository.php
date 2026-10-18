@@ -424,12 +424,12 @@ class ProfesionalRepository
 
     private function bloquearProfesionalParaMutacion(mysqli $db, int $id): bool
     {
-        $col = $db->prepare('SELECT c.id,c.rol,c.estado FROM colaboradores c JOIN profesionales p ON p.colaborador_id=c.id WHERE p.id=? FOR SHARE');
-        $col->bind_param('i', $id); $col->execute(); $laboral = $col->get_result()->fetch_assoc(); $col->close();
-        if ($laboral && ($laboral['rol'] !== 'profesional' || $laboral['estado'] === 'baja')) {
-            throw new AgendaLaboralException('Esta ficha conserva su historial, pero su estado o rol laboral no permite modificar la agenda. Gestiona primero a la persona desde Recursos Humanos.', 422);
-        }
-        $stmt = $db->prepare("SELECT id FROM profesionales WHERE id = ? LIMIT 1 FOR UPDATE");
+        // El profesional serializa agenda, reservas y cambios laborales. La subconsulta no bloquea
+        // colaboradores: RR. HH. puede tener esa fila bloqueada mientras espera este profesional.
+        $stmt = $db->prepare("SELECT p.id,
+            (SELECT c.rol FROM colaboradores c WHERE c.id=p.colaborador_id) rol_laboral,
+            (SELECT c.estado FROM colaboradores c WHERE c.id=p.colaborador_id) estado_laboral
+            FROM profesionales p WHERE p.id=? LIMIT 1 FOR UPDATE");
         if (!$stmt) {
             throw new PersistenceException("Error al preparar bloqueo de profesional: " . $db->error);
         }
@@ -445,11 +445,13 @@ class ProfesionalRepository
             $stmt->close();
             throw new PersistenceException("Error al leer resultado de bloqueo de profesional: " . $err);
         }
-        $existe = $res->fetch_assoc() !== null;
+        $fila = $res->fetch_assoc();
         $res->free();
         $stmt->close();
-
-        return $existe;
+        if ($fila && $fila['estado_laboral'] !== null && ($fila['rol_laboral'] !== 'profesional' || $fila['estado_laboral'] === 'baja')) {
+            throw new AgendaLaboralException('Esta ficha conserva su historial, pero su estado o rol laboral no permite modificar la agenda. Gestiona primero a la persona desde Recursos Humanos.', 422);
+        }
+        return $fila !== null;
     }
 
     /**

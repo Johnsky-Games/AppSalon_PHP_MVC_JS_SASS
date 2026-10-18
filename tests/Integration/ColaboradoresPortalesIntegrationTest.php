@@ -931,4 +931,64 @@ final class ColaboradoresPortalesIntegrationTest extends TestCase
         }
     }
 
+    /** Segunda conexión real mientras RH mantiene un bloqueo; falla si la agenda toma el candado inverso. */
+    private function ejecutarOperacionConcurrente(string $codigo, array $datos): array
+    {
+        $fuente = 'require ' . var_export(__DIR__ . '/../bootstrap.php', true) . '; $d=json_decode($argv[1],true); ' . $codigo . '; echo json_encode($r), "\n";';
+        $p = proc_open([PHP_BINARY, '-r', $fuente, json_encode($datos)], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        $this->assertIsResource($p);
+        try {
+            fclose($pipes[0]); stream_set_timeout($pipes[1], 5);
+            $linea = fgets($pipes[1]);
+            $this->assertNotFalse($linea, 'La agenda no debe bloquear colaboradores mientras RH espera el profesional.');
+            $res = json_decode($linea, true);
+            $this->assertIsArray($res, (string)$linea);
+            return $res;
+        } finally {
+            proc_terminate($p); fclose($pipes[1]); fclose($pipes[2]); proc_close($p);
+        }
+    }
+
+    public function testUnaConfiguracionConcurrenteConLaBajaSeSerializaSinInterbloquearRh(): void
+    {
+        $sid = $this->servicioId(); $email = $this->email('candado-agenda');
+        $r = $this->invitar($email, 'profesional', ['nombre_profesional' => 'ColabPortal Candado Agenda', 'servicios' => [(string)$sid]]);
+        $this->assertSame('ok', $this->nuevaAceptacion($this->tokenEnviado($email))['status']);
+        $cid = (int)$r['colaborador_id']; $pid = (int)$r['profesional_id'];
+        \Classes\Transaccion::ejecutar($this->db, function () use ($cid, $pid): void {
+            $this->db->query("SELECT id FROM colaboradores WHERE id=$cid FOR UPDATE");
+            $r = $this->ejecutarOperacionConcurrente('$r=(new Services\\ProfesionalService())->aplicarGrupoSemanal($d["pid"],["dias"=>["1"],"hora_inicio"=>"09:00","hora_fin"=>"18:00"],"horario")', ['pid' => $pid]);
+            $this->assertSame('ok', $r['status'], json_encode($r));
+            (new ColaboradorRepository($this->db))->cambiarAcceso($this->owner, $cid, 'profesional', 'baja');
+        });
+        $this->assertSame('baja', $this->db->query("SELECT estado FROM colaboradores WHERE id=$cid")->fetch_assoc()['estado']);
+        $this->assertSame(1, $this->n("SELECT COUNT(*) n FROM horarios_profesionales WHERE profesionalId=$pid"), 'La edición se confirmó antes de la baja, sin perder su configuración.');
+        $this->assertSame('invalid', (new \Services\ProfesionalService())->aplicarGrupoSemanal($pid, ['dias' => ['2'], 'hora_inicio' => '09:00', 'hora_fin' => '18:00'], 'horario')['status']);
+    }
+
+    public function testLaReservaConcurrenteImpideConfirmarUnaBajaQueDejariaSuCitaSinAtencion(): void
+    {
+        $sid = $this->servicioId(); $email = $this->email('candado-reserva');
+        $r = $this->invitar($email, 'profesional', ['nombre_profesional' => 'ColabPortal Candado Reserva', 'servicios' => [(string)$sid]]);
+        $this->assertSame('ok', $this->nuevaAceptacion($this->tokenEnviado($email))['status']);
+        $cid = (int)$r['colaborador_id']; $pid = (int)$r['profesional_id']; $cliente = $this->cuenta('cliente');
+        $dia = new \DateTimeImmutable('+10 days', new \DateTimeZone('America/Guayaquil')); $dow = (int)$dia->format('N');
+        $this->assertSame('ok', (new \Services\ProfesionalService())->guardarHorariosSemanales($pid, [$dow => ['dia_semana' => $dow, 'activo' => '1', 'hora_inicio' => '09:00', 'hora_fin' => '18:00']])['status']);
+        $cita = 0;
+        try {
+            \Classes\Transaccion::ejecutar($this->db, function () use ($cid, $pid, $cliente, $sid, $dia, $dow, &$cita): void {
+                $this->db->query("SELECT id FROM colaboradores WHERE id=$cid FOR UPDATE");
+                $this->db->query('SELECT COUNT(*) FROM citas')->fetch_row(); // Snapshot previo: la protección debe usar una lectura actual.
+                $r = $this->ejecutarOperacionConcurrente('$r=(new Repositories\\CitaRepository())->crearReservaConProfesionalAtomica($d["cliente"],$d["pid"],$d["fecha"],"10:00:00",$d["dow"],[$d["sid"]])', ['cliente' => $cliente, 'pid' => $pid, 'fecha' => $dia->format('Y-m-d'), 'dow' => $dow, 'sid' => $sid]);
+                $this->assertSame('ok', $r['status'], json_encode($r)); $cita = (int)$r['id'];
+                try { (new ColaboradorRepository($this->db))->cambiarAcceso($this->owner, $cid, 'profesional', 'baja'); $this->fail('La baja debía detectar la reserva confirmada por la otra conexión.'); }
+                catch (\DomainException $e) { $this->assertStringContainsString('cita(s) futura(s)', $e->getMessage()); }
+            });
+            $this->assertSame('activo', $this->db->query("SELECT estado FROM colaboradores WHERE id=$cid")->fetch_assoc()['estado']);
+            $this->assertSame('1', $this->db->query("SELECT activo FROM profesionales WHERE id=$pid")->fetch_assoc()['activo']);
+        } finally {
+            if ($cita) { $this->db->query("DELETE FROM citasservicios WHERE citaId=$cita"); $this->db->query("DELETE FROM citas WHERE id=$cita"); }
+        }
+    }
+
 }
