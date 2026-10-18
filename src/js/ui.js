@@ -301,3 +301,11 @@
         });
     });
 })();
+
+// Una fecha editada convierte el atajo en rango personalizado sin alterar los demás filtros.
+document.addEventListener('change', event => {
+ if (!event.target.matches('form input[type="date"]')) return;
+ const periodo=event.target.form?.querySelector('[data-periodo]');
+ if(periodo) periodo.value='personalizado';
+});
+document.addEventListener('click',event=>{ if(event.target.closest('[data-erp-imprimir]'))window.print(); });

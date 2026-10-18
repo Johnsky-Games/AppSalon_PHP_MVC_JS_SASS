@@ -30,13 +30,16 @@ $consulta = static function (array $extra = []) use ($filtros): string {
 <?php foreach ($porVerificar as $t): $propia = (int)$t['registrado_por'] === $actorId; ?>
 <tr><td><a href="<?php echo s(destino_portal('caja_cita', ['id' => (int)$t['cita_id']] + $rango)); ?>">#<?php echo (int)$t['cita_id']; ?></a></td><td><?php echo s($t['cliente']); ?></td><td><?php echo s($t['referencia_transferencia']); ?></td><td class="ui-table-number"><?php echo s(caja_dinero(\Services\CobroCalculo::centavos((string)$t['monto']))); ?></td><td><?php echo s($t['registrado_por_nombre']); ?><small><?php echo caja_fecha($t['created_at']); ?></small></td>
 <td class="caja-acciones">
-<form method="POST" action="/caja/pago/verificar" data-una-vez><input type="hidden" name="csrf_token" value="<?php echo s(csrf_token()); ?>"><input type="hidden" name="idem_key" value="<?php echo s(\Classes\Idempotencia::nuevaClave()); ?>"><input type="hidden" name="pago_id" value="<?php echo (int)$t['pago_id']; ?>"><input type="hidden" name="cita_id" value="<?php echo (int)$t['cita_id']; ?>"><?php echo campos_retorno('caja', $rango + ['estado' => $filtros['estado'] ?: null]); ?><button class="boton" type="submit" aria-label="Verificar la transferencia de la cita <?php echo (int)$t['cita_id']; ?>">Verificar</button></form>
+<form method="POST" action="/caja/pago/verificar" data-una-vez>
+
+<input type="hidden" name="csrf_token" value="<?php echo s(csrf_token()); ?>"><input type="hidden" name="idem_key" value="<?php echo s(\Classes\Idempotencia::nuevaClave()); ?>"><input type="hidden" name="pago_id" value="<?php echo (int)$t['pago_id']; ?>"><input type="hidden" name="cita_id" value="<?php echo (int)$t['cita_id']; ?>"><?php echo campos_retorno('caja', $rango + ['estado' => $filtros['estado'] ?: null]); ?><button class="boton" type="submit" aria-label="Verificar la transferencia de la cita <?php echo (int)$t['cita_id']; ?>">Verificar</button></form>
 <a class="boton ui-button-quiet" href="<?php echo s(destino_portal('caja_cita', ['id' => (int)$t['cita_id']] + $rango)); ?>">Ver cita y rechazar</a></td></tr>
 <?php endforeach; ?></tbody></table></div></section>
 <?php endif; ?>
 
 <p class="ui-help caja-nota-fechas">Las fechas filtran por la <strong>fecha programada de la cita</strong> (no por la efectiva de la atención ni por la del cobro). Una cita antigua (por ejemplo, una atención regularizada) se cobra hoy y conserva la fecha real de su cobro: el efectivo del día está en <a href="/admin/finanzas">Finanzas</a> (movimientos de caja por fecha real).</p>
 <form class="formulario ops-filter caja-filtros" method="GET" action="/caja" aria-label="Filtros de caja">
+<?php $periodoContexto="caja"; $periodoHistorico=false; include __DIR__."/../templates/_periodo_filtro.php"; ?>
 <div class="campo"><label for="caja-desde">Desde</label><input id="caja-desde" name="desde" type="date" value="<?php echo s($filtros['desde']); ?>"></div>
 <div class="campo"><label for="caja-hasta">Hasta</label><input id="caja-hasta" name="hasta" type="date" value="<?php echo s($filtros['hasta']); ?>"></div>
 <div class="campo"><label for="caja-q">Cliente</label><input id="caja-q" name="q" type="search" maxlength="80" value="<?php echo s($filtros['q']); ?>" placeholder="Nombre, correo o teléfono"></div>

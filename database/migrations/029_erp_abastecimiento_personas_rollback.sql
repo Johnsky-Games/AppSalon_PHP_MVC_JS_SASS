@@ -1,0 +1,18 @@
+DO (SELECT 'No se revierten jornadas ERP sin conservarlas' FROM erp_jornadas CROSS JOIN (SELECT 1 UNION ALL SELECT 2) x);
+DO (SELECT 'No se revierten documentos de negocio ERP sin conservarlos' FROM erp_compras CROSS JOIN (SELECT 1 UNION ALL SELECT 2) x);
+DO (SELECT 'No se revierten expedientes ERP sin conservarlos' FROM erp_contratos CROSS JOIN (SELECT 1 UNION ALL SELECT 2) x);
+DO (SELECT 'No se revierten novedades ERP sin conservarlas' FROM erp_asistencia CROSS JOIN (SELECT 1 UNION ALL SELECT 2) x);
+DO (SELECT 'No se revierten ausencias ERP sin conservarlas' FROM erp_ausencias CROSS JOIN (SELECT 1 UNION ALL SELECT 2) x);
+DO (SELECT 'No se revierten solicitudes ERP sin conservarlas' FROM erp_solicitudes CROSS JOIN (SELECT 1 UNION ALL SELECT 2) x);
+DO (SELECT 'No se revierten obligaciones ERP sin conservarlas' FROM erp_obligaciones CROSS JOIN (SELECT 1 UNION ALL SELECT 2) x);
+DROP TABLE IF EXISTS erp_solicitudes;
+DROP TABLE IF EXISTS erp_ausencias;
+DROP TABLE IF EXISTS erp_asistencia;
+DROP TABLE IF EXISTS erp_jornadas;
+DROP TABLE IF EXISTS erp_contratos;
+DROP TABLE IF EXISTS erp_proveedor_reembolsos;
+DROP TABLE IF EXISTS erp_proveedor_creditos;
+DROP TABLE IF EXISTS erp_obligacion_pagos;
+DROP TABLE IF EXISTS erp_obligaciones;
+DROP TABLE IF EXISTS erp_compra_lineas;
+DROP TABLE IF EXISTS erp_compras;

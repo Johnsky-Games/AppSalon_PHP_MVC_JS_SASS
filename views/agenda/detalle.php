@@ -98,3 +98,13 @@ $verFinanzas = !empty($permisos['finanzas']);
         <?php endif; ?>
     </section>
 </section>
+
+<?php if(puede('erp.ventas.crear')): ?><section class="ui-card"><h2>Venta de esta visita</h2><form method="POST" action="/gestion/accion"><input type="hidden" name="csrf_token" value="<?= s(csrf_token()) ?>"><input type="hidden" name="idem_key" value="<?= s(\Classes\Idempotencia::nuevaClave()) ?>"><input type="hidden" name="accion" value="venta_crear"><input type="hidden" name="cita_id" value="<?= (int)$cita['id'] ?>"><button class="boton">Abrir venta con servicios y productos</button></form></section><?php endif; ?>
+
+<?php if(puede('erp.consumos')||puede('erp.consumos.propios')): ?>
+<section class="ui-card"><h2>Insumos de la atención</h2><p>Registra una vez el consumo de las recetas configuradas. Se descuenta del stock libre y queda asociado a esta cita.</p>
+<?php if(!empty($consumo)): ?><p>Consumo #<?= (int)$consumo['id'] ?> registrado el <?= s($consumo['creado_en']) ?> · <?= s($consumo['motivo']) ?></p><?php else: ?>
+<form class="formulario" method="POST" action="/gestion/accion" data-una-vez>
+<input type="hidden" name="csrf_token" value="<?= s(csrf_token()) ?>"><input type="hidden" name="idem_key" value="<?= s(\Classes\Idempotencia::nuevaClave()) ?>"><input type="hidden" name="accion" value="consumir"><input type="hidden" name="cita_id" value="<?= $citaId ?>">
+<div class="campo"><label for="consumo-motivo">Detalle del consumo</label><input id="consumo-motivo" name="motivo" maxlength="300" required></div><button class="boton">Registrar insumos utilizados</button></form><?php endif; ?></section>
+<?php endif; ?>

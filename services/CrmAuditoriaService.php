@@ -118,6 +118,7 @@ final class CrmAuditoriaService
      */
     public function normalizarConsulta(array $q): array
     {
+        $q = \Classes\PeriodoFiltro::aplicar($q,historico:true);
         $errores = [];
         $texto = static function (string $k) use ($q, &$errores): ?string {
             if (!array_key_exists($k, $q)) { return null; }

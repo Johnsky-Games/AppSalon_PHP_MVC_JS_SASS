@@ -191,6 +191,7 @@ class ReporteService
      */
     public function validarYNormalizarFiltros(array $parametros): array
     {
+        $parametros = \Classes\PeriodoFiltro::aplicar($parametros,'fecha_inicio','fecha_fin',ahora:$this->ahoraReferencia);
         $rangoDefault = $this->obtenerRangoPredeterminado();
         $errores = [];
 

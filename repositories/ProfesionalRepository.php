@@ -1561,6 +1561,10 @@ class ProfesionalRepository
 
             $this->bloquearProfesionalParaMutacion($db, $profesionalId);
 
+            $ausencia=$db->prepare("SELECT id FROM erp_ausencias WHERE bloqueo_id=? AND estado='aprobada'");
+            $ausencia->bind_param('i',$bloqueoId);$ausencia->execute();$protegida=$ausencia->get_result()->fetch_row();$ausencia->close();
+            if($protegida)throw new AgendaLaboralException('Este bloqueo corresponde a una ausencia aprobada. Se gestiona desde Recursos Humanos.',422);
+
             $stmt = $db->prepare(
                 "DELETE FROM bloqueos_profesionales WHERE id = ? AND profesionalId = ? LIMIT 1"
             );

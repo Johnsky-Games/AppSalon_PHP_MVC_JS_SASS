@@ -301,4 +301,12 @@ class ServicioRepository
             throw new PersistenceException("Fallo en la capa de persistencia al eliminar servicio.", 0, $e);
         }
     }
+    /** Tarifa explícita del ERP; evita dos editores contradictorios para un mismo servicio. */
+    public function tarifaErp(int $id): ?array
+    {
+        $db=$this->resolveDb();$st=$db->prepare('SELECT precio_centavos,impuesto_pb FROM erp_catalogo WHERE servicio_id=?');
+        if(!$st)throw new PersistenceException('No se pudo consultar la tarifa del servicio.');
+        $st->bind_param('i',$id);if(!$st->execute())throw new PersistenceException('No se pudo consultar la tarifa del servicio.');$r=$st->get_result()->fetch_assoc();$st->close();return $r?:null;
+    }
+
 }

@@ -17,6 +17,31 @@ final class ColaboradorRepository
     public const DIAS_VIGENCIA = 7;
     public const ESPERA_REENVIO_SEGUNDOS = 60;
 
+    /** Reconciliación explícita con una persona laboral existente; conserva toda la configuración operativa. */
+    public function vincularProfesionalExistente(int $actor, int $colaborador, int $profesional): void
+    {
+        Transaccion::ejecutar($this->db, function () use ($actor,$colaborador,$profesional): void {
+            $this->exigirPropietario($actor);
+            $c=$this->una('SELECT * FROM colaboradores WHERE id=? FOR UPDATE','i',[$colaborador]);
+            if (!$c || $c['rol']!=='profesional' || $c['estado']==='baja') {
+                throw new \DomainException('Selecciona un colaborador vigente con rol Profesional.');
+            }
+            $p=$this->una('SELECT * FROM profesionales WHERE id=? FOR UPDATE','i',[$profesional]);
+            if (!$p) throw new \DomainException('La ficha profesional no existe.');
+            if ((int)($p['colaborador_id']??0)===$colaborador) return;
+            if ($p['colaborador_id']!==null || ($p['usuarioId']!==null && (int)$p['usuarioId']!==(int)($c['usuario_id']??0))) {
+                throw new \DomainException('La ficha pertenece a otra persona. No se cambió ningún vínculo.');
+            }
+            if ($this->una('SELECT id FROM profesionales WHERE colaborador_id=? FOR UPDATE','i',[$colaborador])) {
+                throw new \DomainException('El colaborador ya tiene una ficha profesional. Revisa sus historiales antes de vincular.');
+            }
+            $activo=$c['estado']==='activo' ? (int)$p['activo'] : 0;
+            $usuario=$c['estado']==='invitado' ? null : $c['usuario_id'];
+            $this->sql('UPDATE profesionales SET colaborador_id=?,usuarioId=?,activo=? WHERE id=?','iiii',[$colaborador,$usuario,$activo,$profesional])->close();
+            $this->auditar($actor,$c['usuario_id'],'profesional_vinculado',"colaborador:$colaborador;profesional:$profesional");
+        });
+    }
+
     private mysqli $db;
 
     public function __construct(?mysqli $db = null)

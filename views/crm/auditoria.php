@@ -42,7 +42,9 @@ $resumenFiltros = static function (array $f): string {
 
 <section class="crm-card" aria-labelledby="aud-filtros-titulo">
     <h2 id="aud-filtros-titulo">Filtrar el registro</h2>
-    <form class="crm-filtros" action="<?= s($rutaBase) ?>" method="GET" role="search">
+    <form class="crm-filtros" action="<?= s($rutaBase) ?>
+<?php $periodoContexto="auditoria"; $periodoHistorico=true; include __DIR__."/../templates/_periodo_filtro.php"; ?>
+" method="GET" role="search">
         <div class="campo"><label for="aud-resultado">Resultado</label><select id="aud-resultado" name="resultado"><option value="">Todos</option><?php foreach (CrmAuditoriaService::RESULTADOS as $k => $et): ?><option value="<?= s($k) ?>"<?= ($filtros['resultado'] ?? null) === $k ? ' selected' : '' ?>><?= s($et) ?></option><?php endforeach; ?></select></div>
         <div class="campo"><label for="aud-tipo">Tipo</label><select id="aud-tipo" name="tipo"><option value="">Todos</option><?php foreach (CrmAuditoriaService::TIPOS as $k => $et): ?><option value="<?= s($k) ?>"<?= ($filtros['tipo'] ?? null) === $k ? ' selected' : '' ?>><?= s($et) ?></option><?php endforeach; ?></select></div>
         <div class="campo"><label for="aud-actor">N.º de usuario</label><input id="aud-actor" name="actor_id" type="text" inputmode="numeric" maxlength="10" pattern="[0-9]*" value="<?= s((string)($filtros['actor_id'] ?? '')) ?>" autocomplete="off"></div>

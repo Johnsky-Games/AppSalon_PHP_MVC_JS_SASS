@@ -25,6 +25,7 @@ class CajaRepository
     public static function filtros(array $entrada, ?\DateTimeImmutable $hoy = null): array
     {
         $hoy ??= new \DateTimeImmutable('now', new \DateTimeZone('America/Guayaquil'));
+        $entrada = \Classes\PeriodoFiltro::aplicar($entrada, ahora: $hoy);
         $errores = [];
         $f = ['desde' => $hoy->modify('-30 days')->format('Y-m-d'), 'hasta' => $hoy->format('Y-m-d'), 'estado' => '', 'metodo' => '', 'profesional' => 0, 'q' => '', 'pagina' => 1];
         foreach (['desde', 'hasta'] as $k) {
@@ -61,12 +62,13 @@ class CajaRepository
         $dinero = 'CAST(ROUND(p.monto*100) AS SIGNED)';
         $sql = "SELECT c.id,c.fecha,c.hora,c.hora_inicio,c.estado cita_estado,c.usuarioId cliente_id,c.profesionalId profesional_id,
             TRIM(CONCAT(COALESCE(u.nombre,''),' ',COALESCE(u.apellido,''))) cliente,COALESCE(pr.nombre,'') profesional,
-            COALESCE(t.total,0) total,COALESCE(g.cobrado,0) cobrado,COALESCE(g.devuelto,0) devuelto,COALESCE(g.pendiente,0) pendiente,COALESCE(g.metodos,'') metodos,
+            COALESCE(ev.total,t.total,0) total,COALESCE(g.cobrado,0) cobrado,COALESCE(g.devuelto,0) devuelto,COALESCE(g.pendiente,0) pendiente,COALESCE(g.metodos,'') metodos,
             (c.estado IN " . self::COBRABLES . ") cobrable
           FROM citas c
           LEFT JOIN usuarios u ON u.id=c.usuarioId
           LEFT JOIN profesionales pr ON pr.id=c.profesionalId
           LEFT JOIN (SELECT cs.citaId,SUM(CAST(ROUND(COALESCE(cs.precio_servicio,s.precio)*100) AS SIGNED)) total FROM citasservicios cs LEFT JOIN servicios s ON s.id=cs.servicioId GROUP BY cs.citaId) t ON t.citaId=c.id
+          LEFT JOIN (SELECT v.cita_id,v.total_centavos-COALESCE(SUM(d.monto_centavos),0) total FROM erp_ventas v LEFT JOIN erp_devoluciones d ON d.venta_id=v.id WHERE v.estado<>'anulada' GROUP BY v.id,v.cita_id,v.total_centavos) ev ON ev.cita_id=c.id
           LEFT JOIN (SELECT x.cita,SUM(x.cobrado) cobrado,SUM(x.devuelto) devuelto,SUM(x.pendiente) pendiente,GROUP_CONCAT(DISTINCT x.metodo ORDER BY x.metodo SEPARATOR ',') metodos FROM (
               SELECT COALESCE(p.cita_id,p.cita_referencia_id) cita,
                 IF(p.estado IN ('completado','reembolsado'),{$dinero},0) cobrado,

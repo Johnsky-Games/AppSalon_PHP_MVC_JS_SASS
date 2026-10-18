@@ -218,6 +218,7 @@ final class CrmService
      */
     public function normalizarFiltros(array $query, array $acceso, array $catalogos): array
     {
+        $query = \Classes\PeriodoFiltro::aplicar($query, historico: true, ahora: $this->hoy());
         $errores = [];
         $hoy = $this->hoy();
         $texto = function (string $clave) use ($query, &$errores): ?string {

@@ -96,6 +96,35 @@ module.exports = async function verifyPlatform({ browser, baseUrl, recordTest, s
         if (query(`SELECT monto_centavos FROM caja_movimientos WHERE concepto='${concept}'`) !== '1234') throw new Error('Cash entry must persist exact cents.');
         recordTest('PLAT-03','Registro manual de caja desde modal',true,'Recepción declarada de12.34 persistida como1234centavos; ninguna transferencia bancaria ejecutada.');
 
+        const erpForm = action => `form:has(input[name="accion"][value="${action}"])`;
+        await owner.goto(`${baseUrl}/gestion/catalogo`,{waitUntil:'networkidle0'});
+        await owner.click('section.ui-card details:first-of-type > summary');
+        const productPriceForm='form:has(input[name="origen"][value="producto"])';
+        await fill(owner,productPriceForm,{origen_id:product,precio:'10',impuesto:'15',tipo:'venta'});
+        await submit(owner,productPriceForm);
+        const catalog = query(`SELECT id FROM erp_catalogo WHERE producto_id=${product}`);
+        await owner.goto(`${baseUrl}/gestion/caja`,{waitUntil:'networkidle0'});
+        await fill(owner,erpForm('caja_abrir'),{fondo:'0'});await submit(owner,erpForm('caja_abrir'));
+        await owner.goto(`${baseUrl}/pdv`,{waitUntil:'networkidle0'});await submit(owner,erpForm('venta_crear'));
+        const sale = new URL(owner.url()).searchParams.get('id');
+        if (!sale || !/^\d+$/.test(sale)) throw new Error('ERP sale did not open after creation.');
+        await fill(owner,erpForm('venta_agregar'),{catalogo_id:catalog,cantidad:'1',descuento:'0'});await submit(owner,erpForm('venta_agregar'));
+        await submit(owner,erpForm('venta_confirmar'));
+        await fill(owner,erpForm('venta_cobrar'),{monto:'11.50',recibido:'20',metodo:'efectivo'});await submit(owner,erpForm('venta_cobrar'));
+        await submit(owner,erpForm('venta_entregar'));
+        if (query(`SELECT stock_milesimas FROM inventario_productos WHERE id=${product}`) !== '1500') throw new Error('ERP delivery must remove only one physical unit.');
+        if (query(`SELECT CONCAT(p.monto,':',p.cambio_centavos) FROM pagos p JOIN erp_pago_aplicaciones a ON a.pago_id=p.id WHERE a.venta_id=${sale}`) !== '11.50:850') throw new Error('ERP cash tender must preserve applied amount and change.');
+        await responsive(owner,'erp-sale');
+        const receipt = query(`SELECT id FROM erp_recibos WHERE venta_id=${sale}`);
+        let erpResponse = await owner.goto(`${baseUrl}/ventas/recibo?id=${receipt}`,{waitUntil:'networkidle0'});
+        if (erpResponse.status() !== 200 || !await owner.$('[data-erp-imprimir]')) throw new Error('ERP immutable receipt must render and allow printing.');
+        for (const [route,label] of [['/gestion/indicadores','erp-bi'],['/gestion/compras','erp-purchases'],['/gestion/recursos','erp-resources']]) {
+            erpResponse=await owner.goto(baseUrl+route,{waitUntil:'networkidle0'});
+            if(erpResponse.status()!==200) throw new Error(`ERP route ${route} HTTP${erpResponse.status()}`);
+            await responsive(owner,label);
+        }
+        recordTest('PLAT-07','PDV integrado, caja, entrega y recibo real',true,'Venta USD11.50; efectivo20, cambio8.50; una salida física; recibo inmutable; vistas ERP sin desbordamiento en cuatro anchos.');
+
         const client = await login('carlos@correo.com');
         let response = await client.goto(`${baseUrl}/perfil`,{waitUntil:'networkidle0'});
         if (response.status() !== 200) throw new Error('Client profile unavailable.');

@@ -257,11 +257,16 @@ final class CobroCitaService
     private function citaFila(int $citaId, bool $bloquear): ?array
     {
         // FOR UPDATE OF c: bloquea solo la cita (no al cliente ni al profesional, que otras operaciones usan).
-        return $this->repo->consulta(
+        $fila = $this->repo->consulta(
             'SELECT c.id,c.fecha,c.hora,c.hora_inicio,c.hora_fin,c.estado,c.estado_pago,c.usuarioId,c.profesionalId,u.nombre cliente_nombre,u.apellido cliente_apellido,p.nombre profesional_nombre'
             . ' FROM citas c LEFT JOIN usuarios u ON u.id=c.usuarioId LEFT JOIN profesionales p ON p.id=c.profesionalId WHERE c.id=?' . ($bloquear ? ' FOR UPDATE OF c' : ''),
             'i', [$citaId]
         )[0] ?? null;
+        if($bloquear){
+            $venta=$this->repo->consulta("SELECT id FROM erp_ventas WHERE cita_id=? AND estado<>'anulada' FOR SHARE",'i',[$citaId])[0]??null;
+            if($venta)throw new CobroRechazado('Esta cita se cobra desde Punto de venta, venta #'.(int)$venta['id'].'.',409);
+        }
+        return $fila;
     }
 
     /**

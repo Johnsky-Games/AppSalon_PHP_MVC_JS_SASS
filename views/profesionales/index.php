@@ -31,7 +31,10 @@ include __DIR__ . '/../templates/alertas.php';
         </p>
 
         <?php if ($prof->colaborador_id && !empty($puedeRh)): ?><p><a href="/admin/recursos-humanos/ficha?id=<?= (int)$prof->colaborador_id ?>">Ficha laboral</a></p>
-        <?php elseif (!$prof->colaborador_id): ?><p class="ui-badge ui-badge--warning">Ficha antigua pendiente de vincular a Recursos Humanos</p><?php endif; ?>
+        <?php elseif (!$prof->colaborador_id): ?><p class="ui-badge ui-badge--warning">Ficha antigua pendiente de vincular a Recursos Humanos</p>
+            <?php if (!empty($puedeAltas)): ?><p><a class="boton ui-button-quiet" href="/admin/equipo?rol=profesional&amp;profesional_id=<?= (int)$prof->id ?>">Vincular a Recursos Humanos</a></p>
+            <?php else: ?><p class="ui-form-help">El propietario puede vincular esta ficha desde Recursos Humanos.</p><?php endif; ?>
+        <?php endif; ?>
         <div class="acciones">
             <a class="boton" href="/profesionales/actualizar?id=<?php echo s($prof->id); ?>"><?= $prof->permiteConfigurarAgenda() ? 'Actualizar' : 'Consultar ficha' ?></a>
             <a class="boton" href="/profesionales/horarios?id=<?php echo s($prof->id); ?>">Horarios y Agenda</a>

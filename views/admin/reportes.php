@@ -32,6 +32,8 @@ $queryExportar = http_build_query([
 <h2 class="ui-section-title">Filtrar Reporte de Reservas, Ocupación y Movimientos Financieros</h2><p class="ui-form-help">Elige un periodo y compara la agenda por fecha programada, los servicios realizados por fecha efectiva o los ingresos por fecha de cobro.</p>
 <div class="busqueda reportes-filtros ui-card">
     <form action="/admin/reportes" method="GET" class="formulario" id="form-filtros-reportes">
+<?php $periodoContexto="reportes"; $periodoHistorico=false; include __DIR__."/../templates/_periodo_filtro.php"; ?>
+
         <div class="campo">
             <label for="fecha_inicio">Desde</label>
             <input

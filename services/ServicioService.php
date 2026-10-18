@@ -359,6 +359,7 @@ class ServicioService
             ];
         }
 
+        $precioOriginal = (string)$existente->precio;
         // Aplicar únicamente campos editables (`nombre`, `precio` y `duracion_minutos`), preservando el ID validado
         $existente->sincronizarEditable($datos);
         $existente->id = (string)$id;
@@ -379,6 +380,9 @@ class ServicioService
         $existente->id = (string)$id;
 
         try {
+            if (self::normalizarPrecio($precioOriginal) !== $existente->precio && $this->repository->tarifaErp($id) !== null) {
+                return ['status'=>self::STATUS_INVALID,'resultado'=>false,'servicio'=>$existente,'alertas'=>['error'=>['Este precio se gestiona en Precios y productos del PDV, donde se registra también su impuesto. Cambia allí la tarifa y conserva aquí el nombre y la duración.']]];
+            }
             $actualizado = $this->repository->update($existente);
             if (!$actualizado) {
                 return [

@@ -151,8 +151,12 @@ final class CrmRepository
         return self::unir(
             self::f("SELECT COALESCE(pg.usuario_id,ci.usuarioId) usuario,'C' tipo,{$mock} mock,CAST(ROUND(pg.monto*100) AS SIGNED) c,{$cobro} fecha_evento{$join}"
                 . " WHERE pg.estado IN ('completado','reembolsado') AND {$cobro}>=? AND {$cobro}<?{$u}", 'ss' . $tu, array_merge([$ini, $fin], $pu)),
-            self::f(" UNION ALL SELECT COALESCE(pg.usuario_id,ci.usuarioId),'R',{$mock},CAST(ROUND(pg.monto*100) AS SIGNED),{$devol}{$join}"
-                . " WHERE pg.estado='reembolsado' AND {$devol}>=? AND {$devol}<?{$u}", 'ss' . $tu, array_merge([$ini, $fin], $pu))
+            // Los eventos parciales tienen importe y fecha propios. El fallback legado solo aporta la parte
+            // de un reembolso total que NO esté ya representada en el libro, evitando contarlo dos veces.
+            self::f(" UNION ALL SELECT COALESCE(pg.usuario_id,ci.usuarioId),'R',{$mock},GREATEST(0,CAST(ROUND(pg.monto*100) AS SIGNED)-COALESCE((SELECT SUM(d0.monto_centavos) FROM cobros_devoluciones d0 WHERE d0.pago_id=pg.id),0)),{$devol}{$join}"
+                . " WHERE pg.estado='reembolsado' AND {$devol}>=? AND {$devol}<?{$u}", 'ss' . $tu, array_merge([$ini, $fin], $pu)),
+            self::f(" UNION ALL SELECT COALESCE(pg.usuario_id,ci.usuarioId),'R',{$mock},d.monto_centavos,d.registrado_en{$join} JOIN cobros_devoluciones d ON d.pago_id=pg.id"
+                . " WHERE d.registrado_en>=? AND d.registrado_en<?{$u}", 'ss' . $tu, array_merge([$ini, $fin], $pu))
         );
     }
 
@@ -174,9 +178,10 @@ final class CrmRepository
     {
         $estados = "'" . implode("','", self::ESTADOS_PAGO_CON_SALDO) . "'";   // constantes del código, nunca entrada del usuario
         return self::f(
-            'SELECT ci.usuarioId,CAST(SUM(GREATEST(0,tt.total-COALESCE(pp.pagado,0))) AS SIGNED) saldo,COUNT(*) citas_saldo FROM citas ci '
+            'SELECT ci.usuarioId,CAST(SUM(GREATEST(0,COALESCE(ev.total,tt.total)-COALESCE(pp.pagado,0))) AS SIGNED) saldo,COUNT(*) citas_saldo FROM citas ci '
             . 'INNER JOIN (SELECT citaId,SUM(ROUND(precio_servicio*100)) total FROM citasservicios GROUP BY citaId) tt ON tt.citaId=ci.id '
-            . "LEFT JOIN (SELECT COALESCE(cita_id,cita_referencia_id) cid,SUM(ROUND(monto*100)) pagado FROM pagos WHERE estado='completado' AND COALESCE(NULLIF(TRIM(proveedor),''),'mock')<>'mock' GROUP BY cid) pp ON pp.cid=ci.id "
+            . "LEFT JOIN (SELECT v.cita_id,v.total_centavos-COALESCE(d.credito,0) total FROM erp_ventas v LEFT JOIN(SELECT venta_id,SUM(monto_centavos) credito FROM erp_devoluciones GROUP BY venta_id)d ON d.venta_id=v.id WHERE v.estado<>'anulada')ev ON ev.cita_id=ci.id "
+            . "LEFT JOIN (SELECT COALESCE(pg.cita_id,pg.cita_referencia_id) cid,SUM(GREATEST(0,ROUND(pg.monto*100)-COALESCE((SELECT SUM(d.monto_centavos) FROM cobros_devoluciones d WHERE d.pago_id=pg.id),0))) pagado FROM pagos pg WHERE pg.estado='completado' AND COALESCE(NULLIF(TRIM(pg.proveedor),''),'mock')<>'mock' GROUP BY cid) pp ON pp.cid=ci.id "
             . "WHERE ci.estado='completada' AND ci.fecha<=? AND ci.estado_pago IN ({$estados}) GROUP BY ci.usuarioId",
             's', [$hoy]
         );

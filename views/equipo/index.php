@@ -1,5 +1,27 @@
 <?php
 $etiquetasPermisos = [
+    'erp.ventas.ver'=>'Consultar ventas',
+    'erp.ventas.crear'=>'Gestionar PDV y cotizaciones',
+    'erp.cobrar'=>'Registrar cobros',
+    'erp.caja'=>'Abrir y arquear caja propia',
+    'erp.caja.movimientos'=>'Movimientos de caja',
+    'erp.catalogo'=>'Precios e impuestos',
+    'erp.configurar'=>'Datos de la empresa',
+    'erp.descuento'=>'Autorizar descuentos',
+    'erp.verificar'=>'Verificar transferencias',
+    'erp.devolver'=>'Devoluciones y anulaciones',
+    'erp.compras'=>'Compras y recepciones',
+    'erp.rh'=>'Expediente, contratos y asistencia',
+    'erp.promociones'=>'Promociones y cupones',
+    'erp.comisiones'=>'Liquidar comisiones',
+    'erp.aprobaciones'=>'Resolver aprobaciones',
+    'erp.reportes'=>'Indicadores y exportación ERP',
+    'erp.obligaciones.pagar'=>'Pagar obligaciones',
+    'erp.recursos'=>'Recursos, activos e insumos',
+    'erp.consumos'=>'Consumos de todas las atenciones',
+    'erp.consumos.propios'=>'Consumos de atenciones propias',
+    'erp.documentos.propios'=>'Documentos laborales propios autorizados',
+
     'equipo.gestionar' => 'Administrar accesos del equipo', 'servicios.gestionar' => 'Gestionar servicios',
     'profesionales.gestionar' => 'Gestionar profesionales y horarios', 'perfiles.gestionar' => 'Gestionar perfiles de clientes',
     'agenda.gestionar' => 'Gestionar toda la agenda', 'agenda.ver_propia' => 'Ver y atender su agenda asignada',
@@ -22,6 +44,13 @@ $idemInvitacion = !empty($homonimos['clave']) ? $homonimos['clave'] : clave_oper
 <?php if (!empty($puedeRh)) { ?><nav class="gestion-secciones" aria-label="Gestión de personal"><a href="/admin/recursos-humanos">Recursos Humanos</a><a href="/admin/equipo" aria-current="page">Accesos e invitaciones</a></nav><?php } ?>
 
 <section class="ui-card" aria-labelledby="equipo-invitar-titulo">
+<?php if (!empty($fichasSinCuenta)): ?>
+<details><summary>Vincular a un colaborador ya registrado</summary><p>Selecciona la persona y su ficha antigua. Sus servicios, horarios y citas se conservan.</p>
+<form class="formulario ui-filtros" method="POST" action="/admin/equipo/vincular">
+<input type="hidden" name="csrf_token" value="<?= s(csrf_token()) ?>">
+<div class="campo"><label for="vincular-colaborador">Colaborador existente</label><select id="vincular-colaborador" name="colaborador_id" required><option value="">Selecciona</option><?php foreach($colaboradores as $c): if($c['rol']!=='profesional'||$c['estado']==='baja'||!empty($c['profesional_id'])) continue; ?><option value="<?= (int)$c['id'] ?>"><?= s($c['nombre'].' '.$c['apellido'].' · '.$c['email']) ?></option><?php endforeach; ?></select></div>
+<div class="campo"><label for="vincular-profesional">Ficha profesional antigua</label><select id="vincular-profesional" name="profesional_id" required><?php foreach($fichasSinCuenta as $f): ?><option value="<?= (int)$f['id'] ?>"<?= (string)($previo['profesional_id']??'')===(string)$f['id']?' selected':'' ?>>#<?= (int)$f['id'] ?> · <?= s($f['nombre']) ?></option><?php endforeach; ?></select></div><button class="boton">Confirmar vínculo</button></form></details>
+<?php endif; ?>
 <h2 id="equipo-invitar-titulo">Invitar a una persona</h2>
 <p class="ui-form-help">Un mismo correo corresponde a una sola ficha laboral. Si ya es cliente conserva su cuenta y sus reservas; solo se añade su acceso al equipo cuando acepte.</p>
 <form action="/admin/equipo/crear" method="POST" class="formulario" data-una-vez data-rol-form>
