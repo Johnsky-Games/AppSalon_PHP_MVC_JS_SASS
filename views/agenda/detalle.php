@@ -4,6 +4,8 @@ use Classes\ReglaAtencion;
 
 $citaId = (int)$cita['id'];
 $periodo = ['desde' => $desde, 'hasta' => $hasta];
+if (!empty($estado)) { $periodo['estado'] = $estado; }
+if (($pagina ?? 1) > 1) { $periodo['pagina'] = $pagina; }
 $volverAgenda = destino_portal('agenda', $periodo) ?: inicio_portal();
 $retornoClave = 'agenda_cita'; $retornoParams = ['id' => $citaId] + $periodo;
 $hora = substr((string)($cita['hora_inicio'] ?: $cita['hora']), 0, 5);

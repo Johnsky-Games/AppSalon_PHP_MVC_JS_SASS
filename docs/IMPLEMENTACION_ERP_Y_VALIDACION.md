@@ -54,7 +54,8 @@ Esta revisión corrige el HTML de los formularios de CRM, la reproducción de en
 
 Los contratos de QA incluyen ahora todos los archivos de rutas registrados, los permisos explícitos por rol y el esquema de 92 tablas. Las pruebas de acciones de agenda recorren los enlaces reales de paginación, conservando el formulario de cada página. La auditoría de exportaciones de caja exige exactamente un registro por intento autenticado; no se excluyen otros movimientos. Recepción solo ve el nombre del producto necesario para solicitar un ajuste, sin extender esa excepción al SKU, costos o movimientos.
 
-Validación local dirigida: los 13 casos de CRM finalizaron sin fallos; las dos pruebas de formas hostiles de RH aprobaron 523 aserciones; las siete pruebas de períodos, consistencia y portales aprobaron 26 aserciones. En la revisión de 190 casos pasaron agenda, atención, cobro, menú y esquema; las discrepancias de contratos de autorización se corrigieron y la matriz completa se está repitiendo. El ciclo de respaldo/restauración con manifiesto SHA-256 recuperó las 92 tablas de la base de pruebas. El estado definitivo del nuevo commit debe consultarse en el CI del PR #4.
+Validación local dirigida: los 13 casos de CRM finalizaron sin fallos; las dos pruebas de formas hostiles de RH aprobaron 523 aserciones; las siete pruebas de períodos, consistencia y portales aprobaron 26 aserciones. Se aprobaron 26 casos de agenda con 375 aserciones, incluido el regreso desde una cita a la segunda página con su filtro de estado; y los seis casos de login real con 18 aserciones. El ciclo de respaldo/restauración con manifiesto SHA-256 recuperó las 92 tablas de la base de pruebas. La matriz completa de autorización se amplió a 211 casos. Los resultados definitivos de la regresión completa deben consultarse en el CI del PR #4.
+
 
 ## Actualización Docker de un entorno con datos
 

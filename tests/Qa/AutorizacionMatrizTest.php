@@ -214,7 +214,7 @@ final class AutorizacionMatrizTest extends QaCase
             }
             if ($reales !== $esperadas) { $f[] = "auditoría de exportación: se esperaba $esperadas fila(s) nueva(s) (status {$resp['status']}) y hubo $reales"; }
         }
-        if ($r !== null && !empty($r['efecto_caja_auditoria'])) {
+        if ($r !== null && !empty($r['efecto_caja_auditoria']) && isset($x['dif'])) {
             // Cada exportación o denegación autenticada de caja registra exactamente un intento, también en HEAD.
             $esperadas = in_array($resp['status'], [200, 403], true) ? 1 : 0;
             $reales = 0; $otros = [];

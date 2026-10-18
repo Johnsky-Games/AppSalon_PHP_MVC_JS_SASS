@@ -74,10 +74,12 @@ class AgendaController
         }
         $desde = is_string($_GET['desde'] ?? null) ? $_GET['desde'] : null;
         $hasta = is_string($_GET['hasta'] ?? null) ? $_GET['hasta'] : null;
+        $estado = destino_valor_tipado('enum:confirmada,en_servicio,completada,no_asistio,cancelada', $_GET['estado'] ?? null);
+        $pagina = filter_var($_GET['pagina'] ?? 1, FILTER_VALIDATE_INT, ['options'=>['min_range'=>1,'max_range'=>99999]]) ?: 1;
         $alertas = array_merge_recursive(self::tomarAviso(),$_SESSION['erp_alertas']??[]);unset($_SESSION['erp_alertas']);
         $consumo=(new \Repositories\ErpRepository())->uno('SELECT id,creado_en,motivo FROM erp_consumos WHERE cita_id=?',[$id]);
         $ahora = (new AgendaAtencionService())->ahora();
-        $router->render('agenda/detalle', compact('cita', 'desde', 'hasta', 'alertas', 'permisos', 'ahora','consumo') + ['script' => '<script src="/build/js/agenda-atencion.js"></script>']);
+        $router->render('agenda/detalle', compact('cita', 'desde', 'hasta', 'estado', 'pagina', 'alertas', 'permisos', 'ahora','consumo') + ['script' => '<script src="/build/js/agenda-atencion.js"></script>']);
     }
     /** Citas antiguas sin resolver («pendientes de revisión»): nunca se marcan solas; aquí se revisan. El profesional ve solo las suyas. */
     public static function pendientes(Router $router): void
