@@ -185,80 +185,58 @@ class ProfesionalController
             http_response_code(500);
         }
 
+        $alertas = array_merge_recursive($resultado['alertas'], $_SESSION['profesionales_alertas'] ?? []);
+        unset($_SESSION['profesionales_alertas']);
         $router->render('profesionales/index', [
             'nombre' => $_SESSION['nombre'] ?? '',
             'apellido' => $_SESSION['apellido'] ?? '',
             'profesionales' => $resultado['profesionales'],
-            'alertas' => $resultado['alertas']
+            'alertas' => $alertas, 'puedeRh' => puede('rh.gestionar'), 'puedeAltas' => puede('equipo.gestionar')
         ]);
     }
 
+    /** Alta laboral única: la ficha de agenda nace dentro de la invitación del colaborador. */
     public static function crear(Router $router)
     {
         iniciar_sesion_segura();
-        exigir_permiso('profesionales.gestionar');
-
-        $profesional = new Profesional();
-        $alertas = [];
-        $homonimos = null;
-
-        $catalogoServicios = self::obtenerServicioService()->listar();
-        if ($catalogoServicios['status'] === ServicioService::STATUS_ERROR) {
-            http_response_code(500);
-            $alertas = $catalogoServicios['alertas'];
+        exigir_permiso('equipo.gestionar');
+        $alertas = []; $homonimos = null;
+        $previo = [];
+        $catalogo = self::obtenerServicioService()->listar();
+        if ($catalogo['status'] === ServicioService::STATUS_ERROR) {
+            throw new \Classes\ServiceUnavailableException('No se pudo consultar el catálogo de servicios.');
         }
-
-        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
             exigir_csrf();
-
-            $clave = clave_operacion_enviada();
-            if ($clave === null) {
-                // Toda alta nace de un formulario con su clave de operación; sin ella no se admite.
-                $resultado = ['status' => ProfesionalService::STATUS_INVALID, 'profesional' => new Profesional(),
-                    'alertas' => ['error' => ['El formulario venció. Recárgalo antes de guardar.']]];
-            } else {
-                $actorId = (int)($_SESSION['id'] ?? 0);
-                $rol = null;
-                try { $rol = (new \Services\AuthorizationService())->contexto($actorId)['rol'] ?? null; } catch (\Throwable) {}
-                $resultado = self::obtenerProfesionalService()->crear($_POST, $clave, \Classes\Idempotencia::actorUsuario($actorId, 'equipo'),
-                    ['actor_id' => $actorId, 'actor_rol' => $rol, 'ip_hash' => \Services\AuditoriaHuella::ip(\Services\AuditoriaHuella::ipDeSolicitud())]);
+            // Se fija el rol en servidor; este formulario no concede otros accesos.
+            $datos = $_POST; $datos['rol'] = 'profesional';
+            $datos['nombre_profesional'] = $datos['nombre_agenda'] ?? '';
+            $db = ActiveRecord::getDB();
+            $servicio = new \Services\ColaboradorService(new \Repositories\ColaboradorRepository($db),
+                new \Services\CorreoSalidaService(new \Repositories\CorreoSalidaRepository($db)));
+            $r = $servicio->invitar((int)$_SESSION['id'], $datos, clave_operacion_enviada(),
+                \Services\AuditoriaHuella::ip(\Services\AuditoriaHuella::ipDeSolicitud()));
+            if ($r['status'] === \Services\ColaboradorService::OK) {
+                $_SESSION['profesionales_alertas'] = ['exito' => ['Colaborador y ficha profesional registrados. La invitación queda en la cola de correos; la agenda se activa cuando la persona acepta.']];
+                redirigir('/profesionales'); return;
             }
-            if ($resultado['status'] === ProfesionalService::STATUS_OK) {
-                redirigir('/profesionales');
-                return;
+            if ($r['status'] === \Services\ColaboradorService::CANCELADO) {
+                redirigir(!empty($r['id_existente']) ? '/profesionales/actualizar?id=' . (int)$r['id_existente'] : '/profesionales'); return;
             }
-            if ($resultado['status'] === ProfesionalService::STATUS_CANCELADO) {
-                // No se creó nada: se lleva al operador a la ficha existente que coincide.
-                redirigir(!empty($resultado['id_existente']) ? '/profesionales/actualizar?id=' . (int)$resultado['id_existente'] : '/profesionales');
-                return;
+            $homonimos = $r['homonimos'] ?? null;
+            $alertas = ['error' => $r['errores'] ?? ['No se pudo registrar al colaborador.']];
+            // Solo valores escalares para repoblar identidad; la agenda usa su validador habitual.
+            foreach (['nombre','apellido','email','telefono','puesto','fecha_ingreso','nombre_agenda','profesional_id'] as $campo) {
+                $previo[$campo] = is_string($_POST[$campo] ?? null) ? mb_substr($_POST[$campo], 0, 120) : '';
             }
-            if ($resultado['status'] === ProfesionalService::STATUS_REQUIERE_CONFIRMACION) {
-                $homonimos = $resultado['homonimos'];
-            }
-
-            $profesional = $resultado['profesional'] ?? new Profesional();
-            $alertas = $resultado['alertas'];
-
-            if ($resultado['status'] === ProfesionalService::STATUS_REQUIERE_CONFIRMACION) {
-                // 200 en el paso normal del flujo; 409 si alguien intentó confirmar con un token que no corresponde.
-                http_response_code(!empty($homonimos['confirmacion_invalida']) ? 409 : 200);
-            } elseif ($resultado['status'] === ProfesionalService::STATUS_ERROR) {
-                http_response_code(500);
-            } elseif ($resultado['status'] === ProfesionalService::STATUS_CONFLICT_CLAVE || $resultado['status'] === ProfesionalService::STATUS_EN_CURSO) {
-                http_response_code(409);
-            } elseif (es_peticion_json() || !self::esCargaFormularioProfesionalValida($_POST)) {
-                http_response_code(422);
-            }
+            foreach (['servicios','franjas','descansos'] as $campo) { $previo[$campo] = is_array($_POST[$campo] ?? null) ? $_POST[$campo] : []; }
+            http_response_code($homonimos ? (!empty($homonimos['confirmacion_invalida']) ? 409 : 200)
+                : ($r['status'] === \Services\ColaboradorService::ERROR ? 500
+                    : (in_array($r['status'], [\Services\ColaboradorService::CONFLICT, \Services\ColaboradorService::CONFLICT_KEY, \Services\ColaboradorService::IN_PROGRESS], true) ? 409 : 422)));
         }
-
-        $router->render('profesionales/crear', [
-            'nombre' => $_SESSION['nombre'] ?? '',
-            'apellido' => $_SESSION['apellido'] ?? '',
-            'profesional' => $profesional,
-            'serviciosDisponibles' => $catalogoServicios['servicios'] ?? [],
-            'homonimos' => $homonimos,
-            'alertas' => $alertas
-        ]);
+        $router->render('profesionales/crear', ['alertas' => $alertas, 'homonimos' => $homonimos,
+            'previo' => $previo, 'serviciosDisponibles' => $catalogo['servicios'] ?? [],
+            'fichasSinCuenta' => (new \Repositories\ColaboradorRepository(ActiveRecord::getDB()))->profesionalesSinCuenta()]);
     }
 
     public static function actualizar(Router $router)

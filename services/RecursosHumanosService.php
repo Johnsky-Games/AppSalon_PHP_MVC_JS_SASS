@@ -27,6 +27,7 @@ final class RecursosHumanosService
         $pagina = is_string($paginaRaw) && preg_match('/^[1-9]\d{0,5}$/', $paginaRaw) ? (int)$paginaRaw : 1;
         if ($paginaRaw !== (string)$pagina && $paginaRaw !== $pagina) { $errores[] = 'La página no es válida.'; }
         return ['filtros' => ['q' => $q, 'rol' => $rol, 'estado' => $estado], 'errores' => $errores,
+            'fichasSinVinculo' => $this->repo->profesionalesSinCuenta(),
             'directorio' => $this->repo->directorio($q, $rol, $estado, $pagina)];
     }
 }

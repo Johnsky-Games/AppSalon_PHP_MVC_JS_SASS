@@ -133,7 +133,7 @@ final class ColaboradorService
         try {
             $previa = Idempotencia::buscar($db, 'colaborador.invitar', $actorId, $clave, $contenido);
             if ($previa !== null) { return $this->resultadoInvitacion($previa, true); }
-            if ($d['rol'] === 'profesional' && $d['profesional_id'] === null) {
+            if ($d['rol'] === 'profesional' && $d['profesional_id'] === null && $this->repo->fichaReinvitable($d['email']) === null) {
                 // Aviso de posibles homónimos (mismas garantías que el alta de clientes): token HMAC, decisión auditada en la misma transacción.
                 $homonimos = new HomonimosProfesionalesService(new ProfesionalHomonimosRepository($db));
                 $rolActor = null;

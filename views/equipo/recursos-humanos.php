@@ -5,7 +5,7 @@ $query = static fn(array $extra = []): string => http_build_query(array_merge($f
 ?>
 <header class="ui-page-header">
     <div><p class="ui-eyebrow">Personas del negocio</p><h1 class="nombre-pagina">Recursos Humanos</h1><p class="descripcion-pagina">Consulta el directorio de colaboradores, sus datos de contacto y sus fichas laborales.</p></div>
-    <?php if ($puedeAccesos): ?><a class="boton ui-button-quiet" href="/admin/equipo">Accesos e invitaciones</a><?php endif; ?>
+    <?php if ($puedeAccesos): ?><a class="boton ui-button-quiet" href="/admin/equipo">Registrar colaborador / invitaciones</a><?php endif; ?>
 </header>
 <?php include __DIR__ . '/../templates/barra.php'; include __DIR__ . '/../templates/alertas.php'; ?>
 <form class="gestion-busqueda gestion-busqueda--rh" method="GET" action="/admin/recursos-humanos" role="search">
@@ -39,3 +39,11 @@ $query = static fn(array $extra = []): string => http_build_query(array_merge($f
     </nav>
     <?php endif; ?>
 </section>
+
+<?php if (!empty($fichasSinVinculo)): ?>
+<section class="ui-card" aria-labelledby="rh-pendientes"><h2 id="rh-pendientes">Profesionales pendientes de ficha laboral</h2>
+<details><summary>Ver fichas pendientes de vinculación</summary><p>Estas fichas antiguas conservan su agenda e historial. Identifica a cada persona y vincula su ficha al invitarla; no crees una segunda ficha.</p>
+<ul><?php foreach ($fichasSinVinculo as $f): ?><li>#<?= (int)$f['id'] ?> · <?= s($f['nombre']) ?><?php if ($puedeProfesionales): ?> · <a href="/profesionales/horarios?id=<?= (int)$f['id'] ?>">Consultar agenda</a><?php endif; ?><?php if ($puedeAccesos): ?> · <a href="/admin/equipo?rol=profesional&amp;profesional_id=<?= (int)$f['id'] ?>">Vincular ficha laboral</a><?php endif; ?></li><?php endforeach; ?></ul>
+<?php if ($puedeAccesos): ?><a class="boton" href="/admin/equipo">Vincular desde la invitación</a><?php endif; ?>
+</details></section>
+<?php endif; ?>

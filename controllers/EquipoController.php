@@ -51,9 +51,19 @@ class EquipoController
         $alertas = $_SESSION['equipo_alertas'] ?? [];
         unset($_SESSION['equipo_alertas']);
         $servicios = (new ServicioRepository($db))->findAll();
+        $fichas = $repo->profesionalesSinCuenta();
+        $previo = $_SESSION['equipo_previo'] ?? [];
+        if (!$previo && ($_GET['rol'] ?? '') === 'profesional') { $previo['rol'] = 'profesional'; }
+        $fichaSeleccionada = filter_var($_GET['profesional_id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+        if (!$previo || !isset($previo['profesional_id'])) {
+            if ($fichaSeleccionada && in_array($fichaSeleccionada, array_map('intval', array_column($fichas, 'id')), true)) {
+                $previo['rol'] = 'profesional'; $previo['profesional_id'] = (string)$fichaSeleccionada;
+            }
+        }
+
         $router->render('equipo/index', [
             'colaboradores' => $repo->listar(),
-            'fichasSinCuenta' => $repo->profesionalesSinCuenta(),
+            'fichasSinCuenta' => $fichas,
             'servicios' => is_array($servicios) ? $servicios : [],
             'roles' => ColaboradorRepository::ROLES_INVITABLES,
             'rolesAcceso' => array_values(array_filter(array_keys(AuthorizationService::ROLES), static fn($r) => $r !== 'cliente')),
@@ -61,7 +71,7 @@ class EquipoController
             'puedeRh' => puede('rh.gestionar'),
             'puedeAgenda' => puede('agenda.gestionar'),
             'puedeProfesionales' => puede('profesionales.gestionar'),
-            'previo' => $_SESSION['equipo_previo'] ?? [],
+            'previo' => $previo,
             'homonimos' => $_SESSION['equipo_homonimos'] ?? null,
         ]);
         unset($_SESSION['equipo_previo'], $_SESSION['equipo_homonimos']);

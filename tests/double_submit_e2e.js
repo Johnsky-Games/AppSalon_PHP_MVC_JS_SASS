@@ -152,14 +152,16 @@ async function registroCliente(browser, etiqueta) {
             await Promise.all([page.waitForNavigation({ waitUntil: 'networkidle0' }), page.click('input[type="submit"]')]);
             const nombre = `E2E Profesional ${Date.now()}`;
             await page.goto(`${baseUrl}/profesionales/crear`, { waitUntil: 'networkidle0' });
-            await rellenar(page, { '#nombre': nombre });
+            await rellenar(page, { '#nombre': 'Invitada', '#apellido': 'Profesional', '#nombre-agenda': nombre, '#email': `prof-${Date.now()}@duplicados.test` });
+            await page.$eval('input[name="servicios[]"]', el => { el.checked = true; });
             await dobleClic(page, 'form[data-una-vez] input[type="submit"]');
             await esperarDestino(page, '/profesionales');
-            comprobar('Profesional: doble clic → un solo registro', contar(`SELECT COUNT(*) FROM profesionales WHERE nombre='${nombre}'`) === 1);
+            comprobar('Profesional: doble clic → una ficha vinculada a RH', contar(`SELECT COUNT(*) FROM profesionales p JOIN colaboradores c ON c.id=p.colaborador_id WHERE p.nombre='${nombre}' AND c.estado='invitado' AND p.activo=0`) === 1);
 
             const nombre2 = `E2E Profesional HTTP ${Date.now()}`;
             await page.goto(`${baseUrl}/profesionales/crear`, { waitUntil: 'networkidle0' });
-            await rellenar(page, { '#nombre': nombre2 });
+            await rellenar(page, { '#nombre': 'Invitada', '#apellido': 'Profesional', '#nombre-agenda': nombre2, '#email': `prof-http-${Date.now()}@duplicados.test` });
+            await page.$eval('input[name="servicios[]"]', el => { el.checked = true; });
             await page.evaluate(async () => {
                 const form = document.querySelector('form[data-una-vez]');
                 const enviar = () => fetch(form.action, { method: 'POST', body: new URLSearchParams(new FormData(form)), redirect: 'manual', credentials: 'same-origin' });

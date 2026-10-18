@@ -174,7 +174,7 @@ final class ReasignacionCitasRepository
             sort($ids);
             $filas = [];
             foreach ($ids as $id) {
-                $f = $this->una('SELECT id, nombre, activo FROM profesionales WHERE id = ? FOR UPDATE', 'i', [$id]);
+                $f = $this->una("SELECT p.id,p.nombre,IF(p.colaborador_id IS NULL OR EXISTS(SELECT 1 FROM colaboradores c WHERE c.id=p.colaborador_id AND c.rol='profesional' AND c.estado='activo'),p.activo,0) activo FROM profesionales p WHERE p.id=? FOR UPDATE", 'i', [$id]);
                 if ($f) { $filas[(int)$f['id']] = $f; }
             }
             if (!isset($filas[$origenId])) { return $falla('origen_inexistente', 'El profesional de origen no existe.', 404); }

@@ -166,7 +166,7 @@ final class CorreccionesQaIntegrationTest extends TestCase
     }
 
     // DEF-07 / DEF-08
-    public function testSePuedeReinvitarElMismoCorreoTrasRevocarYLaFichaHeredadaQuedaLibre(): void
+    public function testSePuedeReinvitarElMismoCorreoTrasRevocarConservandoLaFichaHeredada(): void
     {
         $this->db->query("INSERT INTO profesionales(nombre,activo) VALUES ('CorrQa Heredada',1)");
         $ficha = (int)$this->db->insert_id;
@@ -175,7 +175,7 @@ final class CorreccionesQaIntegrationTest extends TestCase
         $a = $this->svc()->invitar($this->owner, $base, Idempotencia::nuevaClave());
         $this->assertSame('ok', $a['status']);
         $this->assertSame('ok', $this->svc()->revocar($this->owner, $a['colaborador_id'])['status']);
-        $this->assertNull($this->db->query("SELECT colaborador_id FROM profesionales WHERE id=$ficha")->fetch_assoc()['colaborador_id'], 'La ficha vuelve a estar disponible');
+        $this->assertSame((int)$a['colaborador_id'], (int)$this->db->query("SELECT colaborador_id FROM profesionales WHERE id=$ficha")->fetch_assoc()['colaborador_id'], 'La ficha conserva a su persona.');
         $b = $this->svc()->invitar($this->owner, ['rol' => 'recepcion'] + $base, Idempotencia::nuevaClave());
         $this->assertSame('ok', $b['status'], json_encode($b));
         $this->assertSame($a['colaborador_id'], $b['colaborador_id'], 'Un correo = una ficha: se reutiliza');

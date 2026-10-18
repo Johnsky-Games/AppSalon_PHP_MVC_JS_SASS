@@ -11,8 +11,11 @@ include __DIR__ . '/../templates/alertas.php';
 ?>
 
 <div class="acciones">
+    <?php if ($profesional->colaborador_id && puede('rh.gestionar')): ?><a class="boton" href="/admin/recursos-humanos/ficha?id=<?= (int)$profesional->colaborador_id ?>">Ficha laboral</a><?php endif; ?>
     <a class="boton" href="/profesionales">Volver a Profesionales</a>
 </div>
+
+<?php if (!$profesional->permiteConfigurarAgenda()) { include __DIR__ . '/_agenda_consulta.php'; return; } ?>
 
 <h2 class="ui-section-title">1. Horario Semanal</h2><p class="ui-form-help">Activa los días de atención. Añade varias franjas para organizar jornadas divididas.</p>
 <?php $previoGrupos = ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' ? $_POST : []; ?>
