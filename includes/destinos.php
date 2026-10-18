@@ -42,6 +42,7 @@ function catalogo_destinos(): array
         'pdv'=>['equipo','/pdv',['erp.ventas.ver'],[]],
         'erp_recibo'=>['equipo','/ventas/recibo',['erp.ventas.ver'],['id'=>'id']],
         'erp_venta'=>['equipo','/ventas/detalle',['erp.ventas.ver'],['id'=>'id','q'=>'texto']],
+        'erp_prepagos'=>['equipo','/gestion/prepagos',['erp.cobrar'],['id'=>'id','q'=>'texto','pagina'=>'entero']],
         'erp_caja'=>['equipo','/gestion/caja',['erp.caja'],[]],
         'erp_catalogo'=>['equipo','/gestion/catalogo',['erp.catalogo'],[]],
         'erp_contactos'=>['equipo','/gestion/contactos',['erp.ventas.crear'],['q'=>'texto']],
@@ -364,7 +365,7 @@ function navegacion_portal(string $portal): array
             $enlace('profesionales', 'Profesionales', 'users')]],
         ['titulo' => 'Personas', 'enlaces' => [$enlace('rh', 'Recursos Humanos', 'users'), $enlace('equipo', 'Equipo y Permisos', 'users'), $enlace('erp_personal','Jornada y ausencias','users')]],
         ['titulo' => 'Gestión comercial', 'enlaces' => [
-            $enlace('pdv','Punto de venta','check'), $enlace('erp_caja','Mi caja','chart'), $enlace('erp_catalogo','Precios y productos','sparkles'), $enlace('erp_compras','Compras','check'), $enlace('erp_obligaciones','Cuentas por pagar','chart'), $enlace('erp_aprobaciones','Solicitudes','check'), $enlace('erp_comisiones','Comisiones','chart'), $enlace('erp_promociones','Promociones','sparkles'), $enlace('erp_seguimiento','Seguimiento comercial','users'),
+            $enlace('pdv','Punto de venta','check'), $enlace('erp_caja','Mi caja','chart'), $enlace('erp_prepagos','Saldos prepagados','chart'), $enlace('erp_catalogo','Precios y productos','sparkles'), $enlace('erp_compras','Compras','check'), $enlace('erp_obligaciones','Cuentas por pagar','chart'), $enlace('erp_aprobaciones','Solicitudes','check'), $enlace('erp_comisiones','Comisiones','chart'), $enlace('erp_promociones','Promociones','sparkles'), $enlace('erp_seguimiento','Seguimiento comercial','users'),
             $enlace('finanzas', 'Finanzas', 'chart'), $enlace('inventario', 'Inventario', 'check'), $enlace('erp_recursos','Recursos e insumos','check'), $enlace('erp_indicadores','Indicadores del negocio','chart'), $enlace('reportes', 'Reportes', 'chart'),
             $enlace('crecimiento', 'Crecimiento y fidelidad', 'sparkles'), $clientes, $enlace('clientes_indicadores', 'Indicadores de clientes', 'chart')]],
         ['titulo' => 'Ajustes del negocio', 'enlaces' => [$enlace('ajustes', 'Ajustes del negocio', 'check'), $enlace('erp_configuracion','Datos de la empresa','check'), $enlace('erp_integraciones','Integraciones','chart')]],

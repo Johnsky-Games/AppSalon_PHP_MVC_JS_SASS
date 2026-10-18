@@ -167,6 +167,8 @@ return [
     ['m' => 'GET', 'p' => '/gestion/comisiones', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'ok' => [200, 'html']],
     ['m' => 'GET', 'p' => '/gestion/recursos', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'ok' => [200, 'html']],
     ['m' => 'GET', 'p' => '/gestion/indicadores', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'ok' => [200, 'html']],
+    ['m' => 'GET', 'p' => '/gestion/prepagos/comprobante', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'finanzas'], 'ok' => [404, 'html']],
+    ['m' => 'GET', 'p' => '/gestion/prepagos', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'finanzas'], 'ok' => [200, 'html']],
     ['m' => 'GET', 'p' => '/gestion/caja', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'finanzas'], 'ok' => [200, 'html']],
     ['m' => 'GET', 'p' => '/gestion/configuracion', 'g' => 'permiso', 'roles' => ['propietario'], 'ok' => [200, 'html']],
     ['m' => 'GET', 'p' => '/gestion/promociones', 'g' => 'permiso', 'roles' => ['propietario', 'gerente'], 'ok' => [200, 'html']],

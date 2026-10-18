@@ -23,6 +23,7 @@ final class ErpPagoService extends ErpService
             $clave='erp:'.hash('sha256',$actor.':'.$d['idem_key']);$referencia='MAN-ERP-'.strtoupper(bin2hex(random_bytes(10)));$ahora=$this->r::ahora();
             $this->r->q("INSERT INTO pagos(cita_id,cita_referencia_id,usuario_id,referencia_pago,proveedor,monto,moneda,estado,metodo_pago,idempotency_key,payload_proveedor,pagado_at,monto_recibido_centavos,cambio_centavos,referencia_transferencia,referencia_unica,estado_verificacion,registrado_por) VALUES(?,?,?,?,'manual',?,'USD',?,?,?,?,?,?,?,?,?,?,?)",[$v['cita_id'],(int)($v['cita_id']??0),$v['cliente_usuario_id'],$referencia,CobroCalculo::plano($monto),$metodo==='efectivo'?'completado':'pendiente',$metodo,$clave,json_encode(['venta_id'=>$id,'via'=>'pdv']),$metodo==='efectivo'?$ahora:null,$recibido,$cambio,$ref['visible']??null,$ref['unica']??null,$metodo==='efectivo'?'confirmado':'pendiente_verificacion',$actor]);
             $pago=$this->r->id();
+            if($ref)(new ErpTransferenciaService($this->r))->reservar($ref['unica'],$pago);
             $this->r->q("INSERT INTO erp_pago_aplicaciones(pago_id,venta_id,sesion_id,importe_centavos,origen) VALUES(?,?,?,?,'pdv')",[$pago,$id,(int)$sesion['id'],$monto]);
             if($metodo==='efectivo')$cajas->asentar($actor,(int)$sesion['id'],'ingreso',$monto,$metodo,'Venta #'.$id,'erp.pago:'.$pago,$pago);
             $this->actualizarCita($id);(new ErpComisionService($this->r))->sincronizar($id,$actor);
@@ -43,6 +44,7 @@ final class ErpPagoService extends ErpService
             $nota=$this->texto($d['nota']??'',180);$monto=CobroCalculo::centavos($p['monto']);
             $s=$ventas->resumen($id);if($confirmar&&$s['neto']+$monto>$s['total'])throw new ErpException('La transferencia supera el saldo de la venta.',409);
             $this->r->q('UPDATE pagos SET estado=?,estado_verificacion=?,pagado_at=?,verificado_por=?,verificado_en=?,verificacion_nota=?,referencia_unica=? WHERE id=?',[$confirmar?'completado':'fallido',$confirmar?'confirmado':'rechazado',$confirmar?$this->r::ahora():null,$actor,$this->r::ahora(),$nota,$confirmar?$p['referencia_unica']:null,(int)$p['id']]);
+            if(!$confirmar)(new ErpTransferenciaService($this->r))->liberarPago((int)$p['id']);
             if($confirmar){$cajas=new ErpCajaService($this->r);$sesion=$cajas->sesion($actor);$cajas->asentar($actor,(int)$sesion['id'],'ingreso',$monto,'transferencia','Venta #'.$id,'erp.pago:'.$p['id'],(int)$p['id']);}
             $this->actualizarCita($id);(new ErpComisionService($this->r))->sincronizar($id,$actor);$evento=$this->evento($actor,$confirmar?'transferencia_confirmada':'transferencia_rechazada','venta',$id,['pago_id'=>$p['id'],'nota'=>$nota],$confirmar?['contabilidad']:[]);
             if($confirmar)(new ErpReciboService($this->r))->emitir($actor,$id,$evento);return $id;

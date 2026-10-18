@@ -65,7 +65,7 @@ Realizar después de revisar la rama y sus comprobaciones. Estos comandos no act
 
 ```bash
 git fetch origin
-git switch feature/erp-salon-integrado
+git switch main
 git pull --ff-only
 
 docker compose --env-file includes/.env -p appsalon-validacion stop web notificaciones
@@ -113,3 +113,48 @@ Compatibilidad explícita: las pantallas anteriores permiten movimientos sin ses
 No hay migración nueva ni alteración de datos históricos. El enlace utiliza las tablas introducidas en 028. No se cambia la autoridad de las reglas de comisión antiguas frente a las del ERP; esta revisión conecta su pago con el arqueo.
 
 Regresión específica: diez pruebas de integración con 67 aserciones, incluidas dos conexiones concurrentes para retiros antiguos/PDV y cierre. Cubren cambio, transferencias, devolución repetida, insuficiencia de efectivo, pago de comisión, aislamiento entre operadores, reapertura y conservación del histórico. La suite principal y la QA independiente se registran por SHA en el PR; el resultado de un commit anterior no acredita esta continuación.
+
+## Saldos prepagados y tarjetas regalo nominativas (034)
+
+Este bloque añade una cuenta de saldo por contacto beneficiario, sin exigir credenciales de acceso. «Saldo» y «Tarjeta regalo nominativa» comparten el mismo libro; la tarjeta no es anónima ni transferible mediante un código. Esta entrega no aplica caducidad automática, no renueva contratos y no vende paquetes de sesiones. La carga de dinero no crea una venta de servicios, no marca atención realizada y no devenga comisión.
+
+El flujo es: crear cuenta del beneficiario → abrir caja → registrar carga en efectivo o transferencia pendiente → verificar la transferencia → identificar al comprador en una venta confirmada → aplicar saldo → entregar producto o prestar el servicio. Si el contacto está vinculado explícitamente a una membresía de cliente, el prepago también puede liquidar su venta originada en una cita. Una venta de mostrador sin comprador identificado no puede consumir el saldo de otra persona.
+
+Fuentes de verdad:
+
+| Hecho | Registro | Efecto |
+|---|---|---|
+| Cuenta del beneficiario | `erp_prepagos` | Identidad y tipo; crearla no inventa saldo |
+| Recepción declarada | `erp_prepago_cargas` | Efectivo confirmado o transferencia por verificar |
+| Dinero confirmado o reintegrado | `caja_movimientos` y vínculo con sesión | Un ingreso por carga; un egreso por reintegro real |
+| Derechos monetarios disponibles | `erp_prepago_movimientos` | Carga/restitución positivas; aplicación/reembolso negativas |
+| Liquidación con saldo | `pagos` con método `prepago` y `erp_pago_aplicaciones` | Reduce lo pendiente de la venta; no vuelve a entrar dinero a caja |
+| Referencia bancaria | `erp_transferencia_referencias` | Exclusión mutua entre Caja anterior, PDV y cargas de prepago |
+
+El saldo se calcula del libro de solo anexado, con bloqueos de cuenta y lecturas actuales. La aplicación bloquea primero la venta; dos ventas compiten por el mismo saldo y dos medios compiten por el mismo importe pendiente. El resumen de venta consulta los últimos cobros confirmados aunque la transacción haya esperado el bloqueo bajo REPEATABLE READ. Idempotencia evita duplicar carga, aplicación, restitución o reembolso.
+
+Una devolución comercial restituye a la cuenta los importes originalmente liquidados con prepago. No los entrega en efectivo. El reintegro de saldo no utilizado es otra operación autorizada: está limitado por el saldo actual y lo no reembolsado de una carga confirmada, se registra por el medio original y comprueba el fondo disponible si es efectivo. Las transferencias bancarias se ejecutan fuera de la aplicación; el operador confirma el movimiento real. Restituir saldo y reintegrar dinero son hechos distintos.
+
+Las referencias de transferencias pendientes/confirmadas anteriores se incorporan al registro común sin inventar movimientos. Una referencia no puede financiar una venta y un prepago en paralelo. Rechazar una transferencia libera su referencia para corregirla; confirmar la conserva. Sigue vigente la separación entre quien declara y quien verifica, con la excepción ya existente del propietario.
+
+Las cargas y reintegros emiten comprobantes internos `SP-…` en el mismo movimiento. Guardan empresa, beneficiario, operador, referencia, recibido/cambio y saldo resultante del momento, con SHA-256 y protección de solo anexado. Cambiar después los datos de empresa o contacto no cambia esas copias. Los pagos de ventas con saldo conservan el recibo ERP de la venta.
+
+La comisión se calcula al aplicar saldo y cumplir la entrega/atención exigida, sobre los importes históricos de la venta; no se paga por cargar dinero. Las devoluciones revierten el devengo comercial. BI mantiene separados el flujo de caja, las ventas y el saldo prepagado pendiente de aplicar. El saldo de la cuenta no representa por sí solo todas las obligaciones de servicios cobrados aún sin prestar; tampoco sustituye un asiento contable o documento fiscal.
+
+Permisos: propietario, gerente, recepción y finanzas pueden consultar, crear, cargar y aplicar (`erp.cobrar`). Verificar requiere `erp.verificar`; reintegrar dinero requiere `erp.devolver`. Profesional y portal cliente no acceden a esta gestión, incluso si la cuenta propietaria tiene doble membresía. Crear un contacto no crea acceso laboral ni credenciales de cliente.
+
+La nueva vista separa directorio y detalle. El directorio busca por beneficiario/nombre y pagina de 25 en 25; el detalle pagina cargas y movimientos por separado. El libro utiliza los períodos compartidos de semana/mes y fechas propias. El saldo mostrado siempre es el actual, independiente del período histórico consultado.
+
+Migración 034: cuatro tablas nuevas, 96 en total con el esquema actual; no altera importes históricos. El rollback exige conservar las cuentas y su evidencia antes de eliminar el bloque. Ensayar sobre una copia con respaldo y APP_KEY conservada. El recorrido de navegador `PLAT-08` usa formularios reales para carga, impresión, compra con saldo, entrega, devolución y reintegro. Las pruebas de negocio cubren concurrencia, identidad del beneficiario, comisiones, banco, portales y comprobantes. La evidencia definitiva se registra por SHA en el PR de esta entrega.
+
+Pendientes posteriores: paquetes con derechos de sesiones y reglas de consumo/cancelación, suscripciones con ciclos y cobros recurrentes, fidelidad económica y proveedores fiscales/contables/nómina. Esta entrega no los activa ni declara resueltos.
+
+La actualización de `main` instala las entregas ya fusionadas. Para ensayar este bloque 034 antes de su fusión, seleccionar explícitamente `feature/erp-prepagados` y actualizar esa rama antes de ejecutar el mismo procedimiento Docker. No confundir el piloto de una rama con una instalación ya disponible en `main`.
+
+El ensayo de recuperación detectó que el formato portable conservaba tablas y datos, pero omitía los triggers. El restaurador ahora repone las protecciones desde las migraciones versionadas presentes en el código, primero en staging y después en el destino nuevo. No admite código de triggers proporcionado por el archivo de respaldo. Una migración desconocida o una forma de protección no soportada detiene la validación. El ensayo con cuentas, cargas, saldo aplicado y reintegro recuperó 96 tablas/94 filas, el saldo de 5900 centavos, el comprobante idéntico, la referencia bancaria y las 31 protecciones; UPDATE/DELETE del libro restaurado vuelven a rechazarse. Es necesario conservar una versión de código compatible con las migraciones del respaldo.
+
+Validación local de esta continuación: suite principal en orden aleatorio, 1202 pruebas/18673 aserciones; QA dirigida de rutas, navegación, esquema, caja y finanzas, 241/7335; recuperación, 12/443. La comprobación adicional de la restricción SQL del efectivo aprobó 1/10: una carga en efectivo no admite recibido/cambio nulos. PHP y los dos scripts de navegador pasan la revisión de sintaxis. El recorrido real nuevo PLAT-08 y la QA independiente completa deben finalizar en el CI del SHA publicado; no se presentan como ejecutados localmente.
+
+Las cargas conservan además una clave y huella permanentes en su registro financiero. Vencer o depurar la caché temporal de idempotencia no autoriza a cobrar de nuevo un formulario antiguo, incluso si la caja original ya está cerrada; la misma clave con otros datos se rechaza.
+
+La última ampliación de protección de cargas aprobó los 18 casos de prepagos/95 aserciones, incluido el reenvío después de expirar la caché y con la caja original cerrada. El resultado se presenta como operación ya registrada; no añade carga, dinero ni evento. El CI ejecutará la suite completa del SHA final publicado.

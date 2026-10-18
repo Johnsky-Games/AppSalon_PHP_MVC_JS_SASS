@@ -28,4 +28,12 @@ final class ErpPortalesIntegrationTest extends TestCase
         foreach(['personal','documentos'] as $metodo)self::assertSame(403,$this->ejecutar(fn()=>ErpController::$metodo($router)),$metodo);
         self::assertSame(403,$this->ejecutar(fn()=>ErpController::documentoDescargar()));
     }
+    public function testPortalClienteNoPuedeLeerNiCrearSaldosPrepagados():void
+    {
+        $this->sesion('cliente');$_SERVER['REQUEST_METHOD']='GET';
+        self::assertSame(403,$this->ejecutar(fn()=>ErpController::prepagos(new \MVC\Router())));
+        $_SERVER['REQUEST_METHOD']='POST';$_POST=['accion'=>'prepago_crear','idem_key'=>R5CajaFixture::clave(),'csrf_token'=>'csrf-erp-portales'];
+        self::assertSame(403,$this->ejecutar(fn()=>ErpController::accion()));self::assertSame(0,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_prepagos')['n']);
+    }
+
 }

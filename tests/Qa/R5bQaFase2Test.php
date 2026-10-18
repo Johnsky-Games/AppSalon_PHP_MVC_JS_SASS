@@ -28,7 +28,7 @@ final class R5bQaFase2Test extends R5bCase
         self::q('TRUNCATE intentos_login');
         $db = self::db();
         $db->query('SET FOREIGN_KEY_CHECKS=0');
-        foreach (self::q("SELECT table_name t FROM information_schema.tables WHERE table_schema=DATABASE() AND table_type='BASE TABLE' AND table_name REGEXP 'pago|caja_|comision|comprobante|cobro|devol' AND table_name NOT LIKE '%config%'") as $t) { $db->query('TRUNCATE TABLE `' . $t['t'] . '`'); }
+        foreach (self::q("SELECT table_name t FROM information_schema.tables WHERE table_schema=DATABASE() AND table_type='BASE TABLE' AND table_name REGEXP 'pago|transferencia_referencias|caja_|comision|comprobante|cobro|devol' AND table_name NOT LIKE '%config%'") as $t) { $db->query('TRUNCATE TABLE `' . $t['t'] . '`'); }
         $db->query('SET FOREIGN_KEY_CHECKS=1');
     }
 

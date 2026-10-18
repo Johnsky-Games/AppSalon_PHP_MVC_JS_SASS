@@ -17,6 +17,7 @@ declare(strict_types=1);
  * - Importa únicamente en una base nueva o vacía indicada explícitamente con --db.
  * - Valida en staging antes de importar. Nunca renombra ni elimina tablas originales.
  * - Un destino nuevo incompleto se conserva para diagnóstico si falla la importación final.
+ * - Repone los triggers de protección desde las migraciones locales aplicadas; nunca ejecuta triggers del dump.
  * - Restaura `FOREIGN_KEY_CHECKS = 1` y `UNIQUE_CHECKS = 1` de manera garantizada al finalizar.
  */
 
@@ -453,6 +454,7 @@ try {
         }
     }
     validar_manifiesto_y_esquema($mysqli, $stagingDb, $datosMan);
+    \Classes\ProteccionesRestauradas::aplicar($mysqli);
     // Recheck immediately before any destination DDL. Existing data is never altered.
     if ($existe) {
         $mysqli->select_db($dbName);
@@ -471,11 +473,12 @@ try {
         }
     }
     validar_manifiesto_y_esquema($mysqli, $dbName, $datosMan);
+    $protecciones=\Classes\ProteccionesRestauradas::aplicar($mysqli);
     $mysqli->query('SET FOREIGN_KEY_CHECKS = 1');
     $mysqli->query('SET UNIQUE_CHECKS = 1');
     $mysqli->query("DROP DATABASE `{$stagingDb}`");
     $stagingDb = null;
-    echo "[OK] Restauración completada: base nueva/vacía {$dbName}. Verifique antes de cambiar la conexión de la aplicación.\n";
+    echo "[OK] Restauración completada: base nueva/vacía {$dbName}; protecciones versionadas={$protecciones}. Verifique antes de cambiar la conexión de la aplicación.\n";
     $exitCode = 0;
 } catch (Throwable $error) {
     fwrite(STDERR, '[ERROR] ' . $error->getMessage() . "\n");
