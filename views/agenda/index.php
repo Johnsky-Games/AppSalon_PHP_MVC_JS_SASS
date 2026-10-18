@@ -2,7 +2,9 @@
 use Services\AgendaAtencionService;
 use Classes\ReglaAtencion;
 
-$periodo = ['desde' => $desde, 'hasta' => $hasta, 'estado'=>$estado??'', 'pagina'=>$pagina??1];
+$periodo = ['desde' => $desde, 'hasta' => $hasta];
+if (!empty($estado)) { $periodo['estado'] = $estado; }
+if (($pagina ?? 1) > 1) { $periodo['pagina'] = $pagina; }
 $etiquetaEstado = static fn(string $e): string => ReglaAtencion::etiqueta($e);
 ?>
 <section class="agenda-integral">

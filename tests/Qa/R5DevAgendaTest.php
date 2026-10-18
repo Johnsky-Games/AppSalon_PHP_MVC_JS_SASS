@@ -431,7 +431,12 @@ final class R5DevAgendaTest extends R5DevAgendaCase
             $this->assertSame(200, $r['status'], $rol);
             $this->assertStringContainsString('Clara Cliente', $r['body'], $rol);
             $this->assertStringContainsString('Corte histórico', $r['body'], $rol);
-            foreach (['$20.00', 'Total de la visita', 'Estado de pago', 'Pagado', 'Cobrar', 'comprobante', '/caja'] as $prohibido) {
+            preg_match_all('~(?:href|action)="([^"]+)"~', $r['body'], $destinos);
+            foreach ($destinos[1] as $destino) {
+                $ruta = parse_url(html_entity_decode($destino), PHP_URL_PATH) ?: '';
+                $this->assertFalse($ruta === '/caja' || str_starts_with($ruta, '/caja/'), "$rol no accede a la caja histórica");
+            }
+            foreach (['$20.00', 'Total de la visita', 'Estado de pago', 'Pagado', 'Cobrar', 'comprobante'] as $prohibido) {
                 $this->assertStringNotContainsStringIgnoringCase($prohibido, $r['body'], "$rol no ve «{$prohibido}»");
             }
         }
@@ -505,7 +510,7 @@ final class R5DevAgendaTest extends R5DevAgendaCase
         $ya = $this->citaYaComenzada();
         $futura = $this->cita(self::diaNegocio(3), '11:00:00', 'confirmada', self::$proA['profesional_id']);
         $per = 'desde=' . self::diaNegocio(0) . '&hasta=' . self::diaNegocio(4);
-        $pag = $n->get("/agenda?$per");
+        $pag = $this->agendaConCita($n, "/agenda?$per", $futura);
         $this->assertStringNotContainsString('data-modal-open="agenda-reprogramar-' . $ya . '"', $pag['body'], 'la cita ya comenzó: el servidor la rechazaría');
         $this->assertStringContainsString('data-modal-open="agenda-reprogramar-' . $futura . '"', $pag['body']);
         $this->assertMatchesRegularExpression('~<dialog id="agenda-reprogramar-' . $futura . '".*?name="volver" value="agenda".*?</dialog>~s', $pag['body']);

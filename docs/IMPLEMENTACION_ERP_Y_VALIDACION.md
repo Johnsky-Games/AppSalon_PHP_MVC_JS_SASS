@@ -46,6 +46,16 @@ Las tarifas de servicios configuradas en el ERP actualizan el precio final mostr
 
 La integración real debe definir emisor/país, impuestos y documentos admitidos, proveedor, cuentas contables, reglas de nómina y conciliación. El contrato `IntegracionErpInterface` exige consulta por referencia y confirmación verificable. La cola incluye un sobre versionado con evento, entidad, fecha y datos. No se deben marcar eventos como enviados manualmente para aparentar integración.
 
+## Verificación de continuidad del 18 de octubre
+
+El CI del commit `f2086ce` aprobó el recorrido real de navegador, la navegación por rol y la suite principal (1172 pruebas, 18394 aserciones). La QA independiente encontró defectos de formularios y contratos anteriores a la ampliación; ese resultado no se considera una validación completa del ERP.
+
+Esta revisión corrige el HTML de los formularios de CRM, la reproducción de entradas no escalares en equipo y los retornos de agenda. Refuerza la separación entre portales incluso para un propietario con membresía de cliente: una sesión del portal cliente no puede ejecutar acciones del ERP ni abrir expedientes laborales. Las rutas empresariales sin sesión llevan al acceso del equipo.
+
+Los contratos de QA incluyen ahora todos los archivos de rutas registrados, los permisos explícitos por rol y el esquema de 92 tablas. Las pruebas de acciones de agenda recorren los enlaces reales de paginación, conservando el formulario de cada página. La auditoría de exportaciones de caja exige exactamente un registro por intento autenticado; no se excluyen otros movimientos. Recepción solo ve el nombre del producto necesario para solicitar un ajuste, sin extender esa excepción al SKU, costos o movimientos.
+
+Validación local dirigida: los 13 casos de CRM finalizaron sin fallos; las dos pruebas de formas hostiles de RH aprobaron 523 aserciones; las siete pruebas de períodos, consistencia y portales aprobaron 26 aserciones. En la revisión de 190 casos pasaron agenda, atención, cobro, menú y esquema; las discrepancias de contratos de autorización se corrigieron y la matriz completa se está repitiendo. El ciclo de respaldo/restauración con manifiesto SHA-256 recuperó las 92 tablas de la base de pruebas. El estado definitivo del nuevo commit debe consultarse en el CI del PR #4.
+
 ## Actualización Docker de un entorno con datos
 
 Realizar después de revisar la rama y sus comprobaciones. Estos comandos no actualizan el equipo Windows desde esta sesión. Ejecutar en el repositorio local, conservando `includes/.env`, `APP_KEY` y los volúmenes existentes.

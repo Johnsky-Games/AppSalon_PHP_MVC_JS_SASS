@@ -65,7 +65,7 @@ final class AutorizacionMatrizTest extends QaCase
     private static function loginAnonimo(string $ruta): string
     {
         $camino = (string)parse_url($ruta, PHP_URL_PATH);
-        foreach (['/agenda', '/caja', '/admin', '/profesionales', '/servicios'] as $prefijo) {
+        foreach (['/agenda', '/caja', '/admin', '/profesionales', '/servicios', '/pdv', '/ventas', '/gestion'] as $prefijo) {
             if ($camino === $prefijo || str_starts_with($camino, $prefijo . '/')) { return '/equipo/login'; }
         }
         return '/';
@@ -197,6 +197,8 @@ final class AutorizacionMatrizTest extends QaCase
         $cab = '';
         foreach ($h as $k => $vs) { $cab .= $k . ': ' . implode(' | ', $vs) . "\n"; }
         $fugas = self::fugas($cuerpo . "\n" . $cab, self::prohibidos($persona, $r !== null ? self::base($r['p']) : null));
+        // Solo el nombre comercial del producto es visible a recepción al solicitar un ajuste; no SKU, costo ni movimientos.
+        if ($resp['status'] === 200 && !$spec['denegado']) { $fugas = array_values(array_diff($fugas, $r['centinelas_visibles'][self::personas()[$persona]['rol'] ?? ''] ?? [])); }
         if ($fugas) { $f[] = 'FUGA de datos privados: ' . implode(', ', $fugas); }
         // Efectos: una petición benigna (o denegada) no modifica nada.
         $tablasEfecto = $x['tablas'];
@@ -211,6 +213,17 @@ final class AutorizacionMatrizTest extends QaCase
                 if (preg_match('/^crm_exportaciones_auditoria\(n (\d+)→(\d+)\)$/u', $t, $mm)) { $reales = (int)$mm[2] - (int)$mm[1]; } else { $tablasEfecto[] = $t; }
             }
             if ($reales !== $esperadas) { $f[] = "auditoría de exportación: se esperaba $esperadas fila(s) nueva(s) (status {$resp['status']}) y hubo $reales"; }
+        }
+        if ($r !== null && !empty($r['efecto_caja_auditoria'])) {
+            // Cada exportación o denegación autenticada de caja registra exactamente un intento, también en HEAD.
+            $esperadas = in_array($resp['status'], [200, 403], true) ? 1 : 0;
+            $reales = 0; $otros = [];
+            foreach ($tablasEfecto as $t) {
+                if (preg_match('/^caja_exportaciones_auditoria\(n (\d+)→(\d+)\)$/u', $t, $mm)) { $reales = (int)$mm[2] - (int)$mm[1]; }
+                else { $otros[] = $t; }
+            }
+            $tablasEfecto = $otros;
+            if ($reales !== $esperadas) { $f[] = "auditoría de caja: se esperaba $esperadas fila(s) y hubo $reales"; }
         }
         if ($tablasEfecto) { $f[] = 'EFECTO en BD: ' . implode(', ', $tablasEfecto); }
         if ($x['correo'] !== 0) { $f[] = "EFECTO: {$x['correo']} correo(s) enviados al buzón SMTP" . (empty($x['correo_detalle']) ? '' : ' [' . implode('; ', $x['correo_detalle']) . ']'); }
@@ -761,7 +774,8 @@ final class AutorizacionMatrizTest extends QaCase
     public function test_H_la_matriz_cubre_exactamente_las_rutas_registradas_en_index_php(): void
     {
         $src = (string)file_get_contents(self::RAIZ . '/public/index.php');
-        preg_match_all('/\$router->(get|post)\(\'([^\']+)\'/', $src, $m, PREG_SET_ORDER);
+        foreach (glob(self::RAIZ . '/includes/rutas/*.php') as $archivo) { $src .= file_get_contents($archivo); }
+        preg_match_all('/\$router->(get|post)\(\s*\'([^\']+)\'/', $src, $m, PREG_SET_ORDER);
         $registradas = [];
         foreach ($m as $x) { $registradas[strtoupper($x[1]) . ' ' . $x[2]] = true; }
         $matriz = [];
@@ -775,11 +789,11 @@ final class AutorizacionMatrizTest extends QaCase
     public function test_H_el_catalogo_de_permisos_por_rol_coincide_con_la_tabla_escrita_a_mano(): void
     {
         $esperado = [
-            'propietario' => ['equipo.gestionar', 'servicios.gestionar', 'profesionales.gestionar', 'perfiles.gestionar', 'agenda.gestionar', 'agenda.ver_propia', 'agenda.regularizar', 'agenda.solicitar_regularizacion', 'finanzas.gestionar', 'inventario.gestionar', 'marketing.gestionar', 'ajustes.gestionar', 'reportes.ver', 'clientes.ver', 'clientes.ver_propios', 'clientes.analitica', 'clientes.exportar', 'rh.gestionar'],
-            'gerente' => ['servicios.gestionar', 'profesionales.gestionar', 'perfiles.gestionar', 'agenda.gestionar', 'agenda.regularizar', 'finanzas.gestionar', 'inventario.gestionar', 'marketing.gestionar', 'ajustes.gestionar', 'reportes.ver', 'clientes.ver', 'clientes.analitica', 'clientes.exportar'],
-            'recepcion' => ['perfiles.gestionar', 'agenda.gestionar', 'clientes.ver'],
-            'profesional' => ['agenda.ver_propia', 'agenda.solicitar_regularizacion', 'clientes.ver_propios'],
-            'finanzas' => ['finanzas.gestionar', 'inventario.gestionar', 'reportes.ver', 'clientes.analitica'],
+            'propietario' => ['equipo.gestionar', 'servicios.gestionar', 'profesionales.gestionar', 'perfiles.gestionar', 'agenda.gestionar', 'agenda.ver_propia', 'agenda.regularizar', 'agenda.solicitar_regularizacion', 'finanzas.gestionar', 'inventario.gestionar', 'marketing.gestionar', 'ajustes.gestionar', 'reportes.ver', 'clientes.ver', 'clientes.ver_propios', 'clientes.analitica', 'clientes.exportar', 'rh.gestionar', 'erp.ventas.ver', 'erp.ventas.crear', 'erp.cobrar', 'erp.caja', 'erp.caja.movimientos', 'erp.catalogo', 'erp.configurar', 'erp.descuento', 'erp.verificar', 'erp.devolver', 'erp.compras', 'erp.rh', 'erp.promociones', 'erp.comisiones', 'erp.aprobaciones', 'erp.reportes', 'erp.consumos.propios', 'erp.obligaciones.pagar', 'erp.recursos', 'erp.consumos', 'erp.documentos.propios'],
+            'gerente' => ['servicios.gestionar', 'profesionales.gestionar', 'perfiles.gestionar', 'agenda.gestionar', 'agenda.regularizar', 'finanzas.gestionar', 'inventario.gestionar', 'marketing.gestionar', 'ajustes.gestionar', 'reportes.ver', 'clientes.ver', 'clientes.analitica', 'clientes.exportar', 'erp.ventas.ver', 'erp.ventas.crear', 'erp.cobrar', 'erp.caja', 'erp.caja.movimientos', 'erp.catalogo', 'erp.descuento', 'erp.verificar', 'erp.devolver', 'erp.compras', 'erp.promociones', 'erp.comisiones', 'erp.aprobaciones', 'erp.reportes', 'erp.consumos.propios', 'erp.obligaciones.pagar', 'erp.recursos', 'erp.consumos', 'erp.documentos.propios'],
+            'recepcion' => ['perfiles.gestionar', 'agenda.gestionar', 'clientes.ver', 'erp.ventas.ver', 'erp.ventas.crear', 'erp.cobrar', 'erp.caja', 'erp.documentos.propios'],
+            'profesional' => ['agenda.ver_propia', 'agenda.solicitar_regularizacion', 'clientes.ver_propios', 'erp.consumos.propios', 'erp.documentos.propios'],
+            'finanzas' => ['finanzas.gestionar', 'inventario.gestionar', 'reportes.ver', 'clientes.analitica', 'erp.ventas.ver', 'erp.ventas.crear', 'erp.cobrar', 'erp.caja', 'erp.caja.movimientos', 'erp.catalogo', 'erp.verificar', 'erp.devolver', 'erp.compras', 'erp.comisiones', 'erp.aprobaciones', 'erp.reportes', 'erp.consumos.propios', 'erp.obligaciones.pagar', 'erp.recursos', 'erp.consumos', 'erp.documentos.propios'],
             'cliente' => [],
         ];
         $real = AuthorizationService::ROLES;

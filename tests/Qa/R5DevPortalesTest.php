@@ -355,16 +355,16 @@ final class R5DevPortalesTest extends R5DevPortalesCase
     public function test_el_menu_muestra_solo_lo_que_el_servidor_permite_a_cada_rol_y_marca_la_seccion_actual(): void
     {
         $esperado = [
-            'propietario' => ['/admin', '/agenda', '/servicios', '/servicios/crear', '/profesionales', '/admin/recursos-humanos', '/admin/equipo', '/admin/finanzas', '/admin/inventario', '/admin/reportes', '/admin/crecimiento', '/admin/clientes', '/admin/clientes/indicadores', '/admin/ajustes', '/perfil'],
-            'gerente' => ['/admin', '/agenda', '/servicios', '/servicios/crear', '/profesionales', '/admin/finanzas', '/admin/inventario', '/admin/reportes', '/admin/crecimiento', '/admin/clientes', '/admin/clientes/indicadores', '/admin/ajustes', '/perfil'],
-            'recepcion' => ['/admin', '/agenda', '/admin/clientes', '/admin/clientes/indicadores', '/perfil'],
-            'profesional' => ['/agenda', '/admin/clientes', '/perfil'],
-            'finanzas' => ['/admin/finanzas', '/admin/inventario', '/admin/reportes', '/admin/clientes/indicadores', '/perfil'],
+            'propietario' => ['/admin', '/agenda', '/caja', '/servicios', '/servicios/crear', '/profesionales', '/admin/recursos-humanos', '/admin/equipo', '/gestion/personal', '/pdv', '/gestion/caja', '/gestion/catalogo', '/gestion/compras', '/gestion/obligaciones', '/gestion/aprobaciones', '/gestion/comisiones', '/gestion/promociones', '/gestion/seguimiento', '/admin/finanzas', '/admin/inventario', '/gestion/recursos', '/gestion/indicadores', '/admin/reportes', '/admin/crecimiento', '/admin/clientes', '/admin/clientes/indicadores', '/admin/ajustes', '/gestion/configuracion', '/gestion/integraciones', '/perfil'],
+            'gerente' => ['/admin', '/agenda', '/caja', '/servicios', '/servicios/crear', '/profesionales', '/gestion/personal', '/pdv', '/gestion/caja', '/gestion/catalogo', '/gestion/compras', '/gestion/obligaciones', '/gestion/aprobaciones', '/gestion/comisiones', '/gestion/promociones', '/gestion/seguimiento', '/admin/finanzas', '/admin/inventario', '/gestion/recursos', '/gestion/indicadores', '/admin/reportes', '/admin/crecimiento', '/admin/clientes', '/admin/clientes/indicadores', '/admin/ajustes', '/gestion/integraciones', '/perfil'],
+            'recepcion' => ['/admin', '/agenda', '/gestion/personal', '/pdv', '/gestion/caja', '/gestion/aprobaciones', '/gestion/seguimiento', '/admin/clientes', '/admin/clientes/indicadores', '/perfil'],
+            'profesional' => ['/agenda', '/gestion/personal', '/admin/clientes', '/perfil'],
+            'finanzas' => ['/caja', '/gestion/personal', '/pdv', '/gestion/caja', '/gestion/catalogo', '/gestion/compras', '/gestion/obligaciones', '/gestion/aprobaciones', '/gestion/comisiones', '/gestion/seguimiento', '/admin/finanzas', '/admin/inventario', '/gestion/recursos', '/gestion/indicadores', '/admin/reportes', '/admin/clientes/indicadores', '/gestion/integraciones', '/perfil'],
         ];
         foreach ($esperado as $rol => $hrefs) {
             $n = self::entrar(self::$base, 'equipo', self::$roles[$rol]);
             $pag = $n->get('/perfil')['body'];
-            $this->assertSame($hrefs, array_values(array_diff($this->navHrefs($pag), ['/caja'])), "menú de $rol");
+            $this->assertSame($hrefs, $this->navHrefs($pag), "menú de $rol");
             $this->assertSame(1, substr_count($pag, 'aria-current="page"'), "$rol: una sola sección marcada en /perfil");
             $this->assertStringContainsString('aria-label="Secciones del equipo"', $pag);
             foreach (self::EXCLUSIVAS_CLIENTE as $x) { $this->assertNotContains($x, $this->navHrefs($pag), "$rol no ve $x"); }

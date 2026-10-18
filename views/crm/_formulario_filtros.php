@@ -10,9 +10,8 @@ $completo = $modo === 'completo';
 $sel = static fn($a, $b): string => (string)$a === (string)$b ? ' selected' : '';
 $centavosATexto = static fn($c): string => $c === null ? '' : number_format((int)$c / 100, 2, '.', '');
 ?>
-<form class="crm-filtros crm-filtros--agrupados" action="<?= s($rutaBase) ?>
-<?php $periodoContexto="clientes"; $periodoHistorico=true; include __DIR__."/../templates/_periodo_filtro.php"; ?>
-" method="GET"<?= $completo ? ' role="search"' : '' ?> id="crm-form-filtros">
+<form class="crm-filtros crm-filtros--agrupados" action="<?= s($rutaBase) ?>" method="GET"<?= $completo ? ' role="search"' : '' ?> id="crm-form-filtros">
+    <?php $periodoContexto="clientes"; $periodoHistorico=true; include __DIR__."/../templates/_periodo_filtro.php"; ?>
     <?php if (!empty($f['indicador'])): ?><input type="hidden" name="indicador" value="<?= s($f['indicador']) ?>"><?php endif; ?>
     <?php if ($completo): ?>
     <fieldset class="crm-grupo crm-ancho">

@@ -2,7 +2,7 @@
 /**
  * Matriz declarativa de rutas de AppSalon para el QA de autorización (Ronda 2).
  *
- * Fuente: `public/index.php` (TODAS las rutas registradas; una prueba compara este archivo con las llamadas `$router->get/post`)
+ * Fuente: `public/index.php` y `includes/rutas/*.php` (TODAS las rutas registradas; una prueba compara este archivo con las llamadas `$router->get/post`)
  * y los controladores/`funciones.php`. Los contratos se DERIVARON LEYENDO el código (no copiando respuestas observadas).
  *
  * Campos de cada ruta:
@@ -151,4 +151,39 @@ return [
     ['m' => 'GET',  'p' => '/perfil?id={ajeno}',     'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion'], 'ok' => [200, 'html']],
     ['m' => 'GET',  'p' => '/perfil?id={uid_staff}', 'g' => 'permiso', 'roles' => ['propietario'], 'ok' => [200, 'html'],
         'deny_msg' => ['gerente' => 'Los datos del personal los administra quien gestiona Recursos Humanos.', 'recepcion' => 'Los datos del personal los administra quien gestiona Recursos Humanos.']],
+    // ERP: contratos explícitos de alcance; los servicios vuelven a comprobar cada acción concreta.
+    ['m' => 'GET', 'p' => '/pdv', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'finanzas'], 'ok' => [200, 'html']],
+    ['m' => 'GET', 'p' => '/ventas', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'finanzas'], 'ok' => [200, 'html']],
+    ['m' => 'GET', 'p' => '/gestion/contactos', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'finanzas'], 'ok' => [200, 'html']],
+    ['m' => 'GET', 'p' => '/gestion/aprobaciones', 'centinelas_visibles' => ['recepcion' => ['NEGOCIO:SENT-PRODUCTO-INV']], 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'finanzas'], 'ok' => [200, 'html']],
+    ['m' => 'GET', 'p' => '/gestion/seguimiento', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'finanzas'], 'ok' => [200, 'html']],
+    ['m' => 'GET', 'p' => '/ventas/detalle', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'finanzas'], 'ok' => [404, 'html']],
+    ['m' => 'GET', 'p' => '/ventas/recibo', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'finanzas'], 'ok' => [404, 'html']],
+    ['m' => 'GET', 'p' => '/ventas/cotizacion', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'finanzas'], 'ok' => [404, 'html']],
+    ['m' => 'GET', 'p' => '/gestion/catalogo', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'ok' => [200, 'html']],
+    ['m' => 'GET', 'p' => '/gestion/integraciones', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'ok' => [200, 'html']],
+    ['m' => 'GET', 'p' => '/gestion/compras', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'ok' => [200, 'html']],
+    ['m' => 'GET', 'p' => '/gestion/obligaciones', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'ok' => [200, 'html']],
+    ['m' => 'GET', 'p' => '/gestion/comisiones', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'ok' => [200, 'html']],
+    ['m' => 'GET', 'p' => '/gestion/recursos', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'ok' => [200, 'html']],
+    ['m' => 'GET', 'p' => '/gestion/indicadores', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'ok' => [200, 'html']],
+    ['m' => 'GET', 'p' => '/gestion/caja', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'finanzas'], 'ok' => [200, 'html']],
+    ['m' => 'GET', 'p' => '/gestion/configuracion', 'g' => 'permiso', 'roles' => ['propietario'], 'ok' => [200, 'html']],
+    ['m' => 'GET', 'p' => '/gestion/promociones', 'g' => 'permiso', 'roles' => ['propietario', 'gerente'], 'ok' => [200, 'html']],
+    ['m' => 'GET', 'p' => '/gestion/personal', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'profesional', 'finanzas'], 'ok' => [200, 'html']],
+    ['m' => 'GET', 'p' => '/gestion/documentos?entidad=venta&id=99999999', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'profesional', 'finanzas'], 'ok' => [404, 'html']],
+    ['m' => 'GET', 'p' => '/gestion/documentos/descargar', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'profesional', 'finanzas'], 'ok' => [404, 'html']],
+    ['m' => 'GET', 'p' => '/gestion/exportar?formato=csv', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'ok' => [200, 'csv']],
+    ['m' => 'POST', 'p' => '/gestion/accion', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'profesional', 'finanzas'], 'orden' => 'auth', 'csrf' => 'exigir', 'ok' => [422, 'html']],
+    ['m' => 'POST', 'p' => '/admin/equipo/vincular', 'g' => 'permiso', 'roles' => ['propietario'], 'orden' => 'auth', 'csrf' => 'exigir', 'ok' => [303, 'redir', '/admin/recursos-humanos']],
+    ['m' => 'GET', 'p' => '/admin/clientes/listado', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'profesional'], 'ok' => [200, 'html']],
+    ['m' => 'GET', 'p' => '/agenda/cita', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'profesional'], 'ok' => [404, 'html']],
+    ['m' => 'GET', 'p' => '/caja', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'ok' => [200, 'html'], 'deny_msg' => ['cliente'=>'Tu cuenta no tiene permiso para operar la caja. Consulta con la administración del salón si necesitas acceso.', 'profesional'=>'Tu cuenta no tiene permiso para operar la caja. Consulta con la administración del salón si necesitas acceso.', 'recepcion'=>'Tu cuenta no tiene permiso para operar la caja. Consulta con la administración del salón si necesitas acceso.']],
+    ['m' => 'GET', 'p' => '/caja/cita', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'ok' => [422, 'html'], 'deny_msg' => ['cliente'=>'Tu cuenta no tiene permiso para operar la caja. Consulta con la administración del salón si necesitas acceso.', 'profesional'=>'Tu cuenta no tiene permiso para operar la caja. Consulta con la administración del salón si necesitas acceso.', 'recepcion'=>'Tu cuenta no tiene permiso para operar la caja. Consulta con la administración del salón si necesitas acceso.']],
+    ['m' => 'GET', 'p' => '/caja/comprobante', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'ok' => [422, 'html'], 'deny_msg' => ['cliente'=>'Tu cuenta no tiene permiso para operar la caja. Consulta con la administración del salón si necesitas acceso.', 'profesional'=>'Tu cuenta no tiene permiso para operar la caja. Consulta con la administración del salón si necesitas acceso.', 'recepcion'=>'Tu cuenta no tiene permiso para operar la caja. Consulta con la administración del salón si necesitas acceso.']],
+    ['m' => 'GET', 'p' => '/caja/exportar?formato=csv', 'efecto_caja_auditoria' => true, 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'ok' => [200, 'csv'], 'deny_msg' => ['cliente'=>'Tu cuenta no tiene permiso para exportar la caja.', 'profesional'=>'Tu cuenta no tiene permiso para exportar la caja.', 'recepcion'=>'Tu cuenta no tiene permiso para exportar la caja.']],
+    ['m' => 'POST', 'p' => '/caja/cita/cobrar', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'orden' => 'auth', 'csrf' => 'exigir', 'ok' => [422, 'html'], 'deny_msg' => ['cliente'=>'Tu cuenta no tiene permiso para operar la caja. Consulta con la administración del salón si necesitas acceso.', 'profesional'=>'Tu cuenta no tiene permiso para operar la caja. Consulta con la administración del salón si necesitas acceso.', 'recepcion'=>'Tu cuenta no tiene permiso para operar la caja. Consulta con la administración del salón si necesitas acceso.']],
+    ['m' => 'POST', 'p' => '/caja/cita/devolver', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'orden' => 'auth', 'csrf' => 'exigir', 'ok' => [422, 'html'], 'deny_msg' => ['cliente'=>'Tu cuenta no tiene permiso para operar la caja. Consulta con la administración del salón si necesitas acceso.', 'profesional'=>'Tu cuenta no tiene permiso para operar la caja. Consulta con la administración del salón si necesitas acceso.', 'recepcion'=>'Tu cuenta no tiene permiso para operar la caja. Consulta con la administración del salón si necesitas acceso.']],
+    ['m' => 'POST', 'p' => '/caja/pago/verificar', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'orden' => 'auth', 'csrf' => 'exigir', 'ok' => [422, 'html'], 'deny_msg' => ['cliente'=>'Tu cuenta no tiene permiso para operar la caja. Consulta con la administración del salón si necesitas acceso.', 'profesional'=>'Tu cuenta no tiene permiso para operar la caja. Consulta con la administración del salón si necesitas acceso.', 'recepcion'=>'Tu cuenta no tiene permiso para operar la caja. Consulta con la administración del salón si necesitas acceso.']],
+    ['m' => 'POST', 'p' => '/caja/pago/rechazar', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'orden' => 'auth', 'csrf' => 'exigir', 'ok' => [422, 'html'], 'deny_msg' => ['cliente'=>'Tu cuenta no tiene permiso para operar la caja. Consulta con la administración del salón si necesitas acceso.', 'profesional'=>'Tu cuenta no tiene permiso para operar la caja. Consulta con la administración del salón si necesitas acceso.', 'recepcion'=>'Tu cuenta no tiene permiso para operar la caja. Consulta con la administración del salón si necesitas acceso.']],
 ];

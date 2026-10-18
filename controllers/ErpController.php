@@ -12,6 +12,19 @@ use Services\ErpDevolucionService;
 
 final class ErpController
 {
+    private static function equipo():void
+    {
+        iniciar_sesion_segura();isAuth();
+        if(portal_sesion()!=='equipo'){self::denegar();}
+    }
+    private static function denegar():void
+    {
+        \Classes\ErrorResponse::render(403,[
+            'mensaje'=>mensaje_acceso_denegado('Tu cuenta no tiene permiso para realizar esta operación. Consulta con la administración del salón si necesitas acceso.'),
+            'json'=>['resultado'=>false,'error'=>'No tienes permiso para esta operación'],
+        ]+opciones_volver_portal());
+        detener_ejecucion(403);
+    }
     private static function render(Router $router,string $vista,array $datos=[]):void
     {
         $alertas=$_SESSION['erp_alertas']??[];unset($_SESSION['erp_alertas']);
@@ -94,7 +107,7 @@ final class ErpController
     }
     public static function personal(Router $router):void
     {
-        iniciar_sesion_segura();isAuth();$r=new ErpRepository();$ctx=(new \Services\AuthorizationService($r->db))->contexto((int)$_SESSION['id']);
+        self::equipo();$r=new ErpRepository();$ctx=(new \Services\AuthorizationService($r->db))->contexto((int)$_SESSION['id']);
         if(!$ctx||$ctx['rol']==='cliente')throw new ErpException('Acceso reservado al equipo.',403);
         $gestionRh=puede('erp.rh');$id=$gestionRh?(filter_var($_GET['id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0):0;
         $propio=$r->uno('SELECT id FROM colaboradores WHERE usuario_id=?',[(int)$_SESSION['id']]);
@@ -142,7 +155,7 @@ final class ErpController
     {
         iniciar_sesion_segura();isAuth();$aud=new \Services\ExportacionAuditoriaService(new \Repositories\ExportacionAuditoriaRepository());$actor=\Services\ExportacionAuditoriaService::actorDeSesion();
         $formato=\Classes\Exportacion\Exportador::formatoDe($_GET['formato']??null);
-        if(!puede('erp.reportes')){$aud->registrar('erp.caja_diaria',$formato??'invalido',$actor,null,['resultado'=>'denegada','motivo'=>'sin_permiso']);\Classes\ErrorResponse::render(403);return;}
+        if(!puede('erp.reportes')){$aud->registrar('erp.caja_diaria',$formato??'invalido',$actor,null,['resultado'=>'denegada','motivo'=>'sin_permiso']);self::denegar();return;}
         if(!$formato)throw new ErpException('Formato de exportación no válido.');
         $d=(new \Services\ErpInformeService())->obtener((int)$_SESSION['id'],$_GET);
         $r=\Classes\Exportacion\Exportador::generar($formato,'caja_diaria_'.$d['desde'].'_'.$d['hasta'],[
@@ -163,21 +176,21 @@ final class ErpController
     }
     public static function documentos(Router $router):void
     {
-        iniciar_sesion_segura();isAuth();$svc=new \Services\ErpDocumentoService();$actor=(int)$_SESSION['id'];
+        self::equipo();$svc=new \Services\ErpDocumentoService();$actor=(int)$_SESSION['id'];
         $entidad=is_string($_GET['entidad']??null)?$_GET['entidad']:'';$id=filter_var($_GET['id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;
         $filas=$svc->listar($actor,$entidad,$id);$editar=$entidad!=='colaborador'||puede('erp.rh');
         self::render($router,'documentos',compact('filas','entidad','id','editar'));
     }
     public static function documentoDescargar():void
     {
-        iniciar_sesion_segura();isAuth();$id=filter_var($_GET['id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;
+        self::equipo();$id=filter_var($_GET['id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;
         $doc=(new \Services\ErpDocumentoService())->descargar((int)$_SESSION['id'],$id);
         header('Content-Type: '.$doc['mime']);header('Content-Disposition: attachment; filename="documento-'.$id.'.'.pathinfo($doc['nombre_archivo'],PATHINFO_EXTENSION).'"');
         header('Content-Length: '.strlen($doc['contenido']));header('Cache-Control: private, no-store');header('X-Content-Type-Options: nosniff');echo $doc['contenido'];detener_ejecucion(200);
     }
     public static function accion():void
     {
-        iniciar_sesion_segura();isAuth();exigir_csrf();
+        self::equipo();exigir_csrf();
         $acciones=[
             'venta_crear'=>[ErpVentaService::class,'crear','venta'], 'venta_agregar'=>[ErpVentaService::class,'agregar','venta'],
             'venta_retirar'=>[ErpVentaService::class,'retirar','venta'],'venta_confirmar'=>[ErpVentaService::class,'confirmar','venta'],
