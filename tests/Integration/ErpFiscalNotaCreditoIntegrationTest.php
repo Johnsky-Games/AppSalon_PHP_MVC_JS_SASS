@@ -19,6 +19,7 @@ final class ErpFiscalNotaCreditoIntegrationTest extends TestCase
         $this->appKeyAnterior=getenv('APP_KEY');$this->appKeyEnvAnterior=$_ENV['APP_KEY']??null;putenv('APP_KEY=testing-fiscal-master-key-32-characters');$_ENV['APP_KEY']='testing-fiscal-master-key-32-characters';
         $this->db=BaseDatosAislada::crear('fiscal_nc');ActiveRecord::setDB($this->db);$this->r=new ErpRepository($this->db);$this->actor=R5CajaFixture::usuario($this->db,'propietario');
         [$p12,$password]=F::certificado();$this->perfil=$this->fiscal()->perfil($this->actor,$this->d(['emisor'=>F::emisor(),'titular_confirmado'=>'1']),$p12,$password)['recurso_id'];
+        F::parametros($this->db,$this->actor);
         $this->db->query("INSERT INTO inventario_productos(sku,nombre,unidad,stock_milesimas,costo_centavos) VALUES('NC-1','Champú','unidad',10000,500)");$this->producto=(int)$this->db->insert_id;
         $c=(new ErpMaestrosService($this->r))->catalogo($this->actor,$this->d(['origen'=>'producto','origen_id'=>$this->producto,'precio'=>'10.00','impuesto'=>'15.00','tipo'=>'venta']))['recurso_id'];
         $ventas=new ErpVentaService($this->r);$this->venta=$ventas->crear($this->actor,$this->d())['recurso_id'];$ventas->agregar($this->actor,$this->d(['venta_id'=>$this->venta,'catalogo_id'=>$c,'cantidad'=>'3']));

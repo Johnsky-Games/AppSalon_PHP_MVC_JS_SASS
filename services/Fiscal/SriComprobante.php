@@ -6,7 +6,7 @@ use Services\ErpCalculo;
 /** Generador nacional en USD, IVA por línea y valores exactos del ERP. ICE/exportación requieren otro contrato. */
 final class SriComprobante
 {
-    private const IVA=['0'=>0,'2'=>1200,'3'=>1400,'4'=>1500,'5'=>500,'6'=>0,'7'=>0,'8'=>800,'10'=>1300];
+    public const IVA=['0'=>0,'2'=>1200,'3'=>1400,'4'=>1500,'5'=>500,'6'=>0,'7'=>0,'8'=>800,'10'=>1300];
 
     public static function factura(array $emisor,array $datos):string {return self::crear($emisor,$datos,false);}
     public static function notaCredito(array $emisor,array $datos):string {return self::crear($emisor,$datos,true);}
@@ -22,8 +22,8 @@ final class SriComprobante
         if(in_array($idTipo,['06','08'],true)&&!preg_match('/^[A-Za-z0-9-]{3,20}$/D',$id))throw new \InvalidArgumentException('Identificación exterior no válida.');
         if($idTipo==='07'&&($id!=='9999999999999'||$nc))throw new \InvalidArgumentException('La nota de crédito exige un comprador identificado.');
         $nombre=self::texto($b['nombre']??null,300);
-        // Este bloque exige identificación: no convierte ventas en consumidor final de forma implícita.
-        if($idTipo==='07')throw new \InvalidArgumentException('Registra un comprador identificado para este circuito fiscal.');
+        // Consumidor final solo cuando el servicio fiscal lo autorizó tras validar el parámetro vigente; nunca de forma implícita.
+        if($idTipo==='07'&&($nc||empty($d['consumidor_final'])||$nombre!=='CONSUMIDOR FINAL'))throw new \InvalidArgumentException('Registra un comprador identificado para este circuito fiscal.');
         $lineas=$d['lineas']??null;if(!is_array($lineas)||!array_is_list($lineas)||!count($lineas)||count($lineas)>1000)throw new \InvalidArgumentException('Incluye de 1 a 1000 líneas.');
         $totales=['base'=>0,'descuento'=>0,'iva'=>0,'total'=>0];$impuestos=[];$calculadas=[];
         foreach($lineas as $l){
