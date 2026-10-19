@@ -222,7 +222,12 @@ final class ErpContabilidadService extends ErpService
             if($cierres&&!end($cierres)['reversado'])return (int)end($cierres)['id'];
             $origen='cierre:'.$anio.($cierres?':'.(count($cierres)+1):'');
             $dic=$this->periodoBloqueado($anio,12);if($dic['estado']!=='abierto')throw new ErpException('El período de diciembre debe estar abierto para registrar el cierre.',409);
-            $abierto=$this->r->uno("SELECT mes FROM erp_cont_periodos WHERE anio=? AND mes<12 AND estado='abierto' LIMIT 1 FOR SHARE",[$anio]);if($abierto)throw new ErpException('Cierra primero los períodos de enero a noviembre (falta '.sprintf('%04d-%02d',$anio,$abierto['mes']).').',409);
+            // Cada mes del ejercicio desde el inicio contable debe estar cerrado: un mes sin fila (sin movimientos) no cuenta como cerrado.
+            $cfg0=$this->r->uno('SELECT inicio_contable FROM erp_cont_config WHERE id=1 FOR SHARE');if(!$cfg0||!$cfg0['inicio_contable'])throw new ErpException('Define primero la fecha de inicio contable.',409);
+            if(substr($cfg0['inicio_contable'],0,4)>(string)$anio)throw new ErpException('El ejercicio es anterior al inicio contable ('.$cfg0['inicio_contable'].').',409);
+            for($m=max((int)(substr($cfg0['inicio_contable'],0,4)===(string)$anio?substr($cfg0['inicio_contable'],5,2):1),1);$m<12;$m++){
+                if($this->periodoBloqueado($anio,$m)['estado']!=='cerrado')throw new ErpException('Cierra primero los períodos de enero a noviembre (falta '.sprintf('%04d-%02d',$anio,$m).').',409);
+            }
             // Un cierre sobre hechos incompletos dejaría ingresos o gastos sin cerrar: todos los hechos de diciembre deben estar contabilizados.
             $cfg=$this->r->uno('SELECT inicio_contable FROM erp_cont_config WHERE id=1 FOR SHARE');
             if(!$cfg||!$cfg['inicio_contable'])throw new ErpException('Define primero la fecha de inicio contable.',409);
