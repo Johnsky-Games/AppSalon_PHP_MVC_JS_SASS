@@ -21,6 +21,9 @@ $etiquetasPermisos = [
     'erp.consumos'=>'Consumos de todas las atenciones',
     'erp.consumos.propios'=>'Consumos de atenciones propias',
     'erp.documentos.propios'=>'Documentos laborales propios autorizados',
+    'contabilidad.ver'=>'Consultar libros y estados contables',
+    'contabilidad.registrar'=>'Registrar y reversar asientos contables',
+    'contabilidad.configurar'=>'Configurar plan de cuentas, roles contables y cierres',
 
     'equipo.gestionar' => 'Administrar accesos del equipo', 'servicios.gestionar' => 'Gestionar servicios',
     'profesionales.gestionar' => 'Gestionar profesionales y horarios', 'perfiles.gestionar' => 'Gestionar perfiles de clientes',
