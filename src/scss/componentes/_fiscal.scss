@@ -1,0 +1,42 @@
+.sri-ride {
+  background: #fff; color: #172b30; border: 1px solid #bcc8ca; border-radius: .8rem;
+  padding: 2.4rem; max-width: 100%; overflow-wrap: anywhere;
+  h2 { font-size: 2rem; text-align: left; margin: 0 0 1rem; }
+  h3 { font-size: 1.5rem; text-align: left; margin: 0 0 1rem; }
+  p, dt, dd, th, td, caption, footer { font-size: 1.3rem; line-height: 1.5; }
+  p { margin: .4rem 0; }
+  small { display: block; }
+  footer { border-top: 1px solid #bcc8ca; margin-top: 2rem; padding-top: 1rem; }
+}
+.sri-ride-heading, .sri-ride-summary { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 2rem; }
+.sri-ride-heading > section, .sri-buyer { border: 1px solid #bcc8ca; border-radius: .4rem; padding: 1.4rem; }
+.sri-buyer, .sri-lines-wrap, .sri-ride-summary { margin-top: 2rem; }
+.sri-access-key { display: block; font-family: monospace; overflow-wrap: anywhere; }
+.sri-test-warning { text-align: center; border: 2px solid currentColor; padding: 1rem; margin-bottom: 2rem !important; }
+.sri-lines-wrap { overflow-x: auto; }
+.sri-lines { width: 100%; border-collapse: collapse; table-layout: fixed; min-width: 58rem; }
+.sri-lines th, .sri-lines td { border: 1px solid #bcc8ca; text-align: left; vertical-align: top; padding: .6rem; }
+.sri-lines th:nth-child(3) { width: 30%; }
+.sri-lines .sri-number { text-align: right; font-variant-numeric: tabular-nums; }
+.sri-totals { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .6rem 1rem; }
+.sri-totals dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.sri-grand-total { border-top: 1px solid #172b30; padding-top: 1rem; font-weight: bold; }
+@media (max-width: 700px) {
+  .sri-ride { padding: 1.2rem; }
+  .sri-ride-heading, .sri-ride-summary { grid-template-columns: minmax(0, 1fr); }
+}
+@media print {
+  @page sri-factura { size: A4; margin: 12mm; }
+  body:has(.sri-ride) {
+    background: #fff; color: #000;
+    .ui-sidebar, .ui-page-header, .barra, .nav-equipo, .ops-toolbar, .ui-content-footer, .sri-print-help, .ui-skip-link, .nav-equipo-aviso { display: none !important; }
+    .contenedor-app, .app { display: block !important; width: auto !important; max-width: none !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; }
+    .sri-ride { page: sri-factura; border: 0; border-radius: 0; padding: 0; color: #000; }
+    .sri-ride p, .sri-ride dt, .sri-ride dd, .sri-ride th, .sri-ride td, .sri-ride caption, .sri-ride footer { font-size: 9pt; }
+    .sri-ride-heading, .sri-ride-summary { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); break-inside: avoid; }
+    .sri-buyer, .sri-test-warning, .sri-lines tr { break-inside: avoid; }
+    .sri-lines-wrap { overflow: visible; }
+    .sri-lines { min-width: 0; }
+    .sri-lines thead { display: table-header-group; }
+  }
+}

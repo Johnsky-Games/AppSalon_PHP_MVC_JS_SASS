@@ -227,6 +227,22 @@ module.exports = async function verifyPlatform({ browser, baseUrl, recordTest, s
         await owner.goto(`${baseUrl}/gestion/facturacion?periodo=mes`,{waitUntil:'networkidle0'});await responsive(owner,'native-fiscal-directory');
         recordTest('PLAT-10','Facturación propia desde PDV: XML firmado, estado y descarga privada',true,'Factura de pruebas de la venta entregada; firma sintética; sin segunda caja ni autorización inventada; directorio/ficha responsive. No se contacta al SRI desde este E2E.');
 
+        const web=process.env.TEST_WEB_CONTAINER;
+        if(!web||name!=='appsalon_e2e_test')throw new Error('RIDE E2E requires the isolated application container.');
+        execFileSync('docker',['exec',web,'php','tests/fixtures/autorizar_fiscal_e2e.php',fiscalId],{stdio:['ignore','pipe','pipe']});
+        await owner.goto(`${baseUrl}/gestion/facturacion?id=${fiscalId}`,{waitUntil:'networkidle0'});
+        await Promise.all([owner.waitForNavigation({waitUntil:'networkidle0'}),owner.click('a[href="/gestion/facturacion/ride?id='+fiscalId+'"]')]);
+        const rideText=await owner.$eval('.sri-ride',n=>n.innerText);
+        if(!rideText.includes('SIN VALIDEZ TRIBUTARIA')||!rideText.includes('Comprador fiscal de ensayo')||!rideText.includes('11.50')||!rideText.includes('10.00')||!rideText.includes('1.50'))throw new Error('RIDE must preserve the authorized invoice and test warning.');
+        await responsive(owner,'sri-ride');
+        await owner.emulateMediaType('print');
+        const printLayout=await owner.evaluate(()=>({navigation:getComputedStyle(document.querySelector('.ui-sidebar')).display,warning:getComputedStyle(document.querySelector('.sri-test-warning')).display,overflow:document.querySelector('.sri-lines').scrollWidth>document.querySelector('.sri-ride').clientWidth+1}));
+        if(printLayout.navigation!=='none'||printLayout.warning==='none'||printLayout.overflow)throw new Error('Printed RIDE must hide navigation, preserve test warning and fit the page.');
+        const ridePdf=await owner.pdf({format:'A4',preferCSSPageSize:true,printBackground:true,path:path.join(screenshotDir,'sri-ride-pruebas.pdf')});
+        if(ridePdf.length<1000||Buffer.from(ridePdf).subarray(0,5).toString()!=='%PDF-')throw new Error('Printable RIDE PDF was not generated.');
+        await owner.emulateMediaType('screen');
+        recordTest('PLAT-11','RIDE de factura autorizada: datos originales, responsive e impresión PDF',true,'Autorización sintética por transporte de ensayo en base E2E aislada; cuatro anchos, impresión y PDF; sin llamadas al SRI.');
+
         const client = await login('carlos@correo.com');
         let response = await client.goto(`${baseUrl}/perfil`,{waitUntil:'networkidle0'});
         if (response.status() !== 200) throw new Error('Client profile unavailable.');

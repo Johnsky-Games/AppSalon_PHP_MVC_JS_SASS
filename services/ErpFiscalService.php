@@ -7,6 +7,12 @@ use Services\Fiscal\{SriAutorizacion,SriClienteSoap,SriComprobante,SriFirmaXades
 /** Piloto nativo SRI. CLI autorizado, sin exponer certificados ni aceptar estados fiscales manuales. */
 final class ErpFiscalService extends ErpService
 {
+    public function ride(int $actor, int $id): array
+    {
+        $archivo = $this->descargar($actor, $id, true);
+        return \Services\Fiscal\SriRide::datos($archivo['contenido']);
+    }
+
     /** Descarga privada sin contactar al SRI, reservar números ni alterar la venta. */
     public function descargar(int $actor, int $id, bool $autorizado = false): array
     {
