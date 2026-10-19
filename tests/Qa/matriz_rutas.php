@@ -169,6 +169,8 @@ return [
     ['m' => 'GET', 'p' => '/gestion/indicadores', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'ok' => [200, 'html']],
     ['m' => 'GET', 'p' => '/gestion/prepagos/comprobante', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'finanzas'], 'ok' => [404, 'html']],
     ['m' => 'GET', 'p' => '/gestion/suscripciones', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'finanzas'], 'ok' => [200, 'html']],
+    ['m' => 'GET', 'p' => '/gestion/facturacion', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'finanzas'], 'ok' => [200, 'html']],
+    ['m' => 'GET', 'p' => '/gestion/facturacion/xml', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'finanzas'], 'ok' => [404, 'html']],
     ['m' => 'GET', 'p' => '/gestion/paquetes', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'finanzas'], 'ok' => [200, 'html']],
     ['m' => 'GET', 'p' => '/gestion/prepagos', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'finanzas'], 'ok' => [200, 'html']],
     ['m' => 'GET', 'p' => '/gestion/caja', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'finanzas'], 'ok' => [200, 'html']],

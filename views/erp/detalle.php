@@ -1,4 +1,5 @@
 <?php $titulo='Venta #'.(int)$venta['id'];include __DIR__.'/_inicio.php';$id=(int)$venta['id']; ?>
+<?php if(puede('erp.cobrar')): ?><p><a href="/gestion/facturacion?venta_id=<?= $id ?>">Facturación propia · piloto SRI</a></p><?php endif; ?>
 <section class="ui-card"><h2><?= s($venta['comprador_nombre']) ?></h2><p>Estado comercial: <strong><?= s($venta['estado']) ?></strong><?php if($venta['cita_id']): ?> · <a href="/agenda/cita?id=<?= (int)$venta['cita_id'] ?>">Cita #<?= (int)$venta['cita_id'] ?></a><?php endif; ?></p>
 <div class="ui-grid"><p>Total vigente: <strong><?= s($dinero($resumen['total'])) ?></strong></p><p>Cobrado neto: <strong><?= s($dinero($resumen['neto'])) ?></strong></p><p>Por verificar: <strong><?= s($dinero($resumen['pendiente'])) ?></strong></p><p>Por cobrar: <strong><?= s($dinero($resumen['saldo'])) ?></strong></p></div>
 <div class="ops-table-wrap"><table class="ops-table"><thead><tr><th>Concepto</th><th>Cantidad</th><th>Precio antes de impuesto</th><th>Descuento</th><th>Impuesto</th><th>Total</th><th>Entrega / devolución</th></tr></thead><tbody>

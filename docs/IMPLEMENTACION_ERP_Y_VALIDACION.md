@@ -179,3 +179,14 @@ Pausar o cancelar detiene ciclos futuros. Reactivar una pausa abre o reutiliza e
 Los cobros con tarjeta y renovaciones con débito automático requieren conectar la banca/adquisición y registrar el mandato correspondiente. Esta entrega no solicita datos de tarjeta ni simula cargos. La facturación propia directa al SRI, contabilidad, nómina, fidelidad económica y ampliaciones del plan continúan como trabajos separados.
 
 Se incorpora PLAT-09 para formularios reales de plan, beneficiario vinculado, financiación, reserva, restitución y estados del contrato mensual, además de responsive. Los resultados por SHA y el estado de su ejecución se registran en el PR; añadir el caso no equivale a haberlo ejecutado localmente. La validación local inicial aprobó 52 pruebas/191 aserciones; después se amplió el soporte a varias sesiones y el cálculo de comisiones. La regresión dirigida de esa ampliación aprobó 69/264; los ensayos siguientes y el CI completan su alcance.
+
+
+## Continuación 037: facturación propia directa al SRI
+
+Se incorpora un piloto nativo de certificación, sin facturador intermediario: clave de acceso, XML factura 2.1.0/nota de crédito 1.1.0, validación con XSD oficiales locales, firma XAdES-BES con tres referencias y transporte SOAP HTTPS a los endpoints oficiales. La factura preparada desde PDV conserva venta, emisor, comprador, precio, descuento, IVA, número, XML y huella; no genera otro ingreso. El certificado se configura por consola y se cifra con APP_KEY.
+
+El supervisor reserva un lease y consulta la misma clave antes de transmitir. Recepción y autorización tienen estados distintos; el XML firmado nunca se regenera tras timeout. Códigos 43/70 se consultan sin retransmitir, el error temporal 50 se reintenta y los rechazos se conservan. No se acepta marcar un documento como autorizado desde un formulario. El contador pertenece a RUC/ambiente/serie/tipo, independiente de versiones del perfil.
+
+El directorio y ficha fiscal separan filtros, preparación y evidencia. El XML firmado solo se descarga con permiso de equipo y sin caché. Se añade PLAT-10 de preparación por formulario, persistencia, integridad, descarga y responsive, sin contactar al SRI. Su ejecución definitiva se registra por SHA en el PR. El detalle del alcance, consola y pendientes está en `FACTURACION_PROPIA_SRI.md`.
+
+La migración 037 deja 104 tablas y 42 protecciones SQL. El ensayo dirigido inicial aprobó 50 pruebas/142 aserciones, incluidos dos procesos reales, numeración al cambiar el emisor, respaldo/restauración del XML y certificado cifrado, timeout, estados y restricciones. La QA de esquema aprobó 13/224. La firma también se comprobó con Python/lxml/cryptography, independientemente del firmador PHP. Las ampliaciones de pantallas y permisos se verifican a continuación y en CI. Producción, corrección de rechazos, integración de notas de crédito, anticipos, RIDE, entrega al correo y reglas fiscales por régimen continúan pendientes.

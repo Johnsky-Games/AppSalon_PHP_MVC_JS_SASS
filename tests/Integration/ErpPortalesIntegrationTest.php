@@ -41,5 +41,10 @@ final class ErpPortalesIntegrationTest extends TestCase
         $_SERVER['REQUEST_METHOD']='POST';foreach(['paquete_plan','paquete_crear','paquete_aplicar','suscripcion_crear','suscripcion_estado'] as $accion){$_POST=['accion'=>$accion,'idem_key'=>R5CajaFixture::clave(),'csrf_token'=>'csrf-erp-portales'];self::assertSame(403,$this->ejecutar(fn()=>ErpController::accion()));}
         self::assertSame(0,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_suscripciones')['n']);
     }
+    public function testPortalClienteNoLeeXmlNiPreparaFacturasAunqueSeaPropietario():void
+    {
+        $this->sesion('cliente');$_SERVER['REQUEST_METHOD']='GET';self::assertSame(403,$this->ejecutar(fn()=>ErpController::fiscal(new \MVC\Router())));self::assertSame(403,$this->ejecutar(fn()=>ErpController::fiscalXml()));
+        $_SERVER['REQUEST_METHOD']='POST';$_POST=['accion'=>'fiscal_factura','idem_key'=>R5CajaFixture::clave(),'csrf_token'=>'csrf-erp-portales'];self::assertSame(403,$this->ejecutar(fn()=>ErpController::accion()));self::assertSame(0,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_fiscal_documentos')['n']);
+    }
 
 }

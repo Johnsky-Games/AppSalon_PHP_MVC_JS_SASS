@@ -1,7 +1,7 @@
 <?php
 require __DIR__.'/../bootstrap.php';
 [$script,$accion,$actor,$json]=array_pad($argv,4,'');$datos=json_decode($json,true);
-$clase=match($accion){'aplicar','cargar'=>\Services\ErpPrepagoService::class,'paquete'=>\Services\ErpPaqueteService::class,'cobrar'=>\Services\ErpPagoService::class,default=>null};
+$clase=match($accion){'aplicar','cargar'=>\Services\ErpPrepagoService::class,'paquete'=>\Services\ErpPaqueteService::class,'factura'=>\Services\ErpFiscalService::class,'cobrar'=>\Services\ErpPagoService::class,default=>null};
 if(!$clase||!is_array($datos)||(int)$actor<=0)exit(2);
 validar_base_datos_prueba(\Model\ActiveRecord::getDB());echo "READY\n";flush();if(trim((string)fgets(STDIN))!=='GO')exit(3);
 try {$metodo=$accion==='paquete'?'aplicar':$accion;$r=(new $clase())->$metodo((int)$actor,$datos);echo json_encode(['ok'=>true]+$r)."\n";}
