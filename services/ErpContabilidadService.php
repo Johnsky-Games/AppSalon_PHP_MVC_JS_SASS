@@ -113,6 +113,9 @@ final class ErpContabilidadService extends ErpService
         $this->r->q('INSERT IGNORE INTO erp_cont_periodos(anio,mes) VALUES(?,?)',[$anio,$mes]);
         $p=$this->r->uno('SELECT * FROM erp_cont_periodos WHERE anio=? AND mes=? FOR SHARE',[$anio,$mes]);
         if($p['estado']!=='abierto')throw new ErpException('El período '.sprintf('%04d-%02d',$anio,$mes).' está cerrado. Registra el asiento en un período abierto.',409);
+        // Con el ejercicio cerrado (asiento de cierre sin reverso) nada más se registra en ese año: el resultado trasladado quedaría desactualizado.
+        $cierreAnio=$this->r->uno("SELECT a.id FROM erp_cont_asientos a WHERE a.tipo='cierre' AND a.fecha=? AND NOT EXISTS(SELECT 1 FROM erp_cont_asientos r WHERE r.reversa_de_id=a.id) LIMIT 1 FOR SHARE",[$anio.'-12-31']);
+        if($cierreAnio&&$tipo!=='cierre'&&!($tipo==='reverso'&&$reversa===(int)$cierreAnio['id']))throw new ErpException('El ejercicio '.$anio.' está cerrado. Revierte primero su asiento de cierre o registra el hecho en un ejercicio abierto.',409);
         $ids=array_values(array_unique(array_column($canon,0)));
         $cuentas=$this->r->q('SELECT id,imputable,activa FROM erp_cont_cuentas WHERE id IN('.implode(',',array_fill(0,count($ids),'?')).') FOR SHARE',$ids);
         if(count($cuentas)!==count($ids))throw new ErpException('Alguna cuenta no existe.',404);
@@ -151,6 +154,7 @@ final class ErpContabilidadService extends ErpService
         return $this->ejecutar($actor,'contabilidad.registrar','cont_reverso',$d,function()use($actor,$d){
             $id=$this->id($d['asiento_id']??null);$motivo=$this->texto($d['motivo']??'',160);$fecha=isset($d['fecha'])&&$d['fecha']!==''?$this->fecha($d['fecha']):$this->hoy();
             $a=$this->r->uno('SELECT * FROM erp_cont_asientos WHERE id=? FOR UPDATE',[$id])??throw new ErpException('Asiento no encontrado.',404);
+            if($a['tipo']==='cierre')$fecha=$a['fecha'];// El cierre se revierte en su propio ejercicio, nunca en el siguiente.
             if($a['tipo']==='reverso')throw new ErpException('Un reverso no se revierte: registra de nuevo el hecho.',409);
             $previo=$this->r->uno('SELECT id FROM erp_cont_asientos WHERE reversa_de_id=? FOR SHARE',[$id]);if($previo)return (int)$previo['id'];
             $lineas=[];foreach($this->r->q('SELECT * FROM erp_cont_lineas WHERE asiento_id=? ORDER BY nro FOR SHARE',[$id]) as $l)$lineas[]=['cuenta_id'=>(int)$l['cuenta_id'],'debe'=>(int)$l['haber_centavos'],'haber'=>(int)$l['debe_centavos'],'contacto_id'=>$l['contacto_id'],'referencia'=>$l['referencia']];
@@ -175,15 +179,28 @@ final class ErpContabilidadService extends ErpService
             [$anio,$mes]=$this->anioMes($d);$cfg=$this->r->uno('SELECT inicio_contable FROM erp_cont_config WHERE id=1 FOR SHARE');
             if(!$cfg['inicio_contable'])throw new ErpException('Define primero la fecha de inicio contable.',409);
             $p=$this->periodoBloqueado($anio,$mes);if($p['estado']==='cerrado')return (int)$p['id'];
-            $antes=$this->r->uno("SELECT anio,mes FROM erp_cont_periodos WHERE estado='abierto' AND anio*100+mes<? ORDER BY anio,mes LIMIT 1 FOR SHARE",[$anio*100+$mes]);
-            if($antes)throw new ErpException('Cierra primero el período '.sprintf('%04d-%02d',$antes['anio'],$antes['mes']).'.',409);
+            // Todo mes desde el inicio contable es predecesor, tenga o no movimientos: se materializa y debe estar cerrado.
+            $ini=new \DateTimeImmutable(substr($cfg['inicio_contable'],0,7).'-01');$objetivo=new \DateTimeImmutable(sprintf('%04d-%02d-01',$anio,$mes));
+            if($objetivo<$ini)throw new ErpException('El período es anterior al inicio contable ('.$cfg['inicio_contable'].').',409);
+            for($m=$ini;$m<$objetivo;$m=$m->modify('first day of next month')){
+                $pm=$this->periodoBloqueado((int)$m->format('Y'),(int)$m->format('n'));
+                if($pm['estado']!=='cerrado')throw new ErpException('Cierra primero el período '.$m->format('Y-m').'.',409);
+            }
             $fin=(new \DateTimeImmutable(sprintf('%04d-%02d-01',$anio,$mes)))->modify('first day of next month')->format('Y-m-d');
             $pend=(int)$this->r->uno("SELECT COUNT(*) n FROM erp_integraciones_outbox o JOIN erp_eventos e ON e.id=o.evento_id WHERE o.destino='contabilidad' AND o.estado<>'confirmado' AND e.creado_en>=? AND e.creado_en<?",[$cfg['inicio_contable'].' 00:00:00',$fin.' 00:00:00'])['n'];
             if($pend>0)throw new ErpException('Hay '.$pend.' hecho(s) económicos sin contabilizar hasta el fin del período. Procésalos o concílialos antes de cerrar.',409);
+            $sinPrestar=$this->prestacionesPendientes($cfg['inicio_contable'],$fin);
+            if($sinPrestar>0)throw new ErpException('Hay '.$sinPrestar.' servicio(s) prestado(s) sin contabilizar hasta el fin del período. Ejecuta el supervisor contable antes de cerrar.',409);
             $problemas=$this->integridad();if($problemas)throw new ErpException('El libro tiene inconsistencias: '.$problemas[0],409);
             $this->r->q("UPDATE erp_cont_periodos SET estado='cerrado',cerrado_por=?,cerrado_en=? WHERE id=?",[$actor,$this->r::ahora(),(int)$p['id']]);
             $this->evento($actor,'cont_periodo_cerrado','periodo',(int)$p['id'],['anio'=>$anio,'mes'=>$mes]);return (int)$p['id'];
         });
+    }
+    /** Servicios completados desde el inicio contable (y antes de $antesDe, si se indica) que todavía no tienen su asiento de prestación. */
+    private function prestacionesPendientes(string $inicio,?string $antesDe=null):int
+    {
+        $fecha='COALESCE(DATE(c.atencion_fin_at),DATE(c.atencion_efectiva_at),c.fecha)';$a=[$inicio];$tope='';if($antesDe!==null){$tope=" AND $fecha<?";$a[]=$antesDe;}
+        return (int)($this->r->uno("SELECT COUNT(*) n FROM erp_ventas v JOIN citas c ON c.id=v.cita_id WHERE v.estado='confirmada' AND c.estado='completada' AND $fecha>=?$tope AND EXISTS(SELECT 1 FROM erp_venta_lineas l WHERE l.venta_id=v.id AND l.servicio_id IS NOT NULL) AND NOT EXISTS(SELECT 1 FROM erp_cont_asientos a WHERE a.origen=CONCAT('prestacion:v',v.id))",$a)['n']??0);
     }
     public function reabrirPeriodo(int $actor,array $d):array
     {
@@ -200,16 +217,25 @@ final class ErpContabilidadService extends ErpService
     {
         return $this->ejecutar($actor,'contabilidad.configurar','cont_ejercicio_cerrar',$d,function()use($actor,$d){
             $anio=filter_var($d['anio']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>2000,'max_range'=>2100]]);if($anio===false)throw new ErpException('Indica el año.');
-            $previo=$this->r->uno('SELECT id FROM erp_cont_asientos WHERE origen=? FOR SHARE',['cierre:'.$anio]);if($previo)return (int)$previo['id'];
+            $cierres=$this->r->q("SELECT a.id,(SELECT r.id FROM erp_cont_asientos r WHERE r.reversa_de_id=a.id) reversado FROM erp_cont_asientos a WHERE a.tipo='cierre' AND a.fecha=? ORDER BY a.id FOR SHARE",[$anio.'-12-31']);
+            if($cierres&&!end($cierres)['reversado'])return (int)end($cierres)['id'];
+            $origen='cierre:'.$anio.($cierres?':'.(count($cierres)+1):'');
             $dic=$this->periodoBloqueado($anio,12);if($dic['estado']!=='abierto')throw new ErpException('El período de diciembre debe estar abierto para registrar el cierre.',409);
             $abierto=$this->r->uno("SELECT mes FROM erp_cont_periodos WHERE anio=? AND mes<12 AND estado='abierto' LIMIT 1 FOR SHARE",[$anio]);if($abierto)throw new ErpException('Cierra primero los períodos de enero a noviembre (falta '.sprintf('%04d-%02d',$anio,$abierto['mes']).').',409);
+            // Un cierre sobre hechos incompletos dejaría ingresos o gastos sin cerrar: todos los hechos de diciembre deben estar contabilizados.
+            $cfg=$this->r->uno('SELECT inicio_contable FROM erp_cont_config WHERE id=1 FOR SHARE');
+            if(!$cfg||!$cfg['inicio_contable'])throw new ErpException('Define primero la fecha de inicio contable.',409);
+            $pend=(int)$this->r->uno("SELECT COUNT(*) n FROM erp_integraciones_outbox o JOIN erp_eventos e ON e.id=o.evento_id WHERE o.destino='contabilidad' AND o.estado<>'confirmado' AND e.creado_en>=? AND e.creado_en<?",[$cfg['inicio_contable'].' 00:00:00',($anio+1).'-01-01 00:00:00'])['n'];
+            if($pend>0)throw new ErpException('Hay '.$pend.' hecho(s) económicos sin contabilizar hasta el fin del ejercicio. Procésalos antes de cerrarlo.',409);
+            $sinPrestar=$this->prestacionesPendientes($cfg['inicio_contable'],($anio+1).'-01-01');
+            if($sinPrestar>0)throw new ErpException('Hay '.$sinPrestar.' servicio(s) prestado(s) sin contabilizar hasta el fin del ejercicio. Ejecuta el supervisor contable antes de cerrar.',409);
             $filas=$this->r->q("SELECT c.id,c.tipo,SUM(l.debe_centavos) d,SUM(l.haber_centavos) h FROM erp_cont_lineas l JOIN erp_cont_asientos a ON a.id=l.asiento_id JOIN erp_cont_cuentas c ON c.id=l.cuenta_id WHERE a.fecha BETWEEN ? AND ? AND c.tipo IN('ingreso','costo','gasto') GROUP BY c.id,c.tipo HAVING SUM(l.debe_centavos)<>SUM(l.haber_centavos) FOR SHARE",[$anio.'-01-01',$anio.'-12-31']);
             if(!$filas)throw new ErpException('No hay resultado del ejercicio que cerrar.',409);
             $lineas=[];$neto=0;foreach($filas as $f){$saldo=(int)$f['d']-(int)$f['h'];$neto+=$saldo;$lineas[]=['cuenta_id'=>(int)$f['id'],'debe'=>$saldo<0?-$saldo:0,'haber'=>$saldo>0?$saldo:0];}
             $res=$this->rolCuenta('resultado_ejercicio');// Pérdida (gastos y costos > ingresos): el resultado se debita; utilidad: se acredita.
             $lineas[]=['cuenta_id'=>$res,'debe'=>$neto>0?$neto:0,'haber'=>$neto<0?-$neto:0];
             if($neto===0)$lineas=array_filter($lineas,fn($l)=>$l['cuenta_id']!==$res);
-            return $this->publicar($actor,['fecha'=>$anio.'-12-31','tipo'=>'cierre','origen'=>'cierre:'.$anio,'concepto'=>'Cierre del ejercicio '.$anio,'lineas'=>array_values($lineas)]);
+            return $this->publicar($actor,['fecha'=>$anio.'-12-31','tipo'=>'cierre','origen'=>$origen,'concepto'=>'Cierre del ejercicio '.$anio,'lineas'=>array_values($lineas)]);
         });
     }
 
@@ -242,15 +268,18 @@ final class ErpContabilidadService extends ErpService
         $totalPatrimonio=$tot['patrimonio']+$resultado;
         return ['secciones'=>$sec,'totales'=>$tot,'resultado_sin_cerrar'=>$resultado,'pasivo_mas_patrimonio'=>$tot['pasivo']+$totalPatrimonio,'cuadra'=>$tot['activo']===$tot['pasivo']+$totalPatrimonio];
     }
-    public function mayor(int $cuenta,string $desde,string $hasta):array
+    public function mayor(int $cuenta,string $desde,string $hasta,int $limite=2000):array
     {
         $c=$this->r->uno('SELECT * FROM erp_cont_cuentas WHERE id=?',[$cuenta])??throw new ErpException('Cuenta no encontrada.',404);
         $ini=$this->r->uno('SELECT COALESCE(SUM(l.debe_centavos),0) d,COALESCE(SUM(l.haber_centavos),0) h FROM erp_cont_lineas l JOIN erp_cont_asientos a ON a.id=l.asiento_id WHERE l.cuenta_id=? AND a.fecha<?',[$cuenta,$desde]);
         $deudora=in_array($c['tipo'],['activo','costo','gasto'],true);$saldo=($deudora?1:-1)*((int)$ini['d']-(int)$ini['h']);$inicial=$saldo;$mov=[];
-        foreach($this->r->q('SELECT a.id asiento_id,a.numero,a.fecha,a.tipo,a.concepto,l.debe_centavos,l.haber_centavos,l.contacto_id,l.referencia FROM erp_cont_lineas l JOIN erp_cont_asientos a ON a.id=l.asiento_id WHERE l.cuenta_id=? AND a.fecha BETWEEN ? AND ? ORDER BY a.fecha,a.numero,l.nro LIMIT 2000',[$cuenta,$desde,$hasta]) as $m){
+        // El saldo final sale de la suma del rango completo, no del listado: el listado se acota por rendimiento y lo avisa.
+        $rango=$this->r->uno('SELECT COUNT(*) n,COALESCE(SUM(l.debe_centavos),0) d,COALESCE(SUM(l.haber_centavos),0) h FROM erp_cont_lineas l JOIN erp_cont_asientos a ON a.id=l.asiento_id WHERE l.cuenta_id=? AND a.fecha BETWEEN ? AND ?',[$cuenta,$desde,$hasta]);
+        $final=$inicial+($deudora?1:-1)*((int)$rango['d']-(int)$rango['h']);
+        foreach($this->r->q('SELECT a.id asiento_id,a.numero,a.fecha,a.tipo,a.concepto,l.debe_centavos,l.haber_centavos,l.contacto_id,l.referencia FROM erp_cont_lineas l JOIN erp_cont_asientos a ON a.id=l.asiento_id WHERE l.cuenta_id=? AND a.fecha BETWEEN ? AND ? ORDER BY a.fecha,a.numero,l.nro LIMIT '.max(1,$limite),[$cuenta,$desde,$hasta]) as $m){
             $saldo+=($deudora?1:-1)*((int)$m['debe_centavos']-(int)$m['haber_centavos']);$mov[]=$m+['saldo'=>$saldo];
         }
-        return ['cuenta'=>$c,'saldo_inicial'=>$inicial,'movimientos'=>$mov,'saldo_final'=>$saldo];
+        return ['cuenta'=>$c,'saldo_inicial'=>$inicial,'movimientos'=>$mov,'saldo_final'=>$final,'total_movimientos'=>(int)$rango['n'],'truncado'=>(int)$rango['n']>count($mov)];
     }
     public function diario(string $desde,string $hasta,int $pagina=1):array
     {
@@ -289,18 +318,26 @@ final class ErpContabilidadService extends ErpService
         };
         $n=fn(string $sql,array $a=[])=>(int)($this->r->uno($sql,$a)['n']??0);
         $controles=[];
-        $aux=$n("SELECT COALESCE(SUM(o.monto_centavos-o.ajuste_centavos-o.pagado_centavos+COALESCE((SELECT SUM(x.monto_centavos) FROM erp_proveedor_reembolsos x WHERE x.obligacion_id=o.id),0)),0) n FROM erp_obligaciones o WHERE o.origen='compra'");
-        $controles[]=['nombre'=>'Proveedores','libro'=>$saldo('proveedores'),'auxiliar'=>$aux,'fuente'=>'Facturas de proveedor menos créditos y pagos, más reintegros'];
-        $aux=$n("SELECT COALESCE(SUM(monto_centavos-ajuste_centavos-pagado_centavos),0) n FROM erp_obligaciones WHERE origen='comision'");
-        $controles[]=['nombre'=>'Comisiones por pagar','libro'=>$saldo('comisiones_por_pagar'),'auxiliar'=>$aux,'fuente'=>'Obligaciones de comisiones liquidadas por pago directo'];
-        $aux=$n('SELECT COALESCE(SUM(monto_centavos),0) n FROM erp_prepago_movimientos');
-        $controles[]=['nombre'=>'Anticipos de clientes','libro'=>$saldo('anticipos_clientes'),'auxiliar'=>$aux,'fuente'=>'Libro de saldos prepagados (cargas, aplicaciones, restituciones y reembolsos)'];
-        $aux=$n("SELECT COALESCE(SUM(CASE WHEN tipo='ingreso' THEN monto_centavos ELSE -monto_centavos END),0) n FROM caja_movimientos WHERE metodo='efectivo'");
-        $controles[]=['nombre'=>'Caja en efectivo','libro'=>$saldo('caja'),'auxiliar'=>$aux,'fuente'=>'Movimientos de caja en efectivo. Los ingresos y egresos manuales de caja todavía no tienen regla contable y aparecen como diferencia.'];
+        // Cada auxiliar se calcula con sus movimientos fechados hasta el cierre del día de corte, igual que el libro.
+        $fin=$hasta.' 23:59:59';
+        $aux=$n("SELECT COALESCE(SUM(CASE WHEN o.creado_en<=? THEN o.monto_centavos ELSE 0 END),0)
+            -COALESCE((SELECT SUM(k.monto_centavos) FROM erp_proveedor_creditos k JOIN erp_obligaciones ok ON ok.id=k.obligacion_id WHERE ok.origen='compra' AND ok.creado_en<=? AND k.creado_en<=?),0)
+            -COALESCE((SELECT SUM(p.monto_centavos) FROM erp_obligacion_pagos p JOIN erp_obligaciones op ON op.id=p.obligacion_id WHERE op.origen='compra' AND op.creado_en<=? AND p.creado_en<=?),0)
+            +COALESCE((SELECT SUM(x.monto_centavos) FROM erp_proveedor_reembolsos x JOIN erp_obligaciones oz ON oz.id=x.obligacion_id WHERE oz.origen='compra' AND oz.creado_en<=? AND x.creado_en<=?),0) n
+            FROM erp_obligaciones o WHERE o.origen='compra'",[$fin,$fin,$fin,$fin,$fin,$fin,$fin]);
+        $controles[]=['nombre'=>'Proveedores','libro'=>$saldo('proveedores'),'auxiliar'=>$aux,'fuente'=>'Facturas de proveedor menos créditos y pagos, más reintegros, hasta la fecha de corte'];
+        $aux=$n("SELECT COALESCE(SUM(CASE WHEN o.creado_en<=? THEN o.monto_centavos ELSE 0 END),0)
+            -COALESCE((SELECT SUM(k.monto_centavos) FROM erp_proveedor_creditos k JOIN erp_obligaciones ok ON ok.id=k.obligacion_id WHERE ok.origen='comision' AND ok.creado_en<=? AND k.creado_en<=?),0)
+            -COALESCE((SELECT SUM(p.monto_centavos) FROM erp_obligacion_pagos p JOIN erp_obligaciones op ON op.id=p.obligacion_id WHERE op.origen='comision' AND op.creado_en<=? AND p.creado_en<=?),0) n
+            FROM erp_obligaciones o WHERE o.origen='comision'",[$fin,$fin,$fin,$fin,$fin]);
+        $controles[]=['nombre'=>'Comisiones por pagar','libro'=>$saldo('comisiones_por_pagar'),'auxiliar'=>$aux,'fuente'=>'Obligaciones de comisiones liquidadas por pago directo, hasta la fecha de corte'];
+        $aux=$n('SELECT COALESCE(SUM(monto_centavos),0) n FROM erp_prepago_movimientos WHERE creado_en<=?',[$fin]);
+        $controles[]=['nombre'=>'Anticipos de clientes','libro'=>$saldo('anticipos_clientes'),'auxiliar'=>$aux,'fuente'=>'Libro de saldos prepagados (cargas, aplicaciones, restituciones y reembolsos) hasta la fecha de corte'];
+        $aux=$n("SELECT COALESCE(SUM(CASE WHEN tipo='ingreso' THEN monto_centavos ELSE -monto_centavos END),0) n FROM caja_movimientos WHERE metodo='efectivo' AND registrado_en<=?",[$fin]);
+        $controles[]=['nombre'=>'Caja en efectivo','libro'=>$saldo('caja'),'auxiliar'=>$aux,'fuente'=>'Movimientos de caja en efectivo hasta la fecha de corte. Los ingresos y egresos manuales de caja todavía no tienen regla contable y aparecen como diferencia.'];
         foreach($controles as &$c)$c['diferencia']=$c['libro']-$c['auxiliar'];unset($c);
         $pendientes=$n("SELECT COUNT(*) n FROM erp_integraciones_outbox WHERE destino='contabilidad' AND estado<>'confirmado'");
-        $sinPrestar=0;$inicio=$this->config()['inicio_contable']??null;
-        if($inicio)$sinPrestar=$n("SELECT COUNT(*) n FROM erp_ventas v JOIN citas c ON c.id=v.cita_id WHERE v.estado='confirmada' AND c.estado='completada' AND COALESCE(DATE(c.atencion_fin_at),DATE(c.atencion_efectiva_at),c.fecha)>=? AND EXISTS(SELECT 1 FROM erp_venta_lineas l WHERE l.venta_id=v.id AND l.servicio_id IS NOT NULL) AND NOT EXISTS(SELECT 1 FROM erp_cont_asientos a WHERE a.origen=CONCAT('prestacion:v',v.id))",[$inicio]);
+        $inicio=$this->config()['inicio_contable']??null;$sinPrestar=$inicio?$this->prestacionesPendientes($inicio):0;
         $bal=$this->balanceComprobacion($hasta);
         return ['controles'=>$controles,'eventos_sin_contabilizar'=>$pendientes,'prestaciones_sin_contabilizar'=>$sinPrestar,'integridad'=>$this->integridad(),'balance_cuadra'=>$bal['cuadra']];
     }

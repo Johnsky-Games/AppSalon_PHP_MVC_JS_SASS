@@ -114,6 +114,19 @@ final class ErpContabilidadEventosIntegrationTest extends TestCase
         (new ErpDevolucionService($this->r))->devolver($this->owner,$this->d(['venta_id'=>$venta,'linea_id'=>$linea,'cantidad'=>'2','motivo'=>'No lo quiere']));$this->contabilizar();
         self::assertSame(0,$this->saldo('ingreso_productos'));self::assertSame(0,$this->saldo('devoluciones_ventas'));self::assertSame(0,$this->saldo('iva_ventas'));self::assertSame(0,$this->saldo('cxc',$this->contacto));self::assertSame(0,$this->saldo('caja'));
     }
+    public function testNoSeCierraUnPeriodoNiElEjercicioConUnServicioPrestadoSinContabilizar():void
+    {
+        $hoy=new \DateTimeImmutable($this->r::ahora());$anio=(int)$hoy->format('Y');$mes=(int)$hoy->format('n');
+        $this->r->q('UPDATE erp_cont_config SET inicio_contable=? WHERE id=1',[$hoy->format('Y-m-01')]);$cont=new ErpContabilidadService($this->r);
+        $c=R5CajaFixture::cita($this->db,$this->usuarioCliente,null,['30.00']);$v=new ErpVentaService($this->r);$venta=$v->crear($this->owner,$this->d(['cita_id'=>$c]))['recurso_id'];
+        $v->confirmar($this->owner,$this->d(['venta_id'=>$venta,'version'=>(int)$this->r->uno('SELECT version FROM erp_ventas WHERE id=?',[$venta])['version']]));
+        $this->r->q("UPDATE citas SET estado='completada',atencion_fin_at=? WHERE id=?",[$this->r::ahora(),$c]);
+        $this->r->q("UPDATE erp_integraciones_outbox SET estado='confirmado' WHERE destino='contabilidad'");// el hecho de la venta no es lo que se prueba: solo la prestación sin asiento
+        try{$cont->cerrarPeriodo($this->owner,$this->d(['anio'=>$anio,'mes'=>$mes]));self::fail('Debía rechazar el cierre');}catch(ErpException $e){self::assertSame(409,$e->getCode());self::assertStringContainsString('servicio(s) prestado(s) sin contabilizar',$e->getMessage());}
+        self::assertSame('abierto',$this->r->uno('SELECT estado FROM erp_cont_periodos WHERE anio=? AND mes=?',[$anio,$mes])['estado']??'abierto','El rechazo no cierra nada (la fila del período se revierte con la transacción)');
+        $r=$this->contabilizar();self::assertSame(1,$r['prestaciones']);
+        self::assertGreaterThan(0,$cont->cerrarPeriodo($this->owner,$this->d(['anio'=>$anio,'mes'=>$mes]))['recurso_id']);
+    }
     public function testServicioPrestadoReconoceElIngresoUnaSolaVezAunqueElSupervisorRepita():void
     {
         $c=R5CajaFixture::cita($this->db,$this->usuarioCliente,null,['30.00']);$v=new ErpVentaService($this->r);$venta=$v->crear($this->owner,$this->d(['cita_id'=>$c]))['recurso_id'];
