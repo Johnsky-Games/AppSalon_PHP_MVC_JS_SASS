@@ -2,11 +2,37 @@
 namespace Services;
 
 use Classes\{Secretos,Transaccion};
-use Services\Fiscal\{SriClienteSoap,SriComprobante,SriFirmaXades,SriXml};
+use Services\Fiscal\{SriAutorizacion,SriClienteSoap,SriComprobante,SriFirmaXades,SriXml};
 
 /** Piloto nativo SRI. CLI autorizado, sin exponer certificados ni aceptar estados fiscales manuales. */
 final class ErpFiscalService extends ErpService
 {
+    /** Descarga privada sin contactar al SRI, reservar números ni alterar la venta. */
+    public function descargar(int $actor, int $id, bool $autorizado = false): array
+    {
+        $this->permitir($actor, 'erp.cobrar');
+        $doc = $this->r->uno('SELECT * FROM erp_fiscal_documentos WHERE id=?', [$id])
+            ?? throw new ErpException('Documento fiscal no encontrado.', 404);
+        if (!hash_equals($doc['xml_sha256'], hash('sha256', $doc['xml_firmado']))) {
+            throw new ErpException('No se pudo verificar la integridad del XML.', 409);
+        }
+        $xml = $doc['xml_firmado'];
+        if ($autorizado) {
+            if ($doc['estado'] !== 'autorizada') {
+                throw new ErpException('El comprobante todavía no tiene autorización del SRI.', 409);
+            }
+            try {
+                $respuesta = json_decode($doc['respuesta_json'] ?? 'null', true, 512, JSON_THROW_ON_ERROR);
+                if (!is_array($respuesta)) throw new \RuntimeException('Falta la evidencia.');
+                $xml = SriAutorizacion::exportar($respuesta, $doc['xml_firmado']);
+            } catch (\RuntimeException|\InvalidArgumentException|\JsonException $e) {
+                throw new ErpException('No se pudo verificar la evidencia de autorización.', 409);
+            }
+        }
+        $numero = preg_match('/^\d{3}-\d{3}-\d{9}$/D', $doc['numero']) ? $doc['numero'] : (string) $id;
+        return ['contenido' => $xml, 'nombre' => 'pruebas-sri-'.($autorizado ? 'autorizado-' : '').$numero.'.xml'];
+    }
+
     private function cli():void {if(PHP_SAPI!=='cli')throw new ErpException('Operación reservada a la consola del piloto fiscal.',403);}
     public function perfil(int $actor,array $d,#[\SensitiveParameter] string $p12,#[\SensitiveParameter] string $password):array
     {

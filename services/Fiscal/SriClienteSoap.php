@@ -40,11 +40,8 @@ final class SriClienteSoap
         $resultado=['estado'=>$estado,'clave'=>$clave,'autorizado'=>$estado==='AUTORIZADO','mensajes'=>$this->mensajes($xp,$a)];
         if($estado==='AUTORIZADO'){
             $aut=$this->valor($xp,$a,'numeroAutorizacion');$fecha=$this->valor($xp,$a,'fechaAutorizacion');$amb=$this->valor($xp,$a,'ambiente');$xml=$this->valor($xp,$a,'comprobante');
-            if($aut!==$clave||$amb!==($this->ambiente==='1'?'PRUEBAS':'PRODUCCIÓN')||!preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/D',$fecha))throw new \RuntimeException('Autorización incompleta o de otro ambiente.');
-            // Compara la forma canónica completa, incluida la firma, tolerando solo la declaración XML.
-            $autorizado=SriXml::validar($xml);
-            if(!hash_equals(hash('sha256',$doc->C14N(false,false)),hash('sha256',$autorizado->C14N(false,false))))throw new \RuntimeException('El XML autorizado difiere del comprobante enviado.');
             $resultado+=['numero_autorizacion'=>$aut,'fecha_autorizacion'=>$fecha,'ambiente'=>$amb,'xml'=>$xml];
+            SriAutorizacion::validar($resultado,$firmadoEsperado);
         }
         return $resultado;
     }

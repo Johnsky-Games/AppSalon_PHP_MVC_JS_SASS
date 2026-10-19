@@ -71,6 +71,40 @@ final class ErpFiscalIntegrationTest extends TestCase
     {
         $d=$this->documento();$t=$this->transporte([new \RuntimeException('timeout de ensayo')]);self::assertSame(1,$this->svc()->procesar($t)['pendientes']);$this->debido();$t=$this->transporte([$this->respuesta($d['clave_acceso'],$d['xml_firmado'])]);self::assertSame(1,$this->svc()->procesar($t)['autorizados']);self::assertCount(1,$t->peticiones);$despues=$this->r->uno('SELECT * FROM erp_fiscal_documentos');self::assertSame($d['xml_firmado'],$despues['xml_firmado']);self::assertSame($d['clave_acceso'],$despues['clave_acceso']);self::assertSame(1,(int)$this->r->uno('SELECT ultimo FROM erp_fiscal_secuencias')['ultimo']);
     }
+    public function testDescargaAutorizadaExigeEvidenciaYNoGeneraMovimientos():void
+    {
+        $d=$this->documento();
+        self::assertSame($d['xml_firmado'],$this->svc()->descargar($this->actor,(int)$d['id'])['contenido']);
+        try{$this->svc()->descargar($this->actor,(int)$d['id'],true);self::fail('Pendiente no es autorizado.');}catch(ErpException $e){self::assertSame(409,$e->getCode());}
+        $this->svc()->procesar($this->transporte([$this->respuesta($d['clave_acceso'],$d['xml_firmado'])]));
+        $antes=$this->r->uno('SELECT COUNT(*) n FROM erp_eventos')['n'];
+        $archivo=$this->svc()->descargar($this->actor,(int)$d['id'],true);
+        $xml=\Services\Fiscal\SriXml::cargar($archivo['contenido']);
+        self::assertSame('pruebas-sri-autorizado-001-002-000000001.xml',$archivo['nombre']);
+        self::assertSame($d['clave_acceso'],$xml->getElementsByTagName('numeroAutorizacion')->item(0)->textContent);
+        self::assertSame($d['xml_firmado'],$xml->getElementsByTagName('comprobante')->item(0)->textContent);
+        self::assertSame($antes,$this->r->uno('SELECT COUNT(*) n FROM erp_eventos')['n']);
+        self::assertSame(0,(int)$this->r->uno('SELECT COUNT(*) n FROM pagos')['n']);
+        self::assertSame(1,(int)$this->r->uno('SELECT ultimo FROM erp_fiscal_secuencias')['ultimo']);
+        try{$this->r->q('UPDATE erp_fiscal_documentos SET respuesta_json=NULL');self::fail('Conserve evidencia autorizada.');}catch(\Repositories\PersistenceException|\mysqli_sql_exception $e){self::assertSame(1644,$e->getCode());}
+        $cliente=R5CajaFixture::usuario($this->db);$this->expectException(ErpException::class);$this->expectExceptionCode(403);$this->svc()->descargar($cliente,(int)$d['id'],true);
+    }
+    public function testControladorEntregaLosDosXmlAlEquipoAutorizado():void
+    {
+        $d=$this->documento();$this->svc()->procesar($this->transporte([$this->respuesta($d['clave_acceso'],$d['xml_firmado'])]));
+        $anterior=['sesion'=>$_SESSION??[],'get'=>$_GET,'server'=>$_SERVER];
+        try{
+            if(session_status()===PHP_SESSION_NONE)session_start();
+            $ctx=(new \Services\AuthorizationService($this->db))->contexto($this->actor);
+            $_SESSION=['login'=>true,'id'=>$this->actor,'portal'=>'equipo','version_sesion'=>(int)$ctx['version_sesion']];
+            $_SERVER['REQUEST_METHOD']='GET';$_SERVER['HTTP_ACCEPT']='application/xml';$_SERVER['REQUEST_URI']='/gestion/facturacion/xml';
+            foreach(['firmado'=>false,'autorizado'=>true] as $formato=>$autorizado){
+                $_GET=['id'=>(string)$d['id'],'formato'=>$formato];
+                ob_start();try{\Controllers\ErpController::fiscalXml();$contenido=ob_get_contents();}finally{ob_end_clean();}
+                self::assertSame($this->svc()->descargar($this->actor,(int)$d['id'],$autorizado)['contenido'],$contenido);
+            }
+        }finally{$_SESSION=$anterior['sesion'];$_GET=$anterior['get'];$_SERVER=$anterior['server'];}
+    }
     public function testLeaseVigenteNoHacePeticiones():void {$this->documento();$this->r->q('UPDATE erp_fiscal_documentos SET lease_token=?,lease_hasta=DATE_ADD(?,INTERVAL 1 HOUR)',[str_repeat('a',32),$this->r::ahora()]);$t=$this->transporte([]);self::assertSame(0,$this->svc()->procesar($t)['pendientes']);self::assertSame([],$t->peticiones);}
     /** @dataProvider erroresRecepcion */
     public function testClasificaRecepcionSinPerderClaveNiReenviarLoQueEstaEnProceso(string $codigo,string $estado):void
@@ -122,12 +156,13 @@ final class ErpFiscalIntegrationTest extends TestCase
     }
     public function testRespaldoRestauraXmlCertificadoNumeracionYProtecciones():void
     {
-        $d=$this->documento();$origen=BaseDatosAislada::nombre($this->db);$destino='appsalon_fixture_fiscal_restore_'.bin2hex(random_bytes(5)).'_test';$archivo=sys_get_temp_dir().'/fiscal_bk_'.bin2hex(random_bytes(8)).'.sql.gz';$restaurada=null;
+        $d=$this->documento();$this->svc()->procesar($this->transporte([$this->respuesta($d['clave_acceso'],$d['xml_firmado'])]));$exportado=$this->svc()->descargar($this->actor,(int)$d['id'],true);$origen=BaseDatosAislada::nombre($this->db);$destino='appsalon_fixture_fiscal_restore_'.bin2hex(random_bytes(5)).'_test';$archivo=sys_get_temp_dir().'/fiscal_bk_'.bin2hex(random_bytes(8)).'.sql.gz';$restaurada=null;
         $cli=function(array $args):void {$pipes=[];$p=proc_open(array_merge([PHP_BINARY],$args),[1=>['pipe','w'],2=>['pipe','w']],$pipes,null,array_merge(getenv(),['DB_NAME'=>BaseDatosAislada::nombre($this->db)]));self::assertIsResource($p);$out=stream_get_contents($pipes[1]);$err=stream_get_contents($pipes[2]);fclose($pipes[1]);fclose($pipes[2]);self::assertSame(0,proc_close($p),$out.$err);};
         try{
             $cli(['scripts/backup_db.php','--db='.$origen,'--output='.$archivo,'--gzip']);$this->r->q('CREATE DATABASE `'.$destino.'` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');$cli(['scripts/restore_db.php','--db='.$destino,'--input='.$archivo,'--hash='.hash_file('sha256',$archivo)]);
             $restaurada=new \mysqli(getenv('DB_HOST'),getenv('DB_USER'),getenv('DB_PASS'),$destino,(int)getenv('DB_PORT'));$r=new ErpRepository($restaurada);self::assertSame($d['xml_sha256'],$r->uno('SELECT xml_sha256 FROM erp_fiscal_documentos')['xml_sha256']);self::assertSame($d['xml_firmado'],$r->uno('SELECT xml_firmado FROM erp_fiscal_documentos')['xml_firmado']);self::assertSame(1,(int)$r->uno('SELECT ultimo FROM erp_fiscal_secuencias')['ultimo']);self::assertSame($this->r->uno('SELECT certificado_cifrado FROM erp_fiscal_perfiles')['certificado_cifrado'],$r->uno('SELECT certificado_cifrado FROM erp_fiscal_perfiles')['certificado_cifrado']);self::assertFalse($restaurada->query('DELETE FROM erp_fiscal_documentos'));self::assertSame(1644,$restaurada->errno);
             self::assertSame(3,(int)$r->uno("SELECT COUNT(*) n FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='erp_fiscal_documentos' AND index_name='uq_fiscal_numero_emisor'")['n']);
+            self::assertSame($exportado,(new ErpFiscalService($r))->descargar($this->actor,(int)$d['id'],true));
             $otra=(new ErpVentaService($r))->crear($this->actor,$this->d())['recurso_id'];
             try{$r->q("INSERT INTO erp_fiscal_documentos(perfil_id,venta_id,clave_operacion,huella,clave_acceso,numero,snapshot_json,xml_firmado,xml_sha256,creado_por,creado_en,actualizado_en) SELECT perfil_id,?,SHA2('numero-restaurado',256),huella,REPEAT('0',49),numero,snapshot_json,xml_firmado,xml_sha256,creado_por,creado_en,actualizado_en FROM erp_fiscal_documentos WHERE id=?",[$otra,(int)$d['id']]);self::fail('La restauración debe impedir repetir el número fiscal.');}catch(\Repositories\PersistenceException|\mysqli_sql_exception $e){self::assertSame(1062,$e->getCode());}
         }finally{if($restaurada)$restaurada->close();$this->r->q('DROP DATABASE IF EXISTS `'.$destino.'`');foreach([$archivo,$archivo.'.manifest.json'] as $f)if(is_file($f))unlink($f);}

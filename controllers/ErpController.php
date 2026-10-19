@@ -9,6 +9,7 @@ use Services\ErpPagoService;
 use Services\ErpCajaService;
 use Services\ErpEntregaService;
 use Services\ErpDevolucionService;
+use Services\ErpFiscalService;
 
 final class ErpController
 {
@@ -159,9 +160,12 @@ final class ErpController
     }
     public static function fiscalXml():void
     {
-        exigir_permiso('erp.cobrar');$r=new ErpRepository();$id=filter_var($_GET['id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;$doc=$r->uno('SELECT xml_firmado,xml_sha256,numero FROM erp_fiscal_documentos WHERE id=?',[$id])??throw new ErpException('Documento fiscal no encontrado.',404);
-        if(!hash_equals($doc['xml_sha256'],hash('sha256',$doc['xml_firmado'])))throw new ErpException('No se pudo verificar la integridad del XML.',409);
-        header('Content-Type: application/xml; charset=UTF-8');header('Content-Disposition: attachment; filename="pruebas-sri-'.$doc['numero'].'.xml"');header('Cache-Control: private, no-store');header('X-Content-Type-Options: nosniff');echo $doc['xml_firmado'];
+        exigir_permiso('erp.cobrar');
+        $formato=$_GET['formato']??'firmado';
+        if(!in_array($formato,['firmado','autorizado'],true))throw new ErpException('Formato fiscal no válido.');
+        $id=filter_var($_GET['id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;
+        $doc=(new ErpFiscalService())->descargar((int)$_SESSION['id'],$id,$formato==='autorizado');
+        header('Content-Type: application/xml; charset=UTF-8');header('Content-Disposition: attachment; filename="'.$doc['nombre'].'"');header('Cache-Control: private, no-store');header('X-Content-Type-Options: nosniff');echo $doc['contenido'];
     }
     public static function suscripciones(Router $router):void
     {
