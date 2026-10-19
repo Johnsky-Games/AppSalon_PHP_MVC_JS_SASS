@@ -184,6 +184,13 @@ final class ErpContabilidadIntegrationTest extends TestCase
         $c2=$this->svc()->cerrarEjercicio($this->owner,$this->d(['anio'=>2026]))['recurso_id'];self::assertNotSame($c,$c2);self::assertSame('cierre:2026:2',$this->r->uno('SELECT origen FROM erp_cont_asientos WHERE id=?',[$c2])['origen']);
         self::assertSame(-51000,$this->saldo('3.1.03'));self::assertSame(0,$this->svc()->balanceGeneral('2026-12-31')['resultado_sin_cerrar']);
     }
+    public function testElEjercicioNoSeCierraSiFaltanMesesSinFilaDePeriodo():void
+    {
+        $this->asiento('2026-12-10','1.1.01','4.1.01','100.00');
+        $e=$this->rechazo(fn()=>$this->svc()->cerrarEjercicio($this->owner,$this->d(['anio'=>2026])),409);self::assertStringContainsString('2026-01',$e->getMessage());
+        $this->rechazo(fn()=>$this->svc()->cerrarPeriodo($this->owner,$this->d(['anio'=>2026,'mes'=>12])),409);
+        self::assertSame(0,(int)$this->r->uno("SELECT COUNT(*) n FROM erp_cont_asientos WHERE tipo='cierre'")['n']);
+    }
     public function testElMayorCalculaElSaldoFinalSobreTodoElRangoAunqueElListadoSeAcote():void
     {
         for($i=1;$i<=5;$i++)$this->asiento('2026-01-0'.$i,'1.1.01','4.1.01','10.00');
