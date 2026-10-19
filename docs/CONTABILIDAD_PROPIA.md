@@ -50,6 +50,13 @@ Cada hecho distinto genera su asiento. Un evento con varios hechos genera varios
 * **Libros:** diario con reversos enlazados, mayor con saldo inicial y corrido, balance de comprobación, estado de resultados, balance general y auxiliar por tercero (cuentas por cobrar, proveedores, anticipos).
 * **Conciliación** (`/gestion/contabilidad?vista=conciliacion`): proveedores contra las obligaciones, comisiones por pagar contra las obligaciones de comisión, anticipos contra el libro de saldos prepagados y caja contra los movimientos de caja en efectivo. Una diferencia nunca se ajusta sola.
 
+### Reglas de cierre (revisión de la PR #13)
+
+* **Cierre de período:** todo mes desde el inicio contable es predecesor y debe estar cerrado, tenga o no movimientos (se materializan al cerrar). Se rechaza si hay hechos del negocio sin contabilizar o servicios prestados sin asiento de prestación hasta el fin del período.
+* **Cierre del ejercicio:** exige además que no haya hechos ni servicios sin contabilizar hasta el 31 de diciembre. Con el ejercicio cerrado (asiento de cierre sin reverso) no se admite ningún otro asiento fechado en ese año; para registrar algo omitido se revierte el cierre (siempre con fecha 31 de diciembre) y se vuelve a cerrar (`cierre:<año>:2`, `:3`…).
+* **Mayor:** el saldo final se calcula sobre todo el rango; el listado se acota a 2000 renglones y lo avisa (`truncado`, `total_movimientos`).
+* **Conciliación a una fecha:** libro y auxiliares se calculan con sus movimientos fechados hasta el fin del día de corte (facturas, créditos, pagos y reintegros de proveedor; obligaciones de comisión; movimientos prepagados; efectivo de caja). Los contadores de hechos y servicios sin contabilizar son siempre el pendiente actual.
+
 ## Puesta en marcha
 
 1. Actualizar y migrar (`php database/migrador.php up`, incluye 043).

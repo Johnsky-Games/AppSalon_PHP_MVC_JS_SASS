@@ -109,6 +109,12 @@ final class ErpFiscalReglasIntegrationTest extends TestCase
         $e=$this->conflicto(fn()=>$this->factura());self::assertStringContainsString('iva.codigo.4',$e->getMessage());
         self::assertSame(0,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_fiscal_documentos')['n']);self::assertNull($this->r->uno('SELECT ultimo FROM erp_fiscal_secuencias WHERE ultimo>0'),'Sin documento no se consume secuencial');
     }
+    public function testLaCategoriaDeIvaCeroTambienExigeSuParametroVigente():void
+    {
+        $this->registrar(['clave'=>'iva.codigo.0','estado'=>'derogado']);
+        $e=$this->conflicto(fn()=>$this->factura(['categorias_iva'=>[(string)$this->linea=>'0']]));self::assertStringContainsString('iva.codigo.0',$e->getMessage());
+        self::assertSame(0,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_fiscal_documentos')['n']);
+    }
     public function testConsumidorFinalSoloConParametroVigenteYDentroDelMaximo():void
     {
         $cf=['tipo'=>'07','identificacion'=>'9999999999999','nombre'=>'Alguien con nombre propio','direccion'=>'No debe viajar'];

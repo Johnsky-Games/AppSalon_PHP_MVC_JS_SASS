@@ -47,6 +47,7 @@ $tabla=static function(array $filas,callable $f):string{$h='';foreach($filas as 
 <?php if(isset($mayor)): ?><section class="ui-card"><h2><?= s($mayor['cuenta']['codigo'].' '.$mayor['cuenta']['nombre']) ?></h2><p>Saldo inicial <?= s($dinero($mayor['saldo_inicial'])) ?> · Saldo final <strong><?= s($dinero($mayor['saldo_final'])) ?></strong></p>
 <div class="ops-table-wrap"><table class="ops-table"><thead><tr><th>Fecha</th><th>Asiento</th><th>Concepto</th><th>Debe</th><th>Haber</th><th>Saldo</th></tr></thead><tbody>
 <?= $tabla($mayor['movimientos'],fn($m)=>'<tr><td>'.s($m['fecha']).'</td><td>'.(int)$m['numero'].'</td><td>'.s($m['concepto']).'</td><td>'.($m['debe_centavos']?s($dinero($m['debe_centavos'])):'').'</td><td>'.($m['haber_centavos']?s($dinero($m['haber_centavos'])):'').'</td><td>'.s($dinero($m['saldo'])).'</td></tr>') ?>
+<?php if(!empty($mayor['truncado'])): ?><tr><td colspan="6"><strong>Se muestran los primeros <?= count($mayor['movimientos']) ?> de <?= (int)$mayor['total_movimientos'] ?> movimientos; el saldo final incluye todos. Acota el rango de fechas para ver el detalle completo.</strong></td></tr><?php endif; ?>
 <?php if(!$mayor['movimientos']): ?><tr><td colspan="6">Sin movimientos en el rango.</td></tr><?php endif; ?></tbody></table></div></section><?php endif; ?>
 <?php endif; ?>
 

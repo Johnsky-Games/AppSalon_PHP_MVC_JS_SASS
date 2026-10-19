@@ -153,6 +153,52 @@ final class ErpContabilidadIntegrationTest extends TestCase
         $bg=$this->svc()->balanceGeneral('2026-12-31');self::assertTrue($bg['cuadra']);self::assertSame(0,$bg['resultado_sin_cerrar']);self::assertSame(-30000,$this->saldo('3.1.03'));
         self::assertTrue($this->svc()->balanceComprobacion('2026-12-31')['cuadra']);
     }
+    public function testNoSeCierraUnPeriodoSiFaltaUnMesAnteriorAunSinMovimientos():void
+    {
+        $this->asiento('2026-03-10','1.1.01','4.1.01','10.00');
+        $e=$this->rechazo(fn()=>$this->svc()->cerrarPeriodo($this->owner,$this->d(['anio'=>2026,'mes'=>3])),409);self::assertStringContainsString('2026-01',$e->getMessage());
+        $this->rechazo(fn()=>$this->svc()->cerrarPeriodo($this->owner,$this->d(['anio'=>2025,'mes'=>12])),409);
+        $this->svc()->cerrarPeriodo($this->owner,$this->d(['anio'=>2026,'mes'=>1]));
+        $e=$this->rechazo(fn()=>$this->svc()->cerrarPeriodo($this->owner,$this->d(['anio'=>2026,'mes'=>3])),409);self::assertStringContainsString('2026-02',$e->getMessage());
+        $this->svc()->cerrarPeriodo($this->owner,$this->d(['anio'=>2026,'mes'=>2]));$this->svc()->cerrarPeriodo($this->owner,$this->d(['anio'=>2026,'mes'=>3]));
+        // Ya no puede aparecer un asiento en un mes abierto anterior a uno cerrado.
+        $this->rechazo(fn()=>$this->asiento('2026-01-20','1.1.01','4.1.01','10.00'),409);
+    }
+    public function testElEjercicioNoSeCierraConHechosDeDiciembreSinContabilizarNiAdmiteMasAsientosCerrado():void
+    {
+        $this->asiento('2026-01-10','1.1.01','4.1.01','500.00');
+        for($m=1;$m<=11;$m++)$this->svc()->cerrarPeriodo($this->owner,$this->d(['anio'=>2026,'mes'=>$m]));
+        $this->r->q("INSERT INTO erp_eventos(tipo,entidad,entidad_id,actor_id,datos_json,creado_en) VALUES('pago_confirmado','venta',1,1,'{}','2026-12-20 10:00:00')");$ev=$this->r->id();
+        $this->r->q("INSERT INTO erp_integraciones_outbox(destino,evento_id,referencia,payload_json,estado,actualizado_en) VALUES('contabilidad',?,?,'{}','pendiente',NOW())",[$ev,'ERP-'.$ev.'-contabilidad']);
+        $e=$this->rechazo(fn()=>$this->svc()->cerrarEjercicio($this->owner,$this->d(['anio'=>2026])),409);self::assertStringContainsString('sin contabilizar',$e->getMessage());
+        self::assertSame(0,(int)$this->r->uno("SELECT COUNT(*) n FROM erp_cont_asientos WHERE tipo='cierre'")['n']);
+        $this->r->q("UPDATE erp_integraciones_outbox SET estado='confirmado' WHERE evento_id=?",[$ev]);
+        $c=$this->svc()->cerrarEjercicio($this->owner,$this->d(['anio'=>2026]))['recurso_id'];
+        // Cerrado el ejercicio, diciembre sigue abierto pero nada nuevo entra en ese año.
+        $e=$this->rechazo(fn()=>$this->asiento('2026-12-15','1.1.01','4.1.01','10.00'),409);self::assertStringContainsString('ejercicio 2026 está cerrado',$e->getMessage());
+        self::assertSame($c,$this->svc()->cerrarEjercicio($this->owner,$this->d(['anio'=>2026]))['recurso_id']);
+        // El cierre se revierte en su propio ejercicio aunque se pida otra fecha; después se registra lo omitido y se cierra de nuevo.
+        $rev=$this->svc()->reversar($this->owner,$this->d(['asiento_id'=>$c,'motivo'=>'Faltaba un asiento','fecha'=>'2027-01-05']))['recurso_id'];
+        self::assertSame('2026-12-31',$this->r->uno('SELECT fecha FROM erp_cont_asientos WHERE id=?',[$rev])['fecha']);
+        $this->asiento('2026-12-15','1.1.01','4.1.01','10.00');
+        $c2=$this->svc()->cerrarEjercicio($this->owner,$this->d(['anio'=>2026]))['recurso_id'];self::assertNotSame($c,$c2);self::assertSame('cierre:2026:2',$this->r->uno('SELECT origen FROM erp_cont_asientos WHERE id=?',[$c2])['origen']);
+        self::assertSame(-51000,$this->saldo('3.1.03'));self::assertSame(0,$this->svc()->balanceGeneral('2026-12-31')['resultado_sin_cerrar']);
+    }
+    public function testElMayorCalculaElSaldoFinalSobreTodoElRangoAunqueElListadoSeAcote():void
+    {
+        for($i=1;$i<=5;$i++)$this->asiento('2026-01-0'.$i,'1.1.01','4.1.01','10.00');
+        $m=$this->svc()->mayor($this->cuenta('1.1.01'),'2026-01-01','2026-01-31',2);
+        self::assertCount(2,$m['movimientos']);self::assertTrue($m['truncado']);self::assertSame(5,$m['total_movimientos']);self::assertSame(5000,$m['saldo_final'],'El saldo final no depende del listado recortado');
+        $completo=$this->svc()->mayor($this->cuenta('1.1.01'),'2026-01-01','2026-01-31');self::assertFalse($completo['truncado']);self::assertSame(5000,$completo['saldo_final']);
+    }
+    public function testLaConciliacionHistoricaNoCuentaMovimientosPosterioresAlCorte():void
+    {
+        $ins=fn(string $tipo,int $monto,string $fecha,string $k)=>$this->r->q("INSERT INTO caja_movimientos(tipo,monto_centavos,concepto,metodo,idempotencia,huella,registrado_en) VALUES(?,?,'Prueba','efectivo',?,?,?)",[$tipo,$monto,$k,hash('sha256',$k),$fecha]);
+        $ins('ingreso',10000,'2026-01-10 09:00:00','c1');$ins('ingreso',5000,'2026-02-10 09:00:00','c2');$ins('egreso',2000,'2026-02-11 09:00:00','c3');
+        $caja=fn(string $h)=>array_values(array_filter($this->svc()->conciliacion($h)['controles'],fn($c)=>$c['nombre']==='Caja en efectivo'))[0]['auxiliar'];
+        self::assertSame(10000,$caja('2026-01-31'),'A enero solo cuenta lo anterior al corte');self::assertSame(13000,$caja('2026-02-28'));
+        self::assertSame(10000,$caja('2026-02-10')-5000,'El día de corte entra completo');
+    }
     public function testMayorYAuxiliarPorTercero():void
     {
         $cxc=fn(string $f,string $m,bool $cobro)=>$this->svc()->asiento($this->owner,$this->d(['fecha'=>$f,'concepto'=>'Cuenta por cobrar','lineas'=>$cobro?[['cuenta'=>'1.1.01','debe'=>$m],['cuenta'=>'1.1.03','haber'=>$m,'contacto_id'=>$this->cliente]]:[['cuenta'=>'1.1.03','debe'=>$m,'contacto_id'=>$this->cliente],['cuenta'=>'4.1.01','haber'=>$m]]]));
