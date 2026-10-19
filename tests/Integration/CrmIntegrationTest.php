@@ -344,6 +344,8 @@ final class CrmIntegrationTest extends TestCase
 
     public function testPagoMockSeSeparaYNoSeSumaAIngresosReales(): void
     {
+        $this->db->begin_transaction();
+        try {
         // El equipo con perfil de cliente tiene gasto propio, fuera del filtro externo predeterminado.
         $equipo = $this->usuario('Equipo', 'Gasto ' . $this->tag, ['rol' => 'gerente', 'membresia' => 'activo']);
         $this->pago(null, $equipo, '47.25', 'manual', 'completado', $this->dia(-4) . ' 11:00:00');
@@ -352,11 +354,12 @@ final class CrmIntegrationTest extends TestCase
         $c2 = $this->cita($cli, $this->dia(-4), 'completada');
         $c3 = $this->cita($cli, $this->dia(-3), 'completada');
         $this->pago($c1, $cli, '100.00', 'mock', 'completado', $this->dia(-5) . ' 11:00:00');
-        $this->pago($c2, $cli, '30.00', 'manual', 'completado', $this->dia(-4) . ' 11:00:00');
+        $parcial = $this->pago($c2, $cli, '30.00', 'manual', 'completado', $this->dia(-4) . ' 11:00:00');
+        $this->sql("INSERT INTO cobros_devoluciones(pago_id,cita_id,monto_centavos,motivo,registrado_en) VALUES(?,?,1900,'Regresión CRM parcial',?)", 'iis', [$parcial,$c2,$this->dia(-1).' 10:00:00'])->close();
         $this->pago($c3, $cli, '20.00', 'mock', 'reembolsado', $this->dia(-3) . ' 11:00:00', $this->dia(-2) . ' 09:00:00');
         $this->pago(null, $cli, '999.00', 'manual', 'pendiente', $this->dia(-1) . ' 11:00:00'); // pendiente: no es cobro
         $fila = $this->listado(['desde' => $this->dia(-30), 'hasta' => $this->dia(0)])[$cli];
-        $this->assertSame([3000, 0, 1], [(int)$fila['cobros_real'], (int)$fila['dev_real'], (int)$fila['n_cobros_real']]);
+        $this->assertSame([3000, 1900, 1], [(int)$fila['cobros_real'], (int)$fila['dev_real'], (int)$fila['n_cobros_real']]);
         $this->assertSame([12000, 2000], [(int)$fila['cobros_sim'], (int)$fila['dev_sim']]);
 
         // Conciliación global con un cálculo independiente (incluye cualquier otro dato que exista en la base).
@@ -367,6 +370,7 @@ final class CrmIntegrationTest extends TestCase
         $this->assertSame($ref['cobros_real'] - $ref['dev_real'], $gasto['neto_real']);
         $this->assertSame($ref['sim_neto'], $gasto['neto_simulado']);
         $this->assertSame($ref['n_cobros_real'], $gasto['n_cobros_real']);
+        } finally { $this->db->rollback(); }
     }
 
     public function testKpisGlobalesConcilianConCalculoIndependiente(): void
@@ -851,7 +855,12 @@ final class CrmIntegrationTest extends TestCase
             if ($primera >= $desde && $primera <= $hasta) { $r['primera_visita']++; }
         }
         $citaUsuario = array_column($citas, 'usuarioId', 'id');
-        foreach ($this->filas('SELECT cita_id,cita_referencia_id,usuario_id,proveedor,monto,estado,pagado_at,created_at,reembolsado_at FROM pagos') as $p) {
+        // El libro de devoluciones tiene importes y fechas propios, incluso con el pago aún completado.
+        $devPorPago = [];
+        foreach ($this->filas('SELECT pago_id,monto_centavos,registrado_en FROM cobros_devoluciones') as $d) {
+            if ($d['pago_id'] !== null) $devPorPago[(int)$d['pago_id']][] = $d;
+        }
+        foreach ($this->filas('SELECT id,cita_id,cita_referencia_id,usuario_id,proveedor,monto,estado,pagado_at,created_at,reembolsado_at FROM pagos') as $p) {
             $uid = $p['usuario_id'] ?? ($citaUsuario[$p['cita_id'] ?? $p['cita_referencia_id']] ?? null);
             if ($uid === null || !isset($esCliente[(int)$uid])) { continue; }
             $mock = trim((string)$p['proveedor']) === '' || trim((string)$p['proveedor']) === 'mock';
@@ -860,9 +869,17 @@ final class CrmIntegrationTest extends TestCase
             $fDev = substr((string)($p['reembolsado_at'] ?? $p['pagado_at'] ?? $p['created_at']), 0, 10);
             $cobra = in_array($p['estado'], ['completado', 'reembolsado'], true) && $fCobro >= $desde && $fCobro <= $hasta;
             $devuelve = $p['estado'] === 'reembolsado' && $fDev >= $desde && $fDev <= $hasta;
-            if ($mock) { $r['sim_neto'] += ($cobra ? $cents : 0) - ($devuelve ? $cents : 0); continue; }
+            $devTotalLibro = 0; $devPeriodo = 0;
+            foreach ($devPorPago[(int)$p['id']] ?? [] as $d) {
+                $devTotalLibro += (int)$d['monto_centavos'];
+                $dia = substr($d['registrado_en'], 0, 10);
+                if ($dia >= $desde && $dia <= $hasta) $devPeriodo += (int)$d['monto_centavos'];
+            }
+            // Un reembolso total heredado solo aporta el remanente que no existe ya en el libro.
+            if ($devuelve) $devPeriodo += max(0, $cents - $devTotalLibro);
+            if ($mock) { $r['sim_neto'] += ($cobra ? $cents : 0) - $devPeriodo; continue; }
             if ($cobra) { $r['cobros_real'] += $cents; $r['n_cobros_real']++; }
-            if ($devuelve) { $r['dev_real'] += $cents; }
+            $r['dev_real'] += $devPeriodo;
         }
         return $r;
     }
