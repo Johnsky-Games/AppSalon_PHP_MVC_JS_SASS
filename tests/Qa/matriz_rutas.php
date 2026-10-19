@@ -171,6 +171,8 @@ return [
     ['m' => 'GET', 'p' => '/gestion/suscripciones', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'finanzas'], 'ok' => [200, 'html']],
     ['m' => 'GET', 'p' => '/gestion/facturacion', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'finanzas'], 'ok' => [200, 'html']],
     ['m' => 'GET', 'p' => '/gestion/facturacion/parametros', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'finanzas'], 'ok' => [200, 'html']],
+    ['m' => 'GET', 'p' => '/gestion/nomina', 'g' => 'permiso', 'roles' => ['propietario', 'finanzas'], 'ok' => [200, 'html']],
+    ['m' => 'GET', 'p' => '/gestion/nomina/recibo', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'profesional', 'finanzas'], 'ok' => [404, 'html']],
     ['m' => 'GET', 'p' => '/gestion/contabilidad', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'ok' => [200, 'html']],
     ['m' => 'GET', 'p' => '/gestion/facturacion/pdf', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'finanzas'], 'ok' => [404, 'html']],
     ['m' => 'GET', 'p' => '/gestion/facturacion/ride', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'finanzas'], 'ok' => [404, 'html']],

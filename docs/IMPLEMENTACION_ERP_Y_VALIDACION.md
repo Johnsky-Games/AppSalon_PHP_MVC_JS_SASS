@@ -270,3 +270,13 @@ Rama `feature/erp-contabilidad`, apilada sobre `feature/erp-fiscal-reglas` (#12)
 * **Permisos nuevos y segregados:** `contabilidad.ver` (propietario, gerente, finanzas), `contabilidad.registrar` (propietario, finanzas), `contabilidad.configurar` (propietario). Contrato de pruebas actualizado a propósito: la tabla escrita a mano de permisos por rol de `AutorizacionMatrizTest`, el registro de rutas y `EsquemaTest` (108 → 115 tablas).
 * **Hallazgo corregido en el camino:** el primer trigger de balance anidaba dos `IF`; el lector de protecciones de la restauración (`ProteccionesRestauradas`) solo admite un `IF … END IF` por trigger y la restauración fallaba. La prueba de respaldo/restauración existente lo detectó; el trigger se aplanó con la misma garantía.
 * **Pruebas:** ledger/inmutabilidad/períodos/cierre/reversos/permisos/concurrencia con procesos reales (15), hechos y conciliaciones con auxiliares (9), pantallas y acciones (en la misma suite).
+
+## Continuación 044: nómina propia
+
+Rama `feature/erp-nomina`, apilada sobre `feature/erp-contabilidad` (#13). Detalle, fórmula `nomina-v1`, fuentes y límites: `docs/NOMINA_PROPIA.md`.
+
+* **Migración 044** (aditiva; +8 tablas, 123 en total): parámetros legales versionados, condiciones por colaborador, corridas, líneas inmutables, novedades, vínculo único con las comisiones por nómina y liquidación de beneficios. Añade tres cuentas y roles contables (retención de renta, beneficios, descuentos). Guarda de rollback si hay parámetros, condiciones, corridas, novedades o beneficios.
+* **Sin cifras legales de fábrica:** todo parámetro lo registra una persona con fuente y vigencia; sin parámetros no se calcula. Las pruebas usan valores de ensayo marcados como no oficiales.
+* **Calcular → revisar → aprobar** (segregados; solo el propietario aprueba), obligaciones por colaborador, IESS y SRI en una transacción idempotente, anulación antes del primer pago con reverso contable, ajustes por novedades, beneficios acumulados, recibo propio por colaborador y comisión pagada por nómina o por pago directo, nunca por ambos.
+* **Contrato de pruebas cambiado y justificado:** tabla de permisos por rol (+5 permisos `nomina.*`), registro de rutas y conteo de tablas.
+* **Correcciones durante el desarrollo:** una variable (`$inicio`) no llegaba al cierre del adaptador contable y el hecho de nómina se fechaba mal; la prueba lo detectó. Dos vistas reutilizaban nombres de variable de los formularios compartidos (`$clave`, `$k`); las pruebas de pantalla lo detectaron.

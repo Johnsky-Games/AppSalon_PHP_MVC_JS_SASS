@@ -12,6 +12,8 @@ $router->get('/gestion/caja',[\Controllers\ErpController::class,'caja']);
 $router->get('/gestion/integraciones',[\Controllers\ErpController::class,'integraciones']);
 $router->get('/gestion/facturacion',[\Controllers\ErpController::class,'fiscal']);
 $router->get('/gestion/facturacion/parametros',[\Controllers\ErpController::class,'fiscalParametros']);
+$router->get('/gestion/nomina',[\Controllers\ErpController::class,'nomina']);
+$router->get('/gestion/nomina/recibo',[\Controllers\ErpController::class,'nominaRecibo']);
 $router->get('/gestion/contabilidad',[\Controllers\ErpController::class,'contabilidad']);
 $router->get('/gestion/facturacion/xml',[\Controllers\ErpController::class,'fiscalXml']);
 $router->get('/gestion/facturacion/ride',[\Controllers\ErpController::class,'fiscalRide']);

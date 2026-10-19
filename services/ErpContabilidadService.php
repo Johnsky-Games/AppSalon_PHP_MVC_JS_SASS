@@ -14,6 +14,7 @@ final class ErpContabilidadService extends ErpService
     public const ROLES=[
         'caja'=>'activo','banco'=>'activo','cxc'=>'activo','inventario'=>'activo','iva_compras'=>'activo','activos_fijos'=>'activo',
         'proveedores'=>'pasivo','recepciones_por_facturar'=>'pasivo','iva_ventas'=>'pasivo','anticipos_clientes'=>'pasivo','comisiones_por_pagar'=>'pasivo','sueldos_por_pagar'=>'pasivo','iess_por_pagar'=>'pasivo',
+        'ir_por_pagar'=>'pasivo','beneficios_por_pagar'=>'pasivo','descuentos_nomina'=>'pasivo',
         'resultado_ejercicio'=>'patrimonio','resultados_acumulados'=>'patrimonio',
         'ingreso_servicios'=>'ingreso','ingreso_productos'=>'ingreso','devoluciones_ventas'=>'ingreso',
         'costo_ventas'=>'costo','consumo_insumos'=>'costo',

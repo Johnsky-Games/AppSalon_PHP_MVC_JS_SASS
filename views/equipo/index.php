@@ -24,6 +24,11 @@ $etiquetasPermisos = [
     'contabilidad.ver'=>'Consultar libros y estados contables',
     'contabilidad.registrar'=>'Registrar y reversar asientos contables',
     'contabilidad.configurar'=>'Configurar plan de cuentas, roles contables y cierres',
+    'nomina.ver'=>'Consultar la nómina y todos los recibos',
+    'nomina.calcular'=>'Registrar novedades y calcular la nómina',
+    'nomina.aprobar'=>'Revisar y aprobar novedades y nómina; liquidar beneficios',
+    'nomina.configurar'=>'Configurar parámetros legales y condiciones de nómina',
+    'nomina.recibo_propio'=>'Ver el propio recibo de pago',
 
     'equipo.gestionar' => 'Administrar accesos del equipo', 'servicios.gestionar' => 'Gestionar servicios',
     'profesionales.gestionar' => 'Gestionar profesionales y horarios', 'perfiles.gestionar' => 'Gestionar perfiles de clientes',
