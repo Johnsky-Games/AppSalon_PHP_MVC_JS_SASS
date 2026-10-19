@@ -90,7 +90,7 @@ final class ErpFiscalService extends ErpService
             $regimen=$e['regimen']??'*';$consumidorFinal=($comprador['tipo']??'')==='07';
             // Cobro anticipado: el IVA de servicios se factura al prestarlos (elección del contribuyente, registrada); la carga o el anticipo no genera comprobante.
             if($this->r->uno("SELECT pago_id FROM erp_prepago_movimientos WHERE venta_id=? AND tipo='aplicacion' LIMIT 1",[$venta]))$usados[]=ErpFiscalParametroService::referencia($par->requerir('servicios.hecho_generador','*',$fechaEmision));
-            foreach(array_unique(array_filter(array_map('strval',$fiscales?array_column($fiscales,'codigo_porcentaje'):[])))as $codigo){
+            foreach(array_unique(array_filter(array_map('strval',$fiscales?array_column($fiscales,'codigo_porcentaje'):[]),static fn(string $c)=>$c!==''))as $codigo){
                 $pi=$par->requerir(ErpFiscalParametroService::claveIva($codigo),$regimen,$fechaEmision);$usados[]=ErpFiscalParametroService::referencia($pi);
             }
             if(in_array($regimen,['rimpe_emprendedor','rimpe_negocio_popular'],true)){$l=$par->requerir('regimen.leyenda',$regimen,$fechaEmision);$usados[]=ErpFiscalParametroService::referencia($l);$e['contribuyente_rimpe']=$l['valor_texto'];}
