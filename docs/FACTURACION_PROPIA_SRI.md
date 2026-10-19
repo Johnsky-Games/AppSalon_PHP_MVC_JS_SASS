@@ -64,7 +64,23 @@ La categoría IVA se indica explícitamente: tarifa cero, exento y no objeto son
 
 **Evidencia y entrega.** Reutiliza el worker de lease/consulta/reintentos con la misma clave y XML, la descarga del XML autorizado, el RIDE (A4/impresión), el PDF y la cola de correo cifrada (asunto «Nota de crédito», adjuntos `nota-credito-…`). El RIDE se proyecta del XML autorizado (documento modificado, razón y valor modificado; sin formas de pago).
 
-**Límites actuales.** Ambiente de pruebas. Una nota **rechazada** conserva sus devoluciones vinculadas hasta que exista el flujo de corrección/sustitución (pendiente, bloque 3): hoy esas devoluciones no pueden acreditarse otra vez y la nota rechazada cuenta para los topes. No cubre consumidor final, anticipos/prepago/paquetes/suscripciones, ni devoluciones anteriores a la factura (la factura sigue rechazando ventas con devolución previa).
+**Límites actuales.** Ambiente de pruebas. Una nota **rechazada** se corrige con la sustitución (sección siguiente). No cubre consumidor final, anticipos/prepago/paquetes/suscripciones, ni devoluciones anteriores a la factura (la factura sigue rechazando ventas con devolución previa).
+
+## Corrección de comprobantes rechazados: sustitución (migración 041)
+
+Un comprobante **rechazado** (factura o nota de crédito) nunca se edita ni se reutiliza: conserva su XML firmado, clave de acceso, número, instantánea, respuesta del SRI y estado (los triggers de inmutabilidad ya impedían reescribirlos). La corrección es un **documento nuevo** (otro número y otra clave) con `sustituye_a_id` apuntando al rechazado.
+
+**Rechazo definitivo frente a incierto.** El estado `rechazada` proviene de dos fuentes: «NO AUTORIZADO» en la consulta de autorización, o «DEVUELTA» en la recepción. `pendiente` y `recibida` (incluidos los códigos 43/70, ya registrados, y el 50, temporal) siguen siendo inciertos o en proceso y **no** son sustituibles. Antes de permitir la sustitución, un operador con `erp.configurar` solicita una **verificación**; el worker (`scripts/procesar_erp.php`, fuera de transacciones) consulta la misma clave y clasifica:
+- el SRI responde **AUTORIZADO** → `autorizado_en_sri`: conflicto, se audita (`fiscal_conflicto_estado`) y la sustitución queda bloqueada;
+- **NO AUTORIZADO**, o sin registro cuando el rechazo original fue «DEVUELTA» en recepción → `confirmado`;
+- cualquier otra cosa (timeout, sin registro tras un «NO AUTORIZADO», respuesta no verificable) → `incierta`: se reintenta la misma clave cada 5 minutos y no habilita nada.
+Solo una verificación `confirmado`, de menos de 120 minutos y sin sucesor, habilita la sustitución. Los resultados cerrados son inmutables y no se borran.
+
+**Sustitución.** `fiscal_sustituir_factura` (datos corregidos: emisor, comprador, categorías IVA, pagos; misma venta) y `fiscal_sustituir_nc` (razón corregida). Permisos `erp.configurar` + `erp.cobrar` (factura) o `erp.devolver` (nota); recepción y clientes reciben 403. Garantías de base: una sola sustituta por rechazado (`uq_fiscal_sustituto`), una factura **raíz** por venta (`uq_fiscal_factura_raiz`: la sustituta solo existe como sucesora de una rechazada) y `sustituye_a_id` inmutable. Dos procesos simultáneos producen una sola sustituta (prueba con procesos reales).
+
+**Devoluciones de una nota rechazada.** Siguen vinculadas a la nota rechazada (no se mueven ni se borran filas): nadie puede acreditarlas en una nota independiente mientras tanto. La sustituta **hereda** todas las devoluciones de la cadena de rechazos (se resuelven recorriendo `sustituye_a_id`) y puede **sumar** devoluciones pendientes; solo las nuevas se vinculan a ella, de modo que cada devolución está vinculada exactamente una vez y la trazabilidad completa queda en la cadena. Una nota rechazada deja de contar contra los topes de cantidad, base e impuestos; la sustituta los recalcula con todas las devoluciones.
+
+**Efectos que no ocurren.** Sustituir no genera cobros, devoluciones de dinero, movimientos de inventario ni reversos de comisión. **Límite:** si el SRI llegara a autorizar un comprobante ya marcado `rechazada`, el estado local no puede cambiarse (inmutable); se reporta el conflicto y requiere conciliación manual con la administración.
 
 ## Validación y trabajo que continúa
 

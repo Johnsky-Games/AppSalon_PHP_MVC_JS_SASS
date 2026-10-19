@@ -228,3 +228,10 @@ Detalle funcional, reglas de topes y redondeo, y el cambio de identidad fiscal p
 * **Reutiliza** worker con lease, consulta de la misma clave, XML autorizado, RIDE/PDF y la cola de correo cifrada (asunto y adjuntos propios de la nota).
 * **Respaldo:** el primer diseño usaba una columna generada que el respaldo portable intentaba escribir (error en la restauración, detectado por la prueba existente); se sustituyó por un índice funcional.
 * **Contrato de pruebas cambiado y justificado:** `testRespaldoRestauraXmlCertificadoNumeracionYProtecciones` verificaba el índice de 3 partes `uq_fiscal_numero_emisor`; ahora verifica `uq_fiscal_identidad_documento` (4 partes, con tipo) y `uq_fiscal_factura_unica`. `EsquemaTest`: 104 → 106 tablas.
+
+## Continuación 041: corrección de comprobantes rechazados por sustitución
+
+Rama `feature/erp-fiscal-sustitucion`, apilada sobre `feature/erp-notas-credito` (#10). Verificación previa con el SRI (worker), sustitución de facturas y de notas de crédito con herencia de devoluciones, cadena de trazabilidad y topes que excluyen lo rechazado. Detalle y reglas: `docs/FACTURACION_PROPIA_SRI.md`, sección «Corrección de comprobantes rechazados».
+
+* **Migración 041** (aditiva): `sustituye_a_id` (FK, único, inmutable), unicidad de factura raíz por venta, tabla `erp_fiscal_verificaciones` (una solicitud abierta por comprobante; resultados cerrados inmutables). Deja 107 tablas. Aplicada sobre una base con factura y nota previas; rollback verificado (restaura el esquema de 039 y se vuelve a aplicar; la guarda lo niega si hay sustituciones o verificaciones).
+* **Contrato de pruebas cambiado:** el respaldo/restauración verificaba `uq_fiscal_factura_unica`; ahora `uq_fiscal_factura_raiz`. `EsquemaTest`: 106 → 107 tablas.
