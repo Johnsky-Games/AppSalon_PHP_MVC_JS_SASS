@@ -11,6 +11,7 @@ $router->get('/gestion/contactos',[\Controllers\ErpController::class,'contactos'
 $router->get('/gestion/caja',[\Controllers\ErpController::class,'caja']);
 $router->get('/gestion/integraciones',[\Controllers\ErpController::class,'integraciones']);
 $router->get('/gestion/facturacion',[\Controllers\ErpController::class,'fiscal']);
+$router->get('/gestion/facturacion/parametros',[\Controllers\ErpController::class,'fiscalParametros']);
 $router->get('/gestion/facturacion/xml',[\Controllers\ErpController::class,'fiscalXml']);
 $router->get('/gestion/facturacion/ride',[\Controllers\ErpController::class,'fiscalRide']);
 $router->get('/gestion/facturacion/pdf',[\Controllers\ErpController::class,'fiscalPdf']);

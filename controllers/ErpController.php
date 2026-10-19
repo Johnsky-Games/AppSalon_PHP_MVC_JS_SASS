@@ -161,16 +161,27 @@ final class ErpController
         }
         if($ventaId){
             $previa=$r->uno('SELECT id FROM erp_fiscal_documentos WHERE venta_id=? AND tipo=\'01\'',[$ventaId]);if($previa){header('Location: /gestion/facturacion?id='.(int)$previa['id'],true,303);detener_ejecucion(303);return;}
-            $datos=(new ErpVentaService($r))->detalle((int)$_SESSION['id'],$ventaId);$perfiles=$r->q('SELECT id,ruc,establecimiento,punto_emision,creado_en FROM erp_fiscal_perfiles ORDER BY id DESC LIMIT 100');
-            self::render($router,'fiscal',$datos+compact('ventaId','perfiles'));return;
+            $datos=(new ErpVentaService($r))->detalle((int)$_SESSION['id'],$ventaId);$perfiles=$r->q('SELECT id,ruc,establecimiento,punto_emision,creado_en,datos_json FROM erp_fiscal_perfiles ORDER BY id DESC LIMIT 100');
+            // Máximo de consumidor final vigente para el régimen de cada emisor (null = sin parámetro registrado: la opción no se ofrece).
+            $par=new \Services\ErpFiscalParametroService($r);$hoyF=(new \DateTimeImmutable('now',new \DateTimeZone('America/Guayaquil')))->format('Y-m-d');
+            foreach($perfiles as &$pf){$pf['regimen']=json_decode($pf['datos_json'],true)['regimen']??'*';unset($pf['datos_json']);$m=$par->resolver('consumidor_final.total_maximo_centavos',$pf['regimen'],$hoyF);$pf['cf_max']=$m?(int)$m['valor_entero']:null;}unset($pf);
+            $anticipo=(bool)$r->uno("SELECT pago_id FROM erp_prepago_movimientos WHERE venta_id=? AND tipo='aplicacion' LIMIT 1",[$ventaId]);
+            self::render($router,'fiscal',$datos+compact('ventaId','perfiles','anticipo'));return;
         }
         $q=\Classes\PeriodoFiltro::aplicar($_GET);$hoy=substr($r::ahora(),0,10);$desde=$q['desde']??substr($hoy,0,8).'01';$hasta=$q['hasta']??$hoy;
         foreach([$desde,$hasta] as $f){$fecha=is_string($f)?\DateTimeImmutable::createFromFormat('!Y-m-d',$f):false;if(!$fecha||$fecha->format('Y-m-d')!==$f)throw new ErpException('Fecha fiscal no válida.');}if($hasta<$desde||(new \DateTimeImmutable($desde))->diff(new \DateTimeImmutable($hasta))->days>366)throw new ErpException('Consulta hasta 366 días.');
-        $estado=is_string($q['estado']??null)?$q['estado']:'';if(!in_array($estado,['','pendiente','recibida','autorizada','rechazada'],true))throw new ErpException('Estado fiscal no válido.');
+        $estado=is_string($q['estado']??null)?$q['estado']:'';if(!in_array($estado,['','pendiente','recibida','autorizada','rechazada','bloqueada'],true))throw new ErpException('Estado fiscal no válido.');
         $where=' WHERE d.creado_en>=? AND d.creado_en<DATE_ADD(?,INTERVAL 1 DAY)';$args=[$desde,$hasta];if($estado!==''){$where.=' AND d.estado=?';$args[]=$estado;}
         $pagina=filter_var($q['pagina']??1,FILTER_VALIDATE_INT,['options'=>['min_range'=>1,'max_range'=>100000]])?:1;$total=(int)$r->uno('SELECT COUNT(*) n FROM erp_fiscal_documentos d'.$where,$args)['n'];$paginas=max(1,(int)ceil($total/25));$pagina=min($pagina,$paginas);
         $filas=$r->q('SELECT d.id,d.tipo,d.numero,d.estado,d.creado_en,d.sustituye_a_id,v.comprador_nombre FROM erp_fiscal_documentos d JOIN erp_ventas v ON v.id=d.venta_id'.$where.' ORDER BY d.id DESC LIMIT 25 OFFSET '.(($pagina-1)*25),$args);
         self::render($router,'fiscal',compact('filas','desde','hasta','estado','pagina','paginas','total'));
+    }
+    /** Parámetros fiscales vigentes por régimen y su historial; cualquiera con acceso fiscal los consulta, solo la configuración los registra. */
+    public static function fiscalParametros(Router $router):void
+    {
+        exigir_permiso('erp.cobrar');$r=new ErpRepository();$par=new \Services\ErpFiscalParametroService($r);$hoy=(new \DateTimeImmutable('now',new \DateTimeZone('America/Guayaquil')))->format('Y-m-d');
+        $vigentes=[];foreach($par->listar($hoy) as $p)$vigentes[$p['clave'].'|'.$p['regimen']]=$p;
+        self::render($router,'fiscal-parametros',['vigentes'=>$vigentes,'historial'=>$par->historial(100),'catalogo'=>\Services\ErpFiscalParametroService::catalogo(),'regimenes'=>\Services\ErpFiscalParametroService::REGIMENES,'hoy'=>$hoy,'configura'=>puede('erp.configurar')]);
     }
     public static function fiscalXml():void
     {
@@ -347,6 +358,7 @@ final class ErpController
             'suscripcion_crear'=>[\Services\ErpSuscripcionService::class,'crear','suscripciones'],
             'suscripcion_estado'=>[\Services\ErpSuscripcionService::class,'estado','suscripciones'],
             'fiscal_factura'=>[\Services\ErpFiscalService::class,'factura','facturacion'],
+            'fiscal_parametro'=>[\Services\ErpFiscalParametroService::class,'registrar','fiscal_parametros'],
             'fiscal_nota_credito'=>[\Services\ErpFiscalService::class,'notaCredito','facturacion'],
             'fiscal_verificar'=>[\Services\ErpFiscalService::class,'solicitarVerificacion','facturacion'],
             'fiscal_sustituir_factura'=>[\Services\ErpFiscalService::class,'sustituirFactura','facturacion'],
@@ -387,6 +399,7 @@ final class ErpController
         $ruta=match($destino){'venta'=>$id?'/ventas/detalle?id='.$id:'/pdv','compra'=>'/gestion/compras'.($id?'?id='.$id:''),'personal'=>'/gestion/personal'.($id?'?id='.$id:''),'seguimiento'=>'/gestion/seguimiento'.($id?'?id='.$id:''),'prepagos'=>'/gestion/prepagos'.($id?'?id='.$id:''),'paquetes'=>'/gestion/paquetes'.($id?'?id='.$id:''),'suscripciones'=>'/gestion/suscripciones'.($id?'?id='.$id:''),default=>'/gestion/'.$destino};
         if($destino==='documentos')$ruta='/gestion/documentos?'.http_build_query(['entidad'=>is_string($_POST['entidad']??null)?$_POST['entidad']:'','id'=>(int)($_POST['entidad_id']??0)]);
         if($destino==='consumos')$ruta='/agenda/detalle?id='.(int)($_POST['cita_id']??0);
+        if($destino==='fiscal_parametros')$ruta='/gestion/facturacion/parametros';
         if($destino==='facturacion')$ruta='/gestion/facturacion?'.(($completada||$esEntrega)?'id=':'venta_id=').$id;
         header('Location: '.$ruta,true,303);detener_ejecucion(303);
     }

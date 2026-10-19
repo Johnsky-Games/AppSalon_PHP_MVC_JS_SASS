@@ -165,6 +165,36 @@ final class ErpFiscalSustitucionIntegrationTest extends TestCase
         self::assertSame(1,count(array_filter($resultados,fn($r)=>$r['ok'])),json_encode($resultados));
         self::assertSame(1,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_fiscal_documentos WHERE sustituye_a_id IS NOT NULL')['n']);self::assertSame(2,(int)$this->r->uno("SELECT ultimo FROM erp_fiscal_secuencias WHERE documento='01'")['ultimo']);
     }
+    /** Procesos reales en paralelo: [acción, datos]. Cada uno espera el mismo «GO». */
+    private function enParalelo(array $trabajos):array
+    {
+        $workers=[];$resultados=[];
+        try{
+            foreach($trabajos as [$accion,$datos]){$pipes=[];$p=proc_open([PHP_BINARY,__DIR__.'/../fixtures/concurrent_prepago_worker.php',$accion,(string)$this->actor,json_encode(['idem_key'=>R5CajaFixture::clave()]+$datos)],[0=>['pipe','r'],1=>['pipe','w'],2=>['pipe','w']],$pipes,null,array_merge(getenv(),['DB_NAME'=>BaseDatosAislada::nombre($this->db)]));self::assertIsResource($p);stream_set_timeout($pipes[1],30);$workers[]=[$p,$pipes];self::assertSame("READY\n",fgets($pipes[1]));}
+            foreach($workers as [,$pipes]){fwrite($pipes[0],"GO\n");fflush($pipes[0]);fclose($pipes[0]);}
+            foreach($workers as [$p,$pipes]){$linea=fgets($pipes[1]);$err=stream_get_contents($pipes[2]);fclose($pipes[1]);fclose($pipes[2]);proc_close($p);$j=json_decode((string)$linea,true);self::assertIsArray($j,$err.(string)$linea);$resultados[]=$j;}
+        }finally{foreach($workers as [$p])if(is_resource($p)){proc_terminate($p);proc_close($p);}}
+        return $resultados;
+    }
+    public function testOtraCadenaNoAcreditaALaVezLasDevolucionesDeUnaNotaRechazada():void
+    {
+        $f=$this->facturaPreparada();$this->autorizar($f);$d1=$this->devolver('1');$d2=$this->devolver('1');
+        $n1=$this->fiscal()->notaCredito($this->actor,$this->d(['factura_id'=>$f,'devolucion_ids'=>[$d1],'motivo'=>'Devolución de producto']))['recurso_id'];$this->rechazar($n1);
+        $this->verificar($n1,$this->noAutorizado($this->doc($n1)['clave_acceso']));
+        // Compiten: la sustituta (hereda d1 y suma d2), una nota independiente sobre d1 y otra sobre d2.
+        $r=$this->enParalelo([
+            ['sustituir_nc',['documento_id'=>$n1,'devolucion_ids'=>[$d2],'motivo'=>'Corregida']],
+            ['nota_credito',['factura_id'=>$f,'devolucion_ids'=>[$d1],'motivo'=>'Otra cadena sobre la devuelta de la rechazada']],
+            ['nota_credito',['factura_id'=>$f,'devolucion_ids'=>[$d2],'motivo'=>'Otra cadena sobre la pendiente']],
+        ]);
+        self::assertFalse($r[1]['ok'],'La devolución de una nota rechazada permanece reservada para su cadena');
+        self::assertSame(1,count(array_filter([$r[0],$r[2]],fn($x)=>$x['ok'])),'La devolución pendiente la acredita una sola nota: '.json_encode($r));
+        $conteo=[];foreach($this->vinculos() as $docs)foreach($docs as $dev)$conteo[$dev]=($conteo[$dev]??0)+1;
+        self::assertSame([$d1=>1,$d2=>1],$conteo,'Cada devolución consta vinculada a una sola nota');
+        $acreditado=(int)$this->r->uno("SELECT COALESCE(SUM(l.cantidad_milesimas),0) q FROM erp_fiscal_nc_lineas l JOIN erp_fiscal_documentos x ON x.id=l.documento_id WHERE x.estado NOT IN('rechazada','bloqueada')")['q'];
+        self::assertLessThanOrEqual(3000,$acreditado,'Nunca se acredita más de lo facturado');
+        self::assertSame(['rechazada'],array_values(array_unique(array_column($this->r->q('SELECT estado FROM erp_fiscal_documentos WHERE id=?',[$n1]),'estado'))),'La nota rechazada conserva su estado y su evidencia');
+    }
     public function testElEsquemaGarantizaUnaSolaSustitutaYConservaLaFacturaRaizUnica():void
     {
         $f=$this->facturaPreparada();$this->rechazar($f);$this->verificar($f,$this->noAutorizado($this->doc($f)['clave_acceso']));$s=$this->fiscal()->sustituirFactura($this->actor,$this->datosFactura($f))['recurso_id'];

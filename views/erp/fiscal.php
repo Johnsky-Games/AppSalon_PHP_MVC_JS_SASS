@@ -1,5 +1,5 @@
 <?php $titulo='Facturación propia · SRI';include __DIR__.'/_inicio.php'; ?>
-<p role="status">Ambiente de pruebas: estos comprobantes no tienen validez tributaria. La factura exige comprador identificado, servicios atendidos y productos entregados, sin devoluciones previas ni saldo prepagado aplicado; las devoluciones posteriores se acreditan con notas de crédito.</p>
+<p role="status">Ambiente de pruebas: estos comprobantes no tienen validez tributaria. La factura exige servicios atendidos y productos entregados, sin devoluciones previas; el comprador se identifica salvo consumidor final dentro del máximo registrado. Los anticipos, saldos, paquetes y ciclos no generan comprobante al cobrarse: se facturan al prestar el servicio. Las devoluciones posteriores se acreditan con notas de crédito (no sobre consumidor final). <a href="/gestion/facturacion/parametros">Parámetros fiscales</a>.</p>
 <?php if(isset($documento)): $snapshot=json_decode($documento['snapshot_json'],true);$respuesta=json_decode($documento['respuesta_json']??'null',true);$esNota=$documento['tipo']==='04';$fiscalDoc=$snapshot[$esNota?'nota_credito':'factura']; ?>
 <section class="ui-card">
     <h2><?= $esNota?'Nota de crédito':'Factura' ?> de prueba <?= s($documento['numero']) ?></h2>
@@ -10,6 +10,7 @@
     <p>Clave de acceso:</p><input aria-label="Clave de acceso SRI" readonly value="<?= s($documento['clave_acceso']) ?>" style="width:100%;min-width:0">
     <p>Intentos de proceso: <?= (int)$documento['intentos'] ?> · Última actualización <?= s($documento['actualizado_en']) ?></p>
     <?php if($documento['estado']==='recibida'): ?><p>El SRI recibió el XML. Aún falta su autorización; el supervisor consultará la misma clave.</p><?php endif; ?>
+    <?php if($documento['estado']==='bloqueada'): ?><p>Este sustituto no se transmitió: justo antes de enviarlo, el SRI mostraba AUTORIZADO el comprobante que sustituye. Se conserva como evidencia. Requiere conciliación con la administración; el original sigue siendo el comprobante válido en el SRI.</p><?php endif; ?>
     <?php if($documento['estado']==='rechazada'): ?><p>El SRI rechazó este comprobante. Se conserva con su número, clave y respuesta; la corrección se hace emitiendo un documento sustituto (abajo).</p><?php endif; ?>
     <?php if($respuesta): ?>
         <?php if(isset($respuesta['mensaje'])): ?><p><?= s($respuesta['mensaje']) ?></p><?php endif; ?>
@@ -58,6 +59,8 @@
 <?php endif; ?>
 <?php elseif(isset($ventaId)): ?>
 <section class="ui-card"><h2>Preparar factura de prueba · Venta #<?= (int)$ventaId ?></h2><p><?= s($venta['comprador_nombre']) ?> · Total <?= s($dinero($venta['total_centavos'])) ?></p><p>Los conceptos y precios se conservan desde la venta. Esta preparación reserva un número fiscal de pruebas, pero no registra otro cobro ni significa que el SRI lo haya autorizado.</p>
+<?php if($anticipo??false): ?><p role="note">Esta venta se pagó, en todo o en parte, con saldo anticipado (prepago, paquete o ciclo). El dinero se recibió antes sin comprobante; este es el único comprobante de la prestación. El SRI no define una forma de pago específica para anticipos aplicados: elige la que indique tu contador.</p><?php endif; ?>
+<?php foreach($perfiles as $pf): ?><p><small>Emisor <?= s($pf['ruc'].' '.$pf['establecimiento'].'-'.$pf['punto_emision']) ?> · régimen <?= s($pf['regimen']==='*'?'no declarado':$pf['regimen']) ?> · consumidor final: <?= $pf['cf_max']===null?'no disponible (sin parámetro vigente)':'hasta '.s($dinero($pf['cf_max'])) ?></small></p><?php endforeach; ?>
 <?php if(!$perfiles): ?>
     <p>La administración debe registrar primero el emisor y certificado del piloto desde la consola privada. No se solicita la contraseña de la firma electrónica en esta pantalla.</p>
 <?php elseif($venta['estado']!=='confirmada'): ?>
@@ -66,9 +69,9 @@
     $opciones=[];foreach($perfiles as $perfil)$opciones[$perfil['id']]=$perfil['ruc'].' · '.$perfil['establecimiento'].'-'.$perfil['punto_emision'].' · versión '.$perfil['creado_en'];
     $campos=[
         'perfil_id'=>['etiqueta'=>'Emisor y punto de emisión de pruebas','tipo'=>'select','opciones'=>$opciones],
-        'comprador[tipo]'=>['etiqueta'=>'Identificación fiscal','tipo'=>'select','opciones'=>['04'=>'RUC','05'=>'Cédula','06'=>'Pasaporte','08'=>'Identificación del exterior']],
-        'comprador[identificacion]'=>['etiqueta'=>'Número de identificación fiscal','longitud'=>20],
-        'comprador[nombre]'=>['etiqueta'=>'Nombre o razón social fiscal','valor'=>$venta['comprador_nombre'],'longitud'=>300],
+        'comprador[tipo]'=>['etiqueta'=>'Identificación fiscal','tipo'=>'select','opciones'=>['04'=>'RUC','05'=>'Cédula','06'=>'Pasaporte','08'=>'Identificación del exterior','07'=>'Consumidor final (sin identificar; solo dentro del máximo vigente)']],
+        'comprador[identificacion]'=>['etiqueta'=>'Número de identificación fiscal (no se usa para consumidor final)','longitud'=>20,'requerido'=>false],
+        'comprador[nombre]'=>['etiqueta'=>'Nombre o razón social fiscal (no se usa para consumidor final)','valor'=>$venta['comprador_nombre'],'longitud'=>300,'requerido'=>false],
         'comprador[direccion]'=>['etiqueta'=>'Dirección del comprador','longitud'=>300,'requerido'=>false],
         'forma_pago'=>['etiqueta'=>'Forma pactada para este comprobante de pruebas','tipo'=>'select','opciones'=>['01'=>'Sin utilización del sistema financiero','20'=>'Otros con utilización del sistema financiero']]
     ];
@@ -83,7 +86,7 @@ endif; ?>
     <?php $periodoContexto='fiscal';include __DIR__.'/../templates/_periodo_filtro.php'; ?>
     <div class="campo"><label for="fiscal-desde">Desde</label><input id="fiscal-desde" type="date" name="desde" value="<?= s($desde) ?>" required></div>
     <div class="campo"><label for="fiscal-hasta">Hasta</label><input id="fiscal-hasta" type="date" name="hasta" value="<?= s($hasta) ?>" required></div>
-    <div class="campo"><label for="fiscal-estado">Estado SRI</label><select id="fiscal-estado" name="estado"><?php foreach([''=>'Todos','pendiente'=>'Pendiente','recibida'=>'Recibida, por autorizar','autorizada'=>'Autorizada en pruebas','rechazada'=>'Rechazada'] as $v=>$t): ?><option value="<?= s($v) ?>"<?= $v===$estado?' selected':'' ?>><?= s($t) ?></option><?php endforeach; ?></select></div>
+    <div class="campo"><label for="fiscal-estado">Estado SRI</label><select id="fiscal-estado" name="estado"><?php foreach([''=>'Todos','pendiente'=>'Pendiente','recibida'=>'Recibida, por autorizar','autorizada'=>'Autorizada en pruebas','rechazada'=>'Rechazada','bloqueada'=>'Bloqueada por conflicto'] as $v=>$t): ?><option value="<?= s($v) ?>"<?= $v===$estado?' selected':'' ?>><?= s($t) ?></option><?php endforeach; ?></select></div>
     <button class="boton">Consultar</button>
 </form>
 <div class="ops-table-wrap"><table class="ops-table"><caption><?= (int)$total ?> comprobantes de prueba</caption><thead><tr><th>Tipo</th><th>Número</th><th>Comprador de la venta</th><th>Preparado</th><th>Estado SRI</th></tr></thead><tbody>
