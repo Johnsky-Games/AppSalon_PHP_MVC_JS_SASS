@@ -92,6 +92,24 @@ final class ErpFiscalIntegrationTest extends TestCase
         $cliente=R5CajaFixture::usuario($this->db);$cita=R5CajaFixture::cita($this->db,$cliente,null,['20.00'],'completada');$venta=(new ErpVentaService($this->r))->crear($this->actor,$this->d(['cita_id'=>$cita]))['recurso_id'];(new ErpVentaService($this->r))->confirmar($this->actor,$this->d(['venta_id'=>$venta,'version'=>$this->r->uno('SELECT version FROM erp_ventas WHERE id=?',[$venta])['version']]));
         $linea=$this->r->uno('SELECT id FROM erp_venta_lineas WHERE venta_id=?',[$venta])['id'];$d=$this->datos();$d['venta_id']=$venta;$d['perfil_id']=$perfil;$d['categorias_iva']=[(string)$linea=>'0'];$id=$this->svc()->factura($this->actor,$d)['recurso_id'];self::assertSame('001-002-000000002',$this->r->uno('SELECT numero FROM erp_fiscal_documentos WHERE id=?',[$id])['numero']);self::assertSame(1,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_fiscal_secuencias')['n']);
     }
+    public function testLaBaseImpideRepetirNumeroAunqueUnContadorSeaInconsistente():void
+    {
+        $original=$this->documento();$this->r->q('UPDATE erp_fiscal_secuencias SET ultimo=0');
+        $cliente=R5CajaFixture::usuario($this->db);$cita=R5CajaFixture::cita($this->db,$cliente,null,['20.00'],'completada');$venta=(new ErpVentaService($this->r))->crear($this->actor,$this->d(['cita_id'=>$cita]))['recurso_id'];(new ErpVentaService($this->r))->confirmar($this->actor,$this->d(['venta_id'=>$venta,'version'=>$this->r->uno('SELECT version FROM erp_ventas WHERE id=?',[$venta])['version']]));
+        $linea=$this->r->uno('SELECT id FROM erp_venta_lineas WHERE venta_id=?',[$venta])['id'];$d=$this->datos();$d['venta_id']=$venta;$d['categorias_iva']=[(string)$linea=>'0'];
+        try{$this->svc()->factura($this->actor,$d);self::fail('No se debe repetir la numeración fiscal.');}catch(\Repositories\PersistenceException|\mysqli_sql_exception $e){self::assertSame(1062,$e->getCode());}
+        self::assertSame(1,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_fiscal_documentos')['n']);self::assertSame($original['xml_firmado'],$this->r->uno('SELECT xml_firmado FROM erp_fiscal_documentos')['xml_firmado']);self::assertSame(0,(int)$this->r->uno('SELECT ultimo FROM erp_fiscal_secuencias')['ultimo']);
+    }
+    /** @dataProvider identidadesAusentes */
+    public function testSqlNoAceptaUnComprobanteSinIdentidadFiscalDelEmisor(string $campo):void
+    {
+        $original=$this->documento();$venta=(new ErpVentaService($this->r))->crear($this->actor,$this->d())['recurso_id'];
+        try{
+            $this->r->q("INSERT INTO erp_fiscal_documentos(perfil_id,venta_id,clave_operacion,huella,clave_acceso,numero,snapshot_json,xml_firmado,xml_sha256,creado_por,creado_en,actualizado_en) SELECT perfil_id,?,SHA2('comprobante-sin-emisor',256),huella,REPEAT('0',49),'001-002-999999999',JSON_REMOVE(snapshot_json,?),xml_firmado,xml_sha256,creado_por,creado_en,actualizado_en FROM erp_fiscal_documentos WHERE id=?",[$venta,'$.emisor.'.$campo,(int)$original['id']]);self::fail('Falta identidad fiscal.');
+        }catch(\Repositories\PersistenceException|\mysqli_sql_exception $e){self::assertSame(3819,$e->getCode());}
+        self::assertSame(1,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_fiscal_documentos')['n']);
+    }
+    public static function identidadesAusentes():array {return [['ruc'],['ambiente']];}
     public function testDosProcesosNoCreanOtraFacturaDeLaMismaVenta():void
     {
         $datos=$this->datos();$operaciones=[$datos,$datos];$operaciones[1]['idem_key']=R5CajaFixture::clave();$workers=[];$resultados=[];
@@ -109,6 +127,9 @@ final class ErpFiscalIntegrationTest extends TestCase
         try{
             $cli(['scripts/backup_db.php','--db='.$origen,'--output='.$archivo,'--gzip']);$this->r->q('CREATE DATABASE `'.$destino.'` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');$cli(['scripts/restore_db.php','--db='.$destino,'--input='.$archivo,'--hash='.hash_file('sha256',$archivo)]);
             $restaurada=new \mysqli(getenv('DB_HOST'),getenv('DB_USER'),getenv('DB_PASS'),$destino,(int)getenv('DB_PORT'));$r=new ErpRepository($restaurada);self::assertSame($d['xml_sha256'],$r->uno('SELECT xml_sha256 FROM erp_fiscal_documentos')['xml_sha256']);self::assertSame($d['xml_firmado'],$r->uno('SELECT xml_firmado FROM erp_fiscal_documentos')['xml_firmado']);self::assertSame(1,(int)$r->uno('SELECT ultimo FROM erp_fiscal_secuencias')['ultimo']);self::assertSame($this->r->uno('SELECT certificado_cifrado FROM erp_fiscal_perfiles')['certificado_cifrado'],$r->uno('SELECT certificado_cifrado FROM erp_fiscal_perfiles')['certificado_cifrado']);self::assertFalse($restaurada->query('DELETE FROM erp_fiscal_documentos'));self::assertSame(1644,$restaurada->errno);
+            self::assertSame(3,(int)$r->uno("SELECT COUNT(*) n FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='erp_fiscal_documentos' AND index_name='uq_fiscal_numero_emisor'")['n']);
+            $otra=(new ErpVentaService($r))->crear($this->actor,$this->d())['recurso_id'];
+            try{$r->q("INSERT INTO erp_fiscal_documentos(perfil_id,venta_id,clave_operacion,huella,clave_acceso,numero,snapshot_json,xml_firmado,xml_sha256,creado_por,creado_en,actualizado_en) SELECT perfil_id,?,SHA2('numero-restaurado',256),huella,REPEAT('0',49),numero,snapshot_json,xml_firmado,xml_sha256,creado_por,creado_en,actualizado_en FROM erp_fiscal_documentos WHERE id=?",[$otra,(int)$d['id']]);self::fail('La restauración debe impedir repetir el número fiscal.');}catch(\Repositories\PersistenceException|\mysqli_sql_exception $e){self::assertSame(1062,$e->getCode());}
         }finally{if($restaurada)$restaurada->close();$this->r->q('DROP DATABASE IF EXISTS `'.$destino.'`');foreach([$archivo,$archivo.'.manifest.json'] as $f)if(is_file($f))unlink($f);}
     }
 }
