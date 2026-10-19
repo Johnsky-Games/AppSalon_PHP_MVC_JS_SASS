@@ -2,13 +2,13 @@
 <p role="status">AppSalon no trae cifras legales cargadas. Cada parámetro lo registra una persona con permiso de configuración, después de verificarlo en la fuente oficial del SRI, y queda con su norma, enlace y fecha de consulta. Sin un parámetro vigente no se emite el comprobante que depende de él. Las versiones se conservan; una corrección es una versión nueva desde hoy o una fecha futura.</p>
 <section class="ui-card"><h2>Vigentes hoy (<?= s($hoy) ?>)</h2>
 <div class="ops-table-wrap"><table class="ops-table"><thead><tr><th>Parámetro</th><th>Régimen</th><th>Valor</th><th>Desde</th><th>Fuente</th><th>Consultado</th></tr></thead><tbody>
-<?php $hay=false;foreach($catalogo as $clave=>$def): foreach($regimenes as $reg): $p=$vigentes[$clave.'|'.$reg]??null; if(!$p)continue; $hay=true; ?>
-<tr><td><?= s($clave) ?><br><small><?= s($def['descripcion']) ?></small></td><td><?= s($reg==='*'?'Todos':$reg) ?></td><td><?= $p['estado']==='derogado'?'<em>Derogado: sin regla</em>':s($def['tipo']==='importe'?number_format((int)$p['valor_entero']/100,2,'.',''):($p['valor_entero']!==null?$p['valor_entero']:$p['valor_texto'])) ?></td><td><?= s($p['vigente_desde']) ?></td><td><?= s($p['fuente']) ?><?php if($p['fuente_url']): ?><br><a href="<?= s($p['fuente_url']) ?>" rel="noopener noreferrer" target="_blank">Enlace</a><?php endif; ?></td><td><?= s($p['consultado_en']) ?></td></tr>
+<?php $hay=false;foreach($catalogo as $cp=>$def): foreach($regimenes as $reg): $p=$vigentes[$cp.'|'.$reg]??null; if(!$p)continue; $hay=true; ?>
+<tr><td><?= s($cp) ?><br><small><?= s($def['descripcion']) ?></small></td><td><?= s($reg==='*'?'Todos':$reg) ?></td><td><?= $p['estado']==='derogado'?'<em>Derogado: sin regla</em>':s($def['tipo']==='importe'?number_format((int)$p['valor_entero']/100,2,'.',''):($p['valor_entero']!==null?$p['valor_entero']:$p['valor_texto'])) ?></td><td><?= s($p['vigente_desde']) ?></td><td><?= s($p['fuente']) ?><?php if($p['fuente_url']): ?><br><a href="<?= s($p['fuente_url']) ?>" rel="noopener noreferrer" target="_blank">Enlace</a><?php endif; ?></td><td><?= s($p['consultado_en']) ?></td></tr>
 <?php endforeach; endforeach; if(!$hay): ?><tr><td colspan="6">No hay parámetros registrados. La factura necesita al menos las tarifas de IVA que use; el consumidor final, la leyenda de régimen y el cobro anticipado requieren los suyos.</td></tr><?php endif; ?>
 </tbody></table></div></section>
 <?php if($configura): ?>
 <section class="ui-card"><h2>Registrar una versión</h2>
-<?php $opc=[];foreach($catalogo as $clave=>$def)$opc[$clave]=$clave.' — '.$def['descripcion'];
+<?php $opc=[];foreach($catalogo as $cp=>$def)$opc[$cp]=$cp.' — '.$def['descripcion'];
 $formulario=['accion'=>'fiscal_parametro','campos'=>[
  'clave'=>['etiqueta'=>'Parámetro','tipo'=>'select','opciones'=>$opc],
  'regimen'=>['etiqueta'=>'Régimen (* = todos)','tipo'=>'select','opciones'=>array_combine($regimenes,array_map(fn($r)=>$r==='*'?'* · Todos':$r,$regimenes)),'valor'=>'*'],

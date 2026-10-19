@@ -208,4 +208,28 @@ final class ErpFiscalReglasIntegrationTest extends TestCase
         $this->r->q('UPDATE erp_fiscal_verificaciones SET verificado_en=? WHERE documento_id=?',[$hace(10),$f]);
         self::assertGreaterThan(0,$this->fiscal()->sustituirFactura($this->actor,$this->datos(['documento_id'=>$f]))['recurso_id']);
     }
+
+    // ---- Interfaz ----
+    private function pagina(array $get):string
+    {
+        $anterior=['s'=>$_SESSION??[],'g'=>$_GET,'srv'=>$_SERVER];
+        if(session_status()===PHP_SESSION_NONE)session_start();$ctx=(new \Services\AuthorizationService($this->db))->contexto($this->actor);
+        $_SESSION=['login'=>true,'id'=>$this->actor,'portal'=>'equipo','version_sesion'=>(int)$ctx['version_sesion'],'csrf_token'=>'csrf-reglas'];$_GET=$get;$_SERVER['REQUEST_METHOD']='GET';$_SERVER['HTTP_ACCEPT']='text/html';$_SERVER['REQUEST_URI']='/gestion/facturacion';
+        ob_start();try{\Controllers\ErpController::fiscal(new \MVC\Router());return (string)ob_get_contents();}finally{ob_end_clean();$_SESSION=$anterior['s'];$_GET=$anterior['g'];$_SERVER=$anterior['srv'];}
+    }
+    public function testLaPreparacionOfreceConsumidorFinalConSuMaximoYAvisaDelAnticipo():void
+    {
+        $html=$this->pagina(['venta_id'=>(string)$this->venta]);
+        self::assertStringContainsString('Consumidor final',$html);self::assertStringContainsString('hasta $50.00',$html);
+        self::assertStringNotContainsString('saldo anticipado',$html,'Sin prepago aplicado no se muestra el aviso de anticipo');
+        $this->registrar(['clave'=>'consumidor_final.total_maximo_centavos','estado'=>'derogado','vigente_desde'=>$this->hoy()]);
+        self::assertStringContainsString('no disponible (sin parámetro vigente)',$this->pagina(['venta_id'=>(string)$this->venta]));
+    }
+    public function testLaFichaDeUnSustitutoBloqueadoExplicaElConflicto():void
+    {
+        [$f,$n]=$this->sustitutoPendiente();$o=$this->doc($f);$s=$this->doc($n);$this->debido();
+        $this->fiscal()->procesar($this->transporte([$this->sinAutorizacion($s['clave_acceso']),$this->autorizado($o['clave_acceso'],$o['xml_firmado'])]));
+        $html=$this->pagina(['id'=>(string)$n]);self::assertStringContainsString('no se transmitió',$html);self::assertStringContainsString('bloqueada',$html);
+        self::assertStringContainsString('value="bloqueada"',$this->pagina(['desde'=>date('Y-m-01'),'hasta'=>date('Y-m-d')]));
+    }
 }
