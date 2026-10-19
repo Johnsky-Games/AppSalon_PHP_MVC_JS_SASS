@@ -1750,6 +1750,20 @@ async function runBrowserTests() {
         console.log('TODAS LAS PRUEBAS EN NAVEGADOR WEB FUERON SUPERADAS SATISFACTORIAMENTE');
         console.log('======================================================================\n');
 
+    } catch (error) {
+        console.error('E2E failure stack:', error.stack);
+        console.error('E2E UI state:', await page.evaluate(() => ({
+            url: location.href,
+            pasos: [...document.querySelectorAll('[id^="paso-"]')].map(el => ({ id: el.id, clases: el.className })),
+            hora: document.querySelector('#hora')?.value,
+            disponibilidad: document.querySelector('#estado-disponibilidad')?.dataset.estado,
+            alertas: [...document.querySelectorAll('.alerta')].map(el => el.textContent),
+            siguiente: document.querySelector('#siguiente')?.outerHTML,
+            overlay: document.elementFromPoint(innerWidth / 2, innerHeight / 2)?.outerHTML.slice(0, 500)
+        })).catch(() => ({})));
+        console.error('E2E console errors:', consoleErrors);
+        await page.screenshot({path: path.join(screenshotDir, 'failure.png'), fullPage: false}).catch(() => {});
+        throw error;
     } finally {
         await browser.close();
     }
