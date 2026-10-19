@@ -68,14 +68,14 @@ final class ErpFiscalCorreoService extends ErpService
         }
         if(strlen($archivos['xml'])+strlen($archivos['pdf'])>self::MAX_BYTES||!hash_equals($vigente,$archivos['xml'])||!str_starts_with($archivos['pdf'],'%PDF-'))throw new ErpException('Los adjuntos no corresponden a la evidencia fiscal.',409);
         $e=$ride['emisor'];$numero=$e['estab'].'-'.$e['ptoEmi'].'-'.$e['secuencial'];
-        $prueba=$e['ambiente']==='1';$titulo=($prueba?'PRUEBAS · ':'').'Factura '.$numero;
+        $prueba=$e['ambiente']==='1';$nota=($ride['tipo']??'01')==='04';$documento=$nota?'Nota de crédito':'Factura';$titulo=($prueba?'PRUEBAS · ':'').$documento.' '.$numero;
         $texto=($prueba?"AMBIENTE DE PRUEBAS · SIN VALIDEZ TRIBUTARIA\n\n":'').$e['razonSocial']."\nRUC: ".$e['ruc']."\n".$titulo."\nComprador: ".$ride['factura']['razonSocialComprador']."\nTotal USD: ".$ride['factura']['importeTotal']."\n\nSe adjuntan el XML autorizado y su representación impresa en PDF. Las formas de pago del comprobante no acreditan un nuevo cobro.\nEste correo es transaccional y no modifica tus preferencias de promociones.";
         $html='<div style="font-family:Arial,sans-serif;max-width:640px;margin:auto;padding:24px"><h1 style="font-size:22px">'.htmlspecialchars($titulo,ENT_QUOTES|ENT_SUBSTITUTE,'UTF-8').'</h1><p style="white-space:pre-line;line-height:1.6">'.nl2br(htmlspecialchars($texto,ENT_QUOTES|ENT_SUBSTITUTE,'UTF-8')).'</p></div>';
         $mail=Email::prepararMailerNotificacionCita($email,$nombre,$titulo,$html,$texto);
         $dominio=substr(strrchr(Email::resolverRemitente()['email'],'@'),1);
         $mail->MessageID='<fiscal.'.hash('sha256',self::prefijo($id).$email).'@'.$dominio.'>';
-        $mail->addStringAttachment($archivos['xml'],'factura-'.$numero.'-autorizada.xml','base64','application/xml');
-        $mail->addStringAttachment($archivos['pdf'],'factura-'.$numero.'-ride.pdf','base64','application/pdf');
+        $mail->addStringAttachment($archivos['xml'],($nota?'nota-credito-':'factura-').$numero.'-autorizada.xml','base64','application/xml');
+        $mail->addStringAttachment($archivos['pdf'],($nota?'nota-credito-':'factura-').$numero.'-ride.pdf','base64','application/pdf');
         return $mail;
     }
 
