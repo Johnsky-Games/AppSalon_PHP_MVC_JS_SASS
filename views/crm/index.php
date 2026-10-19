@@ -118,7 +118,7 @@ $hastaEf = $res['hasta_efectivo'] ?? ($f['hasta'] ?? '');
         <article class="crm-kpi">
             <h3 class="crm-kpi__titulo">Suscripción a comunicaciones comerciales</h3>
             <p class="crm-kpi__valor"><?= $entero($res['comunicaciones']['otorgado']) ?></p>
-            <p class="crm-kpi__nota">Otorgado: <?= $entero($res['comunicaciones']['otorgado']) ?> · Revocado (retiraron su consentimiento): <?= $entero($res['comunicaciones']['revocado']) ?> · Sin decisión (nunca decidieron): <?= $entero($res['comunicaciones']['sin_decision']) ?>. Es el consentimiento a recibir promociones por correo; este sistema no tiene suscripciones de pago.</p>
+            <p class="crm-kpi__nota">Otorgado: <?= $entero($res['comunicaciones']['otorgado']) ?> · Revocado (retiraron su consentimiento): <?= $entero($res['comunicaciones']['revocado']) ?> · Sin decisión (nunca decidieron): <?= $entero($res['comunicaciones']['sin_decision']) ?>. Este indicador corresponde al consentimiento para recibir promociones por correo; los contratos comerciales de sesiones se gestionan por separado en Suscripciones.</p>
             <p class="crm-kpi__enlaces"><?= $verListado('consentimiento_si', (int)$res['comunicaciones']['otorgado'], 'las otorgadas') ?> <?= $verListado('comunicaciones_revocado', (int)$res['comunicaciones']['revocado'], 'las revocadas') ?> <?= $verListado('comunicaciones_sin_decision', (int)$res['comunicaciones']['sin_decision'], 'las sin decisión') ?></p>
         </article>
         <article class="crm-kpi">
