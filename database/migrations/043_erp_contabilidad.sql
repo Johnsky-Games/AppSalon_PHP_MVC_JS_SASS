@@ -103,9 +103,7 @@ CREATE TRIGGER trg_cont_linea_ctrl BEFORE INSERT ON erp_cont_lineas FOR EACH ROW
  IF (SELECT COUNT(*) FROM erp_cont_lineas WHERE asiento_id=NEW.asiento_id)>=COALESCE((SELECT n_lineas FROM erp_cont_asientos WHERE id=NEW.asiento_id),0) OR COALESCE((SELECT imputable*activa FROM erp_cont_cuentas WHERE id=NEW.cuenta_id),0)<>1 THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Línea contable fuera del asiento o en una cuenta no imputable o inactiva'; END IF;
 DROP TRIGGER IF EXISTS trg_cont_linea_balance;
 CREATE TRIGGER trg_cont_linea_balance AFTER INSERT ON erp_cont_lineas FOR EACH ROW
- IF (SELECT COUNT(*) FROM erp_cont_lineas WHERE asiento_id=NEW.asiento_id)=(SELECT n_lineas FROM erp_cont_asientos WHERE id=NEW.asiento_id) THEN
-  IF (SELECT SUM(debe_centavos) FROM erp_cont_lineas WHERE asiento_id=NEW.asiento_id)<>(SELECT total_centavos FROM erp_cont_asientos WHERE id=NEW.asiento_id) OR (SELECT SUM(haber_centavos) FROM erp_cont_lineas WHERE asiento_id=NEW.asiento_id)<>(SELECT total_centavos FROM erp_cont_asientos WHERE id=NEW.asiento_id) THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='El asiento no está balanceado: debe y haber deben sumar su total'; END IF;
- END IF;
+ IF (SELECT COUNT(*) FROM erp_cont_lineas WHERE asiento_id=NEW.asiento_id)=(SELECT n_lineas FROM erp_cont_asientos WHERE id=NEW.asiento_id) AND ((SELECT SUM(debe_centavos) FROM erp_cont_lineas WHERE asiento_id=NEW.asiento_id)<>(SELECT total_centavos FROM erp_cont_asientos WHERE id=NEW.asiento_id) OR (SELECT SUM(haber_centavos) FROM erp_cont_lineas WHERE asiento_id=NEW.asiento_id)<>(SELECT total_centavos FROM erp_cont_asientos WHERE id=NEW.asiento_id)) THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='El asiento no está balanceado: debe y haber deben sumar su total'; END IF;
 DROP TRIGGER IF EXISTS trg_cont_linea_no_update;
 CREATE TRIGGER trg_cont_linea_no_update BEFORE UPDATE ON erp_cont_lineas FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Las líneas contables no se editan: corrige con un reverso';
 DROP TRIGGER IF EXISTS trg_cont_linea_no_delete;
