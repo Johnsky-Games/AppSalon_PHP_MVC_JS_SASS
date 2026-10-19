@@ -436,7 +436,10 @@ final class R5DevAgendaTest extends R5DevAgendaCase
                 $ruta = parse_url(html_entity_decode($destino), PHP_URL_PATH) ?: '';
                 $this->assertFalse($ruta === '/caja' || str_starts_with($ruta, '/caja/'), "$rol no accede a la caja histórica");
             }
-            foreach (['$20.00', 'Total de la visita', 'Estado de pago', 'Pagado', 'Cobrar', 'comprobante'] as $prohibido) {
+            // «Prepagados» en la navegación no es el estado financiero «Pagado» de esta visita.
+            $this->assertDoesNotMatchRegularExpression('~\bPagado\b~iu', $r['body'], "$rol no ve el estado Pagado");
+            $this->assertStringNotContainsString('id="det-pago"', $r['body'], "$rol no ve la sección financiera");
+            foreach (['$20.00', 'Total de la visita', 'Estado de pago', 'Cobrar', 'comprobante'] as $prohibido) {
                 $this->assertStringNotContainsStringIgnoringCase($prohibido, $r['body'], "$rol no ve «{$prohibido}»");
             }
         }
