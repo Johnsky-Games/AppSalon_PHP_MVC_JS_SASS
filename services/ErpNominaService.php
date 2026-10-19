@@ -133,13 +133,15 @@ final class ErpNominaService extends ErpService
             if($activa)throw new ErpException('El mes ya tiene una corrida '.$activa['estado'].'. Anúlala para recalcular.',409);
             $p=[];$faltan=[];foreach(self::PARAMETROS as $clave=>[$tipo,$desc]){$x=$this->resolver($clave,$ultimo);if(!$x)$faltan[]=$clave;else $p[$clave]=$x;}
             if($faltan)throw new ErpException('Faltan parámetros de nómina vigentes: '.implode(', ',$faltan).'. Regístralos en Nómina › Parámetros después de verificarlos en la fuente oficial.',409);
-            $contratos=$this->r->q("SELECT c.*,col.fecha_ingreso FROM erp_contratos c JOIN colaboradores col ON col.id=c.colaborador_id WHERE c.tipo='empleado' AND c.inicio<=? AND COALESCE(c.fin,'9999-12-31')>=? ORDER BY c.colaborador_id FOR SHARE",[$ultimo,$primero]);
+            $contratos=$this->r->q("SELECT c.*,col.fecha_ingreso FROM erp_contratos c JOIN colaboradores col ON col.id=c.colaborador_id WHERE c.tipo='empleado' AND c.inicio<=? AND COALESCE(c.fin,'9999-12-31')>=? ORDER BY c.colaborador_id,c.inicio FOR SHARE",[$ultimo,$primero]);
             if(!$contratos)throw new ErpException('No hay empleados con relación contractual vigente en el mes.',409);
             $lineas=[];$sinCondicion=[];
-            foreach($contratos as $c){
-                $cond=$this->r->uno('SELECT * FROM erp_nomina_condiciones WHERE colaborador_id=? AND vigente_desde<=? ORDER BY vigente_desde DESC LIMIT 1 FOR SHARE',[(int)$c['colaborador_id'],$ultimo]);
-                if(!$cond){$sinCondicion[]=(int)$c['colaborador_id'];continue;}
-                $lineas[]=$this->lineaDe($c,$cond,$p,$anio,$mes,$primero,$ultimo);
+            // Una sola línea por colaborador aunque cambie de contrato dentro del mes: los tramos se prorratean y se suman.
+            $porColaborador=[];foreach($contratos as $c)$porColaborador[(int)$c['colaborador_id']][]=$c;
+            foreach($porColaborador as $colId=>$tramos){
+                $cond=$this->r->uno('SELECT * FROM erp_nomina_condiciones WHERE colaborador_id=? AND vigente_desde<=? ORDER BY vigente_desde DESC LIMIT 1 FOR SHARE',[$colId,$ultimo]);
+                if(!$cond){$sinCondicion[]=$colId;continue;}
+                $lineas[]=$this->lineaDe($tramos,$cond,$p,$anio,$mes,$primero,$ultimo);
             }
             if($sinCondicion)throw new ErpException('Registra las condiciones de nómina (región, décimos, fondos de reserva, IESS) de los colaboradores: '.implode(', ',$sinCondicion).'.',409);
             $huella=hash('sha256',json_encode(array_map(fn($l)=>$l['fila'],$lineas),JSON_THROW_ON_ERROR));
@@ -152,12 +154,24 @@ final class ErpNominaService extends ErpService
             $this->evento($actor,'nomina_calculada','nomina',$corrida,['anio'=>$anio,'mes'=>$mes,'lineas'=>count($lineas),'huella'=>$huella,'formula'=>self::FORMULA]);return $corrida;
         });
     }
-    private function lineaDe(array $c,array $cond,array $p,int $anio,int $mes,string $primero,string $ultimo):array
+    /** $tramos: contratos de empleado del colaborador que tocan el mes (ordenados por inicio). Con varios tramos rige el mes comercial de 30 días; las horas se valoran con la base del último. */
+    private function lineaDe(array $tramos,array $cond,array $p,int $anio,int $mes,string $primero,string $ultimo):array
     {
-        $col=(int)$c['colaborador_id'];$base=(int)$c['base_centavos'];
-        $ini=max($c['inicio'],$primero);$fin=min($c['fin']??$ultimo,$ultimo);
-        $dias=($ini===$primero&&$fin===$ultimo)?30:min(30,(int)(new \DateTimeImmutable($ini))->diff(new \DateTimeImmutable($fin))->days+1);
-        $sueldo=intdiv($base*$dias+15,30);
+        $c=end($tramos);$col=(int)$c['colaborador_id'];$base=(int)$c['base_centavos'];
+        if(count($tramos)===1){
+            $ini=max($c['inicio'],$primero);$fin=min($c['fin']??$ultimo,$ultimo);
+            $dias=($ini===$primero&&$fin===$ultimo)?30:min(30,(int)(new \DateTimeImmutable($ini))->diff(new \DateTimeImmutable($fin))->days+1);
+            $sueldo=intdiv($base*$dias+15,30);
+        }else{
+            $dias=0;$sueldo=0;$previoFin=null;
+            foreach($tramos as $t){
+                $ini=max($t['inicio'],$primero);$fin=min($t['fin']??$ultimo,$ultimo);
+                if($previoFin!==null&&$ini<=$previoFin)throw new ErpException('El colaborador '.$col.' tiene contratos de empleado que se solapan en el mes: corrige las fechas.',409);
+                $previoFin=$fin;$d1=min(30,(int)substr($ini,8,2));$d2=$fin===$ultimo?30:min(30,(int)substr($fin,8,2));$dd=max(0,$d2-$d1+1);
+                $dias+=$dd;$sueldo+=intdiv((int)$t['base_centavos']*$dd+15,30);
+            }
+            $dias=min(30,$dias);
+        }
         $horasMes=(int)$p['jornada.horas_mes']['valor_entero'];$horas=0;$bonos=0;$bonosGravados=0;$desc=0;$ir=0;$usadas=[];
         foreach($this->r->q("SELECT * FROM erp_nomina_novedades WHERE colaborador_id=? AND anio=? AND mes=? AND estado='aprobada' ORDER BY id FOR SHARE",[$col,$anio,$mes]) as $n){
             $usadas[]=(int)$n['id'];

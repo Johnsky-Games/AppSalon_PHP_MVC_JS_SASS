@@ -13,7 +13,7 @@ Desde el entorno de desarrollo no se pudo abrir `sri.gob.ec`, `iess.gob.ec` ni l
 
 ## Qué calcula
 Por colaborador con relación `empleado` vigente en el mes, con **`nomina-v1`** (la fórmula queda en la instantánea de cada línea):
-* **Sueldo:** base del contrato × días / 30 (mes completo = 30 días; mes parcial = días calendario del contrato dentro del mes).
+* **Sueldo:** base del contrato × días / 30 (mes completo = 30 días; mes parcial = días calendario del contrato dentro del mes). Si el colaborador cambia de contrato dentro del mes, hay **una sola línea**: cada tramo se prorratea con el mes comercial de 30 días (el día 31 no suma), los días se acumulan con tope de 30, las horas extra se valoran con la base del último contrato y los contratos solapados se rechazan (409).
 * **Horas:** valor de la hora = base / horas del mes (parámetro); suplementarias y extraordinarias = hora × (1 + recargo); nocturnas = solo el recargo. Entran como novedades aprobadas.
 * **Bonos, descuentos y retención de renta:** novedades aprobadas.
 * **Comisiones:** las liquidadas **por nómina** y aún no incluidas en otra corrida. Las liquidadas por pago directo **nunca** entran (un trigger lo impide) y una comisión no puede estar en dos corridas activas (índice único sobre el vínculo activo).

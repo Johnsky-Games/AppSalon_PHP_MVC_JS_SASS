@@ -89,6 +89,19 @@ final class ErpNominaIntegrationTest extends TestCase
         // Las novedades no se consumen al calcular; una novedad sin aprobar no entra.
         self::assertSame(5,(int)$this->r->uno("SELECT COUNT(*) n FROM erp_nomina_novedades WHERE estado='aprobada'")['n']);
     }
+    public function testUnColaboradorQueCambiaDeContratoEnElMesTieneUnaSolaLineaProrrateada():void
+    {
+        $this->escenario();
+        $carla=$this->colaborador('Carla','Mora',R5CajaFixture::usuario($this->db,'profesional'),'2026-01-01');$rh=new ErpRhService($this->r);
+        $rh->contrato($this->owner,$this->d(['colaborador_id'=>$carla,'tipo'=>'empleado','inicio'=>'2026-01-01','fin'=>'2026-10-15','base'=>'300.00','observacion'=>'Primer contrato']));
+        $rh->contrato($this->owner,$this->d(['colaborador_id'=>$carla,'tipo'=>'empleado','inicio'=>'2026-10-16','base'=>'600.00','observacion'=>'Segundo contrato']));
+        $this->svc()->condicion($this->owner,$this->d(['colaborador_id'=>$carla,'vigente_desde'=>'2026-01-01','region'=>'sierra_amazonia','mensualiza_d13'=>'0','mensualiza_d14'=>'0','fondos_reserva'=>'no_aplica','aporta_iess'=>'1']));
+        $k=$this->calcular();
+        self::assertSame(1,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_nomina_lineas WHERE corrida_id=? AND colaborador_id=?',[$k,$carla])['n']);
+        $l=$this->linea($k,$carla);
+        self::assertSame(30,(int)$l['dias']);self::assertSame(15000+30000,(int)$l['sueldo_centavos'],'15 días a 300,00 más 15 días a 600,00');
+        self::assertSame(60000,(int)$l['base_centavos'],'La base registrada es la del último contrato');
+    }
     public function testUnaNovedadSinAprobarNoEntraYFinanzasPreparaPeroNoAprueba():void
     {
         $this->parametros();$this->condiciones();$n=$this->novedad(['tipo'=>'bono','monto'=>'100.00']);
