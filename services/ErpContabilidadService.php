@@ -276,4 +276,32 @@ final class ErpContabilidadService extends ErpService
             $p[]='El asiento '.$a['numero'].' está incompleto o desbalanceado (líneas '.$a['n'].'/'.$a['n_lineas'].').';
         return $p;
     }
+    /**
+     * Conciliación entre el libro y los auxiliares del negocio. Cada control declara de dónde sale cada cifra; una diferencia nunca se ajusta sola:
+     * se explica (hecho sin contabilizar, movimiento sin regla) y se corrige con un asiento o con la regla que falta.
+     */
+    public function conciliacion(string $hasta):array
+    {
+        $saldo=function(string $rol)use($hasta):int{
+            $cuenta=$this->r->uno('SELECT r.cuenta_id FROM erp_cont_roles r WHERE r.rol=?',[$rol]);if(!$cuenta)return 0;
+            $f=$this->r->uno('SELECT COALESCE(SUM(l.debe_centavos),0) d,COALESCE(SUM(l.haber_centavos),0) h FROM erp_cont_lineas l JOIN erp_cont_asientos a ON a.id=l.asiento_id WHERE l.cuenta_id=? AND a.fecha<=?',[(int)$cuenta['cuenta_id'],$hasta]);
+            return (self::ROLES[$rol]==='activo'?1:-1)*((int)$f['d']-(int)$f['h']);
+        };
+        $n=fn(string $sql,array $a=[])=>(int)($this->r->uno($sql,$a)['n']??0);
+        $controles=[];
+        $aux=$n("SELECT COALESCE(SUM(o.monto_centavos-o.ajuste_centavos-o.pagado_centavos+COALESCE((SELECT SUM(x.monto_centavos) FROM erp_proveedor_reembolsos x WHERE x.obligacion_id=o.id),0)),0) n FROM erp_obligaciones o WHERE o.origen='compra'");
+        $controles[]=['nombre'=>'Proveedores','libro'=>$saldo('proveedores'),'auxiliar'=>$aux,'fuente'=>'Facturas de proveedor menos créditos y pagos, más reintegros'];
+        $aux=$n("SELECT COALESCE(SUM(monto_centavos-ajuste_centavos-pagado_centavos),0) n FROM erp_obligaciones WHERE origen='comision'");
+        $controles[]=['nombre'=>'Comisiones por pagar','libro'=>$saldo('comisiones_por_pagar'),'auxiliar'=>$aux,'fuente'=>'Obligaciones de comisiones liquidadas por pago directo'];
+        $aux=$n('SELECT COALESCE(SUM(monto_centavos),0) n FROM erp_prepago_movimientos');
+        $controles[]=['nombre'=>'Anticipos de clientes','libro'=>$saldo('anticipos_clientes'),'auxiliar'=>$aux,'fuente'=>'Libro de saldos prepagados (cargas, aplicaciones, restituciones y reembolsos)'];
+        $aux=$n("SELECT COALESCE(SUM(CASE WHEN tipo='ingreso' THEN monto_centavos ELSE -monto_centavos END),0) n FROM caja_movimientos WHERE metodo='efectivo'");
+        $controles[]=['nombre'=>'Caja en efectivo','libro'=>$saldo('caja'),'auxiliar'=>$aux,'fuente'=>'Movimientos de caja en efectivo. Los ingresos y egresos manuales de caja todavía no tienen regla contable y aparecen como diferencia.'];
+        foreach($controles as &$c)$c['diferencia']=$c['libro']-$c['auxiliar'];unset($c);
+        $pendientes=$n("SELECT COUNT(*) n FROM erp_integraciones_outbox WHERE destino='contabilidad' AND estado<>'confirmado'");
+        $sinPrestar=0;$inicio=$this->config()['inicio_contable']??null;
+        if($inicio)$sinPrestar=$n("SELECT COUNT(*) n FROM erp_ventas v JOIN citas c ON c.id=v.cita_id WHERE v.estado='confirmada' AND c.estado='completada' AND COALESCE(DATE(c.atencion_fin_at),DATE(c.atencion_efectiva_at),c.fecha)>=? AND EXISTS(SELECT 1 FROM erp_venta_lineas l WHERE l.venta_id=v.id AND l.servicio_id IS NOT NULL) AND NOT EXISTS(SELECT 1 FROM erp_cont_asientos a WHERE a.origen=CONCAT('prestacion:v',v.id))",[$inicio]);
+        $bal=$this->balanceComprobacion($hasta);
+        return ['controles'=>$controles,'eventos_sin_contabilizar'=>$pendientes,'prestaciones_sin_contabilizar'=>$sinPrestar,'integridad'=>$this->integridad(),'balance_cuadra'=>$bal['cuadra']];
+    }
 }

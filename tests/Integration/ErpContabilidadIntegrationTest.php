@@ -201,4 +201,37 @@ final class ErpContabilidadIntegrationTest extends TestCase
         }finally{foreach($workers as [$p])if(is_resource($p)){proc_terminate($p);proc_close($p);}}
         return $res;
     }
+
+    // ---- Interfaz y rutas ----
+    private function sesion(int $usuario,string $portal='equipo'):void
+    {
+        if(session_status()===PHP_SESSION_NONE)session_start();$ctx=(new \Services\AuthorizationService($this->db))->contexto($usuario);
+        $_SESSION=['login'=>true,'id'=>$usuario,'portal'=>$portal,'version_sesion'=>(int)$ctx['version_sesion'],'csrf_token'=>'csrf-cont'];$_SERVER['HTTP_ACCEPT']='text/html';$_SERVER['REQUEST_URI']='/gestion/contabilidad';
+    }
+    private function pagina(array $get):string
+    {
+        $_GET=$get;$_SERVER['REQUEST_METHOD']='GET';ob_start();try{\Controllers\ErpController::contabilidad(new \MVC\Router());return (string)ob_get_contents();}finally{ob_end_clean();}
+    }
+    private function estado(callable $f):int {$e=200;ob_start();try{$f();}catch(\AppTerminationException $x){$e=$x->getStatusCode();}finally{ob_end_clean();}return $e;}
+    public function testPantallasContablesRenderizanYElFormularioRegistraYReversaConAuditoria():void
+    {
+        $anterior=['s'=>$_SESSION??[],'g'=>$_GET,'p'=>$_POST,'srv'=>$_SERVER];
+        try{
+            $this->sesion($this->owner);
+            foreach(['resumen','diario','mayor','balances','conciliacion','plan','periodos','asiento'] as $vista)self::assertStringContainsString('Contabilidad propia',$this->pagina(['vista'=>$vista]),$vista);
+            $_SERVER['REQUEST_METHOD']='POST';$_POST=['accion'=>'cont_asiento','vista'=>'asiento','idem_key'=>R5CajaFixture::clave(),'csrf_token'=>'csrf-cont','fecha'=>'2026-03-05','concepto'=>'Aporte inicial de capital','lineas'=>[['cuenta'=>'1.1.02','debe'=>'250.00'],['cuenta'=>'3.1.01','haber'=>'250.00'],['cuenta'=>'','debe'=>'','haber'=>'']]];
+            self::assertSame(303,$this->estado(fn()=>\Controllers\ErpController::accion()));self::assertSame(1,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_cont_asientos')['n']);self::assertSame(25000,$this->saldo('1.1.02'));
+            $html=$this->pagina(['vista'=>'diario','desde'=>'2026-01-01','hasta'=>'2026-12-31']);self::assertStringContainsString('Aporte inicial de capital',$html);self::assertStringContainsString('Reversar este asiento',$html);
+            $a=(int)$this->r->uno('SELECT id FROM erp_cont_asientos')['id'];$_SERVER['REQUEST_METHOD']='POST';$_POST=['accion'=>'cont_reverso','vista'=>'diario','idem_key'=>R5CajaFixture::clave(),'csrf_token'=>'csrf-cont','asiento_id'=>(string)$a,'motivo'=>'Error de captura','fecha'=>'2026-03-06'];
+            self::assertSame(303,$this->estado(fn()=>\Controllers\ErpController::accion()));self::assertSame(0,$this->saldo('1.1.02'));
+            self::assertSame(0,substr_count($this->pagina(['vista'=>'diario','desde'=>'2026-01-01','hasta'=>'2026-12-31']),'Reversar este asiento'),'El original ya figura reversado y un reverso no se revierte: ninguno ofrece el botón');
+            $b=$this->pagina(['vista'=>'balances','desde'=>'2026-01-01','hasta'=>'2026-12-31']);self::assertStringContainsString('El balance cuadra',$b);
+            // Gerente: lee; finanzas: lee y registra, pero no configura; recepción y portal cliente: nada.
+            $gerente=R5CajaFixture::usuario($this->db,'gerente');$this->sesion($gerente);$_SERVER['REQUEST_METHOD']='GET';$h=$this->pagina(['vista'=>'plan']);self::assertStringNotContainsString('Nueva cuenta',$h);self::assertStringNotContainsString('Asiento manual',$this->pagina(['vista'=>'resumen']));
+            $this->sesion($this->finanzas);$f=$this->pagina(['vista'=>'resumen']);self::assertStringContainsString('Asiento manual',$f);self::assertStringNotContainsString('Definir inicio',$f);
+            $this->sesion($this->recepcion);$_SERVER['REQUEST_METHOD']='GET';self::assertSame(403,$this->estado(fn()=>\Controllers\ErpController::contabilidad(new \MVC\Router())));
+            $this->sesion($this->owner,'cliente');self::assertContains($this->estado(fn()=>\Controllers\ErpController::contabilidad(new \MVC\Router())),[302,303,403],'El portal de cliente no entra a la contabilidad aunque la cuenta sea propietaria');self::assertSame(0,(int)$this->r->uno("SELECT COUNT(*) n FROM erp_cont_asientos WHERE concepto='x'")['n']);
+            $this->sesion($this->owner,'cliente');$_SERVER['REQUEST_METHOD']='POST';$_SERVER['REQUEST_URI']='/gestion/accion';$_POST=['accion'=>'cont_asiento','idem_key'=>R5CajaFixture::clave(),'csrf_token'=>'csrf-cont','fecha'=>'2026-03-05','concepto'=>'x','lineas'=>[]];self::assertContains($this->estado(fn()=>\Controllers\ErpController::accion()),[302,303,403]);self::assertSame(2,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_cont_asientos')['n'],'Solo el asiento original y su reverso');
+        }finally{$_SESSION=$anterior['s'];$_GET=$anterior['g'];$_POST=$anterior['p'];$_SERVER=$anterior['srv'];http_response_code(200);}
+    }
 }

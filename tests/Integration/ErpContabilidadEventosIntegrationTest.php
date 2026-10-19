@@ -39,6 +39,10 @@ final class ErpContabilidadEventosIntegrationTest extends TestCase
         $f=$this->r->uno('SELECT COALESCE(SUM(debe_centavos),0) d,COALESCE(SUM(haber_centavos),0) h FROM erp_cont_lineas WHERE cuenta_id=?'.($contacto?' AND contacto_id='.$contacto:''),[$cuenta]);
         return (in_array($tipo,['activo','costo','gasto'],true)?1:-1)*((int)$f['d']-(int)$f['h']);
     }
+    private function diferencia(string $control):int
+    {
+        foreach($this->cont()->conciliacion('2099-12-31')['controles'] as $c)if($c['nombre']===$control)return $c['diferencia'];self::fail($control);
+    }
     private function pendientesDeContabilizar():int {return (int)$this->r->uno("SELECT COUNT(*) n FROM erp_integraciones_outbox WHERE destino='contabilidad' AND estado<>'confirmado'")['n'];}
     private function compraDeProductos(string $cantidad,string $costo,string $impuesto='15.00'):int
     {
@@ -79,6 +83,7 @@ final class ErpContabilidadEventosIntegrationTest extends TestCase
         $c->devolver($this->owner,$this->d(['compra_id'=>$compra,'linea_id'=>$linea,'cantidad'=>'2','motivo'=>'Producto defectuoso']));$this->contabilizar();
         self::assertSame(4000,$this->saldo('inventario'));self::assertSame(-1000,$this->saldo('recepciones_por_facturar'));
         self::assertSame([],$this->cont()->integridad());self::assertTrue($this->cont()->balanceComprobacion('2099-12-31')['cuadra']);self::assertSame(0,$this->pendientesDeContabilizar());
+        self::assertSame(0,$this->diferencia('Proveedores'),'El libro de proveedores concilia con las obligaciones');
     }
     public function testVentaDeProductoSeparaCobroIngresoYCostoYLaCuentaPorCobrarQuedaEnCero():void
     {
@@ -87,7 +92,7 @@ final class ErpContabilidadEventosIntegrationTest extends TestCase
         (new ErpEntregaService($this->r))->entregar($this->owner,$this->d(['venta_id'=>$venta]));$this->contabilizar();
         self::assertSame(0,$this->saldo('cxc',$this->contacto));
         self::assertSame(3000,$this->saldo('ingreso_productos'));self::assertSame(450,$this->saldo('iva_ventas'));self::assertSame(1500,$this->saldo('costo_ventas'),'Costo de 3 unidades a 5,00');self::assertSame(3500,$this->saldo('inventario'));
-        $res=(new ErpVentaService($this->r))->resumen($venta);self::assertSame(0,$res['saldo']);
+        $res=(new ErpVentaService($this->r))->resumen($venta);self::assertSame(0,$res['saldo']);self::assertSame(0,$this->diferencia('Caja en efectivo'),'La caja concilia con los movimientos de caja');
         self::assertSame(1,(int)$this->r->uno("SELECT COUNT(*) n FROM erp_cont_asientos WHERE origen LIKE 'outbox:%' AND concepto LIKE 'Costo de los productos%'")['n'],'El costo es un asiento propio, distinto del ingreso');
         // Reprocesar los mismos eventos no duplica nada.
         $n=(int)$this->r->uno('SELECT COUNT(*) n FROM erp_cont_asientos')['n'];$this->r->q("UPDATE erp_integraciones_outbox SET estado='pendiente',proximo_intento=NULL,lease_token=NULL WHERE destino='contabilidad'");$this->contabilizar();
@@ -139,7 +144,7 @@ final class ErpContabilidadEventosIntegrationTest extends TestCase
         $carga=(int)$this->r->uno('SELECT id FROM erp_prepago_cargas WHERE prepago_id=?',[$prepago])['id'];
         (new ErpPrepagoService($this->r))->reembolsar($this->owner,$this->d(['prepago_id'=>$prepago,'carga_id'=>$carga,'monto'=>'20','motivo'=>'Saldo sin utilizar']));$this->contabilizar();
         self::assertSame(0,$this->saldo('anticipos_clientes',$this->contacto));self::assertSame(2000,$this->saldo('caja'));
-        $prep=(new ErpPrepagoService($this->r))->saldo($prepago);self::assertSame($prep,$this->saldo('anticipos_clientes',$this->contacto),'El anticipo concilia con el saldo del prepago');
+        $prep=(new ErpPrepagoService($this->r))->saldo($prepago);self::assertSame($prep,$this->saldo('anticipos_clientes',$this->contacto),'El anticipo concilia con el saldo del prepago');self::assertSame(0,$this->diferencia('Anticipos de clientes'));self::assertSame(0,$this->diferencia('Caja en efectivo'));
         self::assertSame([],$this->cont()->integridad());
     }
     public function testSinReglaOSinInicioElEventoNoSePierdeNiSeInventa():void
