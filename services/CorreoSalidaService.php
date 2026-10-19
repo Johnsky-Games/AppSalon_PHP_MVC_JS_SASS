@@ -130,9 +130,9 @@ final class CorreoSalidaService
         $evento = $this->repo->tomar($id);
         if ($evento === null) { return self::R_OCUPADO; }
         $carga = $evento['carga'];
-        if ($carga === null || (!isset($carga['token']) && $evento['tipo'] !== self::TIPO_AVISO_EXISTENTE)) {
+        if ($carga === null || (!isset($carga['token']) && !in_array($evento['tipo'],[self::TIPO_AVISO_EXISTENTE,ErpFiscalCorreoService::TIPO],true))) {
             // Sin carga legible (p. ej. APP_KEY cambió) no hay nada que reintentar: terminal y visible; el remedio es reenviar.
-            $this->repo->marcarFallidoDefinitivo($id, $evento['token'], 'Carga ilegible: hay que emitir un enlace nuevo (reenviar la confirmación o la invitación).');
+            $this->repo->marcarFallidoDefinitivo($id, $evento['token'], $evento['tipo']===ErpFiscalCorreoService::TIPO?'Adjuntos fiscales ilegibles: revisa APP_KEY y el respaldo de la entrega.':'Carga ilegible: hay que emitir un enlace nuevo (reenviar la confirmación o la invitación).');
             error_log("[correos] evento #{$id} ({$evento['tipo']}) con carga ilegible: fallido definitivo");
             return self::R_FALLO;
         }
@@ -149,6 +149,22 @@ final class CorreoSalidaService
             }
         }
         $detalle = null;
+        if($evento['tipo']===ErpFiscalCorreoService::TIPO){
+            try {
+                $mail=(new ErpFiscalCorreoService(new \Repositories\ErpRepository($this->repo->conexion())))->preparar($carga,$evento['email'],$evento['nombre']);
+            } catch(ErpException $e) {
+                $this->repo->marcarFallidoDefinitivo($id,$evento['token'],'La evidencia de entrega fiscal no es verificable. Revisa el comprobante y sus adjuntos.');
+                return self::R_FALLO;
+            } catch(\Throwable $e) {
+                $this->registrarFallo($id,$evento,'No se pudo preparar la entrega fiscal.');return self::R_FALLO;
+            }
+            $resultado=Email::despacharFiscal($mail);
+            if($resultado['exito']){
+                if(!$this->repo->marcarEnviado($id,$evento['token']))error_log('[correos] entrega fiscal #'.$id.': SMTP aceptado sin poder confirmar el lease');
+                return self::R_ENVIADO;
+            }
+            $this->registrarFallo($id,$evento,$resultado['error']);return self::R_FALLO;
+        }
         try {
             $correo = new Email($evento['nombre'], $evento['email'], (string)($carga['token'] ?? ''));
             $correo->portal = ($carga['portal'] ?? 'cliente') === 'equipo' ? 'equipo' : 'cliente';

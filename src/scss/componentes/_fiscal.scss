@@ -18,9 +18,11 @@
 .sri-lines th, .sri-lines td { border: 1px solid #bcc8ca; text-align: left; vertical-align: top; padding: .6rem; }
 .sri-lines th:nth-child(3) { width: 30%; }
 .sri-lines .sri-number { text-align: right; font-variant-numeric: tabular-nums; }
-.sri-totals { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .6rem 1rem; }
-.sri-totals dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
-.sri-grand-total { border-top: 1px solid #172b30; padding-top: 1rem; font-weight: bold; }
+.sri-totals { width: 100%; border-collapse: collapse; }
+.sri-totals th, .sri-totals td { padding: .4rem 0; vertical-align: top; }
+.sri-totals th { text-align: left; font-weight: normal; }
+.sri-totals td { text-align: right; font-variant-numeric: tabular-nums; }
+.sri-totals .sri-grand-total { border-top: 1px solid #172b30; padding-top: 1rem; font-weight: bold; }
 @media (max-width: 700px) {
   .sri-ride { padding: 1.2rem; }
   .sri-ride-heading, .sri-ride-summary { grid-template-columns: minmax(0, 1fr); }

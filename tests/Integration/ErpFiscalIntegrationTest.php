@@ -112,6 +112,46 @@ final class ErpFiscalIntegrationTest extends TestCase
         }finally{$_SESSION=$anterior['sesion'];$_GET=$anterior['get'];$_SERVER=$anterior['server'];}
     }
     public function testLeaseVigenteNoHacePeticiones():void {$this->documento();$this->r->q('UPDATE erp_fiscal_documentos SET lease_token=?,lease_hasta=DATE_ADD(?,INTERVAL 1 HOUR)',[str_repeat('a',32),$this->r::ahora()]);$t=$this->transporte([]);self::assertSame(0,$this->svc()->procesar($t)['pendientes']);self::assertSame([],$t->peticiones);}
+    public function testEntregaFiscalCongelaAdjuntosDeduplicaYReintentaFueraDeLaTransaccion():void
+    {
+        $doc=$this->documento();$servicio=new \Services\ErpFiscalCorreoService($this->r);
+        $datos=$this->d(['documento_id'=>$doc['id'],'email'=>'destino@ensayo.test','confirmar_destinatario'=>'1']);
+        try{$servicio->programar($this->actor,$datos);self::fail('Falta autorización.');}catch(ErpException $e){self::assertSame(409,$e->getCode());}
+        self::assertSame(0,(int)$this->r->uno('SELECT COUNT(*) n FROM correos_salida')['n']);
+        $this->svc()->procesar($this->transporte([$this->respuesta($doc['clave_acceso'],$doc['xml_firmado'])]));
+        $anterior=\Classes\Email::getTransport();$capturados=[];
+        \Classes\Email::setTransport(function($mail)use(&$capturados){self::assertSame(0,\Classes\Transaccion::nivel($this->db));$capturados[]=$mail;return count($capturados)>1;});
+        try{
+            $servicio->programar($this->actor,$datos);$cola=$this->r->uno('SELECT * FROM correos_salida');
+            $carga=\Classes\CargaCifrada::descifrar($cola['carga_cifrada']);self::assertStringStartsWith('%PDF-',base64_decode($carga['pdf']));self::assertStringNotContainsString($carga['pdf'],$cola['carga_cifrada']);
+            self::assertCount(0,$capturados,'Programar no toca SMTP.');
+            $this->r->q('UPDATE operaciones_idempotentes SET expira_en=DATE_SUB(UTC_TIMESTAMP(),INTERVAL 1 DAY)');$servicio->programar($this->actor,$datos);
+            $repetido=$datos;$repetido['idem_key']=R5CajaFixture::clave();$repetido['email']='DESTINO@ensayo.test';$servicio->programar($this->actor,$repetido);
+            self::assertSame(1,(int)$this->r->uno('SELECT COUNT(*) n FROM correos_salida')['n']);
+            self::assertSame(1,(int)$this->r->uno("SELECT COUNT(*) n FROM erp_eventos WHERE tipo='fiscal_entrega_programada'")['n']);
+            $worker=new \Services\CorreoSalidaService(new \Repositories\CorreoSalidaRepository($this->db));
+            self::assertFalse($worker->despachar((int)$cola['id']));self::assertSame('pendiente',$this->r->uno('SELECT estado FROM correos_salida')['estado']);
+            // La reactivación explícita utiliza el mismo evento y los mismos adjuntos.
+            $this->r->q("UPDATE correos_salida SET estado='fallido',intentos=6 WHERE id=?",[(int)$cola['id']]);
+            $servicio->reintentar($this->actor,$this->d(['documento_id'=>$doc['id'],'correo_id'=>$cola['id']]));
+            self::assertTrue($worker->despachar((int)$cola['id']));self::assertFalse($worker->despachar((int)$cola['id']));
+            self::assertCount(2,$capturados);self::assertSame($capturados[0]->MessageID,$capturados[1]->MessageID);
+            foreach($capturados as $mail){$adjuntos=$mail->getAttachments();self::assertCount(2,$adjuntos);self::assertSame(base64_decode($carga['xml']),$adjuntos[0][0]);self::assertSame(base64_decode($carga['pdf']),$adjuntos[1][0]);self::assertSame('application/xml',$adjuntos[0][4]);self::assertSame('application/pdf',$adjuntos[1][4]);self::assertStringContainsString('SIN VALIDEZ TRIBUTARIA',$mail->AltBody);}
+            $final=$this->r->uno('SELECT estado,carga_cifrada FROM correos_salida');self::assertSame('enviado',$final['estado']);self::assertNull($final['carga_cifrada']);
+            self::assertSame(0,(int)$this->r->uno('SELECT COUNT(*) n FROM pagos')['n']);self::assertSame(1,(int)$this->r->uno('SELECT ultimo FROM erp_fiscal_secuencias')['ultimo']);
+            $guard=require __DIR__.'/../../database/migrations/039_fiscal_correo_adjuntos.guard.php';self::assertNotEmpty($guard($this->db));
+        }finally{\Classes\Email::setTransport($anterior);\Classes\Email::limpiarEmailsEnviados();}
+    }
+    public function testEntregaNoConfiaEnDestinoCambiadoNiPermiteProgramarAUnCliente():void
+    {
+        $doc=$this->documento();$this->svc()->procesar($this->transporte([$this->respuesta($doc['clave_acceso'],$doc['xml_firmado'])]));$svc=new \Services\ErpFiscalCorreoService($this->r);
+        $datos=$this->d(['documento_id'=>$doc['id'],'email'=>'destino@ensayo.test','confirmar_destinatario'=>'1']);$svc->programar($this->actor,$datos);
+        $cola=$this->r->uno('SELECT id FROM correos_salida');$this->r->q("UPDATE correos_salida SET destinatario_email='otro@ensayo.test'");
+        $previo=\Classes\Email::getTransport();$llamadas=0;\Classes\Email::setTransport(function()use(&$llamadas){$llamadas++;return true;});
+        try{self::assertFalse((new \Services\CorreoSalidaService(new \Repositories\CorreoSalidaRepository($this->db)))->despachar((int)$cola['id']));self::assertSame(0,$llamadas);self::assertSame('fallido',$this->r->uno('SELECT estado FROM correos_salida')['estado']);}
+        finally{\Classes\Email::setTransport($previo);}
+        $cliente=R5CajaFixture::usuario($this->db);$this->expectException(ErpException::class);$this->expectExceptionCode(403);$svc->programar($cliente,$datos);
+    }
     /** @dataProvider erroresRecepcion */
     public function testClasificaRecepcionSinPerderClaveNiReenviarLoQueEstaEnProceso(string $codigo,string $estado):void
     {
@@ -160,15 +200,26 @@ final class ErpFiscalIntegrationTest extends TestCase
         }finally{foreach($workers as [$p])if(is_resource($p)){proc_terminate($p);proc_close($p);}}
         self::assertSame(1,count(array_filter($resultados,fn($r)=>$r['ok'])));self::assertSame(1,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_fiscal_documentos')['n']);self::assertSame(1,(int)$this->r->uno('SELECT ultimo FROM erp_fiscal_secuencias')['ultimo']);
     }
+    public function testDosProcesosNoDuplicanLaEntregaAlMismoDestino():void
+    {
+        $doc=$this->documento();$this->svc()->procesar($this->transporte([$this->respuesta($doc['clave_acceso'],$doc['xml_firmado'])]));$datos=$this->d(['documento_id'=>$doc['id'],'email'=>'destino@ensayo.test','confirmar_destinatario'=>'1']);$operaciones=[$datos,$datos];$operaciones[1]['idem_key']=R5CajaFixture::clave();$workers=[];$resultados=[];
+        try{
+            foreach($operaciones as $d){$pipes=[];$p=proc_open([PHP_BINARY,__DIR__.'/../fixtures/concurrent_prepago_worker.php','correo_fiscal',(string)$this->actor,json_encode($d)],[0=>['pipe','r'],1=>['pipe','w'],2=>['pipe','w']],$pipes,null,array_merge(getenv(),['DB_NAME'=>BaseDatosAislada::nombre($this->db)]));self::assertIsResource($p);stream_set_timeout($pipes[1],20);$workers[]=[$p,$pipes];self::assertSame("READY\n",fgets($pipes[1]));}
+            foreach($workers as [,$pipes]){fwrite($pipes[0],"GO\n");fflush($pipes[0]);fclose($pipes[0]);}
+            foreach($workers as [$p,$pipes]){$linea=fgets($pipes[1]);$err=stream_get_contents($pipes[2]);fclose($pipes[1]);fclose($pipes[2]);self::assertSame(0,proc_close($p),$err.(string)$linea);$j=json_decode((string)$linea,true);self::assertIsArray($j);$resultados[]=$j;}
+        }finally{foreach($workers as [$p])if(is_resource($p)){proc_terminate($p);proc_close($p);}}
+        self::assertSame(2,count(array_filter($resultados,fn($r)=>$r['ok'])));self::assertSame(1,(int)$this->r->uno('SELECT COUNT(*) n FROM correos_salida')['n']);self::assertSame(1,(int)$this->r->uno("SELECT COUNT(*) n FROM erp_eventos WHERE tipo='fiscal_entrega_programada'")['n']);self::assertSame(1,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_fiscal_documentos')['n']);self::assertSame(1,(int)$this->r->uno('SELECT ultimo FROM erp_fiscal_secuencias')['ultimo']);
+    }
     public function testRespaldoRestauraXmlCertificadoNumeracionYProtecciones():void
     {
-        $d=$this->documento();$this->svc()->procesar($this->transporte([$this->respuesta($d['clave_acceso'],$d['xml_firmado'])]));$exportado=$this->svc()->descargar($this->actor,(int)$d['id'],true);$origen=BaseDatosAislada::nombre($this->db);$destino='appsalon_fixture_fiscal_restore_'.bin2hex(random_bytes(5)).'_test';$archivo=sys_get_temp_dir().'/fiscal_bk_'.bin2hex(random_bytes(8)).'.sql.gz';$restaurada=null;
+        $d=$this->documento();$this->svc()->procesar($this->transporte([$this->respuesta($d['clave_acceso'],$d['xml_firmado'])]));$exportado=$this->svc()->descargar($this->actor,(int)$d['id'],true);(new \Services\ErpFiscalCorreoService($this->r))->programar($this->actor,$this->d(['documento_id'=>$d['id'],'email'=>'respaldo@ensayo.test','confirmar_destinatario'=>'1']));$colaOriginal=$this->r->uno('SELECT * FROM correos_salida');$origen=BaseDatosAislada::nombre($this->db);$destino='appsalon_fixture_fiscal_restore_'.bin2hex(random_bytes(5)).'_test';$archivo=sys_get_temp_dir().'/fiscal_bk_'.bin2hex(random_bytes(8)).'.sql.gz';$restaurada=null;
         $cli=function(array $args):void {$pipes=[];$p=proc_open(array_merge([PHP_BINARY],$args),[1=>['pipe','w'],2=>['pipe','w']],$pipes,null,array_merge(getenv(),['DB_NAME'=>BaseDatosAislada::nombre($this->db)]));self::assertIsResource($p);$out=stream_get_contents($pipes[1]);$err=stream_get_contents($pipes[2]);fclose($pipes[1]);fclose($pipes[2]);self::assertSame(0,proc_close($p),$out.$err);};
         try{
             $cli(['scripts/backup_db.php','--db='.$origen,'--output='.$archivo,'--gzip']);$this->r->q('CREATE DATABASE `'.$destino.'` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');$cli(['scripts/restore_db.php','--db='.$destino,'--input='.$archivo,'--hash='.hash_file('sha256',$archivo)]);
             $restaurada=new \mysqli(getenv('DB_HOST'),getenv('DB_USER'),getenv('DB_PASS'),$destino,(int)getenv('DB_PORT'));$r=new ErpRepository($restaurada);self::assertSame($d['xml_sha256'],$r->uno('SELECT xml_sha256 FROM erp_fiscal_documentos')['xml_sha256']);self::assertSame($d['xml_firmado'],$r->uno('SELECT xml_firmado FROM erp_fiscal_documentos')['xml_firmado']);self::assertSame(1,(int)$r->uno('SELECT ultimo FROM erp_fiscal_secuencias')['ultimo']);self::assertSame($this->r->uno('SELECT certificado_cifrado FROM erp_fiscal_perfiles')['certificado_cifrado'],$r->uno('SELECT certificado_cifrado FROM erp_fiscal_perfiles')['certificado_cifrado']);self::assertFalse($restaurada->query('DELETE FROM erp_fiscal_documentos'));self::assertSame(1644,$restaurada->errno);
             self::assertSame(3,(int)$r->uno("SELECT COUNT(*) n FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='erp_fiscal_documentos' AND index_name='uq_fiscal_numero_emisor'")['n']);
             self::assertSame($exportado,(new ErpFiscalService($r))->descargar($this->actor,(int)$d['id'],true));
+            $colaRestaurada=$r->uno('SELECT * FROM correos_salida');self::assertSame($colaOriginal['carga_cifrada'],$colaRestaurada['carga_cifrada']);$carga=\Classes\CargaCifrada::descifrar($colaRestaurada['carga_cifrada']);$mail=(new \Services\ErpFiscalCorreoService($r))->preparar($carga,$colaRestaurada['destinatario_email'],$colaRestaurada['destinatario_nombre']);self::assertSame(base64_decode($carga['pdf']),$mail->getAttachments()[1][0]);
             $otra=(new ErpVentaService($r))->crear($this->actor,$this->d())['recurso_id'];
             try{$r->q("INSERT INTO erp_fiscal_documentos(perfil_id,venta_id,clave_operacion,huella,clave_acceso,numero,snapshot_json,xml_firmado,xml_sha256,creado_por,creado_en,actualizado_en) SELECT perfil_id,?,SHA2('numero-restaurado',256),huella,REPEAT('0',49),numero,snapshot_json,xml_firmado,xml_sha256,creado_por,creado_en,actualizado_en FROM erp_fiscal_documentos WHERE id=?",[$otra,(int)$d['id']]);self::fail('La restauración debe impedir repetir el número fiscal.');}catch(\Repositories\PersistenceException|\mysqli_sql_exception $e){self::assertSame(1062,$e->getCode());}
         }finally{if($restaurada)$restaurada->close();$this->r->q('DROP DATABASE IF EXISTS `'.$destino.'`');foreach([$archivo,$archivo.'.manifest.json'] as $f)if(is_file($f))unlink($f);}

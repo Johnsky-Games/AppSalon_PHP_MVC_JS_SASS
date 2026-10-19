@@ -383,8 +383,8 @@ function validar_manifiesto_y_esquema(mysqli $mysqli, string $dbTarget, ?array $
 function validar_sentencia_respaldo(string $sql): void
 {
     // Remove data literals for inspection; retain quoted identifiers.
-    $estructura = preg_replace("/'(?:\\\\.|''|[^'\\\\])*'|\"(?:\\\\.|\"\"|[^\"\\\\])*\"/s", "''", $sql);
-    if ($estructura === null || preg_match('/\/\*|\b(?:USE|SCHEMA|TRIGGER|PROCEDURE|FUNCTION|EVENT|OUTFILE|DUMPFILE|LOAD_FILE)\b/i', $estructura)
+    $estructura = \Classes\SqlRespaldo::estructura($sql);
+    if (preg_match('/\/\*|\b(?:USE|SCHEMA|TRIGGER|PROCEDURE|FUNCTION|EVENT|OUTFILE|DUMPFILE|LOAD_FILE)\b/i', $estructura)
         || preg_match('/(?:`[^`]+`|[A-Za-z_]\w*)\s*\.\s*(?:`[^`]+`|[A-Za-z_]\w*)/', $estructura)) {
         throw new RuntimeException('Sentencia no admitida: el respaldo no puede cambiar de base ni ejecutar operaciones externas.');
     }

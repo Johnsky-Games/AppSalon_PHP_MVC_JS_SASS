@@ -17,11 +17,23 @@ La migración 037 añade tres tablas (104 en total sobre esta rama) y cuatro pro
 
 La ficha ofrece «Ver RIDE / imprimir» solamente al autorizarse. La ruta `/gestion/facturacion/ride?id=…` vuelve a exigir permiso de equipo y evidencia íntegra. Emisor, comprador, conceptos, cantidades, importes, descuentos, subtotales por categoría de IVA, pagos pactados y régimen se proyectan del XML autorizado, sin usar precios o nombres actuales del catálogo ni recalcular con decimales flotantes. El piloto conserva el aviso de pruebas en pantalla y en impresión.
 
-El botón «Imprimir / guardar PDF» utiliza el diálogo del navegador; permite papel o PDF, sin depender de un generador externo. La impresión A4 oculta la navegación y repite el encabezado de la tabla cuando hay varias páginas. Esta entrega no crea un PDF en el servidor ni lo adjunta a correos. Solo admite facturas del circuito soportado; el RIDE de notas de crédito y su integración comercial continúan pendientes. La referencia es la ficha técnica 2.34 del SRI, apartado 9 y anexo 2, indicada en `resources/sri/README.md`.
+El botón «Imprimir / guardar PDF» utiliza el diálogo del navegador; permite papel o PDF, sin depender de un generador externo. La impresión A4 oculta la navegación y repite el encabezado de la tabla cuando hay varias páginas. La ficha también permite descargar un PDF generado en el servidor por Dompdf 3.1.6 o posterior compatible, usando el mismo fragmento del comprobante, con recursos remotos, PHP y JavaScript desactivados. El formato de totales usa una tabla compartida para mantener alineación en pantalla y PDF. Solo admite facturas del circuito soportado; el RIDE de notas de crédito y su integración comercial continúan pendientes. La referencia es la ficha técnica 2.34 del SRI, apartado 9 y anexo 2, indicada en `resources/sri/README.md`.
+
+## Entrega por correo
+
+Desde una factura autorizada, «Programar entrega del comprobante» solicita un correo confirmado por el operador. Requiere permiso `erp.cobrar` en el portal de equipo y CSRF. No utiliza el consentimiento de promociones ni obliga al comprador a tener una cuenta. La venta, sus pagos y el contador no cambian.
+
+El XML autorizado y el RIDE PDF se congelan una sola vez, con límite conjunto de 5 MB. La cola `correos_salida` conserva ambos adjuntos cifrados con APP_KEY, además del destino ligado dentro de la carga autenticada. La migración 039 amplía únicamente esa carga a MEDIUMTEXT: continúan 104 tablas y 42 protecciones. Su guarda impide revertir entregas fiscales o truncar cargas grandes. El evento de negocio conserva las huellas de adjuntos y destino, sin copiar datos personales ni certificados.
+
+La clave permanente por documento/destino evita que otro formulario o una caché de idempotencia vencida vuelva a programar la misma entrega. Un bloqueo actual del documento y lecturas actuales de la cola cubren dos solicitudes concurrentes. El mensaje mantiene el mismo Message-ID en los reintentos. Esto no garantiza SMTP exactamente una vez: si el servidor acepta y el proceso cae antes de marcar «enviado», el correo puede repetirse.
+
+El worker existente `php scripts/procesar_correos.php --limite=20` valida documento, autorización, hashes y destinatario antes de SMTP, fuera de la transacción comercial. Un adjunto inconsistente termina en fallo para revisión; un fallo SMTP se reintenta con el mismo contenido y retroceso. Al aceptar SMTP, la cola elimina la carga cifrada; el XML fiscal original y las huellas auditadas permanecen. «Aceptado por SMTP» no confirma recepción en el buzón ni lectura. La ficha muestra estado, intentos y diagnóstico saneado, y permite reactivar una entrega fallida sin crear otra fila. No permite reenviar indefinidamente una entrega aceptada al mismo destino.
+
+El PDF descargado después se vuelve a proyectar desde el XML autorizado; sus metadatos de creación pueden cambiar. Los adjuntos reintentados, en cambio, son los bytes congelados en la cola. El respaldo conserva también las entregas pendientes cifradas; es necesario restaurar APP_KEY por separado para despacharlas. El SMTP se configura con las variables existentes EMAIL_HOST/PORT/USER/PASSWORD, sin incorporar un facturador intermediario.
 
 ## Consola del piloto
 
-Ejecutar dentro del contenedor con las migraciones al día. Guardar las configuraciones y el PKCS12 en un volumen privado, fuera de `public` y del repositorio. La contraseña se lee por entrada estándar desde un secreto, nunca como argumento.
+Al actualizar esta rama, instalar las dependencias de composer.lock con `composer install` (o `composer install --no-dev` en el despliegue) y aplicar `php database/migrador.php up`, incluida 039. Ejecutar la consola dentro del contenedor con las migraciones al día. Guardar las configuraciones y el PKCS12 en un volumen privado, fuera de `public` y del repositorio. La contraseña se lee por entrada estándar desde un secreto, nunca como argumento.
 
 ```sh
 php scripts/fiscal_sri.php perfil /run/secrets/emisor-config.json /run/secrets/emisor.p12 < /run/secrets/emisor-password
@@ -39,6 +51,6 @@ La categoría IVA se indica explícitamente: tarifa cero, exento y no objeto son
 
 Las pruebas usan certificados RSA sintéticos y un transporte de ensayo inyectado exclusivamente en `APP_ENV=testing`. No envían comprobantes ficticios a producción. Existe una comprobación independiente de firma y referencias con Python/lxml/cryptography durante el desarrollo; los ensayos por SHA se registran en el PR.
 
-El generador también produce notas de crédito XSD 1.1.0, pero falta cerrar su integración con devoluciones, topes y documentos autorizados de sustento. Continúan la entrega al correo, revisión/corrección de rechazos, consumidor final con sus restricciones, fiscalidad de anticipos/paquetes/suscripciones, configuración del momento de IVA y reglas por régimen, y ensayo real con el certificado del emisor en certificación. Solo después se habilitará producción de forma explícita.
+El generador también produce notas de crédito XSD 1.1.0, pero falta cerrar su integración con devoluciones, topes y documentos autorizados de sustento. Continúan la revisión/corrección de rechazos, consumidor final con sus restricciones, fiscalidad de anticipos/paquetes/suscripciones, configuración del momento de IVA y reglas por régimen, y ensayo real con el certificado del emisor en certificación. Solo después se habilitará producción de forma explícita.
 
 Este avance no sustituye la contabilidad propia de doble partida, cierre tributario ni nómina. Son módulos pendientes con sus propias reglas, autorizaciones y conciliaciones; no se presentan como completados por tener una factura XML o un recibo interno.

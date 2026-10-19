@@ -37,4 +37,13 @@ final class SriRideTest extends TestCase
     {
         $xml=str_replace('<estado>AUTORIZADO</estado>','<estado>RECIBIDA</estado>',$this->contenedor());$this->expectException(\InvalidArgumentException::class);SriRide::datos($xml);
     }
+    public function testPdfLocalConTildesYFacturaLarga():void
+    {
+        $f=F::factura();$f['lineas']=[];
+        for($i=1;$i<=100;$i++)$f['lineas'][]=['codigo'=>'S'.$i,'descripcion'=>'Servicio número '.$i.' · cuidado de uñas y atención profesional','cantidad_milesimas'=>1000,'precio_centavos'=>100,'impuesto_pb'=>0,'codigo_porcentaje'=>'0'];
+        $f['total_centavos']=10000;$f['pagos']=[['forma'=>'01','total_centavos'=>10000]];
+        $pdf=\Services\Fiscal\SriRidePdf::generar(SriRide::datos($this->contenedor($f)));
+        self::assertStringStartsWith('%PDF-',$pdf);self::assertGreaterThan(5000,strlen($pdf));
+        self::assertGreaterThanOrEqual(2,preg_match_all('~/Type\s*/Page\b~',$pdf));
+    }
 }
