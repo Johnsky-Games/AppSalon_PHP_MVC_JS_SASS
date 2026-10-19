@@ -64,6 +64,7 @@ class ReportesFinancierosIntegrationTest extends TestCase
     {
         validar_base_datos_prueba(self::$db);
 
+        self::$db->query("DELETE FROM erp_transferencia_referencias WHERE pago_id IS NOT NULL");
         self::$db->query("DELETE FROM pagos");
         self::$db->query("DELETE FROM notificaciones_citas");
         self::$db->query("DELETE FROM citasservicios");

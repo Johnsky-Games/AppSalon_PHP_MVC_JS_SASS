@@ -48,7 +48,10 @@ final class ErpController
         $datos=(new ErpVentaService($r))->detalle((int)$_SESSION['id'],$id);
         $busqueda=is_string($_GET['q']??null)?mb_substr(trim($_GET['q']),0,80):'';
         $catalogo=$r->q("SELECT a.*,p.nombre, p.stock_milesimas,COALESCE(r.reservado,0) reservado FROM erp_catalogo a JOIN inventario_productos p ON p.id=a.producto_id LEFT JOIN(SELECT producto_id,SUM(cantidad_milesimas) reservado FROM erp_stock_reservas WHERE estado='activa' GROUP BY producto_id)r ON r.producto_id=p.id WHERE a.activo=1 AND p.activo=1 AND a.tipo<>'consumo' AND (p.nombre LIKE ? OR p.sku LIKE ?) ORDER BY p.nombre LIMIT 200",['%'.$busqueda.'%','%'.$busqueda.'%']);
-        self::render($router,'detalle',$datos+compact('catalogo','busqueda')+['cotizaciones'=>$r->q('SELECT id,estado,vence_en,creado_en,version_venta FROM erp_cotizaciones WHERE venta_id=? ORDER BY id DESC',[$id]),'recibos'=>$r->q('SELECT id,codigo,creado_en FROM erp_recibos WHERE venta_id=? ORDER BY id DESC',[$id])]);
+        $prepagos=[];if(puede('erp.cobrar')){
+            $v=$datos['venta'];$prepagos=$r->q("SELECT p.id,p.nombre,(SELECT COALESCE(SUM(m.monto_centavos),0) FROM erp_prepago_movimientos m WHERE m.prepago_id=p.id) saldo FROM erp_prepagos p JOIN erp_contactos c ON c.id=p.contacto_id WHERE p.contacto_id=? OR (c.usuario_id IS NOT NULL AND c.usuario_id=?) ORDER BY p.id",[$v['contacto_id'],$v['cliente_usuario_id']]);
+        }
+        self::render($router,'detalle',$datos+compact('catalogo','busqueda','prepagos')+['cotizaciones'=>$r->q('SELECT id,estado,vence_en,creado_en,version_venta FROM erp_cotizaciones WHERE venta_id=? ORDER BY id DESC',[$id]),'recibos'=>$r->q('SELECT id,codigo,creado_en FROM erp_recibos WHERE venta_id=? ORDER BY id DESC',[$id])]);
     }
     public static function recibo(Router $router):void
     {
@@ -81,6 +84,35 @@ final class ErpController
         $historial=$r->q('SELECT * FROM erp_caja_sesiones WHERE actor_id=? ORDER BY id DESC LIMIT 30',[$actor]);
         $movimientos=$sesion?$r->q('SELECT c.* FROM erp_caja_movimientos m JOIN caja_movimientos c ON c.id=m.caja_id WHERE m.sesion_id=? ORDER BY c.id DESC LIMIT 100',[(int)$sesion['id']]):[];
         self::render($router,'caja',compact('sesion','esperado','historial','movimientos'));
+    }
+    public static function prepagos(Router $router):void
+    {
+        exigir_permiso('erp.cobrar');$r=new ErpRepository();
+        $id=filter_var($_GET['id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;
+        $q=is_string($_GET['q']??null)?mb_substr(trim($_GET['q']),0,80):'';
+        $pagina=filter_var($_GET['pagina']??1,FILTER_VALIDATE_INT,['options'=>['min_range'=>1,'max_range'=>100000]])?:1;
+        $args=['%'.$q.'%','%'.$q.'%'];$where=" FROM erp_prepagos p JOIN erp_contactos c ON c.id=p.contacto_id WHERE (p.nombre LIKE ? OR c.nombre LIKE ?)";
+        $total=(int)$r->uno('SELECT COUNT(*) n'.$where,$args)['n'];$paginas=max(1,(int)ceil($total/25));$pagina=min($pagina,$paginas);
+        $filas=$r->q('SELECT p.*,c.nombre beneficiario,(SELECT COALESCE(SUM(m.monto_centavos),0) FROM erp_prepago_movimientos m WHERE m.prepago_id=p.id) saldo'.$where.' ORDER BY p.id DESC LIMIT 25 OFFSET '.(($pagina-1)*25),$args);
+        $prepago=$id?$r->uno('SELECT p.*,c.nombre beneficiario FROM erp_prepagos p JOIN erp_contactos c ON c.id=p.contacto_id WHERE p.id=?',[$id]):null;
+        if($id&&!$prepago)throw new ErpException('Prepago no encontrado.',404);
+        $saldo=$id?(new \Services\ErpPrepagoService($r))->saldo($id):0;
+        $f=(new \Services\ErpInformeService($r))->rango($_GET);$desde=$f['desde'];$hasta=$f['hasta'];
+        $cp=filter_var($_GET['cargas_pagina']??1,FILTER_VALIDATE_INT,['options'=>['min_range'=>1,'max_range'=>100000]])?:1;
+        $mp=filter_var($_GET['movimientos_pagina']??1,FILTER_VALIDATE_INT,['options'=>['min_range'=>1,'max_range'=>100000]])?:1;
+        $nc=$id?(int)$r->uno('SELECT COUNT(*) n FROM erp_prepago_cargas WHERE prepago_id=?',[$id])['n']:0;
+        $mc=[$id,$desde,$hasta];$mw=' WHERE prepago_id=? AND creado_en>=? AND creado_en<DATE_ADD(?,INTERVAL 1 DAY)';
+        $nm=$id?(int)$r->uno('SELECT COUNT(*) n FROM erp_prepago_movimientos'.$mw,$mc)['n']:0;
+        $cargasPaginas=max(1,(int)ceil($nc/25));$movimientosPaginas=max(1,(int)ceil($nm/25));$cp=min($cp,$cargasPaginas);$mp=min($mp,$movimientosPaginas);
+        $cargas=$id?$r->q("SELECT c.*,COALESCE((SELECT -SUM(m.monto_centavos) FROM erp_prepago_movimientos m WHERE m.carga_id=c.id AND m.tipo='reembolso'),0) reembolsado FROM erp_prepago_cargas c WHERE c.prepago_id=? ORDER BY c.id DESC LIMIT 25 OFFSET ".(($cp-1)*25),[$id]):[];
+        $movimientos=$id?$r->q('SELECT * FROM erp_prepago_movimientos'.$mw.' ORDER BY id DESC LIMIT 25 OFFSET '.(($mp-1)*25),$mc):[];
+        $contactos=$r->q("SELECT id,nombre,identificacion FROM erp_contactos WHERE activo=1 AND tipo IN ('cliente','ambos') ORDER BY nombre LIMIT 500");
+        self::render($router,'prepagos',compact('id','q','pagina','paginas','total','filas','prepago','saldo','cargas','movimientos','contactos','desde','hasta','cp','mp','nc','nm','cargasPaginas','movimientosPaginas'));
+    }
+    public static function prepagoComprobante(Router $router):void
+    {
+        exigir_permiso('erp.cobrar');$id=filter_var($_GET['id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;
+        self::render($router,'prepago_comprobante',['recibo'=>(new \Services\ErpPrepagoService())->comprobante((int)$_SESSION['id'],$id)]);
     }
     public static function integraciones(Router $router):void
     {
@@ -197,6 +229,9 @@ final class ErpController
             'venta_anular'=>[ErpVentaService::class,'anular','venta'],'venta_cobrar'=>[ErpPagoService::class,'cobrar','venta'],
             'venta_verificar'=>[ErpPagoService::class,'verificar','venta'],'venta_entregar'=>[ErpEntregaService::class,'entregar','venta'],
             'venta_devolver'=>[ErpDevolucionService::class,'devolver','venta'],
+            'prepago_crear'=>[\Services\ErpPrepagoService::class,'crear','prepagos'],'prepago_cargar'=>[\Services\ErpPrepagoService::class,'cargar','prepagos'],
+            'prepago_verificar'=>[\Services\ErpPrepagoService::class,'verificar','prepagos'],'prepago_reembolsar'=>[\Services\ErpPrepagoService::class,'reembolsar','prepagos'],
+            'prepago_aplicar'=>[\Services\ErpPrepagoService::class,'aplicar','venta'],
             'cotizacion_emitir'=>[\Services\ErpCotizacionService::class,'emitir','venta'],'cotizacion_aceptar'=>[\Services\ErpCotizacionService::class,'aceptar','venta'],
             'contacto_vincular'=>[ErpMaestrosService::class,'vincularCliente','contactos'],'contacto'=>[ErpMaestrosService::class,'contacto','contactos'],'catalogo'=>[ErpMaestrosService::class,'catalogo','catalogo'],
             'empresa'=>[ErpMaestrosService::class,'empresa','configuracion'],'caja_abrir'=>[ErpCajaService::class,'abrir','caja'],
@@ -225,7 +260,7 @@ final class ErpController
         ];
         $accion=is_string($_POST['accion']??null)?$_POST['accion']:'';
         if(!isset($acciones[$accion])){http_response_code(422);detener_ejecucion(422);return;}
-        [$clase,$metodo,$destino]=$acciones[$accion];$id=filter_var($_POST[$destino==='compra'?'compra_id':($destino==='personal'?'colaborador_id':'venta_id')]??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;
+        [$clase,$metodo,$destino]=$acciones[$accion];$id=filter_var($_POST[$destino==='compra'?'compra_id':($destino==='personal'?'colaborador_id':($destino==='prepagos'?'prepago_id':'venta_id'))]??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;
         try{
             $datos=$_POST;
             if($accion==='documento_subir'){
@@ -240,7 +275,7 @@ final class ErpController
             $_SESSION['erp_alertas']=['error'=>[$e->getMessage()]];
         }catch(\InvalidArgumentException|\Classes\ConflictoIdempotenciaException $e){$_SESSION['erp_alertas']=['error'=>[$e->getMessage()]];}
         catch(\Throwable $e){error_log('[ERP] '.$accion.' '.get_class($e).' code='.$e->getCode());$_SESSION['erp_alertas']=['error'=>['La operación no se completó. Revisa los datos y vuelve a intentarlo.']];}
-        $ruta=match($destino){'venta'=>$id?'/ventas/detalle?id='.$id:'/pdv','compra'=>'/gestion/compras'.($id?'?id='.$id:''),'personal'=>'/gestion/personal'.($id?'?id='.$id:''),'seguimiento'=>'/gestion/seguimiento'.($id?'?id='.$id:''),default=>'/gestion/'.$destino};
+        $ruta=match($destino){'venta'=>$id?'/ventas/detalle?id='.$id:'/pdv','compra'=>'/gestion/compras'.($id?'?id='.$id:''),'personal'=>'/gestion/personal'.($id?'?id='.$id:''),'seguimiento'=>'/gestion/seguimiento'.($id?'?id='.$id:''),'prepagos'=>'/gestion/prepagos'.($id?'?id='.$id:''),default=>'/gestion/'.$destino};
         if($destino==='documentos')$ruta='/gestion/documentos?'.http_build_query(['entidad'=>is_string($_POST['entidad']??null)?$_POST['entidad']:'','id'=>(int)($_POST['entidad_id']??0)]);
         if($destino==='consumos')$ruta='/agenda/detalle?id='.(int)($_POST['cita_id']??0);
         header('Location: '.$ruta,true,303);detener_ejecucion(303);

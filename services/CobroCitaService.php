@@ -113,6 +113,10 @@ final class CobroCitaService
                 throw $e;
             }
             $pagoId = (int)$this->repo->db->insert_id;
+            if (!$efectivo) {
+                try { (new ErpTransferenciaService($this->repo))->reservar($referencia['unica'], $pagoId); }
+                catch (ErpException $e) { throw new CobroRechazado($e->getMessage(), 409, $e); }
+            }
             if ($efectivo) { $this->confirmarEnCaja($actor, $cita, $pagoId, $referenciaPago, $monto, 'efectivo', $ahora); }
             $despues = $this->actualizarEstado($citaId, $cita, true);
             $this->evento($efectivo ? 'cobro_efectivo' : 'transferencia_registrada', $citaId, $pagoId, null, $actor,
@@ -177,6 +181,7 @@ final class CobroCitaService
                 $this->repo->consulta("UPDATE pagos SET estado='completado', pagado_at=?, estado_verificacion='confirmado', verificado_por=?, verificado_en=?, verificacion_nota=? WHERE id=? AND estado_verificacion='pendiente_verificacion'", 'sissi', [$ahora, $actor, $ahora, $nota, $pagoId]);
                 $this->confirmarEnCaja($actor, $cita, $pagoId, (string)$pago['referencia_pago'], $monto, 'transferencia', $ahora);
             } else {
+                (new ErpTransferenciaService($this->repo))->liberarPago($pagoId);
                 $this->repo->consulta("UPDATE pagos SET estado='fallido', estado_verificacion='rechazado', referencia_unica=NULL, verificado_por=?, verificado_en=?, verificacion_nota=? WHERE id=? AND estado_verificacion='pendiente_verificacion'", 'issi', [$actor, $ahora, $nota, $pagoId]);
             }
             $despues = $this->actualizarEstado($citaId, $cita, true);

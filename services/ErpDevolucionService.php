@@ -20,6 +20,9 @@ final class ErpDevolucionService extends ErpService
             $total=(int)$l['total_centavos'];$monto=intdiv($total*($anterior+$qty)+intdiv($original,2),$original)-intdiv($total*$anterior+intdiv($original,2),$original);
             $aPagar=max(0,$antes['neto']-($antes['total']-$monto));
             $pagos=$this->r->q("SELECT p.* FROM pagos p JOIN erp_pago_aplicaciones a ON a.pago_id=p.id WHERE a.venta_id=? AND p.estado='completado' ORDER BY p.id FOR UPDATE",[$id]);
+            // Todos los saldos de prepago se bloquean antes de la caja física.
+            $prepagos=$this->r->q("SELECT m.prepago_id FROM erp_prepago_movimientos m JOIN erp_pago_aplicaciones a ON a.pago_id=m.pago_id WHERE a.venta_id=? AND m.tipo='aplicacion' ORDER BY m.prepago_id FOR SHARE",[$id]);
+            foreach($prepagos as $prepago)(new ErpPrepagoService($this->r))->bloquear((int)$prepago['prepago_id']);
             $sesion=$aPagar>0?(new ErpCajaService($this->r))->sesion($actor):null;
             $this->r->q('INSERT INTO erp_devoluciones(venta_id,linea_id,cantidad_milesimas,monto_centavos,cantidad_entregada_milesimas,reintegrar_stock,motivo,actor_id,creado_en) VALUES(?,?,?,?,?,?,?,?,?)',[$id,(int)$l['id'],$qty,$monto,$entregadaAhora,$stock?1:0,$motivo,$actor,$this->r::ahora()]);
             $devolucion=$this->r->id();$restante=$aPagar;
@@ -29,7 +32,9 @@ final class ErpDevolucionService extends ErpService
                 $ahora=min($restante,max(0,$importe-$dev));if($ahora<=0)continue;
                 if($p['metodo_pago']==='efectivo'&&(new ErpCajaService($this->r))->esperado((int)$sesion['id'])<$ahora)throw new ErpException('Tu caja no dispone del efectivo esperado para la devolución.');
                 $this->r->q("INSERT INTO cobros_devoluciones(pago_id,cita_id,monto_centavos,metodo,motivo,actor_id,origen,registrado_en) VALUES(?,?,?,?,?,?,'caja',?)",[(int)$p['id'],$v['cita_id'],$ahora,$p['metodo_pago'],mb_substr($motivo,0,180),$actor,$this->r::ahora()]);
-                $devId=$this->r->id();(new ErpCajaService($this->r))->asentar($actor,(int)$sesion['id'],'egreso',$ahora,$p['metodo_pago'],'Devolución venta #'.$id,'erp.dev:'.$devId,(int)$p['id'],$devId);
+                $devId=$this->r->id();
+                if($p['metodo_pago']==='prepago')(new ErpPrepagoService($this->r))->restituir($actor,(int)$p['id'],$devId,$ahora,$id,$motivo);
+                else (new ErpCajaService($this->r))->asentar($actor,(int)$sesion['id'],'egreso',$ahora,$p['metodo_pago'],'Devolución venta #'.$id,'erp.dev:'.$devId,(int)$p['id'],$devId);
                 if($dev+$ahora===$importe)$this->r->q("UPDATE pagos SET estado='reembolsado',reembolsado_at=? WHERE id=?",[$this->r::ahora(),(int)$p['id']]);
                 // Los anticipos importados pueden tener devengos históricos; conservar su ajuste nativo.
                 (new ComisionService($this->r))->revertirParcial((int)$p['id'],$devId,$importe,$dev,$dev+$ahora);

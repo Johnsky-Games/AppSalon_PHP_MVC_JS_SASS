@@ -22,3 +22,6 @@ $router->get('/gestion/indicadores',[\Controllers\ErpController::class,'indicado
 $router->get('/gestion/exportar',[\Controllers\ErpController::class,'exportar']);
 $router->get('/gestion/documentos',[\Controllers\ErpController::class,'documentos']);
 $router->get('/gestion/documentos/descargar',[\Controllers\ErpController::class,'documentoDescargar']);
+
+$router->get('/gestion/prepagos',[\Controllers\ErpController::class,'prepagos']);
+$router->get('/gestion/prepagos/comprobante',[\Controllers\ErpController::class,'prepagoComprobante']);

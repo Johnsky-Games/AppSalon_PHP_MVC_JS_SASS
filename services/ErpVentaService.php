@@ -129,10 +129,22 @@ final class ErpVentaService extends ErpService
     }
     public function resumen(int $id):array
     {
-        $v=$this->r->uno('SELECT total_centavos FROM erp_ventas WHERE id=?',[$id])??throw new ErpException('Venta no encontrada.',404);
-        $s=$this->r->uno("SELECT COALESCE(SUM(IF(p.estado IN ('completado','reembolsado'),a.importe_centavos,0)),0) cobrado,COALESCE(SUM(IF(p.estado IN ('completado','reembolsado'),GREATEST(COALESCE(d.monto,0),IF(p.estado='reembolsado',a.importe_centavos,0)),0)),0) devuelto,COALESCE(SUM(IF(p.estado='pendiente',a.importe_centavos,0)),0) pendiente FROM erp_pago_aplicaciones a JOIN pagos p ON p.id=a.pago_id LEFT JOIN(SELECT pago_id,SUM(monto_centavos) monto FROM cobros_devoluciones GROUP BY pago_id)d ON d.pago_id=p.id WHERE a.venta_id=?",[$id]);
-        $devol=(int)($this->r->uno('SELECT COALESCE(SUM(monto_centavos),0) monto FROM erp_devoluciones WHERE venta_id=?',[$id])['monto']);
-        $total=(int)$v['total_centavos']-$devol;$cobrado=(int)$s['cobrado'];$devuelto=(int)$s['devuelto'];$pendiente=(int)$s['pendiente'];
+        // Lecturas actuales: una transacción que esperó el bloqueo de venta
+        // debe incluir los cobros confirmados mientras esperaba, incluso en RR.
+        $v=$this->r->uno('SELECT total_centavos FROM erp_ventas WHERE id=? FOR SHARE',[$id])??throw new ErpException('Venta no encontrada.',404);
+        $pagos=$this->r->q('SELECT p.id,p.estado,a.importe_centavos FROM erp_pago_aplicaciones a JOIN pagos p ON p.id=a.pago_id WHERE a.venta_id=? ORDER BY p.id FOR SHARE',[$id]);
+        $cobrado=0;$devuelto=0;$pendiente=0;
+        foreach($pagos as $p){
+            $importe=(int)$p['importe_centavos'];
+            if(in_array($p['estado'],['completado','reembolsado'],true)){
+                $cobrado+=$importe;
+                $devs=$this->r->q('SELECT monto_centavos FROM cobros_devoluciones WHERE pago_id=? FOR SHARE',[(int)$p['id']]);
+                $devuelto+=max((int)array_sum(array_column($devs,'monto_centavos')),$p['estado']==='reembolsado'?$importe:0);
+            } elseif($p['estado']==='pendiente'){$pendiente+=$importe;}
+        }
+        $creditos=$this->r->q('SELECT monto_centavos FROM erp_devoluciones WHERE venta_id=? FOR SHARE',[$id]);
+        $devol=(int)array_sum(array_column($creditos,'monto_centavos'));
+        $total=(int)$v['total_centavos']-$devol;
         return ['total'=>$total,'original'=>(int)$v['total_centavos'],'devolucion_comercial'=>$devol,'cobrado'=>$cobrado,'devuelto'=>$devuelto,'neto'=>$cobrado-$devuelto,'pendiente'=>$pendiente,'saldo'=>max(0,$total-$cobrado+$devuelto),'disponible'=>max(0,$total-$cobrado+$devuelto-$pendiente)];
     }
 }

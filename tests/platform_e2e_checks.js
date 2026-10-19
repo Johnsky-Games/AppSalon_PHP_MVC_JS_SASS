@@ -125,6 +125,44 @@ module.exports = async function verifyPlatform({ browser, baseUrl, recordTest, s
         }
         recordTest('PLAT-07','PDV integrado, caja, entrega y recibo real',true,'Venta USD11.50; efectivo20, cambio8.50; una salida física; recibo inmutable; vistas ERP sin desbordamiento en cuatro anchos.');
 
+        const prepaidName=`Saldo E2E ${crypto.randomBytes(6).toString('hex')}`;
+        await owner.goto(`${baseUrl}/gestion/contactos`,{waitUntil:'networkidle0'});
+        await owner.$eval(erpForm('contacto'),form=>form.closest('details').open=true);
+        await fill(owner,erpForm('contacto'),{nombre:prepaidName,tipo:'cliente'});await submit(owner,erpForm('contacto'));
+        const prepaidContact=query(`SELECT id FROM erp_contactos WHERE nombre='${prepaidName}'`);
+        await owner.goto(`${baseUrl}/gestion/prepagos`,{waitUntil:'networkidle0'});
+        await owner.$eval(erpForm('prepago_crear'),form=>form.closest('details').open=true);
+        await fill(owner,erpForm('prepago_crear'),{contacto_id:prepaidContact,tipo:'regalo',nombre:prepaidName});await submit(owner,erpForm('prepago_crear'));
+        const prepaid=new URL(owner.url()).searchParams.get('id');
+        if(!prepaid||!/^\d+$/.test(prepaid))throw new Error('Prepaid account must open after creation.');
+        const cashBefore=Number(query("SELECT COALESCE(SUM(IF(tipo='ingreso',monto_centavos,-monto_centavos)),0) FROM caja_movimientos"));
+        const cashLoadForm='form:has(input[name="accion"][value="prepago_cargar"]):has(input[name="metodo"][value="efectivo"])';
+        await owner.$eval(cashLoadForm,form=>form.closest('details').open=true);
+        await fill(owner,cashLoadForm,{monto:'50',recibido:'60'});await submit(owner,cashLoadForm);
+        if(query(`SELECT SUM(monto_centavos) FROM erp_prepago_movimientos WHERE prepago_id=${prepaid}`)!=='5000')throw new Error('Prepaid load must exclude change.');
+        const loadReceipt=query(`SELECT id FROM erp_prepago_movimientos WHERE prepago_id=${prepaid} AND tipo='carga'`);
+        await responsive(owner,'prepaid-account');
+        erpResponse=await owner.goto(`${baseUrl}/gestion/prepagos/comprobante?id=${loadReceipt}`,{waitUntil:'networkidle0'});
+        if(erpResponse.status()!==200||!await owner.$('[data-erp-imprimir]'))throw new Error('Prepaid load receipt must render and allow printing.');
+        await responsive(owner,'prepaid-receipt');
+        await owner.goto(`${baseUrl}/pdv`,{waitUntil:'networkidle0'});await fill(owner,erpForm('venta_crear'),{contacto_id:prepaidContact});await submit(owner,erpForm('venta_crear'));
+        const prepaidSale=new URL(owner.url()).searchParams.get('id');
+        await fill(owner,erpForm('venta_agregar'),{catalogo_id:catalog,cantidad:'1',descuento:'0'});await submit(owner,erpForm('venta_agregar'));await submit(owner,erpForm('venta_confirmar'));
+        await fill(owner,erpForm('prepago_aplicar'),{prepago_id:prepaid,monto:'11.50'});await submit(owner,erpForm('prepago_aplicar'));await submit(owner,erpForm('venta_entregar'));
+        if(query(`SELECT SUM(monto_centavos) FROM erp_prepago_movimientos WHERE prepago_id=${prepaid}`)!=='3850')throw new Error('Prepaid purchase must consume its exact gross total.');
+        if(Number(query("SELECT COALESCE(SUM(IF(tipo='ingreso',monto_centavos,-monto_centavos)),0) FROM caja_movimientos"))!==cashBefore+5000)throw new Error('Applying prepaid credit must not receive money twice.');
+        const prepaidLine=query(`SELECT id FROM erp_venta_lineas WHERE venta_id=${prepaidSale}`);
+        await owner.$eval(erpForm('venta_devolver'),form=>form.closest('details').open=true);
+        await fill(owner,erpForm('venta_devolver'),{linea_id:prepaidLine,cantidad:'1',motivo:'Devolución de producto sin uso E2E',reintegrar_stock:'1'});await submit(owner,erpForm('venta_devolver'));
+        if(query(`SELECT SUM(monto_centavos) FROM erp_prepago_movimientos WHERE prepago_id=${prepaid}`)!=='5000')throw new Error('Product return must restore prepaid credit.');
+        if(query(`SELECT stock_milesimas FROM inventario_productos WHERE id=${product}`)!=='1500')throw new Error('Prepaid return must restore actual product stock once.');
+        await owner.goto(`${baseUrl}/gestion/prepagos?id=${prepaid}`,{waitUntil:'networkidle0'});
+        await owner.$eval(erpForm('prepago_reembolsar'),form=>form.closest('details').open=true);
+        await fill(owner,erpForm('prepago_reembolsar'),{monto:'10',motivo:'Reintegro de saldo no utilizado E2E'});await submit(owner,erpForm('prepago_reembolsar'));
+        if(query(`SELECT SUM(monto_centavos) FROM erp_prepago_movimientos WHERE prepago_id=${prepaid}`)!=='4000')throw new Error('Unused prepaid refund must reduce credit exactly once.');
+        if(Number(query("SELECT COALESCE(SUM(IF(tipo='ingreso',monto_centavos,-monto_centavos)),0) FROM caja_movimientos"))!==cashBefore+4000)throw new Error('Only loading and refunding prepaid funds move physical money.');
+        recordTest('PLAT-08','Prepago nominativo: carga, comprobante, PDV, devolución y reintegro',true,'Carga50, recibido60/cambio10; venta11.50 sin segundo ingreso; devolución repone saldo/stock; reintegro10 deja saldo40 y caja neta40.');
+
         const client = await login('carlos@correo.com');
         let response = await client.goto(`${baseUrl}/perfil`,{waitUntil:'networkidle0'});
         if (response.status() !== 200) throw new Error('Client profile unavailable.');

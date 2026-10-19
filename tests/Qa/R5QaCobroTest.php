@@ -37,7 +37,7 @@ final class R5QaCobroTest extends R5Case
         // Aislamiento: cada prueba parte de finanzas vacías (los invariantes y los conteos son globales).
         $db = self::db();
         $db->query('SET FOREIGN_KEY_CHECKS=0');
-        foreach (self::q("SELECT table_name t FROM information_schema.tables WHERE table_schema=DATABASE() AND table_type='BASE TABLE' AND (table_name REGEXP 'pago|caja_|comision|comprobante|cobro|devol|idempot|exportaciones' ) AND table_name NOT LIKE '%resguardo%' AND table_name NOT LIKE '%config%'") as $t) {
+        foreach (self::q("SELECT table_name t FROM information_schema.tables WHERE table_schema=DATABASE() AND table_type='BASE TABLE' AND (table_name REGEXP 'pago|transferencia_referencias|caja_|comision|comprobante|cobro|devol|idempot|exportaciones' ) AND table_name NOT LIKE '%resguardo%' AND table_name NOT LIKE '%config%'") as $t) {
             $nombre = $t['t'];
             if (str_contains($nombre, 'secuencia') || str_contains($nombre, 'contador')) { continue; }
             $db->query('TRUNCATE TABLE `' . $nombre . '`');

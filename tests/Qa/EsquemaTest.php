@@ -355,6 +355,12 @@ final class EsquemaTest extends R2bCase
         $p = proc_open([PHP_BINARY, '-d', 'variables_order=EGPCS', self::RAIZ . '/scripts/restore_db.php', "--db=$d", "--input=$archivo", "--hash=$hash"], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, self::RAIZ, $env);
         $out = stream_get_contents($pipes[1]) . stream_get_contents($pipes[2]);
         $this->assertSame(0, proc_close($p), $out);
+        $origenTriggers=$this->conectar($o);$destinoTriggers=$this->conectar($d);
+        $consulta="SELECT TRIGGER_NAME,ACTION_TIMING,EVENT_MANIPULATION,EVENT_OBJECT_TABLE,ACTION_STATEMENT FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() ORDER BY TRIGGER_NAME";
+        $normalizar=static function(array $filas):array {foreach($filas as &$fila)$fila['ACTION_STATEMENT']=rtrim(trim($fila['ACTION_STATEMENT']),';');unset($fila);return $filas;};
+        $this->assertSame($normalizar($this->filas($origenTriggers,$consulta)),$normalizar($this->filas($destinoTriggers,$consulta)),'el ciclo debe reponer todas las protecciones versionadas');
+        $this->assertFalse($destinoTriggers->query("DELETE FROM consentimiento_versiones"));$this->assertSame(1644,$destinoTriggers->errno);
+        $origenTriggers->close();$destinoTriggers->close();
         // Esquema y datos idénticos.
         $this->assertEquals($this->esquema($o), $this->esquema($d), 'el esquema restaurado difiere');
         $db = $this->conectar($d);
@@ -434,7 +440,8 @@ final class EsquemaTest extends R2bCase
         // CAMBIO DE CONTRATO (ronda 5, migraciones 023-026): +7 tablas (cobros/verificación y su historial, comprobantes y numeración, auditoría general de exportaciones…).
         // CAMBIO DE CONTRATO (regularización de citas antiguas, migración 027): +1 tabla (citas_regularizaciones).
         // Migraciones ERP 028–033: +42 tablas, sin sustituir las 50 del esquema anterior.
-        $this->assertSame(92, $n, 'tablas del esquema migrado (incluye migraciones y equipo_mutex)');
+        // 034: +4 tablas (beneficiarios, cargas, libro y referencias bancarias compartidas).
+        $this->assertSame(96, $n, 'tablas del esquema migrado (incluye migraciones y equipo_mutex)');
         // La documentación citaba 30 (tras la 015) y el encabezado de backup_db.php "13 tablas": ya no describen la realidad.
         $this->assertFalse(str_contains((string)file_get_contents(self::RAIZ . '/scripts/backup_db.php'), '13 tablas en total'), 'documentación obsoleta en scripts/backup_db.php: dice "13 tablas en total" y el esquema migrado tiene 35');
     }
