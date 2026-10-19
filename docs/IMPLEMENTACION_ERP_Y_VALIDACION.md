@@ -1,6 +1,6 @@
 # Plataforma operativa ERP de AppSalon
 
-Esta entrega desarrolla el núcleo operativo del plan maestro del 17 de octubre de 2026. El plan sigue siendo la referencia de alcance; no todos sus componentes equivalen a funciones terminadas. La facturación fiscal, contabilidad localizada y nómina regulada requieren elegir proveedores. El usuario seleccionó mantenerlos por definir.
+Esta entrega desarrolla el núcleo operativo del plan maestro del 17 de octubre de 2026. El plan sigue siendo la referencia de alcance; no todos sus componentes equivalen a funciones terminadas. Decisión vigente del usuario (18 de octubre, America/Guayaquil): facturación, contabilidad y nómina serán módulos propios de AppSalon. La facturación ecuatoriana se conectará directamente al SRI; no depende de contratar otro software de facturación. La emisión real requiere configurar el emisor y su certificado de firma. Los servicios bancarios/adquirentes para cobros con tarjeta siguen siendo conexiones externas distintas.
 
 ## Procesos incorporados
 
@@ -147,7 +147,7 @@ La nueva vista separa directorio y detalle. El directorio busca por beneficiario
 
 Migración 034: cuatro tablas nuevas, 96 en total con el esquema actual; no altera importes históricos. El rollback exige conservar las cuentas y su evidencia antes de eliminar el bloque. Ensayar sobre una copia con respaldo y APP_KEY conservada. El recorrido de navegador `PLAT-08` usa formularios reales para carga, impresión, compra con saldo, entrega, devolución y reintegro. Las pruebas de negocio cubren concurrencia, identidad del beneficiario, comisiones, banco, portales y comprobantes. La evidencia definitiva se registra por SHA en el PR de esta entrega.
 
-Pendientes posteriores: paquetes con derechos de sesiones y reglas de consumo/cancelación, suscripciones con ciclos y cobros recurrentes, fidelidad económica y proveedores fiscales/contables/nómina. Esta entrega no los activa ni declara resueltos.
+Pendientes posteriores a 034: paquetes con derechos de sesiones y reglas de consumo/cancelación, suscripciones con ciclos y cobros recurrentes, fidelidad económica y motores propios fiscal/contable/nómina. Su avance se registra en la continuación siguiente.
 
 La revisión del CI del PR #5 corrigió dos conciliaciones de prueba de CRM: la referencia independiente incluía al equipo mientras la pantalla aplicaba el filtro predeterminado de clientes externos. La referencia respeta ahora ese vínculo; los casos incluyen colaboradores con visitas y cobros para verificar su exclusión. No se cambia el filtro del producto. La suite dirigida aprobó 25 pruebas/1080 aserciones; la validación completa del nuevo SHA se registra en el PR.
 
@@ -160,3 +160,22 @@ Validación local de esta continuación: suite principal en orden aleatorio, 120
 Las cargas conservan además una clave y huella permanentes en su registro financiero. Vencer o depurar la caché temporal de idempotencia no autoriza a cobrar de nuevo un formulario antiguo, incluso si la caja original ya está cerrada; la misma clave con otros datos se rechaza.
 
 La última ampliación de protección de cargas aprobó los 18 casos de prepagos/95 aserciones, incluido el reenvío después de expirar la caché y con la caja original cerrada. El resultado se presenta como operación ya registrada; no añade carga, dinero ni evento. El CI ejecutará la suite completa del SHA final publicado.
+
+
+## Continuación 035–036: paquetes y contratos mensuales
+
+El paquete identifica un plan de servicio, beneficiario, sesiones y precio por sesión antes de impuesto. Su financiación utiliza una cuenta nominativa de `erp_prepagos`; no aparece una segunda caja ni una venta al crear derechos. Las condiciones del contrato quedan congeladas. Los planes pueden archivarse para altas nuevas sin cambiar contratos anteriores.
+
+El directorio y la ficha de paquetes están separados y paginados. El beneficiario se busca por nombre, identificación o correo, sin exigir un login. Desde la venta en borrador de una cita se selecciona el paquete de cada servicio; una operación puede cubrir varias sesiones y planes. Se valida identidad, servicio, impuesto, financiación y unidades. No admite anticipos previos ni cupones simultáneos; un descuento anterior de la línea cubierta debe retirarse. Se conserva el precio original y se registra la diferencia como descuento pactado, con recálculo de impuesto. La confirmación, las asignaciones y sus pagos se confirman o revierten juntos.
+
+Una sesión queda reservada al asignarse y consumida al registrar la atención, mediante la misma conciliación que procesa comisiones. El saldo de paquete no se gasta por el formulario de prepago genérico. La comisión de una sesión financiada y atendida utiliza su propio pago, aunque otros productos de la venta sigan sin pagar. La devolución se hace por sesión completa: restituye la unidad y su importe en el prepago original; no entrega efectivo. El reintegro de saldo sin utilizar se registra por separado y reduce las sesiones financiadas disponibles. Un pago de paquete no devuelve otros conceptos de la venta.
+
+La operación de asignación y el alta de suscripción conservan claves y huellas permanentes. Reenviar un formulario tras vencer la caché no duplica sesiones ni contratos, tampoco revive una cancelación. Las cuentas de financiación se bloquean en orden estable y las lecturas de unidades son actuales. Las guardas 035 y 036 bloquean revertir contratos con evidencia; el restaurador repone también sus protecciones versionadas.
+
+Las suscripciones comerciales son distintas de la membresía de cliente para acceder al portal y del consentimiento a marketing. Exigen registrar la aceptación de ciclos mensuales. Cada ciclo crea un paquete independiente, sin cobrar ni conceder sesiones financiadas automáticamente. El cliente carga saldo por efectivo o transferencia verificada. El supervisor abre únicamente el ciclo actual; no genera deudas por meses pausados. Se conserva el día original de anclaje (31 enero → fin de febrero → 31 marzo). El final de cada período es exclusivo.
+
+Pausar o cancelar detiene ciclos futuros. Reactivar una pausa abre o reutiliza el ciclo actual; cancelar es terminal y exige un contrato nuevo para otra alta. Las sesiones se asignan a visitas del período antes de que termine; las asignaciones anteriores conservan su historial. El saldo de un período vencido permanece reintegrable, sin confiscación ni traslado automático a otro ciclo. No se admiten nuevas cargas a ciclos vencidos o contratos cancelados. Un contrato defectuoso no bloquea procesar los demás; tiene diagnóstico y reintento diferido.
+
+Los cobros con tarjeta y renovaciones con débito automático requieren conectar la banca/adquisición y registrar el mandato correspondiente. Esta entrega no solicita datos de tarjeta ni simula cargos. La facturación propia directa al SRI, contabilidad, nómina, fidelidad económica y ampliaciones del plan continúan como trabajos separados.
+
+Se incorpora PLAT-09 para formularios reales de plan, beneficiario vinculado, financiación, reserva, restitución y estados del contrato mensual, además de responsive. Los resultados por SHA y el estado de su ejecución se registran en el PR; añadir el caso no equivale a haberlo ejecutado localmente. La validación local inicial aprobó 52 pruebas/191 aserciones; después se amplió el soporte a varias sesiones y el cálculo de comisiones. La regresión dirigida de esa ampliación aprobó 69/264; los ensayos siguientes y el CI completan su alcance.

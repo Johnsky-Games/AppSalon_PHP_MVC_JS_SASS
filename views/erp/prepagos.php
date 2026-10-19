@@ -1,4 +1,5 @@
 <?php $titulo=$prepago?'Prepago #'.(int)$prepago['id']:'Saldos prepagados';include __DIR__.'/_inicio.php'; ?>
+<?php if($paqueteVinculado): ?><section class="ui-card"><h2>Financiación de un paquete de sesiones</h2><p>Este saldo se utiliza únicamente mediante sus sesiones. La financiación pactada es <?= s($dinero((int)$paqueteVinculado['sesiones']*(int)$paqueteVinculado['importe_sesion'])) ?>. Puedes reintegrar saldo sin utilizar; ello reduce las sesiones financiadas disponibles.</p><a href="/gestion/paquetes?id=<?= (int)$paqueteVinculado['id'] ?>">Consultar sesiones del paquete</a></section><?php endif; ?>
 <?php if(!$prepago): ?>
 <p>Registra saldo o una tarjeta regalo a nombre de un cliente. El dinero queda disponible para sus próximas ventas; recibirlo no marca una atención como realizada.</p>
 <form class="formulario ui-filtros" method="GET"><div class="campo"><label for="prepago-buscar">Beneficiario o nombre del prepago</label><input id="prepago-buscar" type="search" name="q" value="<?= s($q) ?>" maxlength="80"></div><button class="boton">Buscar</button></form>

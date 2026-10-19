@@ -2,6 +2,8 @@
 
 Fecha de consulta: 17 de octubre de 2026, America/Guayaquil.
 
+Decisión posterior vigente (18 de octubre de 2026, America/Guayaquil): el usuario solicita un sistema propio de facturación. Se implementarán también contabilidad y nómina como dominios propios, con conexión directa al SRI para la fiscalidad ecuatoriana. Las recomendaciones de tercerizar esos motores que aparecen en la auditoría original quedan sustituidas por esta decisión. Banca, adquisición de tarjetas, certificado del emisor y servicios estatales conservan sus respectivas conexiones externas; no se simulará autorización fiscal ni movimiento bancario.
+
 ## 1. Resultado y alcance
 
 La evolución recomendada es una plataforma integrada para un negocio de servicios de belleza con venta de productos: operación especializada de salón, CRM, PDV, facturación, inventario, compras, finanzas, RH, aprobaciones, documentos y BI. Estos bloques comparten identidades, documentos y eventos; no deben convertirse en aplicaciones con registros duplicados.

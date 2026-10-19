@@ -12,6 +12,8 @@ final class ErpDevolucionService extends ErpService
             if(!$l)throw new ErpException('La línea no pertenece a esta venta.');
             $qty=ValoresExactos::decimal($d['cantidad']??null,3);$original=(int)$l['cantidad_milesimas'];$anterior=(int)$l['devuelto_milesimas'];
             if($qty+$anterior>$original)throw new ErpException('La cantidad supera lo que queda por devolver.');
+            $asignacion=$this->r->uno("SELECT * FROM erp_paquete_aplicaciones WHERE linea_id=? AND estado<>'restituida' FOR SHARE",[(int)$l['id']]);
+            if($asignacion&&($qty!==1000||$anterior!==0))throw new ErpException('Devuelve la sesión completa para restituir su derecho y su saldo.');
             $motivo=$this->texto($d['motivo']??'',300);$stock=($d['reintegrar_stock']??'')==='1';
             $yaEntregadoDev=(int)$this->r->uno('SELECT COALESCE(SUM(cantidad_entregada_milesimas),0) n FROM erp_devoluciones WHERE linea_id=?',[(int)$l['id']])['n'];
             $entregadaAhora=min($qty,max(0,(int)$l['entregado_milesimas']-$yaEntregadoDev));
@@ -19,7 +21,9 @@ final class ErpDevolucionService extends ErpService
             $antes=$ventas->resumen($id);if($antes['pendiente']>0)throw new ErpException('Verifica o rechaza las transferencias pendientes antes de devolver.');
             $total=(int)$l['total_centavos'];$monto=intdiv($total*($anterior+$qty)+intdiv($original,2),$original)-intdiv($total*$anterior+intdiv($original,2),$original);
             $aPagar=max(0,$antes['neto']-($antes['total']-$monto));
-            $pagos=$this->r->q("SELECT p.* FROM pagos p JOIN erp_pago_aplicaciones a ON a.pago_id=p.id WHERE a.venta_id=? AND p.estado='completado' ORDER BY p.id FOR UPDATE",[$id]);
+            // El pago de una sesión está destinado a esa línea; no financia productos u otros servicios.
+            if($asignacion)$aPagar=$monto;
+            $pagos=$this->r->q("SELECT p.* FROM pagos p JOIN erp_pago_aplicaciones a ON a.pago_id=p.id LEFT JOIN erp_paquete_aplicaciones pa ON pa.pago_id=p.id WHERE a.venta_id=? AND p.estado='completado' AND ".($asignacion?'p.id=?':'pa.id IS NULL')." ORDER BY p.id FOR UPDATE",$asignacion?[$id,(int)$asignacion['pago_id']]:[$id]);
             // Todos los saldos de prepago se bloquean antes de la caja física.
             $prepagos=$this->r->q("SELECT m.prepago_id FROM erp_prepago_movimientos m JOIN erp_pago_aplicaciones a ON a.pago_id=m.pago_id WHERE a.venta_id=? AND m.tipo='aplicacion' ORDER BY m.prepago_id FOR SHARE",[$id]);
             foreach($prepagos as $prepago)(new ErpPrepagoService($this->r))->bloquear((int)$prepago['prepago_id']);
@@ -56,6 +60,7 @@ final class ErpDevolucionService extends ErpService
                 }
             }
             $this->r->q('UPDATE erp_venta_lineas SET devuelto_milesimas=devuelto_milesimas+? WHERE id=?',[$qty,(int)$l['id']]);
+            (new ErpPaqueteService($this->r))->restituir($actor,(int)$l['id'],$devolucion);
             (new ErpPagoService($this->r))->actualizarCita($id);(new ErpComisionService($this->r))->sincronizar($id,$actor);
             $evento=$this->evento($actor,'venta_devuelta','venta',$id,['devolucion_id'=>$devolucion,'linea_id'=>$l['id'],'linea_original'=>$l,'cantidad'=>$qty,'devuelto_anterior_milesimas'=>$anterior,'credito'=>$monto,'dinero_devuelto'=>$aPagar,'stock'=>$stock,'motivo'=>$motivo],['fiscal','contabilidad']);
             (new ErpReciboService($this->r))->emitir($actor,$id,$evento);return $id;
