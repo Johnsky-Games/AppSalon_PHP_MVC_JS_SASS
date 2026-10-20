@@ -68,15 +68,14 @@ git fetch origin
 git switch main
 git pull --ff-only
 
-docker compose --env-file includes/.env -p appsalon-validacion stop notificaciones
+docker compose --env-file includes/.env -p appsalon-validacion stop web notificaciones
 docker compose --env-file includes/.env -p appsalon-validacion up -d db
 docker compose --env-file includes/.env -p appsalon-validacion build web notificaciones
 
-docker compose --env-file includes/.env -p appsalon-validacion up -d web
-docker compose --env-file includes/.env -p appsalon-validacion exec -T web php scripts/backup_db.php --gzip
-docker compose --env-file includes/.env -p appsalon-validacion exec -T web php database/migrador.php status
-docker compose --env-file includes/.env -p appsalon-validacion exec -T web php database/migrador.php up
-docker compose --env-file includes/.env -p appsalon-validacion exec -T web php database/migrador.php status
+docker compose --env-file includes/.env -p appsalon-validacion run --rm --no-deps -T web php scripts/backup_db.php --gzip
+docker compose --env-file includes/.env -p appsalon-validacion run --rm --no-deps -T web php database/migrador.php status
+docker compose --env-file includes/.env -p appsalon-validacion run --rm --no-deps -T web php database/migrador.php up
+docker compose --env-file includes/.env -p appsalon-validacion run --rm --no-deps -T web php database/migrador.php status
 
 docker compose --env-file includes/.env -p appsalon-validacion up -d web notificaciones
 docker compose --env-file includes/.env -p appsalon-validacion ps -a
@@ -85,7 +84,7 @@ docker compose --env-file includes/.env -p appsalon-validacion logs --no-color -
 
 Comprobar cada salida antes de ejecutar el comando siguiente; detenerse si falla respaldo, migración o comprobación. El bind del proyecto conserva el respaldo en `storage/backups`; copiarlo a un destino seguro y verificar su manifiesto. Conservar `APP_KEY` por separado: cambiarla impide descifrar documentos y otras cargas cifradas. Nunca publicar respaldos o claves en Git.
 
-No ejecutar `down -v`, no eliminar `appsalon-validacion_appsalon_db_data` y no recrear cuentas para actualizar. El respaldo y las migraciones se ejecutan siempre **dentro del servicio `web`** (`exec -T web php …`), que ya tiene la conexión a la base y el volumen de `storage/backups`; conservar `--env-file includes/.env` en cada comando. `migrador.php status` antes y después permite comparar lo aplicado. El nombre del proyecto y la red deben coincidir con la configuración que ya utiliza el entorno.
+No ejecutar `down -v`, no eliminar `appsalon-validacion_appsalon_db_data` y no recrear cuentas para actualizar. El respaldo y las migraciones se ejecutan **con la definición del servicio `web`** como contenedor de tarea (`run --rm --no-deps -T web php …`): misma imagen, variables de `includes/.env` y volumen de `storage/backups`, pero **sin atender solicitudes**. `web` y `notificaciones` permanecen detenidos hasta que el segundo `status` confirme que no quedan migraciones pendientes; si el respaldo o una migración falla, no se inician (el código nuevo no debe servirse contra el esquema anterior). Conservar `--env-file includes/.env` en cada comando. Con un `web` ya en marcha, `exec -T web php …` ejecuta lo mismo dentro del contenedor, pero solo es aceptable en una ventana sin tráfico. El nombre del proyecto y la red deben coincidir con la configuración que ya utiliza el entorno.
 
 ## Registro de calidad: fallos intermitentes y verificaciones (20 de octubre)
 
