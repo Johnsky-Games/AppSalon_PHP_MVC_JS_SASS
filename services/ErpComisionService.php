@@ -19,11 +19,15 @@ final class ErpComisionService extends ErpService
         $v=$this->r->uno('SELECT * FROM erp_ventas WHERE id=?',[$venta]);if(!$v||$v['estado']!=='confirmada')return;
         $s=(new ErpVentaService($this->r))->resumen($venta);$neto=max(0,min($s['neto'],$s['total']));
         $lineas=$this->r->q('SELECT * FROM erp_venta_lineas WHERE venta_id=? ORDER BY id',[$venta]);$acumulado=0;$asignado=0;$legacyBase=[];$legacyAsignado=[];
+        $protegidas=[];$importeProtegido=0;$pagadoProtegido=0;
+        foreach($this->r->q("SELECT a.linea_id,a.importe_centavos,p.estado FROM erp_paquete_aplicaciones a LEFT JOIN pagos p ON p.id=a.pago_id WHERE a.venta_id=? AND a.estado<>'restituida' FOR SHARE",[$venta]) as $a){$pagado=$a['estado']==='completado'?(int)$a['importe_centavos']:0;$protegidas[(int)$a['linea_id']]=$pagado;$importeProtegido+=(int)$a['importe_centavos'];$pagadoProtegido+=$pagado;}
+        $totalLibre=max(0,$s['total']-$importeProtegido);$netoLibre=max(0,min($neto-$pagadoProtegido,$totalLibre));
         $cita=$v['cita_id']?$this->r->uno('SELECT * FROM citas WHERE id=?',[(int)$v['cita_id']]):null;
         foreach($lineas as $l){
             $qty=(int)$l['cantidad_milesimas'];$dev=(int)$l['devuelto_milesimas'];$original=(int)$l['total_centavos'];
-            $vigente=$original-intdiv($original*$dev+intdiv($qty,2),$qty);$acumulado+=$vigente;
-            $cuota=$s['total']>0?intdiv($neto*$acumulado,$s['total']):0;$pagadoLinea=$cuota-$asignado;$asignado=$cuota;
+            $vigente=$original-intdiv($original*$dev+intdiv($qty,2),$qty);
+            if(array_key_exists((int)$l['id'],$protegidas))$pagadoLinea=$protegidas[(int)$l['id']];
+            else{$acumulado+=$vigente;$cuota=$totalLibre>0?intdiv($netoLibre*$acumulado,$totalLibre):0;$pagadoLinea=$cuota-$asignado;$asignado=$cuota;}
             $movs=$this->r->q('SELECT * FROM erp_comision_movimientos WHERE linea_id=? ORDER BY id FOR UPDATE',[(int)$l['id']]);
             $prof=null;$col=$l['vendedor_colaborador_id'];$fecha=substr($v['confirmado_en']??$v['creado_en'],0,10);
             $elegible=$l['producto_id']?(int)$l['entregado_milesimas']>=$qty-$dev:($cita&&$cita['estado']==='completada');
@@ -54,7 +58,10 @@ final class ErpComisionService extends ErpService
             $this->r->q('INSERT INTO erp_comision_movimientos(venta_id,linea_id,colaborador_id,porcentaje_pb,monto_centavos,creado_en) VALUES(?,?,?,?,?,?)',[$venta,(int)$l['id'],(int)$col,$pb,$delta,$this->r::ahora()]);
             $this->evento($actor,'comision_ajustada','venta',$venta,['movimiento_id'=>$this->r->id(),'linea_id'=>$l['id'],'colaborador_id'=>$col,'delta'=>$delta]);
         }
-        if($cita&&$cita['estado']==='completada')$this->r->q('UPDATE erp_ventas SET atencion_sync_hash=? WHERE id=?',[self::huellaAtencion($cita),$venta]);
+        if($cita&&$cita['estado']==='completada'){
+            (new ErpPaqueteService($this->r))->consumirVenta($venta,$actor);
+            $this->r->q('UPDATE erp_ventas SET atencion_sync_hash=? WHERE id=?',[self::huellaAtencion($cita),$venta]);
+        }
     }
     public function recalcular(int $actor,array $d):array
     {

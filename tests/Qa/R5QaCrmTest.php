@@ -506,20 +506,33 @@ final class R5QaCrmTest extends R5Case
 
     // ================================================================== K8 / K9
 
-    /** Req «no se inventan suscripciones de pago»: ninguna pantalla del CRM muestra planes/mensualidades/«premium» ni montos recurrentes; «suscripción» solo aparece como comunicaciones comerciales. */
+    /** CRM no inventa cobros ni confunde el consentimiento comercial con contratos reales de sesiones. */
     public function test_K8_no_hay_datos_inventados_de_suscripciones_de_pago(): void
     {
         $n = $this->eq('dueno');
         $fallos = [];
-        $id = self::$cli['activo/conf/otorgado'];
-        foreach (['/admin/clientes', '/admin/clientes?por_pagina=100', "/admin/clientes/ficha?id=$id", '/admin/clientes/auditoria'] as $ruta) {
+        $id = self::$cli['activo/conf/sin'];
+        $repo = new \Repositories\ErpRepository(self::db());$actor = (int)self::$e['dueno']['id'];
+        $consentimientos = new \Repositories\ConsentimientoRepository(self::db());$historial = $consentimientos->historial($id);
+        $maestros = new \Services\ErpMaestrosService($repo);
+        $contacto = $maestros->contacto($actor,['idem_key'=>bin2hex(random_bytes(16)),'nombre'=>'Beneficiario K8','tipo'=>'cliente'])['recurso_id'];
+        $maestros->vincularCliente($actor,['idem_key'=>bin2hex(random_bytes(16)),'contacto_id'=>$contacto,'usuario_id'=>$id]);
+        $nombrePlan='Contrato económico K8 '.bin2hex(random_bytes(5));
+        $plan=(new \Services\ErpPaqueteService($repo))->plan($actor,['idem_key'=>bin2hex(random_bytes(16)),'nombre'=>$nombrePlan,'servicio_id'=>self::$e['svc'],'sesiones'=>2,'precio'=>'20','impuesto'=>'0'])['recurso_id'];
+        (new \Services\ErpSuscripcionService($repo))->crear($actor,['idem_key'=>bin2hex(random_bytes(16)),'plan_id'=>$plan,'contacto_id'=>$contacto,'inicio'=>self::gye('+1 day')->format('Y-m-d'),'renovacion_autorizada'=>'1','consentimiento'=>'Aceptación del contrato de sesiones, independiente de marketing']);
+        $conteos=static function():array {$r=[];foreach(['erp_suscripciones','erp_suscripcion_ciclos','erp_paquetes','erp_prepago_movimientos','pagos'] as $tabla)$r[$tabla]=(int)self::escalar('SELECT COUNT(*) FROM '.$tabla);return $r;};
+        $antes=$conteos();
+        foreach (['/admin/clientes', '/admin/clientes?por_pagina=100', '/admin/clientes/indicadores', "/admin/clientes/ficha?id=$id", '/admin/clientes/auditoria'] as $ruta) {
             $t = self::texto($n->get($ruta)['body']);
+            $this->assertStringNotContainsString($nombrePlan,$t,'CRM no presenta un contrato comercial como consentimiento a marketing.');
             if (preg_match('/plan(?:es)? de pago|mensualidad|premium|membres[ií]a de pago|\$\s?\d+(?:\.\d\d)?\s?\/\s?mes|renovaci[oó]n autom|pr[oó]ximo cobro|facturaci[oó]n recurrente/iu', $t, $m)) { $fallos[] = "$ruta muestra «{$m[0]}»"; }
             foreach (preg_split('/(?<=[.!?])\s+/u', $t) as $frase) {
                 if (preg_match('/suscrip/iu', $frase) && !preg_match('/comunicaci|promocion|consentim|correo|marketing|no (?:es|hay|cobra|existe)/iu', $frase)) { $fallos[] = "$ruta usa «suscripción» sin aclarar que es de comunicaciones comerciales: «" . mb_substr($frase, 0, 120) . '»'; break; }
             }
         }
-        $this->assertSame(0, (int)self::escalar("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name LIKE '%suscrip%'"), 'se creó una entidad de suscripción de pago');
+        $this->assertSame($antes,$conteos(),'Consultar CRM no crea ciclos, derechos ni cobros.');
+        $this->assertSame($historial,$consentimientos->historial($id),'Crear un contrato y consultar CRM no concede consentimiento comercial.');
+        $this->assertSame(0,(int)self::escalar('SELECT COALESCE(MAX(marketing_email),0) FROM perfiles_usuario WHERE usuarioId=?',[$id]));
         $this->sinFallos($fallos);
     }
 

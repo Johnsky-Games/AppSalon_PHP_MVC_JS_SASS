@@ -142,7 +142,7 @@ final class CrmService
         'q' => 'Busca por nombre, apellido, correo o teléfono (hasta 80 caracteres).',
         'vinculo' => 'Por defecto se muestran clientes externos. El propietario y las demás cuentas laborales quedan fuera. Para consultar a personas del equipo que también tienen membresía de cliente o citas, elige «Equipo con perfil de cliente» o «Todos los perfiles de cliente».',
         'cuenta' => 'Cuenta: «Confirmada» = la persona ya confirmó su correo y puede entrar; «Sin confirmar» = creó o recibió la cuenta pero aún no la activa.',
-        'membresia' => 'Membresía de cliente: estado de la ficha de cliente (activa o suspendida). No es una suscripción de pago: este sistema no cobra suscripciones.',
+        'membresia' => 'Membresía de cliente: estado de la ficha de cliente (activa o suspendida). No es una suscripción de pago: los contratos comerciales se gestionan por separado en Suscripciones.',
         'consentimiento' => 'Comunicaciones comerciales: consentimiento para recibir promociones por correo. «Otorgado» muestra la versión del texto aceptada y la fecha; «Revocado» = su última decisión fue retirarlo; «Sin decisión» = nunca decidió. Es lo único que en esta pantalla se llama «suscripción»: la suscripción a comunicaciones comerciales.',
         'actividad' => 'Actividad comercial según visitas completadas: «Reciente» = última visita dentro de la ventana de días de actividad; «Inactivo por periodo» = tuvo visitas, pero la última es más antigua que esa ventana; «Nunca atendido» = ninguna visita completada.',
         'segmento' => 'Segmento: cada cliente cae en uno solo de los segmentos de la tabla «Segmentos y reglas». Las reglas están más abajo.',

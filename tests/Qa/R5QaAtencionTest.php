@@ -462,12 +462,12 @@ final class R5QaAtencionTest extends R5Case
 
     /**
      * Req A/E: margen de adelanto (60 min): una cita que empieza en ~30 min SÍ se puede iniciar; una que empieza en 2 h no.
-     * (Solo evaluable antes de las 23:00 hora Guayaquil; después se marca incompleta de forma explícita, no omitida en silencio.)
+     * La fecha de la cita puede cruzar medianoche: la ventana se abre 60 min antes también en la víspera.
      */
     public function test_E_margen_de_adelanto_de_60_minutos(): void
     {
-        $slot = self::slotEnMargen();
-        if ($slot === null) { $this->markTestIncomplete('Después de las 23:30 (America/Guayaquil) no existe un horario «dentro del margen» el mismo día; repetir a otra hora.'); }
+        $inicio = self::gye('+30 minutes');
+        $slot = [$inicio->format('Y-m-d'),$inicio->format('H:i:s')];
         $n = $this->equipo('dueno');
         $c = self::crearCita(['cliente' => self::$e['cliente']['id'], 'pro' => self::$e['proA']['profesional_id'], 'fecha' => $slot[0], 'hora' => $slot[1]]);
         [$f, $b] = $this->accionDe($this->agenda($n, $c), $c, '/Iniciar atenci[óo]n/iu');
@@ -475,12 +475,10 @@ final class R5QaAtencionTest extends R5Case
         $this->assertContains($r['status'], [302, 303], 'dentro del margen de 60 min debe permitir iniciar: ' . substr(self::texto($r['body']), 0, 200));
         $this->assertSame('en_servicio', $this->estado($c));
         $dos = self::gye('+2 hours');
-        if ($dos->format('Y-m-d') === self::gye()->format('Y-m-d')) {
-            $lejos = self::crearCita(['cliente' => self::$e['cliente']['id'], 'pro' => self::$e['proA']['profesional_id'], 'fecha' => $dos->format('Y-m-d'), 'hora' => $dos->format('H:i:s')]);
-            $t = self::tarjeta($this->agenda($n, $lejos)['body'], $lejos);
-            $this->assertTrue(self::accion((string)$t, '/Iniciar atenci[óo]n/iu') === null, 'a 2 h del inicio no debe estar habilitado');
-            $this->assertMatchesRegularExpression('/Disponible desde/iu', self::texto((string)$t));
-        }
+        $lejos = self::crearCita(['cliente' => self::$e['cliente']['id'], 'pro' => self::$e['proA']['profesional_id'], 'fecha' => $dos->format('Y-m-d'), 'hora' => $dos->format('H:i:s')]);
+        $t = self::tarjeta($this->agenda($n, $lejos)['body'], $lejos);
+        $this->assertTrue(self::accion((string)$t, '/Iniciar atenci[óo]n/iu') === null, 'a 2 h del inicio no debe estar habilitado');
+        $this->assertMatchesRegularExpression('/Disponible desde/iu', self::texto((string)$t));
     }
 
     /** Req E: historial con actor, fecha (America/Guayaquil), estado anterior y nuevo, visible en el detalle con el NOMBRE de quien atendió. */

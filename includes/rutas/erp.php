@@ -5,6 +5,8 @@ $router->get('/ventas/detalle',[\Controllers\ErpController::class,'detalle']);
 $router->get('/ventas/recibo',[\Controllers\ErpController::class,'recibo']);
 $router->get('/ventas/cotizacion',[\Controllers\ErpController::class,'cotizacion']);
 $router->get('/gestion/catalogo',[\Controllers\ErpController::class,'catalogo']);
+$router->get('/gestion/paquetes',[\Controllers\ErpController::class,'paquetes']);
+$router->get('/gestion/suscripciones',[\Controllers\ErpController::class,'suscripciones']);
 $router->get('/gestion/contactos',[\Controllers\ErpController::class,'contactos']);
 $router->get('/gestion/caja',[\Controllers\ErpController::class,'caja']);
 $router->get('/gestion/integraciones',[\Controllers\ErpController::class,'integraciones']);

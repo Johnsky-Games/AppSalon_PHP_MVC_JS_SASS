@@ -31,6 +31,7 @@ final class ErpPrepagoService extends ErpService
                 if(!hash_equals($previa['huella'],$huella))throw new ErpException('Esta clave ya identifica otra carga. Revisa el comprobante original.',409);
                 $existente=true;return (int)$previa['prepago_id'];
             }
+            (new ErpPaqueteService($this->r))->validarCarga($id,$monto);
             $pendientes=$this->r->q("SELECT monto_centavos FROM erp_prepago_cargas WHERE prepago_id=? AND estado='pendiente' FOR SHARE",[$id]);
             if($this->saldo($id)+array_sum(array_column($pendientes,'monto_centavos'))+$monto>99999999)throw new ErpException('El saldo y las cargas pendientes superan el límite permitido.');
             $cajas=new ErpCajaService($this->r);$sesion=$cajas->sesion($actor);
@@ -72,7 +73,17 @@ final class ErpPrepagoService extends ErpService
     }
     public function aplicar(int $actor,array $d):array
     {
-        return $this->ejecutar($actor,'erp.cobrar','prepago_aplicar',$d,function()use($actor,$d){
+        return $this->liquidar($actor,$d,null);
+    }
+    /** La asignación ya debe existir en la transacción de paquete; no es una acción HTTP. */
+    public function aplicarPaquete(int $actor,array $d,int $asignacion):array
+    {
+        if(\Classes\Transaccion::nivel($this->r->db)===0)throw new \LogicException('La sesión requiere su transacción comercial.');
+        return $this->liquidar($actor,$d,$asignacion);
+    }
+    private function liquidar(int $actor,array $d,?int $asignacion):array
+    {
+        return $this->ejecutar($actor,'erp.cobrar','prepago_aplicar',$d,function()use($actor,$d,$asignacion){
             $venta=$this->id($d['venta_id']??null);$ventas=new ErpVentaService($this->r);$v=$ventas->bloquear($venta);
             if($v['estado']!=='confirmada')throw new ErpException('Confirma la venta antes de aplicar un prepago.');
             if($v['cita_id']){
@@ -83,10 +94,16 @@ final class ErpPrepagoService extends ErpService
             $contacto=$this->r->uno('SELECT usuario_id FROM erp_contactos WHERE id=? FOR SHARE',[(int)$p['contacto_id']]);
             if((int)$v['contacto_id']!==(int)$p['contacto_id']&&(!$v['cliente_usuario_id']||!$contacto['usuario_id']||(int)$v['cliente_usuario_id']!==(int)$contacto['usuario_id']))throw new ErpException('El prepago pertenece a otro beneficiario. Identifica al comprador correcto.',409);
             $monto=$this->importe($d['monto']??null);$s=$ventas->resumen($venta);
+            $paquete=$this->r->uno('SELECT id FROM erp_paquetes WHERE prepago_id=? FOR SHARE',[$id]);
+            if($paquete){
+                $a=$asignacion?$this->r->uno("SELECT * FROM erp_paquete_aplicaciones WHERE id=? AND paquete_id=? AND venta_id=? AND pago_id IS NULL AND estado='reservada' FOR UPDATE",[$asignacion,(int)$paquete['id'],$venta]):null;
+                if(!$a||(int)$a['importe_centavos']!==$monto)throw new ErpException('Este saldo se utiliza mediante una sesión del paquete.',409);
+            } elseif($asignacion!==null)throw new ErpException('La asignación no corresponde a este prepago.',409);
             if($monto>$s['disponible']||$monto>$this->saldo($id))throw new ErpException('El importe supera el saldo disponible de la venta o del prepago.',409);
             $sesion=(new ErpCajaService($this->r))->sesion($actor);
             $this->r->q("INSERT INTO pagos(cita_id,cita_referencia_id,usuario_id,referencia_pago,proveedor,monto,moneda,estado,metodo_pago,idempotency_key,payload_proveedor,pagado_at,estado_verificacion,registrado_por) VALUES(?,?,?,?,'manual',?,'USD','completado','prepago',?,?,?,'confirmado',?)",[$v['cita_id'],(int)($v['cita_id']??0),$v['cliente_usuario_id'],'PRE-'.strtoupper(bin2hex(random_bytes(12))),CobroCalculo::plano($monto),'prepago:'.hash('sha256',$actor.':'.$d['idem_key']),json_encode(['prepago_id'=>$id,'venta_id'=>$venta,'via'=>'saldo_prepagado']),$this->r::ahora(),$actor]);
             $pago=$this->r->id();
+            if($asignacion!==null)$this->r->q('UPDATE erp_paquete_aplicaciones SET pago_id=? WHERE id=?',[$pago,$asignacion]);
             $this->r->q("INSERT INTO erp_pago_aplicaciones(pago_id,venta_id,sesion_id,importe_centavos,origen) VALUES(?,?,?,?,'pdv')",[$pago,$venta,(int)$sesion['id'],$monto]);
             $this->movimiento($actor,$id,'aplicacion',-$monto,'aplicacion:'.$pago,'Aplicación a venta #'.$venta,null,$pago,null,$venta);
             (new ErpPagoService($this->r))->actualizarCita($venta);(new ErpComisionService($this->r))->sincronizar($venta,$actor);

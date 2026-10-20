@@ -49,9 +49,10 @@ final class ErpController
         $busqueda=is_string($_GET['q']??null)?mb_substr(trim($_GET['q']),0,80):'';
         $catalogo=$r->q("SELECT a.*,p.nombre, p.stock_milesimas,COALESCE(r.reservado,0) reservado FROM erp_catalogo a JOIN inventario_productos p ON p.id=a.producto_id LEFT JOIN(SELECT producto_id,SUM(cantidad_milesimas) reservado FROM erp_stock_reservas WHERE estado='activa' GROUP BY producto_id)r ON r.producto_id=p.id WHERE a.activo=1 AND p.activo=1 AND a.tipo<>'consumo' AND (p.nombre LIKE ? OR p.sku LIKE ?) ORDER BY p.nombre LIMIT 200",['%'.$busqueda.'%','%'.$busqueda.'%']);
         $prepagos=[];if(puede('erp.cobrar')){
-            $v=$datos['venta'];$prepagos=$r->q("SELECT p.id,p.nombre,(SELECT COALESCE(SUM(m.monto_centavos),0) FROM erp_prepago_movimientos m WHERE m.prepago_id=p.id) saldo FROM erp_prepagos p JOIN erp_contactos c ON c.id=p.contacto_id WHERE p.contacto_id=? OR (c.usuario_id IS NOT NULL AND c.usuario_id=?) ORDER BY p.id",[$v['contacto_id'],$v['cliente_usuario_id']]);
+            $v=$datos['venta'];$prepagos=$r->q("SELECT p.id,p.nombre,(SELECT COALESCE(SUM(m.monto_centavos),0) FROM erp_prepago_movimientos m WHERE m.prepago_id=p.id) saldo FROM erp_prepagos p JOIN erp_contactos c ON c.id=p.contacto_id WHERE (p.contacto_id=? OR (c.usuario_id IS NOT NULL AND c.usuario_id=?)) AND NOT EXISTS(SELECT 1 FROM erp_paquetes pa WHERE pa.prepago_id=p.id) ORDER BY p.id",[$v['contacto_id'],$v['cliente_usuario_id']]);
         }
-        self::render($router,'detalle',$datos+compact('catalogo','busqueda','prepagos')+['cotizaciones'=>$r->q('SELECT id,estado,vence_en,creado_en,version_venta FROM erp_cotizaciones WHERE venta_id=? ORDER BY id DESC',[$id]),'recibos'=>$r->q('SELECT id,codigo,creado_en FROM erp_recibos WHERE venta_id=? ORDER BY id DESC',[$id])]);
+        $paquetes=[];if(puede('erp.cobrar')){$v=$datos['venta'];$paquetes=$r->q("SELECT pa.*,pl.nombre,pl.servicio_id,cc.desde ciclo_desde,cc.hasta ciclo_hasta,(SELECT COUNT(*) FROM erp_paquete_aplicaciones a WHERE a.paquete_id=pa.id AND a.estado<>'restituida') usadas FROM erp_paquetes pa JOIN erp_paquete_planes pl ON pl.id=pa.plan_id JOIN erp_prepagos p ON p.id=pa.prepago_id JOIN erp_contactos c ON c.id=p.contacto_id LEFT JOIN erp_suscripcion_ciclos cc ON cc.paquete_id=pa.id WHERE (p.contacto_id=? OR (c.usuario_id IS NOT NULL AND c.usuario_id=?)) AND (cc.id IS NULL OR (cc.hasta>? AND EXISTS(SELECT 1 FROM citas ca WHERE ca.id=? AND ca.fecha>=cc.desde AND ca.fecha<cc.hasta))) ORDER BY pa.id DESC LIMIT 100",[$v['contacto_id'],$v['cliente_usuario_id'],substr($r::ahora(),0,10),$v['cita_id']]);}
+        self::render($router,'detalle',$datos+compact('catalogo','busqueda','prepagos','paquetes')+['cotizaciones'=>$r->q('SELECT id,estado,vence_en,creado_en,version_venta FROM erp_cotizaciones WHERE venta_id=? ORDER BY id DESC',[$id]),'recibos'=>$r->q('SELECT id,codigo,creado_en FROM erp_recibos WHERE venta_id=? ORDER BY id DESC',[$id])]);
     }
     public static function recibo(Router $router):void
     {
@@ -97,6 +98,7 @@ final class ErpController
         $prepago=$id?$r->uno('SELECT p.*,c.nombre beneficiario FROM erp_prepagos p JOIN erp_contactos c ON c.id=p.contacto_id WHERE p.id=?',[$id]):null;
         if($id&&!$prepago)throw new ErpException('Prepago no encontrado.',404);
         $saldo=$id?(new \Services\ErpPrepagoService($r))->saldo($id):0;
+        $paqueteVinculado=$id?$r->uno('SELECT id,sesiones,importe_sesion FROM erp_paquetes WHERE prepago_id=?',[$id]):null;
         $f=(new \Services\ErpInformeService($r))->rango($_GET);$desde=$f['desde'];$hasta=$f['hasta'];
         $cp=filter_var($_GET['cargas_pagina']??1,FILTER_VALIDATE_INT,['options'=>['min_range'=>1,'max_range'=>100000]])?:1;
         $mp=filter_var($_GET['movimientos_pagina']??1,FILTER_VALIDATE_INT,['options'=>['min_range'=>1,'max_range'=>100000]])?:1;
@@ -107,17 +109,54 @@ final class ErpController
         $cargas=$id?$r->q("SELECT c.*,COALESCE((SELECT -SUM(m.monto_centavos) FROM erp_prepago_movimientos m WHERE m.carga_id=c.id AND m.tipo='reembolso'),0) reembolsado FROM erp_prepago_cargas c WHERE c.prepago_id=? ORDER BY c.id DESC LIMIT 25 OFFSET ".(($cp-1)*25),[$id]):[];
         $movimientos=$id?$r->q('SELECT * FROM erp_prepago_movimientos'.$mw.' ORDER BY id DESC LIMIT 25 OFFSET '.(($mp-1)*25),$mc):[];
         $contactos=$r->q("SELECT id,nombre,identificacion FROM erp_contactos WHERE activo=1 AND tipo IN ('cliente','ambos') ORDER BY nombre LIMIT 500");
-        self::render($router,'prepagos',compact('id','q','pagina','paginas','total','filas','prepago','saldo','cargas','movimientos','contactos','desde','hasta','cp','mp','nc','nm','cargasPaginas','movimientosPaginas'));
+        self::render($router,'prepagos',compact('id','q','pagina','paginas','total','filas','prepago','saldo','cargas','movimientos','contactos','desde','hasta','cp','mp','nc','nm','cargasPaginas','movimientosPaginas','paqueteVinculado'));
     }
     public static function prepagoComprobante(Router $router):void
     {
         exigir_permiso('erp.cobrar');$id=filter_var($_GET['id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;
         self::render($router,'prepago_comprobante',['recibo'=>(new \Services\ErpPrepagoService())->comprobante((int)$_SESSION['id'],$id)]);
     }
+    public static function paquetes(Router $router):void
+    {
+        exigir_permiso('erp.cobrar');$r=new ErpRepository();
+        $id=filter_var($_GET['id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;
+        $q=is_string($_GET['q']??null)?mb_substr(trim($_GET['q']),0,80):'';
+        $pagina=filter_var($_GET['pagina']??1,FILTER_VALIDATE_INT,['options'=>['min_range'=>1,'max_range'=>100000]])?:1;
+        $from=' FROM erp_paquetes p JOIN erp_paquete_planes pl ON pl.id=p.plan_id JOIN erp_prepagos pr ON pr.id=p.prepago_id JOIN erp_contactos c ON c.id=pr.contacto_id LEFT JOIN erp_suscripcion_ciclos cc ON cc.paquete_id=p.id';
+        $where=' WHERE (pl.nombre LIKE ? OR c.nombre LIKE ?)';$args=['%'.$q.'%','%'.$q.'%'];
+        $total=(int)$r->uno('SELECT COUNT(*) n'.$from.$where,$args)['n'];$paginas=max(1,(int)ceil($total/25));$pagina=min($pagina,$paginas);
+        $select='SELECT p.*,pl.nombre,pl.servicio_id,c.nombre beneficiario,cc.desde ciclo_desde,cc.hasta ciclo_hasta,cc.suscripcion_id,(SELECT COUNT(*) FROM erp_paquete_aplicaciones a WHERE a.paquete_id=p.id AND a.estado<>\'restituida\') usadas,(SELECT COALESCE(SUM(m.monto_centavos),0) FROM erp_prepago_movimientos m WHERE m.prepago_id=p.prepago_id) saldo';
+        $filas=$r->q($select.$from.$where.' ORDER BY p.id DESC LIMIT 25 OFFSET '.(($pagina-1)*25),$args);
+        $paquete=$id?$r->uno($select.$from.' WHERE p.id=?',[$id]):null;if($id&&!$paquete)throw new ErpException('Paquete no encontrado.',404);
+        $up=filter_var($_GET['usos_pagina']??1,FILTER_VALIDATE_INT,['options'=>['min_range'=>1,'max_range'=>100000]])?:1;
+        $nu=$id?(int)$r->uno('SELECT COUNT(*) n FROM erp_paquete_aplicaciones WHERE paquete_id=?',[$id])['n']:0;$usosPaginas=max(1,(int)ceil($nu/25));$up=min($up,$usosPaginas);
+        $usos=$id?$r->q('SELECT a.*,v.cita_id,c.fecha,c.estado estado_cita FROM erp_paquete_aplicaciones a JOIN erp_ventas v ON v.id=a.venta_id JOIN citas c ON c.id=v.cita_id WHERE a.paquete_id=? ORDER BY a.id DESC LIMIT 25 OFFSET '.(($up-1)*25),[$id]):[];
+        $clienteQ=is_string($_GET['cliente_q']??null)?mb_substr(trim($_GET['cliente_q']),0,80):'';
+        $contactos=$r->q("SELECT id,nombre,identificacion FROM erp_contactos WHERE activo=1 AND tipo IN('cliente','ambos') AND (nombre LIKE ? OR identificacion LIKE ? OR email LIKE ?) ORDER BY nombre LIMIT 50",array_fill(0,3,'%'.$clienteQ.'%'));
+        self::render($router,'paquetes',compact('id','q','pagina','paginas','total','filas','paquete','usos','nu','up','usosPaginas','clienteQ','contactos')+['planes'=>$r->q('SELECT p.*,s.nombre servicio FROM erp_paquete_planes p JOIN servicios s ON s.id=p.servicio_id WHERE p.activo=1 ORDER BY p.nombre LIMIT 500'),'servicios'=>puede('erp.promociones')?$r->q('SELECT id,nombre FROM servicios ORDER BY nombre LIMIT 500'):[]]);
+    }
     public static function integraciones(Router $router):void
     {
         exigir_permiso('erp.reportes');$r=new ErpRepository();
         self::render($router,'integraciones',['filas'=>$r->q('SELECT id,destino,referencia,estado,intentos,actualizado_en FROM erp_integraciones_outbox ORDER BY id DESC LIMIT 200')]);
+    }
+    public static function suscripciones(Router $router):void
+    {
+        exigir_permiso('erp.cobrar');$r=new ErpRepository();$id=filter_var($_GET['id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;
+        $q=is_string($_GET['q']??null)?mb_substr(trim($_GET['q']),0,80):'';$estado=is_string($_GET['estado']??null)?$_GET['estado']:'';
+        if(!in_array($estado,['','activa','pausada','cancelada'],true))throw new ErpException('Estado no válido.');
+        $pagina=filter_var($_GET['pagina']??1,FILTER_VALIDATE_INT,['options'=>['min_range'=>1,'max_range'=>100000]])?:1;
+        $from=' FROM erp_suscripciones s JOIN erp_contactos c ON c.id=s.contacto_id JOIN erp_paquete_planes p ON p.id=s.plan_id';$where=' WHERE (c.nombre LIKE ? OR p.nombre LIKE ?)';$args=['%'.$q.'%','%'.$q.'%'];
+        if($estado!==''){$where.=' AND s.estado=?';$args[]=$estado;}
+        $total=(int)$r->uno('SELECT COUNT(*) n'.$from.$where,$args)['n'];$paginas=max(1,(int)ceil($total/25));$pagina=min($pagina,$paginas);
+        $select='SELECT s.*,c.nombre beneficiario,p.nombre plan,p.sesiones';$filas=$r->q($select.$from.$where.' ORDER BY s.id DESC LIMIT 25 OFFSET '.(($pagina-1)*25),$args);
+        $suscripcion=$id?$r->uno($select.$from.' WHERE s.id=?',[$id]):null;if($id&&!$suscripcion)throw new ErpException('Suscripción no encontrada.',404);
+        $cp=filter_var($_GET['ciclos_pagina']??1,FILTER_VALIDATE_INT,['options'=>['min_range'=>1,'max_range'=>100000]])?:1;
+        $nc=$id?(int)$r->uno('SELECT COUNT(*) n FROM erp_suscripcion_ciclos WHERE suscripcion_id=?',[$id])['n']:0;$ciclosPaginas=max(1,(int)ceil($nc/25));$cp=min($cp,$ciclosPaginas);
+        $ciclos=$id?$r->q("SELECT c.*,p.prepago_id,p.importe_sesion,p.sesiones,(SELECT COALESCE(SUM(m.monto_centavos),0) FROM erp_prepago_movimientos m WHERE m.prepago_id=p.prepago_id) saldo FROM erp_suscripcion_ciclos c JOIN erp_paquetes p ON p.id=c.paquete_id WHERE c.suscripcion_id=? ORDER BY c.desde DESC LIMIT 25 OFFSET ".(($cp-1)*25),[$id]):[];
+        $clienteQ=is_string($_GET['cliente_q']??null)?mb_substr(trim($_GET['cliente_q']),0,80):'';
+        $contactos=$r->q("SELECT id,nombre,identificacion FROM erp_contactos WHERE activo=1 AND tipo IN('cliente','ambos') AND (nombre LIKE ? OR identificacion LIKE ? OR email LIKE ?) ORDER BY nombre LIMIT 50",array_fill(0,3,'%'.$clienteQ.'%'));
+        self::render($router,'suscripciones',compact('id','q','estado','pagina','paginas','total','filas','suscripcion','ciclos','cp','nc','ciclosPaginas','clienteQ','contactos')+['planes'=>$r->q('SELECT id,nombre,sesiones FROM erp_paquete_planes WHERE activo=1 ORDER BY nombre LIMIT 500'),'hoy'=>substr($r::ahora(),0,10)]);
     }
     public static function configuracion(Router $router):void
     {exigir_permiso('erp.configurar');self::render($router,'configuracion',['empresa'=>(new ErpRepository())->uno('SELECT * FROM erp_empresa WHERE id=1')]);}
@@ -246,6 +285,12 @@ final class ErpController
             'rh_asistencia'=>[\Services\ErpRhService::class,'asistencia','personal'],'rh_ausencia'=>[\Services\ErpRhService::class,'solicitarAusencia','personal'],
             'rh_ausencia_resolver'=>[\Services\ErpRhService::class,'resolverAusencia','personal'],'rh_nomina'=>[\Services\ErpRhService::class,'prepararNomina','personal'],
             'solicitud'=>[\Services\ErpAprobacionService::class,'solicitar','aprobaciones'],'solicitud_resolver'=>[\Services\ErpAprobacionService::class,'resolver','aprobaciones'],
+            'paquete_plan'=>[\Services\ErpPaqueteService::class,'plan','paquetes'],
+            'paquete_archivar'=>[\Services\ErpPaqueteService::class,'archivar','paquetes'],
+            'paquete_crear'=>[\Services\ErpPaqueteService::class,'crear','paquetes'],
+            'paquete_aplicar'=>[\Services\ErpPaqueteService::class,'aplicar','venta'],
+            'suscripcion_crear'=>[\Services\ErpSuscripcionService::class,'crear','suscripciones'],
+            'suscripcion_estado'=>[\Services\ErpSuscripcionService::class,'estado','suscripciones'],
             'promocion_estado'=>[\Services\ErpPromocionService::class,'estado','promociones'],
             'promocion_crear'=>[\Services\ErpPromocionService::class,'crear','promociones'],
             'cupon_aplicar'=>[\Services\ErpPromocionService::class,'aplicar','venta'],'cupon_quitar'=>[\Services\ErpPromocionService::class,'quitar','venta'],
@@ -260,7 +305,7 @@ final class ErpController
         ];
         $accion=is_string($_POST['accion']??null)?$_POST['accion']:'';
         if(!isset($acciones[$accion])){http_response_code(422);detener_ejecucion(422);return;}
-        [$clase,$metodo,$destino]=$acciones[$accion];$id=filter_var($_POST[$destino==='compra'?'compra_id':($destino==='personal'?'colaborador_id':($destino==='prepagos'?'prepago_id':'venta_id'))]??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;
+        [$clase,$metodo,$destino]=$acciones[$accion];$campoId=['compra'=>'compra_id','personal'=>'colaborador_id','prepagos'=>'prepago_id','paquetes'=>'paquete_id','suscripciones'=>'suscripcion_id'];$id=filter_var($_POST[$campoId[$destino]??'venta_id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;
         try{
             $datos=$_POST;
             if($accion==='documento_subir'){
@@ -268,14 +313,14 @@ final class ErpController
                 if(!is_array($f)||($f['error']??-1)!==UPLOAD_ERR_OK||!is_string($f['tmp_name']??null)||!is_uploaded_file($f['tmp_name'])||filesize($f['tmp_name'])>5*1024*1024)throw new ErpException('Selecciona un archivo válido de hasta 5 MB.');
                 $datos['contenido']=file_get_contents($f['tmp_name']);$datos['nombre_archivo']=$f['name'];
             }
-            $resultado=(new $clase())->$metodo((int)$_SESSION['id'],$datos);$id=$accion==='rh_nomina'?0:(int)$resultado['recurso_id'];
+            $resultado=(new $clase())->$metodo((int)$_SESSION['id'],$datos);$id=in_array($accion,['rh_nomina','paquete_plan','paquete_archivar'],true)?0:(int)$resultado['recurso_id'];
             $_SESSION['erp_alertas']=['exito'=>[!empty($resultado['repetida'])?'Esta operación ya estaba registrada.':'Operación registrada correctamente.']];
         }catch(ErpException $e){
             if(in_array($e->getCode(),[403,404],true)){\Classes\ErrorResponse::render($e->getCode());return;}
             $_SESSION['erp_alertas']=['error'=>[$e->getMessage()]];
         }catch(\InvalidArgumentException|\Classes\ConflictoIdempotenciaException $e){$_SESSION['erp_alertas']=['error'=>[$e->getMessage()]];}
         catch(\Throwable $e){error_log('[ERP] '.$accion.' '.get_class($e).' code='.$e->getCode());$_SESSION['erp_alertas']=['error'=>['La operación no se completó. Revisa los datos y vuelve a intentarlo.']];}
-        $ruta=match($destino){'venta'=>$id?'/ventas/detalle?id='.$id:'/pdv','compra'=>'/gestion/compras'.($id?'?id='.$id:''),'personal'=>'/gestion/personal'.($id?'?id='.$id:''),'seguimiento'=>'/gestion/seguimiento'.($id?'?id='.$id:''),'prepagos'=>'/gestion/prepagos'.($id?'?id='.$id:''),default=>'/gestion/'.$destino};
+        $ruta=match($destino){'venta'=>$id?'/ventas/detalle?id='.$id:'/pdv','compra'=>'/gestion/compras'.($id?'?id='.$id:''),'personal'=>'/gestion/personal'.($id?'?id='.$id:''),'seguimiento'=>'/gestion/seguimiento'.($id?'?id='.$id:''),'prepagos'=>'/gestion/prepagos'.($id?'?id='.$id:''),'paquetes'=>'/gestion/paquetes'.($id?'?id='.$id:''),'suscripciones'=>'/gestion/suscripciones'.($id?'?id='.$id:''),default=>'/gestion/'.$destino};
         if($destino==='documentos')$ruta='/gestion/documentos?'.http_build_query(['entidad'=>is_string($_POST['entidad']??null)?$_POST['entidad']:'','id'=>(int)($_POST['entidad_id']??0)]);
         if($destino==='consumos')$ruta='/agenda/detalle?id='.(int)($_POST['cita_id']??0);
         header('Location: '.$ruta,true,303);detener_ejecucion(303);
