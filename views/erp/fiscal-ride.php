@@ -1,5 +1,5 @@
 <?php
-$titulo='RIDE de factura'; include __DIR__.'/_inicio.php';
+$titulo=($ride['tipo']??'01')==='04'?'RIDE de nota de crédito':'RIDE de factura'; include __DIR__.'/_inicio.php';
 $e=$ride['emisor']; $f=$ride['factura']; $a=$ride['autorizacion'];
 $numero=$e['estab'].'-'.$e['ptoEmi'].'-'.$e['secuencial'];
 ?>

@@ -47,10 +47,29 @@ php scripts/fiscal_sri.php procesar
 
 La categoría IVA se indica explícitamente: tarifa cero, exento y no objeto son conceptos diferentes. La tabla soportada está en `SriComprobante`; la vigencia aplicable y el régimen del emisor deben configurarse en el circuito definitivo. Los códigos de forma de pago describen el comprobante y no registran otro ingreso de caja.
 
+## Notas de crédito (migración 040)
+
+**Qué es.** Un comprobante fiscal (codDoc `04`) que modifica una **factura autorizada** a partir de **devoluciones comerciales ya registradas**. Se prepara desde la ficha de la factura (`/gestion/facturacion?id=…`), eligiendo las devoluciones pendientes de acreditar y la razón de la modificación. Requiere los permisos `erp.cobrar` y `erp.devolver`; recepción y clientes reciben 403.
+
+**Hechos que permanecen separados.** La nota **no** devuelve dinero, **no** reintegra inventario, **no** revierte comisiones y **no** genera asiento: esos son efectos de la devolución comercial (`ErpDevolucionService`) y se conservan intactos (la prueba compara pagos, devoluciones de cobro, caja, inventario, devoluciones, líneas y comisiones antes y después). Tampoco es la devolución de una sola vía: una devolución comercial puede existir sin nota (p. ej. antes de que la factura se autorice) y la ficha lista las pendientes.
+
+**Reglas.**
+- La factura debe estar `autorizada`; las líneas de la venta deben coincidir con las facturadas (cantidad, precio, descuento, tarifa) o se rechaza (409). Las facturas nuevas guardan `linea_id` en su instantánea; las anteriores se relacionan por posición verificada.
+- Cada devolución puede acreditarse **una sola vez** (`UNIQUE` en `erp_fiscal_nc_devoluciones.devolucion_id`), aunque dos procesos compitan: el segundo recibe 409 tras esperar el candado de la venta.
+- Límites parciales y acumulados por línea: la suma de cantidades y totales de las notas de una línea no supera lo facturado, y la de la factura no supera su total. El descuento se reparte con redondeo acumulado; la última porción absorbe el resto (ajuste ≤ 5 centavos hacia abajo, nunca por encima), de modo que la suma de las notas de una línea cierra con a lo sumo 1 centavo por debajo.
+- El importe fiscal puede diferir del crédito comercial en centavos por redondeo; la instantánea guarda `monto_comercial_centavos` y `diferencia_redondeo_centavos` y la ficha la muestra.
+- Idempotencia permanente por clave de operación y huella; el emisor, certificado y comprador son los de la factura.
+
+**Identidad fiscal.** `erp_fiscal_documentos` gana `tipo` (`01` factura, `04` nota) y `documento_origen_id`; la unicidad por factura usa un índice funcional (no una columna generada, para que los respaldos portables no necesiten escribirla). Se **sustituyen** dos garantías sin perder ninguna: «una fila fiscal por venta» pasa a «una **factura** por venta» (`uq_fiscal_factura_unica`), y «número único por emisor y ambiente» pasa a «número único por emisor, ambiente **y tipo**» (`uq_fiscal_identidad_documento`), porque factura y nota comparten serie y pueden compartir secuencial. Cada tipo tiene su contador en `erp_fiscal_secuencias(documento)`. Los documentos existentes quedan como `01`. Los vínculos devolución↔nota y las líneas acreditadas son de solo anexar (triggers). El trigger de inmutabilidad incluye tipo y origen. El rollback se niega si existen notas.
+
+**Evidencia y entrega.** Reutiliza el worker de lease/consulta/reintentos con la misma clave y XML, la descarga del XML autorizado, el RIDE (A4/impresión), el PDF y la cola de correo cifrada (asunto «Nota de crédito», adjuntos `nota-credito-…`). El RIDE se proyecta del XML autorizado (documento modificado, razón y valor modificado; sin formas de pago).
+
+**Límites actuales.** Ambiente de pruebas. Una nota **rechazada** conserva sus devoluciones vinculadas hasta que exista el flujo de corrección/sustitución (pendiente, bloque 3): hoy esas devoluciones no pueden acreditarse otra vez y la nota rechazada cuenta para los topes. No cubre consumidor final, anticipos/prepago/paquetes/suscripciones, ni devoluciones anteriores a la factura (la factura sigue rechazando ventas con devolución previa).
+
 ## Validación y trabajo que continúa
 
 Las pruebas usan certificados RSA sintéticos y un transporte de ensayo inyectado exclusivamente en `APP_ENV=testing`. No envían comprobantes ficticios a producción. Existe una comprobación independiente de firma y referencias con Python/lxml/cryptography durante el desarrollo; los ensayos por SHA se registran en el PR.
 
-El generador también produce notas de crédito XSD 1.1.0, pero falta cerrar su integración con devoluciones, topes y documentos autorizados de sustento. Continúan la revisión/corrección de rechazos, consumidor final con sus restricciones, fiscalidad de anticipos/paquetes/suscripciones, configuración del momento de IVA y reglas por régimen, y ensayo real con el certificado del emisor en certificación. Solo después se habilitará producción de forma explícita.
+La nota de crédito (XSD 1.1.0) ya está integrada de extremo a extremo (sección «Notas de crédito»). Continúan la revisión/corrección de rechazos, consumidor final con sus restricciones, fiscalidad de anticipos/paquetes/suscripciones, configuración del momento de IVA y reglas por régimen, y ensayo real con el certificado del emisor en certificación. Solo después se habilitará producción de forma explícita.
 
 Este avance no sustituye la contabilidad propia de doble partida, cierre tributario ni nómina. Son módulos pendientes con sus propias reglas, autorizaciones y conciliaciones; no se presentan como completados por tener una factura XML o un recibo interno.

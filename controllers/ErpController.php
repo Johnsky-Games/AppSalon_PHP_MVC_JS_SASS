@@ -144,9 +144,17 @@ final class ErpController
     public static function fiscal(Router $router):void
     {
         exigir_permiso('erp.cobrar');$r=new ErpRepository();$id=filter_var($_GET['id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;$ventaId=filter_var($_GET['venta_id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;
-        if($id){$documento=$r->uno('SELECT d.*,v.comprador_nombre FROM erp_fiscal_documentos d JOIN erp_ventas v ON v.id=d.venta_id WHERE d.id=?',[$id])??throw new ErpException('Documento fiscal no encontrado.',404);$entregas=(new \Services\ErpFiscalCorreoService($r))->listar((int)$_SESSION['id'],$id);self::render($router,'fiscal',compact('documento','entregas'));return;}
+        if($id){
+            $documento=$r->uno('SELECT d.*,v.comprador_nombre FROM erp_fiscal_documentos d JOIN erp_ventas v ON v.id=d.venta_id WHERE d.id=?',[$id])??throw new ErpException('Documento fiscal no encontrado.',404);$entregas=(new \Services\ErpFiscalCorreoService($r))->listar((int)$_SESSION['id'],$id);
+            // Notas de crédito de esta factura (o factura y devoluciones de esta nota) y devoluciones aún sin acreditar fiscalmente.
+            $notas=$documento['tipo']==='01'?$r->q("SELECT id,numero,estado,creado_en FROM erp_fiscal_documentos WHERE documento_origen_id=? ORDER BY id",[$id]):[];
+            $origen=$documento['tipo']==='04'?$r->uno('SELECT id,numero,estado FROM erp_fiscal_documentos WHERE id=?',[(int)$documento['documento_origen_id']]):null;
+            $acreditadas=$documento['tipo']==='04'?$r->q('SELECT d.id,d.linea_id,l.nombre,d.cantidad_milesimas,d.monto_centavos,d.motivo FROM erp_fiscal_nc_devoluciones n JOIN erp_devoluciones d ON d.id=n.devolucion_id JOIN erp_venta_lineas l ON l.id=d.linea_id WHERE n.documento_id=? ORDER BY d.id',[$id]):[];
+            $pendientes=($documento['tipo']==='01'&&$documento['estado']==='autorizada')?$r->q('SELECT d.id,l.nombre,d.cantidad_milesimas,d.monto_centavos,d.motivo,d.creado_en FROM erp_devoluciones d JOIN erp_venta_lineas l ON l.id=d.linea_id WHERE d.venta_id=? AND NOT EXISTS(SELECT 1 FROM erp_fiscal_nc_devoluciones n WHERE n.devolucion_id=d.id) ORDER BY d.id',[(int)$documento['venta_id']]):[];
+            self::render($router,'fiscal',compact('documento','entregas','notas','origen','acreditadas','pendientes'));return;
+        }
         if($ventaId){
-            $previa=$r->uno('SELECT id FROM erp_fiscal_documentos WHERE venta_id=?',[$ventaId]);if($previa){header('Location: /gestion/facturacion?id='.(int)$previa['id'],true,303);detener_ejecucion(303);return;}
+            $previa=$r->uno('SELECT id FROM erp_fiscal_documentos WHERE venta_id=? AND tipo=\'01\'',[$ventaId]);if($previa){header('Location: /gestion/facturacion?id='.(int)$previa['id'],true,303);detener_ejecucion(303);return;}
             $datos=(new ErpVentaService($r))->detalle((int)$_SESSION['id'],$ventaId);$perfiles=$r->q('SELECT id,ruc,establecimiento,punto_emision,creado_en FROM erp_fiscal_perfiles ORDER BY id DESC LIMIT 100');
             self::render($router,'fiscal',$datos+compact('ventaId','perfiles'));return;
         }
@@ -155,7 +163,7 @@ final class ErpController
         $estado=is_string($q['estado']??null)?$q['estado']:'';if(!in_array($estado,['','pendiente','recibida','autorizada','rechazada'],true))throw new ErpException('Estado fiscal no válido.');
         $where=' WHERE d.creado_en>=? AND d.creado_en<DATE_ADD(?,INTERVAL 1 DAY)';$args=[$desde,$hasta];if($estado!==''){$where.=' AND d.estado=?';$args[]=$estado;}
         $pagina=filter_var($q['pagina']??1,FILTER_VALIDATE_INT,['options'=>['min_range'=>1,'max_range'=>100000]])?:1;$total=(int)$r->uno('SELECT COUNT(*) n FROM erp_fiscal_documentos d'.$where,$args)['n'];$paginas=max(1,(int)ceil($total/25));$pagina=min($pagina,$paginas);
-        $filas=$r->q('SELECT d.id,d.numero,d.estado,d.creado_en,v.comprador_nombre FROM erp_fiscal_documentos d JOIN erp_ventas v ON v.id=d.venta_id'.$where.' ORDER BY d.id DESC LIMIT 25 OFFSET '.(($pagina-1)*25),$args);
+        $filas=$r->q('SELECT d.id,d.tipo,d.numero,d.estado,d.creado_en,v.comprador_nombre FROM erp_fiscal_documentos d JOIN erp_ventas v ON v.id=d.venta_id'.$where.' ORDER BY d.id DESC LIMIT 25 OFFSET '.(($pagina-1)*25),$args);
         self::render($router,'fiscal',compact('filas','desde','hasta','estado','pagina','paginas','total'));
     }
     public static function fiscalXml():void
@@ -333,6 +341,7 @@ final class ErpController
             'suscripcion_crear'=>[\Services\ErpSuscripcionService::class,'crear','suscripciones'],
             'suscripcion_estado'=>[\Services\ErpSuscripcionService::class,'estado','suscripciones'],
             'fiscal_factura'=>[\Services\ErpFiscalService::class,'factura','facturacion'],
+            'fiscal_nota_credito'=>[\Services\ErpFiscalService::class,'notaCredito','facturacion'],
             'fiscal_correo'=>[\Services\ErpFiscalCorreoService::class,'programar','facturacion'],
             'fiscal_correo_reintentar'=>[\Services\ErpFiscalCorreoService::class,'reintentar','facturacion'],
             'promocion_estado'=>[\Services\ErpPromocionService::class,'estado','promociones'],
@@ -350,8 +359,8 @@ final class ErpController
         $accion=is_string($_POST['accion']??null)?$_POST['accion']:'';
         if(!isset($acciones[$accion])){http_response_code(422);detener_ejecucion(422);return;}
         [$clase,$metodo,$destino]=$acciones[$accion];$campoId=['compra'=>'compra_id','personal'=>'colaborador_id','prepagos'=>'prepago_id','paquetes'=>'paquete_id','suscripciones'=>'suscripcion_id'];$id=filter_var($_POST[$campoId[$destino]??'venta_id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;$completada=false;
-        $esEntrega=in_array($accion,['fiscal_correo','fiscal_correo_reintentar'],true);
-        if($esEntrega)$id=filter_var($_POST['documento_id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;
+        $esEntrega=in_array($accion,['fiscal_correo','fiscal_correo_reintentar','fiscal_nota_credito'],true);
+        if($esEntrega)$id=filter_var($_POST[$accion==='fiscal_nota_credito'?'factura_id':'documento_id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;
         try{
             $datos=$_POST;
             if($accion==='documento_subir'){
