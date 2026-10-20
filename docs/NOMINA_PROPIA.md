@@ -74,3 +74,22 @@ Nómina › IESS. **AppSalon no presenta avisos ni planillas en el portal del IE
 * **Avisos de entrada y salida:** la pantalla lista los contratos de empleado que empiezan (entrada) o terminan (salida) en el rango y no tienen aviso registrado. Quien tiene `nomina.calcular` registra la **referencia que devolvió el portal**; el aviso solo se anula con motivo (no se edita ni se borra, triggers), y un mismo aviso activo no se duplica.
 * **Borrador de aportes del mes:** de la corrida **aprobada**: sueldo aportable, aporte personal, aporte patronal y fondos de reserva acumulados (se depositan al IESS) por colaborador. La suma cuadra contra la obligación al IESS de la corrida; si no cuadra, la pantalla lo avisa y no debe presentarse sin revisar.
 * **Pendiente:** archivo de importación en el formato oficial, plazos legales de presentación, reglas de mora y aviso de novedades (cambio de sueldo, licencias). Verificar todo con la fuente oficial y el contador antes de operar.
+
+## Formulario 107 y anexo RDEP (050, parcial)
+**Estado: parcial. No se genera ni se presenta ningún archivo oficial.** Qué existe y qué falta, sin asumir nada que no se haya podido verificar.
+
+**Hecho (independiente del formato oficial)**
+* **Identificación del trabajador** (Personal › Identificación tributaria, permiso `erp.rh`): cédula o pasaporte, de solo anexar (la última rige, las anteriores se conservan), validada de **forma** (cédula: 10 dígitos, provincia 01–24 o 30, tercer dígito < 6 y dígito verificador de módulo 10; pasaporte: 5 a 20 alfanuméricos), sin repetirse entre trabajadores, enmascarada en pantalla y sin copiar el número a la auditoría. No consulta el Registro Civil.
+* **Consolidado anual por trabajador** (Nómina › Anual, solo lectura): suma por concepto interno lo **aprobado** en el año (corridas, décimos liquidados, finiquitos con salida en el año y utilidades aprobadas en el año) y controla que cada corrida cuadre con su obligación al IESS y al SRI, que cada trabajador tenga identificación y qué meses no tienen corrida aprobada. CSV (UTF-8 con BOM, `;`, textos neutralizados contra fórmulas de hoja de cálculo) solo para quien configura la nómina.
+
+**Falta — documentos exactos que se necesitan (sri.gob.ec no es accesible desde el entorno de desarrollo)**
+1. *Ficha técnica* del anexo **RDEP** (Anexo de Retenciones en la Fuente bajo Relación de Dependencia) del **ejercicio fiscal a presentar**, con su número de versión.
+2. *Catálogo* del RDEP (tablas de códigos: tipo de identificación, residencia, discapacidad, convenio, etc.) de esa misma versión.
+3. *Esquema XML* (`RDEP.xsd`) de esa versión.
+4. La **resolución vigente** del SRI que regula el anexo y el **formulario 107** (en la prensa se cita la NAC-DGERCGC24-00000037, y otras fuentes la NAC-DGERCGC24-00000002; **no verificado**).
+5. El diseño oficial del **formulario 107** (casilleros y su relación con el RDEP).
+Con esos cinco documentos se agrega el mapa «concepto interno → casillero», los datos del trabajador que faltan (los que pida el catálogo; hoy solo se guarda la identificación) y el generador del XML validado contra el XSD.
+
+**Lo que dicen fuentes secundarias (no oficiales; confirmar en el SRI):** el anexo RDEP se presenta cada año en enero (con vencimiento escalonado por el noveno dígito del RUC, hasta el 7 de febrero en el ciclo 2025) aun si no hubo retenciones; el empleador entrega el formulario 107 a cada trabajador en enero (art. 50 LRTI, según la prensa); el paquete histórico del RDEP incluye programa, ficha técnica, catálogo y `RDEP.xsd`. **Ninguna fecha ni versión de este párrafo está cargada ni se usa en el sistema.**
+
+**Supuestos del consolidado a validar con el contador:** utilidades por año de **aprobación** (no de ejercicio); finiquitos por año de **salida**; décimos liquidados por año de liquidación (los incluidos en un finiquito van en el finiquito); la base aportable IESS es la de la corrida; el impuesto a la renta retenido es el de las líneas de nómina (la retención sobre indemnizaciones y utilidades sigue sin calcularse).

@@ -211,7 +211,7 @@ final class ErpController
     public static function nomina(Router $router):void
     {
         exigir_permiso('nomina.ver');$r=new ErpRepository();$n=new \Services\ErpNominaService($r);$q=$_GET;
-        $vista=in_array($q['vista']??'',['resumen','corrida','novedades','parametros','condiciones','beneficios','renta','finiquitos','utilidades','iess'],true)?$q['vista']:'resumen';
+        $vista=in_array($q['vista']??'',['resumen','corrida','novedades','parametros','condiciones','beneficios','renta','finiquitos','utilidades','iess','anual'],true)?$q['vista']:'resumen';
         $hoy=(new \DateTimeImmutable('now',new \DateTimeZone('America/Guayaquil')))->format('Y-m-d');
         $datos=['vista'=>$vista,'hoy'=>$hoy,'calcula'=>puede('nomina.calcular'),'aprueba'=>puede('nomina.aprobar'),'configura'=>puede('nomina.configurar'),'parametrosDef'=>\Services\ErpNominaService::todosLosParametros()];
         $datos['colaboradores']=$r->q("SELECT id,CONCAT(nombre,' ',apellido) nombre FROM colaboradores WHERE estado<>'baja' ORDER BY apellido,nombre");
@@ -224,6 +224,7 @@ final class ErpController
             'beneficios'=>$datos+=['saldos'=>$n->saldosBeneficios()],
             'utilidades'=>$datos+=(function()use($r){$todos=$r->q("SELECT c.id,CONCAT(c.nombre,' ',c.apellido,IF(c.estado='baja',' (baja)','')) nombre FROM colaboradores c WHERE EXISTS(SELECT 1 FROM erp_contratos k WHERE k.colaborador_id=c.id AND k.tipo='empleado') ORDER BY c.apellido,c.nombre");$u=new \Services\ErpUtilidadesService($r);$rep=$u->listar();$lin=[];foreach($rep as $x)$lin[(int)$x['id']]=$u->lineas((int)$x['id']);return ['repartos'=>$rep,'repartoLineas'=>$lin,'trabajadoresUtil'=>$todos];})(),
             'finiquitos'=>$datos+=['finiquitos'=>(new \Services\ErpFiniquitoService($r))->listar()],
+            'anual'=>$datos+=(function()use($r,$q,$hoy){$anio=filter_var($q['anio']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>2000,'max_range'=>2100]])?:((int)substr($hoy,0,4)-1);return ['anualDatos'=>(new \Services\ErpNominaAnualService($r))->consolidado($anio),'identificacionCompleta'=>puede('nomina.configurar')];})(),
             'iess'=>$datos+=(function()use($r,$q,$hoy){$i=new \Services\ErpIessService($r);$f=static fn($v,$def)=>preg_match('/^\d{4}-\d{2}-\d{2}$/D',(string)$v)&&checkdate((int)substr($v,5,2),(int)substr($v,8,2),(int)substr($v,0,4))?$v:$def;
                 $hasta=$f($q['hasta']??null,$hoy);$desde=$f($q['desde']??null,(new \DateTimeImmutable($hasta))->modify('-60 days')->format('Y-m-d'));if($desde>$hasta)$desde=$hasta;
                 $anio=filter_var($q['anio']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>2000,'max_range'=>2100]])?:(int)substr($hoy,0,4);$mes=filter_var($q['mes']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1,'max_range'=>12]])?:(int)substr($hoy,5,2);
@@ -231,6 +232,12 @@ final class ErpController
             'renta'=>$datos+=['tablasIr'=>$r->q('SELECT * FROM erp_nomina_ir_tablas ORDER BY id DESC LIMIT 100'),'declaracionesIr'=>$r->q("SELECT d.*,CONCAT(c.nombre,' ',c.apellido) nombre FROM erp_nomina_ir_declaraciones d JOIN colaboradores c ON c.id=d.colaborador_id ORDER BY d.id DESC LIMIT 200")],
             default=>null,
         };
+        if($vista==='anual'&&($q['formato']??'')==='csv'){
+            // El CSV lleva identificaciones completas: solo quien configura la nómina.
+            if(!puede('nomina.configurar'))throw new ErpException('Sin permiso para exportar el consolidado.',403);
+            header('Content-Type: text/csv; charset=UTF-8');header('Content-Disposition: attachment; filename="consolidado-relacion-dependencia-'.(int)$datos['anualDatos']['anio'].'.csv"');header('Cache-Control: private, no-store');header('X-Content-Type-Options: nosniff');
+            echo (new \Services\ErpNominaAnualService($r))->csv($datos['anualDatos']);return;
+        }
         if($vista==='corrida'&&!empty($datos['corrida']))$datos['lineas']=$n->lineas((int)$datos['corrida']['id']);
         self::render($router,'nomina',$datos);
     }
@@ -318,6 +325,7 @@ final class ErpController
             'jornadas'=>$id?$r->q('SELECT * FROM erp_jornadas WHERE colaborador_id=? ORDER BY dia_semana',[$id]):[],
             'asistencia'=>$id?$r->q('SELECT * FROM erp_asistencia WHERE colaborador_id=? ORDER BY entrada DESC LIMIT 100',[$id]):[],
             'ausencias'=>$id?$r->q('SELECT * FROM erp_ausencias WHERE colaborador_id=? ORDER BY id DESC LIMIT 100',[$id]):[],
+            'identificacion'=>$id&&$gestionRh?(new \Services\ErpIdentificacionService($r))->vigente($id):null,
             'vacaciones'=>$id?(new \Services\ErpVacacionesService($r))->saldo($id,substr($r::ahora(),0,10)):null]);
     }
     public static function aprobaciones(Router $router):void
@@ -409,7 +417,7 @@ final class ErpController
             'compra_devolver'=>[\Services\ErpCompraService::class,'devolver','compra'],'compra_cerrar'=>[\Services\ErpCompraService::class,'cerrar','compra'],
             'proveedor_credito'=>[\Services\ErpCompraService::class,'credito','obligaciones'],'proveedor_recuperar'=>[\Services\ErpCompraService::class,'recuperar','obligaciones'],
             'compra_facturar'=>[\Services\ErpCompraService::class,'facturar','compra'],'obligacion_pagar'=>[\Services\ErpCompraService::class,'pagar','obligaciones'],
-            'rh_contrato_fin'=>[\Services\ErpRhService::class,'finalizarContrato','personal'],'rh_asistencia_anular'=>[\Services\ErpRhService::class,'anularAsistencia','personal'],'rh_ausencia_anular'=>[\Services\ErpRhService::class,'anularAusencia','personal'],
+            'rh_contrato_fin'=>[\Services\ErpRhService::class,'finalizarContrato','personal'],'rh_asistencia_anular'=>[\Services\ErpRhService::class,'anularAsistencia','personal'],'rh_ausencia_anular'=>[\Services\ErpRhService::class,'anularAusencia','personal'],'rh_identificacion'=>[\Services\ErpIdentificacionService::class,'declarar','personal'],
             'rh_contrato'=>[\Services\ErpRhService::class,'contrato','personal'],'rh_jornada'=>[\Services\ErpRhService::class,'jornada','personal'],
             'rh_asistencia'=>[\Services\ErpRhService::class,'asistencia','personal'],'rh_ausencia'=>[\Services\ErpRhService::class,'solicitarAusencia','personal'],
             'rh_ausencia_resolver'=>[\Services\ErpRhService::class,'resolverAusencia','personal'],'rh_nomina'=>[\Services\ErpRhService::class,'prepararNomina','personal'],
@@ -468,7 +476,7 @@ final class ErpController
         $ruta=match($destino){'venta'=>$id?'/ventas/detalle?id='.$id:'/pdv','compra'=>'/gestion/compras'.($id?'?id='.$id:''),'personal'=>'/gestion/personal'.($id?'?id='.$id:''),'seguimiento'=>'/gestion/seguimiento'.($id?'?id='.$id:''),'prepagos'=>'/gestion/prepagos'.($id?'?id='.$id:''),'paquetes'=>'/gestion/paquetes'.($id?'?id='.$id:''),'suscripciones'=>'/gestion/suscripciones'.($id?'?id='.$id:''),default=>'/gestion/'.$destino};
         if($destino==='documentos')$ruta='/gestion/documentos?'.http_build_query(['entidad'=>is_string($_POST['entidad']??null)?$_POST['entidad']:'','id'=>(int)($_POST['entidad_id']??0)]);
         if($destino==='consumos')$ruta='/agenda/detalle?id='.(int)($_POST['cita_id']??0);
-        if($destino==='nomina'){$v=is_string($_POST['vista']??null)&&in_array($_POST['vista'],['resumen','corrida','novedades','parametros','condiciones','beneficios','renta','finiquitos','utilidades','iess'],true)?$_POST['vista']:'resumen';$k=(int)($_POST['corrida_id']??0);$ruta='/gestion/nomina?vista='.$v.(($v==='corrida'&&$k>0)?'&corrida='.$k:'');}
+        if($destino==='nomina'){$v=is_string($_POST['vista']??null)&&in_array($_POST['vista'],['resumen','corrida','novedades','parametros','condiciones','beneficios','renta','finiquitos','utilidades','iess','anual'],true)?$_POST['vista']:'resumen';$k=(int)($_POST['corrida_id']??0);$ruta='/gestion/nomina?vista='.$v.(($v==='corrida'&&$k>0)?'&corrida='.$k:'');}
         if($destino==='contabilidad'){$v=is_string($_POST['vista']??null)&&in_array($_POST['vista'],['resumen','diario','mayor','balances','plan','periodos','asiento','conciliacion'],true)?$_POST['vista']:'resumen';$ruta='/gestion/contabilidad?vista='.$v;}
         if($destino==='fiscal_parametros')$ruta='/gestion/facturacion/parametros';
         if($destino==='facturacion')$ruta='/gestion/facturacion?'.(($completada||$esEntrega)?'id=':'venta_id=').$id;
