@@ -167,6 +167,14 @@ final class ErpController
         $doc=(new ErpFiscalService())->descargar((int)$_SESSION['id'],$id,$formato==='autorizado');
         header('Content-Type: application/xml; charset=UTF-8');header('Content-Disposition: attachment; filename="'.$doc['nombre'].'"');header('Cache-Control: private, no-store');header('X-Content-Type-Options: nosniff');echo $doc['contenido'];
     }
+    public static function fiscalRide(Router $router):void
+    {
+        exigir_permiso('erp.cobrar');
+        $id=filter_var($_GET['id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;
+        $ride=(new ErpFiscalService())->ride((int)$_SESSION['id'],$id);
+        header('Cache-Control: private, no-store');header('X-Robots-Tag: noindex, nofollow');
+        self::render($router,'fiscal-ride',compact('id','ride'));
+    }
     public static function suscripciones(Router $router):void
     {
         exigir_permiso('erp.cobrar');$r=new ErpRepository();$id=filter_var($_GET['id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;

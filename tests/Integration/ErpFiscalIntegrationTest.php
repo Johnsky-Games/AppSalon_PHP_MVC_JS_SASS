@@ -91,7 +91,9 @@ final class ErpFiscalIntegrationTest extends TestCase
     }
     public function testControladorEntregaLosDosXmlAlEquipoAutorizado():void
     {
-        $d=$this->documento();$this->svc()->procesar($this->transporte([$this->respuesta($d['clave_acceso'],$d['xml_firmado'])]));
+        $datos=$this->datos();$datos['comprador']['nombre']='Comprador <script>alert(1)</script>';$this->svc()->factura($this->actor,$datos);$d=$this->r->uno('SELECT * FROM erp_fiscal_documentos');
+        try{$this->svc()->ride($this->actor,(int)$d['id']);self::fail('No hay RIDE autorizado pendiente.');}catch(ErpException $e){self::assertSame(409,$e->getCode());}
+        $this->svc()->procesar($this->transporte([$this->respuesta($d['clave_acceso'],$d['xml_firmado'])]));
         $anterior=['sesion'=>$_SESSION??[],'get'=>$_GET,'server'=>$_SERVER];
         try{
             if(session_status()===PHP_SESSION_NONE)session_start();
@@ -103,6 +105,10 @@ final class ErpFiscalIntegrationTest extends TestCase
                 ob_start();try{\Controllers\ErpController::fiscalXml();$contenido=ob_get_contents();}finally{ob_end_clean();}
                 self::assertSame($this->svc()->descargar($this->actor,(int)$d['id'],$autorizado)['contenido'],$contenido);
             }
+            $this->r->q("UPDATE servicios SET nombre='Catálogo cambiado',precio=999 WHERE id IN(SELECT servicioId FROM citasservicios WHERE citaId=?)",[$this->cita]);
+            $original=$this->svc()->ride($this->actor,(int)$d['id']);self::assertSame('20.00',$original['factura']['importeTotal']);self::assertStringNotContainsString('Catálogo cambiado',json_encode($original));
+            ob_start();try{\Controllers\ErpController::fiscalRide(new \MVC\Router());$html=ob_get_contents();}finally{ob_end_clean();}
+            self::assertStringContainsString('SIN VALIDEZ TRIBUTARIA',$html);self::assertStringContainsString('Comprador &lt;script&gt;alert(1)&lt;/script&gt;',$html);self::assertStringNotContainsString('<script>alert(1)</script>',$html);self::assertStringContainsString('data-erp-imprimir',$html);
         }finally{$_SESSION=$anterior['sesion'];$_GET=$anterior['get'];$_SERVER=$anterior['server'];}
     }
     public function testLeaseVigenteNoHacePeticiones():void {$this->documento();$this->r->q('UPDATE erp_fiscal_documentos SET lease_token=?,lease_hasta=DATE_ADD(?,INTERVAL 1 HOUR)',[str_repeat('a',32),$this->r::ahora()]);$t=$this->transporte([]);self::assertSame(0,$this->svc()->procesar($t)['pendientes']);self::assertSame([],$t->peticiones);}

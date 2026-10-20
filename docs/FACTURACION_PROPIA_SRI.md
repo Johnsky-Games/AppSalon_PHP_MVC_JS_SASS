@@ -13,6 +13,12 @@ La lógica y las evidencias pertenecen a AppSalon. El receptor externo es el SRI
 
 La migración 037 añade tres tablas (104 en total sobre esta rama) y cuatro protecciones SQL. Su guarda de rollback conserva cualquier emisor, secuencia o documento registrado. La migración 038 añade unicidad de número por RUC y ambiente, independiente del perfil y del contador, y exige identidad completa en el snapshot. Su prevalidación detiene datos incompatibles sin alterarlos. Un contador inconsistente no permite emitir otro documento con el mismo número; requiere revisar la evidencia. Los índices funcionales se conservan también en los respaldos portables. El directorio `/gestion/facturacion` separa listado, preparación y ficha, con filtros de semana/mes/fechas y estado, paginación de 25 y descarga privada del XML firmado. La carga del certificado continúa solo por consola privada. El certificado cifrado también debe conservarse con los respaldos, junto con `APP_KEY` por un canal separado.
 
+## RIDE de la factura autorizada
+
+La ficha ofrece «Ver RIDE / imprimir» solamente al autorizarse. La ruta `/gestion/facturacion/ride?id=…` vuelve a exigir permiso de equipo y evidencia íntegra. Emisor, comprador, conceptos, cantidades, importes, descuentos, subtotales por categoría de IVA, pagos pactados y régimen se proyectan del XML autorizado, sin usar precios o nombres actuales del catálogo ni recalcular con decimales flotantes. El piloto conserva el aviso de pruebas en pantalla y en impresión.
+
+El botón «Imprimir / guardar PDF» utiliza el diálogo del navegador; permite papel o PDF, sin depender de un generador externo. La impresión A4 oculta la navegación y repite el encabezado de la tabla cuando hay varias páginas. Esta entrega no crea un PDF en el servidor ni lo adjunta a correos. Solo admite facturas del circuito soportado; el RIDE de notas de crédito y su integración comercial continúan pendientes. La referencia es la ficha técnica 2.34 del SRI, apartado 9 y anexo 2, indicada en `resources/sri/README.md`.
+
 ## Consola del piloto
 
 Ejecutar dentro del contenedor con las migraciones al día. Guardar las configuraciones y el PKCS12 en un volumen privado, fuera de `public` y del repositorio. La contraseña se lee por entrada estándar desde un secreto, nunca como argumento.
@@ -33,6 +39,6 @@ La categoría IVA se indica explícitamente: tarifa cero, exento y no objeto son
 
 Las pruebas usan certificados RSA sintéticos y un transporte de ensayo inyectado exclusivamente en `APP_ENV=testing`. No envían comprobantes ficticios a producción. Existe una comprobación independiente de firma y referencias con Python/lxml/cryptography durante el desarrollo; los ensayos por SHA se registran en el PR.
 
-El generador también produce notas de crédito XSD 1.1.0, pero falta cerrar su integración con devoluciones, topes y documentos autorizados de sustento. Continúan RIDE, entrega al correo, revisión/corrección de rechazos, consumidor final con sus restricciones, fiscalidad de anticipos/paquetes/suscripciones, configuración del momento de IVA y reglas por régimen, y ensayo real con el certificado del emisor en certificación. Solo después se habilitará producción de forma explícita.
+El generador también produce notas de crédito XSD 1.1.0, pero falta cerrar su integración con devoluciones, topes y documentos autorizados de sustento. Continúan la entrega al correo, revisión/corrección de rechazos, consumidor final con sus restricciones, fiscalidad de anticipos/paquetes/suscripciones, configuración del momento de IVA y reglas por régimen, y ensayo real con el certificado del emisor en certificación. Solo después se habilitará producción de forma explícita.
 
 Este avance no sustituye la contabilidad propia de doble partida, cierre tributario ni nómina. Son módulos pendientes con sus propias reglas, autorizaciones y conciliaciones; no se presentan como completados por tener una factura XML o un recibo interno.

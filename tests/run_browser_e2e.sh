@@ -118,6 +118,7 @@ fi
 export CHROME_BIN APP_URL="$app_url" PAYMENT_WEBHOOK_SECRET="$secret"
 export TZ=America/Guayaquil
 export TEST_DB_CONTAINER="$db" TEST_DB_NAME="$db_name" TEST_REQUIRE_DB_ASSERTIONS=1
+export TEST_WEB_CONTAINER="$web"
 export TEST_MAILBOX_PATH="$mailbox" TEST_BROWSER_REPORT_PATH="$artifacts/browser_test_report.json"
 echo 'E2E_STAGE: recorrido de negocio y SMTP'
 timeout --kill-after=10s 480s node tests/browser_e2e_test.js 2>&1 | tee "$artifacts/browser.log"
