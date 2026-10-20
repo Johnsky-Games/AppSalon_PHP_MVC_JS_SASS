@@ -75,6 +75,7 @@ function tabs() {
 
     botones.forEach(boton => {
         boton.addEventListener('click', function (e) {
+            if (disponibilidadOcupada()) return;
             paso = parseInt(e.currentTarget.dataset.paso, 10);
             mostrarSeccion();
             botonesPaginador();
@@ -107,7 +108,7 @@ function paginaAnterior() {
     const btnAnterior = document.querySelector('#anterior');
     if (!btnAnterior) return;
     btnAnterior.addEventListener('click', function () {
-        if (paso <= pasoInicial) return;
+        if (disponibilidadOcupada() || paso <= pasoInicial) return;
         paso--;
         botonesPaginador();
     });
@@ -117,7 +118,7 @@ function paginaSiguiente() {
     const btnSiguiente = document.querySelector('#siguiente');
     if (!btnSiguiente) return;
     btnSiguiente.addEventListener('click', function () {
-        if (paso >= pasoFinal) return;
+        if (disponibilidadOcupada() || paso >= pasoFinal) return;
         paso++;
         botonesPaginador();
     });
@@ -269,6 +270,13 @@ function actualizarEstadoDisponibilidadUI(estado, mensaje) {
             contenedor.style.minHeight = '';
         }
     }
+}
+
+// Mientras se consulta la disponibilidad la lista se repinta y puede cambiar de alto: un clic de navegación en ese
+// intervalo caería sobre un destino que se mueve, así que se ignora hasta que la consulta termine (éxito, vacío o error).
+function disponibilidadOcupada() {
+    const contenedor = document.querySelector('#contenedor-horarios-disponibles');
+    return !!contenedor && contenedor.getAttribute('aria-busy') === 'true';
 }
 
 function reservarAlturaHorarios() {
