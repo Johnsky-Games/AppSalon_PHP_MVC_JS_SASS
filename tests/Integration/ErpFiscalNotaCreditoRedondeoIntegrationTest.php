@@ -58,7 +58,7 @@ final class ErpFiscalNotaCreditoRedondeoIntegrationTest extends TestCase
     private function nc(int $factura,array $devs):array {return $this->fiscal()->notaCredito($this->actor,$this->d(['factura_id'=>$factura,'devolucion_ids'=>$devs,'motivo'=>'Devolución de producto']));}
     private function tolerancia(int $centavos):void
     {
-        (new ErpFiscalParametroService($this->r))->registrar($this->actor,$this->d(['clave'=>'nota_credito.tolerancia_centavos','valor'=>(string)$centavos,'regimen'=>'*','vigente_desde'=>$this->hoy(),'consultado_en'=>$this->hoy(),'fuente'=>'Valor de ensayo para la prueba (no oficial)']));
+        (new ErpFiscalParametroService($this->r))->registrar($this->actor,$this->d(['clave'=>'nota_credito.tolerancia_centavos','valor'=>(string)$centavos,'regimen'=>'*','vigente_desde'=>$this->hoy(),'consultado_en'=>$this->hoy(),'fuente'=>'Ficha técnica comprobantes electrónicos esquema offline, versión 2.34 (ensayo de la prueba, no oficial)','fuente_url'=>'https://www.sri.gob.ec/ficha-tecnica-ensayo']));
     }
     private function sumas():array
     {
@@ -158,5 +158,148 @@ final class ErpFiscalNotaCreditoRedondeoIntegrationTest extends TestCase
         try{SriComprobante::notaCredito(F::emisor(),$datos+['tolerancia_centavos'=>1]);self::fail('Dos líneas con +1 suman +2 en la misma tarifa y exceden la tolerancia de 1');}
         catch(\InvalidArgumentException $e){self::assertStringContainsString('suma de los redondeos',$e->getMessage());}
         SriXml::validar(SriComprobante::notaCredito(F::emisor(),$datos+['tolerancia_centavos'=>2]));
+    }
+
+    private function registrarTolerancia(array $extra):void
+    {
+        (new ErpFiscalParametroService($this->r))->registrar($this->actor,$this->d($extra+['clave'=>'nota_credito.tolerancia_centavos','valor'=>'1','regimen'=>'*','vigente_desde'=>$this->hoy(),'consultado_en'=>$this->hoy()]));
+    }
+    private function rechazo(callable $f):ErpException {try{$f();}catch(ErpException $e){return $e;}self::fail('Se esperaba un rechazo');}
+
+    public function testUnaToleranciaMayorQueCeroSoloSeRegistraConEvidenciaYElMaximoEsUnCentavo():void
+    {
+        $e=$this->rechazo(fn()=>$this->registrarTolerancia(['fuente'=>'Valor que me parece razonable']));self::assertStringContainsString('requiere evidencia',$e->getMessage());
+        // Un enlace que no es de sri.gob.ec, o una fuente sin ficha técnica con versión, tampoco bastan.
+        $this->rechazo(fn()=>$this->registrarTolerancia(['fuente'=>'Ficha técnica esquema offline versión 2.34','fuente_url'=>'https://ejemplo.com/ficha']));
+        $this->rechazo(fn()=>$this->registrarTolerancia(['fuente'=>'Ficha técnica esquema offline','fuente_url'=>'https://www.sri.gob.ec/ficha']));
+        $this->rechazo(fn()=>$this->registrarTolerancia(['fuente'=>'Guía de un tercero versión 2.34','fuente_url'=>'https://www.sri.gob.ec/ficha']));
+        $this->rechazo(fn()=>$this->registrarTolerancia(['fuente'=>'Ficha técnica esquema offline versión 2.34','fuente_url'=>'http://sri.gob.ec.malicioso.net/ficha']));
+        // La clave citada debe ser de una nota de esta base.
+        $e=$this->rechazo(fn()=>$this->registrarTolerancia(['fuente'=>'Prueba en ambiente de pruebas','nota'=>'Clave '.str_repeat('1',49)]));self::assertStringContainsString('no corresponde a una nota de crédito de esta base',$e->getMessage());
+        // 2 centavos ya no es un valor admisible: el reparto acumulado no produce más de 1 por línea.
+        $this->rechazo(fn()=>$this->registrarTolerancia(['valor'=>'2','fuente'=>'Ficha técnica esquema offline versión 2.34','fuente_url'=>'https://www.sri.gob.ec/ficha']));
+        // Cero (modo estricto) no necesita evidencia.
+        $this->registrarTolerancia(['valor'=>'0','fuente'=>'Modo estricto: la nota debe cuadrar exactamente']);
+        self::assertSame(0,(int)$this->r->uno("SELECT valor_entero v FROM erp_fiscal_parametros WHERE clave='nota_credito.tolerancia_centavos'")['v']);
+    }
+
+    public function testLaEvidenciaDeUnaNotaAutorizadaConDesviacionSeVerificaContraSuXmlFirmado():void
+    {
+        $f=$this->factura();$this->tolerancia(1);$conDesviacion=null;$exacta=null;$pendiente=null;
+        for($i=1;$i<=12;$i++){
+            $dev=$this->devolver('1');$id=$this->nc($f,[$dev])['recurso_id'];
+            $snap=json_decode($this->r->uno('SELECT snapshot_json FROM erp_fiscal_documentos WHERE id=?',[$id])['snapshot_json'],true)['nota_credito'];
+            $max=0;foreach($snap['lineas'] as $l)$max=max($max,abs($l['desviacion_iva']),abs($l['desviacion_detalle']));
+            // Se autoriza cada nota elegida apenas se emite (la cola procesa en orden); la pendiente se deja para el final.
+            if($max>0&&$conDesviacion===null){$this->autorizarFactura($id);$conDesviacion=$id;}
+            elseif($max===0&&$exacta===null){$this->autorizarFactura($id);$exacta=$id;}
+            elseif($max>0&&$conDesviacion!==null&&$exacta!==null){$pendiente=$id;break;}
+        }
+        self::assertNotNull($conDesviacion);self::assertNotNull($pendiente);self::assertNotNull($exacta);
+        $clave=fn(int $id)=>$this->r->uno('SELECT clave_acceso FROM erp_fiscal_documentos WHERE id=?',[$id])['clave_acceso'];
+        $p=new ErpFiscalParametroService($this->r);
+        // Una nota pendiente (aún no autorizada) no demuestra nada.
+        $e=$this->rechazo(fn()=>$p->verificarEvidenciaTolerancia(1,'Prueba',null,'Clave '.$clave($pendiente)));self::assertStringContainsString('no está autorizada',$e->getMessage());
+        // Autorizadas por el SRI (simulado): la exacta no demuestra que se acepte 1 centavo; la que desvía sí.
+        $e=$this->rechazo(fn()=>$p->verificarEvidenciaTolerancia(1,'Prueba',null,'Clave '.$clave($exacta)));self::assertStringContainsString('no demuestran la tolerancia',$e->getMessage());
+        $this->verificarPorDimension($p,$clave($conDesviacion));
+        // Citar además una nota exacta no cambia el resultado: la evidencia es el máximo por dimensión entre las notas autorizadas citadas.
+        $this->verificarPorDimension($p,$clave($conDesviacion).' '.$clave($exacta));
+        $ev=$p->evidenciaTolerancia();self::assertSame($this->veredictoEsperado($p,$clave($conDesviacion)),$ev['veredicto']);self::assertSame([$clave($conDesviacion)],array_column($ev['autorizadas_con_desviacion'],'clave_acceso'));self::assertSame(1,$ev['autorizadas_exactas']);
+        $m=$p->evidenciaNota($clave($conDesviacion));self::assertSame('autorizada',$m['estado']);self::assertSame('1',$m['ambiente']);self::assertSame(0,$m['no_evaluables']);self::assertSame(1,max($m['desviacion_iva'],$m['desviacion_detalle'],$m['desviacion_tarifa']));
+    }
+
+    /** Dimensiones (IVA de línea, detalle, suma por tarifa) en las que la nota autorizada muestra al menos 1 centavo. */
+    private function dimensionesDe(ErpFiscalParametroService $p,string $claves):array
+    {
+        preg_match_all('/\d{49}/',$claves,$m);$d=[];
+        foreach($m[0] as $c){$ev=$p->evidenciaNota($c);foreach(['desviacion_iva','desviacion_detalle','desviacion_tarifa'] as $x)if($ev[$x]>=1)$d[$x]=true;}
+        return array_keys($d);
+    }
+    /** Una tolerancia de 1 centavo con evidencia de notas solo se admite si las notas citadas demuestran TODAS las dimensiones; si no, se rechaza nombrando las que faltan. */
+    private function verificarPorDimension(ErpFiscalParametroService $p,string $claves):void
+    {
+        $cubiertas=$this->dimensionesDe($p,$claves);
+        if(count($cubiertas)===3){$p->verificarEvidenciaTolerancia(1,'Prueba controlada en el ambiente de pruebas del SRI',null,'Notas autorizadas '.$claves);self::assertTrue(true);return;}
+        $e=$this->rechazo(fn()=>$p->verificarEvidenciaTolerancia(1,'Prueba controlada en el ambiente de pruebas del SRI',null,'Notas autorizadas '.$claves));
+        self::assertSame(409,$e->getCode());self::assertStringContainsString('no demuestran la tolerancia',$e->getMessage());
+        foreach(['desviacion_iva'=>'IVA de línea','desviacion_detalle'=>'detalle','desviacion_tarifa'=>'suma del IVA por tarifa'] as $dim=>$etiqueta)self::assertSame(!in_array($dim,$cubiertas,true),str_contains($e->getMessage(),$etiqueta),'Solo se nombran las dimensiones sin evidencia: '.$etiqueta);
+    }
+    private function veredictoEsperado(ErpFiscalParametroService $p,string $claves):string {return count($this->dimensionesDe($p,$claves))===3?'acepta':'acepta_parcial';}
+
+
+    private function rechazarNota(int $id,string $identificador,string $texto,int $relleno=0):void
+    {
+        $antes=str_repeat('<mensaje><identificador>35</identificador><mensaje>'.str_repeat('X',900).'</mensaje><informacionAdicional>relleno</informacionAdicional><tipo>ERROR</tipo></mensaje>',$relleno);
+        $d=$this->r->uno('SELECT clave_acceso FROM erp_fiscal_documentos WHERE id=?',[$id]);$this->r->q('UPDATE erp_fiscal_documentos SET proximo_intento=NULL,lease_hasta=NULL WHERE id=?',[$id]);
+        $resp='<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><ns2:autorizacionComprobanteResponse xmlns:ns2="http://ec.gob.sri.ws.autorizacion"><RespuestaAutorizacionComprobante><claveAccesoConsultada>'.$d['clave_acceso'].'</claveAccesoConsultada><numeroComprobantes>1</numeroComprobantes><autorizaciones><autorizacion><estado>NO AUTORIZADO</estado><mensajes>'.$antes.'<mensaje><identificador>'.$identificador.'</identificador><mensaje>'.$texto.'</mensaje><informacionAdicional>detalle de ensayo</informacionAdicional><tipo>ERROR</tipo></mensaje></mensajes></autorizacion></autorizaciones></RespuestaAutorizacionComprobante></ns2:autorizacionComprobanteResponse></soap:Body></soap:Envelope>';
+        $t=new class([$resp],$this->db) implements SriTransporteInterface {public function __construct(private array $respuestas,private \mysqli $db){}public function post(string $url,string $xml):string {return array_shift($this->respuestas);}};
+        $this->fiscal()->procesar($t);self::assertSame('rechazada',$this->r->uno('SELECT estado FROM erp_fiscal_documentos WHERE id=?',[$id])['estado']);
+    }
+    private function notaConDesviacion(int $factura):int
+    {
+        for($i=1;$i<=12;$i++){
+            $id=$this->nc($factura,[$this->devolver('1')])['recurso_id'];
+            $snap=json_decode($this->r->uno('SELECT snapshot_json FROM erp_fiscal_documentos WHERE id=?',[$id])['snapshot_json'],true)['nota_credito'];
+            foreach($snap['lineas'] as $l)if($l['desviacion_iva']!==0||$l['desviacion_detalle']!==0)return $id;
+            $this->autorizarFactura($id);// las exactas se dejan autorizadas para que no estorben la cola
+        }
+        self::fail('No apareció una nota con desviación');
+    }
+
+    public function testElVeredictoEsRechazaSoloSiElSriDevolvioErrorDeDiferenciasYSinEvidenciaEnCualquierOtroCaso():void
+    {
+        $f=$this->factura();$this->tolerancia(1);$p=new ErpFiscalParametroService($this->r);
+        $id=$this->notaConDesviacion($f);
+        // Rechazada por otra causa (firma): no dice nada de la tolerancia.
+        $this->rechazarNota($id,'39','Firma inválida de ensayo');
+        $ev=$p->evidenciaTolerancia();self::assertSame('sin_evidencia',$ev['veredicto']);self::assertCount(1,$ev['rechazadas_con_desviacion']);self::assertFalse($ev['rechazadas_con_desviacion'][0]['error_diferencias']);
+        // Rechazada con ERROR EN DIFERENCIAS (52) y una desviación de 1 centavo: evidencia de que NO se acepta.
+        $id2=$this->notaConDesviacion($f);$this->rechazarNota($id2,'52','ERROR EN DIFERENCIAS');
+        $ev=$p->evidenciaTolerancia();self::assertSame('rechaza',$ev['veredicto']);self::assertSame(2,count($ev['rechazadas_con_desviacion']));self::assertTrue($ev['rechazadas_con_desviacion'][1]['error_diferencias']);
+        self::assertSame([],$ev['autorizadas_con_desviacion']);
+    }
+
+    public function testElErrorDiferenciasSeDetectaAunqueVengaDespuesDeMuchosMensajes():void
+    {
+        $f=$this->factura();$this->tolerancia(1);$p=new ErpFiscalParametroService($this->r);
+        $id=$this->notaConDesviacion($f);
+        // 6 mensajes previos de ~1 KB: el 52 queda más allá de los primeros 4000 caracteres de la respuesta serializada.
+        $this->rechazarNota($id,'52','ERROR EN DIFERENCIAS',6);
+        self::assertGreaterThan(4000,strpos((string)$this->r->uno('SELECT respuesta_json FROM erp_fiscal_documentos WHERE id=?',[$id])['respuesta_json'],'ERROR EN DIFERENCIAS'),'El caso de prueba debe dejar el 52 fuera de los primeros 4000 caracteres');
+        $ev=$p->evidenciaTolerancia();self::assertSame('rechaza',$ev['veredicto']);self::assertTrue($ev['rechazadas_con_desviacion'][0]['error_diferencias']);
+    }
+
+    public function testLaPruebaControladaEmiteUnaNotaDeUnCentavoSinRegistrarLaToleranciaYSuAutorizacionLaDemuestra():void
+    {
+        $f=$this->factura();
+        // La primera devolución unitaria cuadra exacta: como prueba no demostraría nada y se rechaza.
+        $primera=$this->devolver('1');
+        $e=$this->rechazo(fn()=>$this->fiscal()->notaCreditoPruebaTolerancia($this->actor,$this->d(['factura_id'=>$f,'devolucion_ids'=>[$primera],'motivo'=>'Prueba controlada'])));
+        self::assertSame(409,$e->getCode());self::assertStringContainsString('no produce ninguna desviación',$e->getMessage());
+        $sinPermiso=R5CajaFixture::usuario($this->db,'recepcion');
+        $e=$this->rechazo(fn()=>$this->fiscal()->notaCreditoPruebaTolerancia($sinPermiso,$this->d(['factura_id'=>$f,'devolucion_ids'=>[$primera],'motivo'=>'Prueba controlada'])));self::assertSame(403,$e->getCode());
+        // Se emiten notas en modo estricto hasta que alguna devolución quede rechazada por desviar.
+        $this->autorizarFactura($this->nc($f,[$primera])['recurso_id']);$pendientes=[];
+        for($i=1;$i<=12&&count($pendientes)<2;$i++){$dev=$this->devolver('1');try{$this->autorizarFactura($this->nc($f,[$dev])['recurso_id']);}catch(ErpException){$pendientes[]=$dev;}}
+        self::assertNotEmpty($pendientes,'El modo estricto rechaza devoluciones que desvían');
+        // La prueba con una de esas devoluciones emite UNA nota marcada, con tolerancia efectiva solo para ella.
+        $id=null;
+        foreach($pendientes as $dev){try{$id=$this->fiscal()->notaCreditoPruebaTolerancia($this->actor,$this->d(['factura_id'=>$f,'devolucion_ids'=>[$dev],'motivo'=>'Prueba controlada de tolerancia']))['recurso_id'];$usada=$dev;break;}catch(ErpException $e){self::assertSame(409,$e->getCode());}}
+        self::assertNotNull($id);
+        $snap=json_decode($this->r->uno('SELECT snapshot_json FROM erp_fiscal_documentos WHERE id=?',[$id])['snapshot_json'],true);
+        self::assertTrue($snap['prueba_tolerancia']);self::assertSame(1,$snap['nota_credito']['tolerancia_centavos']);self::assertSame([],$snap['parametros']);
+        $max=0;foreach($snap['nota_credito']['lineas'] as $l)$max=max($max,abs($l['desviacion_iva']),abs($l['desviacion_detalle']));self::assertSame(1,$max);
+        self::assertSame(0,(int)$this->r->uno("SELECT COUNT(*) n FROM erp_fiscal_parametros WHERE clave='nota_credito.tolerancia_centavos'")['n'],'La prueba no registra ni cambia la tolerancia');
+        // Sin autorización del SRI no hay evidencia; autorizada por el SRI (simulado) demuestra la aceptación y habilita el registro.
+        $clave=$this->r->uno('SELECT clave_acceso FROM erp_fiscal_documentos WHERE id=?',[$id])['clave_acceso'];$par=new ErpFiscalParametroService($this->r);
+        $e=$this->rechazo(fn()=>$this->registrarTolerancia(['fuente'=>'Prueba controlada en el ambiente de pruebas del SRI','nota'=>'Nota '.$clave]));self::assertStringContainsString('no está autorizada',$e->getMessage());
+        $this->autorizarFactura($id);self::assertSame($this->veredictoEsperado($par,$clave),$par->evidenciaTolerancia()['veredicto']);
+        $this->verificarPorDimension($par,$clave);
+        // Con la evidencia de dimensiones completa (ficha técnica oficial de ensayo) se registra; una sola nota de prueba no basta si no cubre todas.
+        $this->tolerancia(1);
+        self::assertSame(1,(int)$this->r->uno("SELECT valor_entero v FROM erp_fiscal_parametros WHERE clave='nota_credito.tolerancia_centavos'")['v']);
+        // Con la tolerancia respaldada por evidencia, las devoluciones restantes que el modo estricto rechazaba ya se emiten.
+        foreach(array_diff($pendientes,[$usada]) as $dev)self::assertGreaterThan(0,$this->nc($f,[$dev])['recurso_id']);
     }
 }

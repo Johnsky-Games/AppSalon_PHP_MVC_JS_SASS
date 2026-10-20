@@ -133,6 +133,19 @@ final class ErpFiscalService extends ErpService
             return $this->crearNotaCredito($actor,$d,null);
         });
     }
+    /**
+     * Prueba controlada de la tolerancia: emite UNA nota con una desviación de 1 centavo (solo ambiente de pruebas; este piloto no emite en otro) para que el SRI
+     * la autorice o la rechace. No registra ni cambia ningún parámetro: la nota queda marcada en su instantánea y su resultado se lee con
+     * `php scripts/auditar_notas_credito.php --evidencia-tolerancia`. Si el reparto de las devoluciones elegidas no desvía, se rechaza: no probaría nada.
+     */
+    public function notaCreditoPruebaTolerancia(int $actor,array $d):array
+    {
+        $this->permitir($actor,'erp.configurar');
+        return $this->ejecutar($actor,'erp.configurar','fiscal_nc_prueba_tol',$d,function()use($actor,$d){
+            $this->permitir($actor,'erp.configurar');
+            return $this->crearNotaCredito($actor,$d+['prueba_tolerancia'=>'1'],null);
+        });
+    }
     /** Cuerpo común de la nota y de su sustitución ($sust = nota rechazada ya verificada y bloqueada: hereda sus devoluciones). */
     private function crearNotaCredito(int $actor,array $d,?array $sust):int
     {
@@ -172,6 +185,7 @@ final class ErpFiscalService extends ErpService
             $acum=[];foreach($this->r->q("SELECT l.linea_id,SUM(l.cantidad_milesimas) q,SUM(l.total_centavos) t,SUM(l.base_centavos) b,SUM(l.iva_centavos) i FROM erp_fiscal_nc_lineas l JOIN erp_fiscal_documentos x ON x.id=l.documento_id WHERE x.documento_origen_id=? AND x.estado NOT IN('rechazada','bloqueada') GROUP BY l.linea_id FOR SHARE",[$fid]) as $a)$acum[(int)$a['linea_id']]=[(int)$a['q'],(int)$a['t'],(int)$a['b'],(int)$a['i']];
             // Tolerancia de cuadre del propio documento (parámetro versionado; sin registro, la nota debe cuadrar exactamente).
             $parTol=(new ErpFiscalParametroService($this->r))->resolver('nota_credito.tolerancia_centavos','*',substr($this->r::ahora(),0,10),true);$tol=$parTol?(int)$parTol['valor_entero']:0;
+            $prueba=($d['prueba_tolerancia']??'')==='1';if($prueba)$tol=max($tol,1);// solo para esta nota de prueba; el parámetro registrado no cambia
             $lineasNc=[];$filasRel=[];$totalNc=0;
             foreach($porLinea as $lineaId=>$q){
                 $fl=$fiscalPorLinea[$lineaId]??throw new ErpException('La línea no pertenece a la factura.',409);[$qp,$tp,$bp,$ip]=$acum[$lineaId]??[0,0,0,0];
@@ -181,6 +195,7 @@ final class ErpFiscalService extends ErpService
                 $lineasNc[]=['linea_id'=>$lineaId,'codigo'=>$fl['codigo'],'descripcion'=>$fl['descripcion'],'cantidad_milesimas'=>$c['cantidad'],'precio_centavos'=>$c['precio'],'descuento_centavos'=>$c['descuento'],'impuesto_pb'=>(int)$fl['impuesto_pb'],'codigo_porcentaje'=>$fl['codigo_porcentaje'],'base_centavos'=>$c['base'],'iva_centavos'=>$c['iva'],'desviacion_iva'=>$c['desviacion_iva'],'desviacion_detalle'=>$c['desviacion_detalle']];
                 $filasRel[]=[$lineaId,$c['cantidad'],$c['base'],$c['iva'],$c['total']];$totalNc+=$c['total'];
             }
+            if($prueba&&!array_filter($lineasNc,fn($ln)=>$ln['desviacion_iva']!==0||$ln['desviacion_detalle']!==0))throw new ErpException('Esta nota no produce ninguna desviación: no sirve como prueba de tolerancia. Elige devoluciones cuyo reparto de redondeo desvíe 1 centavo (las que hoy rechaza el modo estricto).',409);
             // La tolerancia registrada es del documento: la desviación acumulada de cada tarifa (IVA repartido frente al IVA de cada base por separado, como en una factura) tampoco puede exceder la tolerancia.
             $porTarifa=[];foreach($lineasNc as $ln){$t=$ln['codigo_porcentaje'];$porTarifa[$t]??=0;$porTarifa[$t]+=$ln['iva_centavos']-intdiv($ln['base_centavos']*$ln['impuesto_pb']+5000,10000);}
             foreach($porTarifa as $t=>$dev)if(abs($dev)>$tol)throw new ErpException('La suma de los redondeos de las líneas con tarifa '.$t.' desvía el IVA de la nota en '.sprintf('%+d',$dev).' centavo(s) y la tolerancia registrada es '.$tol.'. Acredita menos líneas en esta nota o, tras verificar la ficha técnica vigente del SRI, registra nota_credito.tolerancia_centavos.',409);
@@ -188,13 +203,14 @@ final class ErpFiscalService extends ErpService
             $previoTotal=(int)$this->r->uno('SELECT COALESCE(SUM(l.total_centavos),0) t FROM erp_fiscal_nc_lineas l JOIN erp_fiscal_documentos x ON x.id=l.documento_id WHERE x.documento_origen_id=? AND x.estado NOT IN(\'rechazada\',\'bloqueada\') FOR SHARE',[$fid])['t'];
             if($previoTotal+$totalNc>$facturado)throw new ErpException('Las notas de crédito superarían el total de la factura.',409);
             $p=$this->r->uno('SELECT * FROM erp_fiscal_perfiles WHERE id=? FOR SHARE',[(int)$f['perfil_id']])??throw new ErpException('Perfil fiscal no encontrado.');
+            if($prueba&&($p['ambiente']??'1')!=='1')throw new ErpException('La prueba de tolerancia solo se emite en el ambiente de pruebas del SRI.',409);
             $n=$this->reservarNumero($p,'04');
             $datos=['fecha'=>max(substr($this->r::ahora(),0,10),$fac['fecha']),'secuencial'=>str_pad((string)$n,9,'0',STR_PAD_LEFT),'codigo_numerico'=>str_pad((string)random_int(0,99999999),8,'0',STR_PAD_LEFT),'comprador'=>$fac['comprador'],'lineas'=>$lineasNc,'motivo'=>$motivo,'sustento'=>['numero'=>$f['numero'],'fecha'=>$fac['fecha']],'total_centavos'=>$totalNc,'tolerancia_centavos'=>$tol];
             [$p12,$password]=$this->certificado($p);$xml=SriFirmaXades::firmar(SriComprobante::notaCredito($e,$datos),$p12,$password);$claveAcceso=SriXml::cargar($xml)->getElementsByTagName('claveAcceso')->item(0)->textContent;
             $this->confirmarNumero($p,'04',$n);
             $ahora=$this->r::ahora();$numero=$p['establecimiento'].'-'.$p['punto_emision'].'-'.$datos['secuencial'];
             $comercial=array_sum(array_map(fn($x)=>(int)$x['monto_centavos'],$devs));
-            $snapshot=json_encode(['emisor'=>$e,'parametros'=>$parTol?[ErpFiscalParametroService::referencia($parTol)]:[],'nota_credito'=>$datos+['devoluciones'=>$ids,'monto_comercial_centavos'=>$comercial,'diferencia_redondeo_centavos'=>$comercial-$totalNc]],JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE);
+            $snapshot=json_encode(['emisor'=>$e,'parametros'=>$parTol?[ErpFiscalParametroService::referencia($parTol)]:[],'nota_credito'=>$datos+['devoluciones'=>$ids,'monto_comercial_centavos'=>$comercial,'diferencia_redondeo_centavos'=>$comercial-$totalNc]]+($prueba?['prueba_tolerancia'=>true]:[]),JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE);
             $this->r->q("INSERT INTO erp_fiscal_documentos(perfil_id,tipo,documento_origen_id,sustituye_a_id,venta_id,clave_operacion,huella,clave_acceso,numero,snapshot_json,xml_firmado,xml_sha256,creado_por,creado_en,actualizado_en) VALUES(?,'04',?,?,?,?,?,?,?,?,?,?,?,?,?)",[(int)$f['perfil_id'],$fid,$sust?(int)$sust['id']:null,(int)$f['venta_id'],$clave,$huella,$claveAcceso,$numero,$snapshot,$xml,hash('sha256',$xml),$actor,$ahora,$ahora]);$id=$this->r->id();
             foreach($extra as $devId)$this->r->q('INSERT INTO erp_fiscal_nc_devoluciones(documento_id,devolucion_id) VALUES(?,?)',[$id,$devId]);
             foreach($filasRel as [$li,$qq,$b,$iv,$tt])$this->r->q('INSERT INTO erp_fiscal_nc_lineas(documento_id,linea_id,cantidad_milesimas,base_centavos,iva_centavos,total_centavos) VALUES(?,?,?,?,?,?)',[$id,$li,$qq,$b,$iv,$tt]);
