@@ -67,12 +67,18 @@ final class ErpRhService extends ErpService
             $id=$this->r->id();$this->evento($actor,'ausencia_solicitada','colaborador',(int)$c['id'],['ausencia_id'=>$id,'desde'=>$desde,'hasta'=>$hasta,'tipo'=>$tipo]);return (int)$c['id'];
         });
     }
+    /** Con un finiquito aprobado el historial de vacaciones del período liquidado no cambia: se anula primero el finiquito. */
+    private function sinFiniquitoVigente(int $colaborador,array $a):void
+    {
+        if(($a['tipo']??'')==='vacaciones'&&$this->r->uno("SELECT id FROM erp_nomina_finiquitos WHERE colaborador_id=? AND estado='aprobado' AND fecha_ingreso<=? FOR SHARE",[$colaborador,$a['hasta']]))throw new ErpException('El colaborador tiene un finiquito aprobado que incluye esas vacaciones: anula primero el finiquito.',409);
+    }
     public function resolverAusencia(int $actor,array $d):array
     {
         return $this->ejecutar($actor,'erp.rh','ausencia_resolver',$d,function()use($actor,$d){
             $id=$this->id($d['ausencia_id']??null);$a=$this->r->uno('SELECT * FROM erp_ausencias WHERE id=?',[$id])??throw new ErpException('Solicitud no encontrada.');
             $c=$this->colaborador((int)$a['colaborador_id']);$p=$this->r->uno('SELECT id FROM profesionales WHERE colaborador_id=? FOR UPDATE',[(int)$c['id']]);
             $a=$this->r->uno('SELECT * FROM erp_ausencias WHERE id=? FOR UPDATE',[$id]);if($a['estado']!=='solicitada')throw new ErpException('La solicitud ya fue resuelta.',409);
+            if(($d['decision']??'')==='aprobar')$this->sinFiniquitoVigente((int)$c['id'],$a);
             if(!in_array($d['decision']??'',['aprobar','rechazar'],true))throw new ErpException('Decisión no válida.');$aprobar=$d['decision']==='aprobar';$bloqueo=null;
             if($aprobar&&$p){
                 $citas=$this->r->q("SELECT id FROM citas WHERE profesionalId=? AND fecha BETWEEN ? AND ? AND estado IN ('confirmada','en_servicio') FOR SHARE",[(int)$p['id'],$a['desde'],$a['hasta']]);
@@ -113,7 +119,7 @@ final class ErpRhService extends ErpService
     {
         return $this->ejecutar($actor,'erp.rh','ausencia_anular',$d,function()use($actor,$d){
             $id=$this->id($d['ausencia_id']??null);$a=$this->r->uno('SELECT * FROM erp_ausencias WHERE id=?',[$id])??throw new ErpException('Solicitud no encontrada.');$c=$this->colaborador((int)$a['colaborador_id']);$this->r->uno('SELECT id FROM profesionales WHERE colaborador_id=? FOR UPDATE',[(int)$c['id']]);
-            $a=$this->r->uno('SELECT * FROM erp_ausencias WHERE id=? FOR UPDATE',[$id]);if(!in_array($a['estado'],['solicitada','aprobada'],true))throw new ErpException('La ausencia ya está cerrada.');$motivo=$this->texto($d['motivo']??'',300);
+            $a=$this->r->uno('SELECT * FROM erp_ausencias WHERE id=? FOR UPDATE',[$id]);if(!in_array($a['estado'],['solicitada','aprobada'],true))throw new ErpException('La ausencia ya está cerrada.');if($a['estado']==='aprobada')$this->sinFiniquitoVigente((int)$c['id'],$a);$motivo=$this->texto($d['motivo']??'',300);
             if($a['bloqueo_id'])$this->r->q('DELETE FROM bloqueos_profesionales WHERE id=?',[(int)$a['bloqueo_id']]);
             $this->r->q("UPDATE erp_ausencias SET estado='anulada',resuelto_por=?,resuelto_en=? WHERE id=?",[$actor,$this->r::ahora(),$id]);$this->evento($actor,'ausencia_anulada','colaborador',(int)$c['id'],['ausencia'=>$a,'motivo'=>$motivo],['nomina']);return (int)$c['id'];
         });

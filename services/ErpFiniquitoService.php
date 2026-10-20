@@ -82,6 +82,7 @@ final class ErpFiniquitoService extends ErpService
             if(!$this->r->uno("SELECT 1 x FROM erp_nomina_lineas l JOIN erp_nomina_corridas k ON k.id=l.corrida_id WHERE l.id=? AND k.estado='aprobada' FOR SHARE",[(int)$snap['linea_mes_salida']]))throw new ErpException('La nómina del mes de salida ya no está aprobada. Anula el finiquito y recalcula.',409);
             $pend=$this->pendientes((int)$f['colaborador_id']);
             if($this->suma($pend['decimo_tercero'])!==(int)$f['d13_centavos']||$this->suma($pend['decimo_cuarto'])!==(int)$f['d14_centavos'])throw new ErpException('Los décimos acumulados del colaborador cambiaron desde el cálculo. Anula el finiquito y recalcula.',409);
+            if((new ErpVacacionesService($this->r))->tomadasCent((int)$f['colaborador_id'],$f['fecha_ingreso'],$f['fecha_salida'])!==(int)($snap['vacaciones']['registradas_cent']??0))throw new ErpException('Las vacaciones registradas del colaborador cambiaron desde el cálculo. Anula el finiquito y recalcula.',409);
             foreach($pend as $tipo=>$filas)foreach($filas as $x)$this->r->q('INSERT INTO erp_nomina_finiquito_lineas(finiquito_id,linea_id,tipo,monto_centavos) VALUES(?,?,?,?)',[(int)$f['id'],$x['id'],$tipo,$x['m']]);
             $hoy=$this->hoy();$total=(int)$f['total_centavos'];$ob=null;
             if($total>0){
