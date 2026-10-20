@@ -27,6 +27,8 @@ Triggers: política, ficha y líneas no se editan ni borran; corridas y bajas so
 Reparto acumulado en centavos enteros: `objetivo(k) = ⌊(2·base·k + vida) / (2·vida)⌋` (mitad hacia arriba); la cuota del mes *k* es `objetivo(k) − objetivo(k−1)`. La suma de las cuotas es exactamente la base (costo − residual − acumulado inicial) y ninguna cuota excede lo que falta.
 Ejemplo calculado a mano: base 900,00, 7 meses → 128,57 · 128,57 · 128,57 · 128,58 · 128,57 · 128,57 · 128,57.
 
+Activo anterior al libro: con acumulado inicial se **exigen los meses de vida que le quedan** (≤ la vida de la política) y el saldo se reparte en ese plazo. Un activo no puede empezar en un mes que ya tiene corrida vigente (ni posterior).
+
 Reglas: solo meses ya terminados; no antes del inicio contable ni del mes de adquisición; los meses se calculan y contabilizan **en orden y sin saltos**; un activo con meses sin contabilizar bloquea el cálculo (el sistema compara lo contabilizado con lo esperado); sin depreciación en el mes de la baja.
 
 ## Flujo, asientos y reversos

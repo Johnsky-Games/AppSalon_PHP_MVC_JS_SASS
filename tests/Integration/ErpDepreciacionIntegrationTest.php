@@ -108,6 +108,26 @@ final class ErpDepreciacionIntegrationTest extends TestCase
         $act=$this->dep()->activos()[0];self::assertSame([90000,0,'totalmente_depreciado',7],[$act['acumulado'],$act['libros'],$act['estado'],$act['meses_depreciados']]);
         $cuadro=$this->dep()->cuadro($a);self::assertCount(7,$cuadro['filas']);self::assertSame('contabilizada',$cuadro['filas'][6]['estado']);
     }
+    public function testActivoAnteriorAlLibroReparteElSaldoEnLosMesesQueLeQuedan():void
+    {
+        $a=$this->activo('EQ-OLD','1200.00','2025-06-01');
+        // Con acumulado inicial se exigen los meses restantes: repartir el saldo en la vida completa de la política lo extendería más allá de lo que le queda.
+        try{$this->ficha($a,'2026-01',['acumulado_inicial'=>'600.00']);self::fail('Faltan los meses restantes');}catch(ErpException $e){self::assertStringContainsString('meses de vida',$e->getMessage());}
+        try{$this->ficha($a,'2026-01',['acumulado_inicial'=>'600.00','vida_util_meses'=>'8']);self::fail('Más que la política');}catch(ErpException $e){self::assertStringContainsString('no pueden superar',$e->getMessage());}
+        $this->ficha($a,'2026-01',['acumulado_inicial'=>'600.00','vida_util_meses'=>'3']);
+        $k=$this->mes(1);self::assertSame(20000,(int)$this->r->uno('SELECT total_centavos t FROM erp_dep_corridas WHERE id=?',[$k])['t'],'600,00 por depreciar en 3 meses');
+        $this->mes(2);$this->mes(3);$act=$this->dep()->activos()[0];self::assertSame([120000,0,'totalmente_depreciado'],[$act['acumulado'],$act['libros'],$act['estado']]);
+        // El acumulado inicial lo trae el asiento de apertura (manual): mientras no esté, el control lo muestra como diferencia en vez de ocultarlo.
+        self::assertSame(-60000,$this->control()['diferencia']);
+    }
+    public function testUnActivoNoEmpiezaEnUnMesYaProcesado():void
+    {
+        $a=$this->activo();$this->ficha($a);$this->mes(1);
+        $b=$this->activo('EQ-LATE','500.00','2026-01-20');
+        $e=$this->rechazo(fn()=>$this->ficha($b,'2026-01'),409);self::assertStringContainsString('mes ya procesado',$e->getMessage());
+        $this->ficha($b,'2026-02');$this->mes(2);// el mes siguiente incluye a ambos y no se bloquea
+        self::assertSame(2,(int)$this->r->uno("SELECT n_lineas n FROM erp_dep_corridas WHERE mes=2 AND estado='contabilizada'")['n']);
+    }
     public function testAnularReversaEnOrdenInversoYPermiteRecalcular():void
     {
         $a=$this->activo();$this->ficha($a);$k1=$this->mes(1);$k2=$this->mes(2);

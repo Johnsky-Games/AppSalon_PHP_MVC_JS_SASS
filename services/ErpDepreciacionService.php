@@ -61,7 +61,13 @@ final class ErpDepreciacionService extends ErpService
             $costo=(int)$a['costo_centavos'];if($costo<1)throw new ErpException('El activo no tiene costo: corrígelo antes de configurar su depreciación.');
             $acum=trim((string)($d['acumulado_inicial']??''))===''?0:$this->importe($d['acumulado_inicial'],true);
             if($acum>0&&$a['adquirido_en']>=$inicioContable)throw new ErpException('El acumulado inicial solo aplica a un activo adquirido antes del inicio contable ('.$inicioContable.').');
-            $vida=trim((string)($d['vida_util_meses']??''))===''?(int)$cat['vida_util_meses']:$this->entero($d['vida_util_meses'],1,600,'La vida útil (meses)');
+            $sinVida=trim((string)($d['vida_util_meses']??''))==='';
+            // Un activo con acumulado inicial ya consumió parte de su vida: se reparte el saldo en los meses que le quedan, no en la vida completa de la política.
+            if($acum>0&&$sinVida)throw new ErpException('Indica los meses de vida útil que le quedan al activo: el acumulado inicial ya consumió parte de la vida de la política.');
+            $vida=$sinVida?(int)$cat['vida_util_meses']:$this->entero($d['vida_util_meses'],1,600,'La vida útil (meses)');
+            if($acum>0&&$vida>(int)$cat['vida_util_meses'])throw new ErpException('Los meses restantes no pueden superar la vida de la política ('.(int)$cat['vida_util_meses'].').');
+            // Un mes ya procesado no puede incluir un activo que entra tarde: las cuotas se reparten en orden y sin saltos.
+            if($this->r->uno("SELECT id FROM erp_dep_corridas WHERE estado<>'anulada' AND anio*100+mes>=? LIMIT 1 FOR UPDATE",[(int)substr($mes,0,4)*100+(int)substr($mes,5,2)]))throw new ErpException('Ya existe una corrida de ese mes o posterior: el activo no puede empezar a depreciarse en un mes ya procesado. Empieza en el primer mes sin corrida o anula las corridas posteriores.',409);
             $residual=D::residual($costo,(int)$cat['residual_bp']);
             if($acum+$residual>=$costo)throw new ErpException('El acumulado inicial más el valor residual debe ser menor que el costo: no queda nada por depreciar.');
             $this->r->q("INSERT INTO erp_dep_fichas(activo_id,categoria_id,inicio,costo_centavos,acumulado_inicial_centavos,residual_centavos,vida_util_meses,metodo,creado_por,creado_en) VALUES(?,?,?,?,?,?,?,'lineal',?,?)",[(int)$a['id'],(int)$cat['id'],$inicio,$costo,$acum,$residual,$vida,$actor,$this->r::ahora()]);$id=$this->r->id();
