@@ -528,10 +528,23 @@ final class R2bRegistroUniformeTest extends R2bCase
             }
             return $t;
         };
-        $nuevo = $medir(self::correo('tn'));
-        $confirmado = $medir(self::cliente(['email' => self::correo('tc')])['email']);
-        $sinConfirmar = $medir(self::cliente(['email' => self::correo('ts'), 'confirmado' => false])['email']);
-        $staff = $medir(self::miembro(self::$dueno['id'], 'recepcion')['email']);
+        // El tiempo de pared de una sola petición en un runner compartido es ruidoso (se vieron 61 a 187 ms entre ramas iguales): se repite la medición
+        // con cuentas nuevas en 3 rondas y se compara el MÍNIMO por rama y por solicitud. El ruido solo suma tiempo, así que el mínimo es el estimador estable
+        // del trabajo propio de cada rama; una diferencia real (p. ej. enviar correo en línea, 300 ms) sube el mínimo de esa rama en todas las rondas.
+        $rondas = [];
+        for ($r = 0; $r < 3; $r++) {
+            $rondas[] = [
+                'nuevo' => $medir(self::correo('tn' . $r)),
+                'confirmado' => $medir(self::cliente(['email' => self::correo('tc' . $r)])['email']),
+                'sin_confirmar' => $medir(self::cliente(['email' => self::correo('ts' . $r), 'confirmado' => false])['email']),
+                'staff' => $medir(self::miembro(self::$dueno['id'], 'recepcion')['email']),
+            ];
+        }
+        $minimo = [];
+        foreach (['nuevo', 'confirmado', 'sin_confirmar', 'staff'] as $rama) {
+            for ($i = 0; $i < 2; $i++) { $minimo[$rama][$i] = min(array_map(fn(array $r) => $r[$rama][$i], $rondas)); }
+        }
+        [$nuevo, $confirmado, $sinConfirmar, $staff] = [$minimo['nuevo'], $minimo['confirmado'], $minimo['sin_confirmar'], $minimo['staff']];
         $this->assertSame([], self::buzonFallo(self::SMTP), 'ninguna petición debe haber enviado correo');
         foreach (['nuevo' => $nuevo, 'confirmado' => $confirmado, 'sin_confirmar' => $sinConfirmar, 'staff' => $staff] as $rama => $t) {
             foreach ($t as $i => $ms) { $this->assertLessThan(250, $ms, sprintf('%s, solicitud %d: %.0f ms; con envío en línea superaría los 300 ms del SMTP', $rama, $i + 1, $ms)); }
