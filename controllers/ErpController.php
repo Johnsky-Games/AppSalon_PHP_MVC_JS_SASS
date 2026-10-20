@@ -313,7 +313,8 @@ final class ErpController
             'contratos'=>$id?$r->q('SELECT * FROM erp_contratos WHERE colaborador_id=? ORDER BY inicio DESC',[$id]):[],
             'jornadas'=>$id?$r->q('SELECT * FROM erp_jornadas WHERE colaborador_id=? ORDER BY dia_semana',[$id]):[],
             'asistencia'=>$id?$r->q('SELECT * FROM erp_asistencia WHERE colaborador_id=? ORDER BY entrada DESC LIMIT 100',[$id]):[],
-            'ausencias'=>$id?$r->q('SELECT * FROM erp_ausencias WHERE colaborador_id=? ORDER BY id DESC LIMIT 100',[$id]):[]]);
+            'ausencias'=>$id?$r->q('SELECT * FROM erp_ausencias WHERE colaborador_id=? ORDER BY id DESC LIMIT 100',[$id]):[],
+            'vacaciones'=>$id?(new \Services\ErpVacacionesService($r))->saldo($id,substr($r::ahora(),0,10)):null]);
     }
     public static function aprobaciones(Router $router):void
     {

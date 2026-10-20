@@ -1,6 +1,6 @@
 # Reconciliación del plan maestro con el estado del repositorio (19 de octubre de 2026)
 
-Compara las fases F0–F9 de `PLAN_MAESTRO_ERP_SALON_2026-10-17.md` con lo que existe en las ramas apiladas #6 a #14. «Hecho» significa implementado y probado en ensayo; no significa certificado ni listo para producción. Sin expandir a un ERP industrial: lo no cubierto se lista con su siguiente paso.
+Compara las fases F0–F9 de `PLAN_MAESTRO_ERP_SALON_2026-10-17.md` con lo que existe en `main` tras fusionar los PR #6 a #20. «Hecho» significa implementado y probado en ensayo; no significa certificado ni listo para producción. Sin expandir a un ERP industrial: lo no cubierto se lista con su siguiente paso.
 
 | Fase | Estado | Evidencia / qué falta |
 | --- | --- | --- |
@@ -11,7 +11,7 @@ Compara las fases F0–F9 de `PLAN_MAESTRO_ERP_SALON_2026-10-17.md` con lo que e
 | F4 Caja y pagos | Hecho salvo cuentas bancarias | Caja/turnos/arqueo, efectivo y transferencias verificadas, prepago, paquetes, suscripciones. **Falta** cuentas bancarias propias y conciliación contra extractos |
 | F5 Fiscal y enlace contable | Hecho en ensayo (SRI pruebas) | Facturas, notas de crédito, sustitución, consumidor final, anticipos, parámetros por régimen. **Falta** certificación con emisor y certificado reales, facturar en el cobro y el límite porcentual de notas de crédito si se confirma |
 | F5b Contabilidad | Hecho en ensayo | Libro por partida doble, períodos, cierre, reversos, estados, conciliaciones (#13). **Falta** manuales de caja, ajustes de inventario, retenciones, anexos tributarios, depreciación |
-| F6 RH y remuneración | Hecho en ensayo | Jornada, asistencia, ausencias, contratos, comisiones por colaborador con vigencia, nómina propia (#14). IR de relación de dependencia calculado a partir de la tabla que registre el usuario (045; sin cifras de fábrica). Finiquito calculado con parámetros registrados (046). Utilidades repartidas desde el libro con porcentajes registrados (047). **Falta** saldos de vacaciones, planillas al IESS y anexos del SRI |
+| F6 RH y remuneración | Hecho en ensayo | Jornada, asistencia, ausencias, contratos, comisiones por colaborador con vigencia, nómina propia (#14). IR de relación de dependencia calculado a partir de la tabla que registre el usuario (045; sin cifras de fábrica). Finiquito calculado con parámetros registrados (046). Utilidades repartidas desde el libro con porcentajes registrados (047). Ausencias con tipo y saldo de vacaciones integrado al finiquito (048). **Falta** planillas y avisos al IESS, formulario 107/anexos del SRI, jubilación patronal, retención de renta sobre indemnizaciones y utilidades, y contabilizar el destino del excedente de utilidades |
 | F7 CRM y crecimiento | Parcial | Seguimientos, cupones de porcentaje con vigencia, mínimo y topes de uso por cliente; puntos por asistencia (no económicos); paquetes y suscripciones |
 | F8 Gestión y BI | Parcial | Indicadores operativos y exportaciones; CxC/CxP en contabilidad. **Falta** presupuestos, modelo de lectura para Power BI y glosario de métricas |
 | F9 Piloto | Pendiente | Requiere datos reales del emisor, ensayo de recuperación en el entorno del usuario y aceptación por rol |
@@ -35,3 +35,13 @@ Compara las fases F0–F9 de `PLAN_MAESTRO_ERP_SALON_2026-10-17.md` con lo que e
 4. **Promociones avanzadas y reglas de comisiones** (reglas de negocio acotadas, con reversas históricas).
 5. **Modelo de lectura para Power BI** y presupuestos.
 6. **Depreciación** y cierre de los límites de nómina (renta, finiquito).
+
+## Registro de estado (20 de octubre de 2026)
+«Completo» = implementado, probado en ensayo y fusionado en `main`; no significa certificado ni listo para producción. Todo parámetro legal se registra con su fuente: **ninguna cifra legal viene cargada**, y la emisión SRI sigue solo en pruebas.
+
+| Estado | Qué |
+| --- | --- |
+| **Completo (ensayo)** | Ventas, caja, prepago, paquetes y suscripciones; facturas, notas de crédito (reparto acumulado del redondeo, sin tolerancia registrada) y sustitución en ambiente de pruebas; contabilidad por partida doble con cierre y reversos; nómina con décimos y fondos; retención de renta desde tabla registrada (045); finiquito (046); utilidades desde el libro (047); ausencias con tipo y saldo de vacaciones (048) |
+| **Parcial** | Verificación de las reglas contra fuentes oficiales (SRI, IESS y Ministerio del Trabajo no son accesibles desde el entorno de desarrollo: cada parámetro queda con su fuente y fecha de consulta para que el contador/abogado lo valide); multi-sede; conteo físico de inventario; CRM avanzado; BI |
+| **Pendiente** | Certificación SRI con emisor y certificado reales; planillas y avisos al IESS; formulario 107 y anexos del SRI (RDEP); jubilación patronal; retención de renta sobre indemnizaciones y utilidades; destino contable del excedente de utilidades; tesorería bancaria y manuales de caja contabilizados; depreciación; retenciones y anexos tributarios; propinas y fidelización económica (requieren decisión del propietario); presupuestos y modelo de lectura para Power BI; piloto con datos reales |
+| **Decisión del propietario** | Registrar `nota_credito.tolerancia_centavos` solo tras verificarla en la ficha técnica del SRI o en una prueba controlada del ambiente de pruebas; mientras no exista, las notas parciales cuyo acumulado difiere se rechazan (409) |

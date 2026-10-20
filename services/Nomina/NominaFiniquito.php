@@ -27,7 +27,7 @@ final class NominaFiniquito
         $completos=intdiv($dias,$baseAnio);
         $anios=$completos+(($dias%$baseAnio)>0?1:0);// indemnización (art. 188): la fracción cuenta como año completo
         // Vacaciones: días devengados (centésimas) proporcionales al servicio, menos los tomados; valor a base/30 por día.
-        $devCent=intdiv($p['vacaciones.dias_anuales']*100*$dias+intdiv($baseAnio,2),$baseAnio);
+        $devCent=NominaVacaciones::devengadas($p['vacaciones.dias_anuales'],$dias,$baseAnio);
         $pendCent=max(0,$devCent-$in['vacaciones_tomadas_cent']);
         $vacaciones=intdiv($base*$pendCent+1500,3000);
         $desahucio=$in['desahucio']?intdiv($base*$completos*$p['desahucio.pb']+5000,10000):0;// desahucio (art. 185): años de servicio completos
