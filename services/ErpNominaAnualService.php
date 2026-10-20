@@ -25,7 +25,7 @@ final class ErpNominaAnualService extends ErpService
     {
         if($anio<2000||$anio>2100)throw new ErpException('Año fuera de rango.');
         $vacio=array_fill_keys(self::conceptos(),0);$por=[];
-        $nuevo=fn(int $id)=>$por[$id]??=['colaborador_id'=>$id,'meses'=>0,'dias'=>0]+$vacio;
+        $nuevo=function(int $id)use(&$por,$vacio){return $por[$id]??=['colaborador_id'=>$id,'meses'=>0,'dias'=>0]+$vacio;};// por referencia: cada pasada continúa sobre lo ya acumulado
         // 1) Corridas aprobadas del año.
         $sel=implode(',',array_map(fn($k,$c)=>"SUM(l.$c) $k",array_keys(self::LINEA),self::LINEA));
         foreach($this->r->q("SELECT l.colaborador_id,COUNT(*) meses,SUM(l.dias) dias,$sel FROM erp_nomina_lineas l JOIN erp_nomina_corridas k ON k.id=l.corrida_id WHERE k.anio=? AND k.estado='aprobada' GROUP BY l.colaborador_id",[$anio]) as $f){

@@ -17,14 +17,14 @@ final class ErpIdentificacionService extends ErpService
             if($msg=IdentificacionTributaria::error($tipo,$numero))throw new ErpException($msg);
             $nota=($d['nota']??'')===''?null:$this->texto($d['nota'],200);
             $clave=hash('sha256','rh.identificacion:'.$actor.':'.$d['idem_key']);
-            $previo=$this->r->uno('SELECT id FROM erp_rh_identificaciones WHERE clave_operacion=? FOR SHARE',[$clave]);if($previo)return (int)$previo['id'];
+            $previo=$this->r->uno('SELECT id FROM erp_rh_identificaciones WHERE clave_operacion=? FOR SHARE',[$clave]);if($previo)return (int)$c['id'];
             // Un mismo documento no puede estar vigente en dos trabajadores distintos.
             foreach($this->r->q('SELECT i.colaborador_id FROM erp_rh_identificaciones i WHERE i.tipo=? AND i.numero=? AND i.colaborador_id<>? AND i.id=(SELECT MAX(x.id) FROM erp_rh_identificaciones x WHERE x.colaborador_id=i.colaborador_id) FOR SHARE',[$tipo,$numero,(int)$c['id']]) as $_)
                 throw new ErpException('Ese documento ya es la identificación vigente de otro trabajador.',409);
             $vigente=$this->vigente((int)$c['id']);
             if($vigente&&$vigente['tipo']===$tipo&&$vigente['numero']===$numero)throw new ErpException('Esa ya es la identificación vigente del trabajador.',409);
             $this->r->q('INSERT INTO erp_rh_identificaciones(clave_operacion,colaborador_id,tipo,numero,nota,registrado_por,registrado_en) VALUES(?,?,?,?,?,?,?)',[$clave,(int)$c['id'],$tipo,$numero,$nota,$actor,$this->r::ahora()]);
-            $id=$this->r->id();$this->evento($actor,'rh_identificacion_declarada','colaborador',(int)$c['id'],['identificacion_id'=>$id,'tipo'=>$tipo,'cambio'=>$vigente!==null]);return $id;
+            $id=$this->r->id();$this->evento($actor,'rh_identificacion_declarada','colaborador',(int)$c['id'],['identificacion_id'=>$id,'tipo'=>$tipo,'cambio'=>$vigente!==null]);return (int)$c['id'];// el recurso es el trabajador (la fila de identificación consta en el evento)
         });
     }
 

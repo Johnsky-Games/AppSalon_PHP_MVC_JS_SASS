@@ -74,6 +74,8 @@ final class ErpAnexoAnualIntegrationTest extends TestCase
         $fin->aprobar($this->owner,$this->d(['finiquito_id'=>$id]));
         $a=$this->fila($this->anual()->consolidado(2026),$this->colA);
         foreach(['finiquito_decimo_tercero'=>10000,'finiquito_decimo_cuarto'=>8034,'finiquito_vacaciones'=>82520,'finiquito_desahucio'=>0,'finiquito_indemnizacion'=>0,'finiquito_total'=>100554] as $k=>$v)self::assertSame($v,$a[$k],$k);
+        // Las pasadas posteriores (finiquito) no borran lo acumulado por la nómina del mismo trabajador.
+        self::assertSame(2,$a['meses']);self::assertSame(120000,$a['sueldo']);self::assertSame(108660,$a['neto_pagado']);self::assertSame(11340,$a['iess_personal']);
         self::assertSame(0,$this->anual()->consolidado(2027)['totales']['finiquito_total']);
     }
     public function testLaIdentificacionSeValidaSeCorrigeSinBorrarYNoSeRepiteEntreTrabajadores():void
@@ -83,7 +85,8 @@ final class ErpAnexoAnualIntegrationTest extends TestCase
         $this->rechazo(fn()=>$this->ident()->declarar($this->recepcion,$this->d(['colaborador_id'=>$this->colA,'tipo'=>'cedula','numero'=>$uno])),403);
         $this->rechazo(fn()=>$this->ident()->declarar($this->owner,$this->d(['colaborador_id'=>$this->colA,'tipo'=>'cedula','numero'=>'1710034060'])),422);
         $this->rechazo(fn()=>$this->ident()->declarar($this->owner,$this->d(['colaborador_id'=>999999,'tipo'=>'cedula','numero'=>$uno])),404);
-        $this->ident()->declarar($this->owner,$this->d(['colaborador_id'=>$this->colA,'tipo'=>'cedula','numero'=>' '.$uno.' ']));
+        $r=$this->ident()->declarar($this->owner,$this->d(['colaborador_id'=>$this->colA,'tipo'=>'cedula','numero'=>' '.$uno.' ']));
+        self::assertSame($this->colA,$r['recurso_id'],'El recurso devuelto es el trabajador (la acción redirige a su ficha), no la fila de identificación');
         self::assertSame(['tipo'=>'cedula','numero'=>$uno],array_intersect_key($this->ident()->vigente($this->colA),['tipo'=>1,'numero'=>1]));
         $this->rechazo(fn()=>$this->ident()->declarar($this->owner,$this->d(['colaborador_id'=>$this->colA,'tipo'=>'cedula','numero'=>$uno])),409);// ya es la vigente
         $this->rechazo(fn()=>$this->ident()->declarar($this->owner,$this->d(['colaborador_id'=>$this->colB,'tipo'=>'cedula','numero'=>$uno])),409);// de otro trabajador
