@@ -42,3 +42,4 @@ try {
 require_once __DIR__.'/fixtures/sri/Fixtures.php';
 [$p12,$clave]=\Tests\Fixtures\Sri\Fixtures::certificado();
 (new \Services\ErpFiscalService())->perfil(2,['idem_key'=>bin2hex(random_bytes(16)),'titular_confirmado'=>'1','emisor'=>\Tests\Fixtures\Sri\Fixtures::emisor()],$p12,$clave);
+\Tests\Fixtures\Sri\Fixtures::parametros(\Model\ActiveRecord::getDB(),2);

@@ -17,6 +17,7 @@ final class ErpFiscalIntegrationTest extends TestCase
         $this->appKeyAnterior=getenv('APP_KEY');$this->appKeyEnvAnterior=$_ENV['APP_KEY']??null;putenv('APP_KEY=testing-fiscal-master-key-32-characters');$_ENV['APP_KEY']='testing-fiscal-master-key-32-characters';
         $this->db=BaseDatosAislada::crear('fiscal');ActiveRecord::setDB($this->db);$this->r=new ErpRepository($this->db);$this->actor=R5CajaFixture::usuario($this->db,'propietario');$cliente=R5CajaFixture::usuario($this->db);
         [$p12,$password]=F::certificado();$this->perfil=$this->svc()->perfil($this->actor,$this->d(['emisor'=>F::emisor(),'titular_confirmado'=>'1']),$p12,$password)['recurso_id'];
+        F::parametros($this->db,$this->actor);
         $this->cita=R5CajaFixture::cita($this->db,$cliente,null,['20.00'],'completada',substr($this->r::ahora(),0,10));
         $this->venta=(new ErpVentaService($this->r))->crear($this->actor,$this->d(['cita_id'=>$this->cita]))['recurso_id'];
         (new ErpVentaService($this->r))->confirmar($this->actor,$this->d(['venta_id'=>$this->venta,'version'=>$this->r->uno('SELECT version FROM erp_ventas WHERE id=?',[$this->venta])['version']]));

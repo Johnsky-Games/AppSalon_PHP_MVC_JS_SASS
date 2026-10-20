@@ -46,5 +46,15 @@ final class ErpPortalesIntegrationTest extends TestCase
         $this->sesion('cliente');$_SERVER['REQUEST_METHOD']='GET';self::assertSame(403,$this->ejecutar(fn()=>ErpController::fiscal(new \MVC\Router())));self::assertSame(403,$this->ejecutar(fn()=>ErpController::fiscalRide(new \MVC\Router())));self::assertSame(403,$this->ejecutar(fn()=>ErpController::fiscalPdf()));self::assertSame(403,$this->ejecutar(fn()=>ErpController::fiscalXml()));$_GET['formato']='autorizado';self::assertSame(403,$this->ejecutar(fn()=>ErpController::fiscalXml()));
         $_SERVER['REQUEST_METHOD']='POST';$_POST=['accion'=>'fiscal_correo','idem_key'=>R5CajaFixture::clave(),'csrf_token'=>'csrf-erp-portales'];self::assertSame(403,$this->ejecutar(fn()=>ErpController::accion()));$_POST=['accion'=>'fiscal_correo_reintentar','idem_key'=>R5CajaFixture::clave(),'csrf_token'=>'csrf-erp-portales'];self::assertSame(403,$this->ejecutar(fn()=>ErpController::accion()));$_POST=['accion'=>'fiscal_factura','idem_key'=>R5CajaFixture::clave(),'csrf_token'=>'csrf-erp-portales'];self::assertSame(403,$this->ejecutar(fn()=>ErpController::accion()));self::assertSame(0,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_fiscal_documentos')['n']);
     }
-
+    public function testParametrosFiscalesSoloSeLeenYRegistranDesdeElPortalDeEquipo():void
+    {
+        $this->sesion('cliente');$_SERVER['REQUEST_METHOD']='GET';self::assertSame(403,$this->ejecutar(fn()=>ErpController::fiscalParametros(new \MVC\Router())));
+        $_SERVER['REQUEST_METHOD']='POST';$_POST=['accion'=>'fiscal_parametro','idem_key'=>R5CajaFixture::clave(),'csrf_token'=>'csrf-erp-portales','clave'=>'iva.codigo.4','valor'=>'1500','fuente'=>'Fuente de ensayo','vigente_desde'=>date('Y-m-d'),'consultado_en'=>date('Y-m-d')];
+        self::assertSame(403,$this->ejecutar(fn()=>ErpController::accion()));self::assertSame(0,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_fiscal_parametros')['n']);
+        // En el portal de equipo la página se renderiza completa y el formulario registra la versión con auditoría.
+        $this->sesion('equipo');$_SERVER['REQUEST_METHOD']='POST';self::assertSame(303,$this->ejecutar(fn()=>ErpController::accion()));
+        self::assertSame(1,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_fiscal_parametros')['n']);self::assertSame(1,(int)$this->r->uno("SELECT COUNT(*) n FROM erp_eventos WHERE tipo='fiscal_parametro_registrado'")['n']);
+        $_SERVER['REQUEST_METHOD']='GET';$_POST=[];ob_start();try{ErpController::fiscalParametros(new \MVC\Router());$html=(string)ob_get_contents();}finally{ob_end_clean();}
+        self::assertStringContainsString('iva.codigo.4',$html);self::assertStringContainsString('Registrar una versión',$html);self::assertStringContainsString('Fuente de ensayo',$html);
+    }
 }

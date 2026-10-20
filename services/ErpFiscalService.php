@@ -51,8 +51,9 @@ final class ErpFiscalService extends ErpService
         $this->cli();if(($d['emisor']['ambiente']??null)!=='1'||($d['titular_confirmado']??null)!=='1')throw new ErpException('El piloto exige ambiente de pruebas y confirmar la titularidad del certificado.');
         $d['certificado_sha256']=hash('sha256',$p12);$d['credencial_huella']=hash_hmac('sha256',$password,Secretos::clave('sri-certificado-huella'));
         return $this->ejecutar($actor,'erp.configurar','fiscal_perfil',$d,function()use($actor,$d,$p12,$password){
-            $e=$d['emisor'];$permitidas=['ruc','ambiente','establecimiento','punto_emision','razon_social','dir_matriz','obligado_contabilidad','nombre_comercial','dir_establecimiento','contribuyente_especial','agente_retencion','contribuyente_rimpe'];
+            $e=$d['emisor'];$permitidas=['ruc','ambiente','establecimiento','punto_emision','razon_social','dir_matriz','obligado_contabilidad','nombre_comercial','dir_establecimiento','contribuyente_especial','agente_retencion','contribuyente_rimpe','regimen'];
             if(array_diff(array_keys($e),$permitidas))throw new ErpException('La configuración del emisor contiene campos no admitidos.');
+            if(isset($e['regimen'])){if(!in_array($e['regimen'],['general','rimpe_emprendedor','rimpe_negocio_popular'],true))throw new ErpException('Régimen no válido: general, rimpe_emprendedor o rimpe_negocio_popular.');if(!empty($e['contribuyente_rimpe']))throw new ErpException('Con régimen declarado la leyenda proviene del parámetro fiscal «regimen.leyenda»; no la repitas en el emisor.');}
             // Valida estructura y posibilidad de firmar en memoria; no envía ni persiste el documento sintético.
             $prueba=['fecha'=>substr($this->r::ahora(),0,10),'secuencial'=>'000000001','codigo_numerico'=>'00000000','comprador'=>['tipo'=>'05','identificacion'=>'0000000000','nombre'=>'Validación local de configuración'],'lineas'=>[['codigo'=>'CONFIG','descripcion'=>'Validación local','cantidad_milesimas'=>1000,'precio_centavos'=>1,'impuesto_pb'=>0,'codigo_porcentaje'=>'0']],'pagos'=>[['forma'=>'01','total_centavos'=>1]]];
             SriFirmaXades::firmar(SriComprobante::factura($e,$prueba),$p12,$password);
@@ -77,7 +78,8 @@ final class ErpFiscalService extends ErpService
             $huella=hash('sha256',json_encode([$venta,$perfil,$comprador,$categorias,$pagos],JSON_THROW_ON_ERROR));$previa=$sust?$this->r->uno('SELECT * FROM erp_fiscal_documentos WHERE clave_operacion=? FOR SHARE',[$clave]):$this->r->uno('SELECT * FROM erp_fiscal_documentos WHERE venta_id=? AND tipo=\'01\' AND sustituye_a_id IS NULL FOR SHARE',[$venta]);
             if($previa){if($previa['clave_operacion']!==$clave||!hash_equals($previa['huella'],$huella))throw new ErpException('La venta ya tiene un comprobante fiscal; conserva su clave y revisa su estado.',409);return (int)$previa['id'];}
             if($v['estado']!=='confirmada')throw new ErpException('Confirma primero la venta.');
-            if($this->r->uno('SELECT id FROM erp_devoluciones WHERE venta_id=? LIMIT 1',[$venta])||$this->r->uno("SELECT pago_id FROM erp_prepago_movimientos WHERE venta_id=? AND tipo='aplicacion' LIMIT 1",[$venta]))throw new ErpException('El piloto no procesa ventas con devolución o aplicación de prepago.');
+            if($this->r->uno('SELECT id FROM erp_devoluciones WHERE venta_id=? LIMIT 1',[$venta]))throw new ErpException('El piloto no procesa ventas con devolución previa a la factura.');
+            $par=new ErpFiscalParametroService($this->r);$fechaEmision=substr($this->r::ahora(),0,10);$usados=[];
             $lineas=$this->r->q('SELECT * FROM erp_venta_lineas WHERE venta_id=? ORDER BY id FOR SHARE',[$venta]);$fiscales=[];
             $cita=$v['cita_id']?$this->r->uno('SELECT estado FROM citas WHERE id=?',[(int)$v['cita_id']]):null;
             foreach($lineas as $l){
@@ -85,11 +87,23 @@ final class ErpFiscalService extends ErpService
                 $fiscales[]=['linea_id'=>(int)$l['id'],'codigo'=>($l['producto_id']?'P':'S').($l['producto_id']?:$l['servicio_id']),'descripcion'=>$l['nombre'],'cantidad_milesimas'=>(int)$l['cantidad_milesimas'],'precio_centavos'=>(int)$l['precio_centavos'],'descuento_centavos'=>(int)$l['descuento_centavos'],'impuesto_pb'=>(int)$l['impuesto_pb'],'codigo_porcentaje'=>$categorias[(string)$l['id']]??null];
             }
             $p=$this->r->uno('SELECT * FROM erp_fiscal_perfiles WHERE id=? FOR SHARE',[$perfil])??throw new ErpException('Perfil fiscal no encontrado.');$e=json_decode($p['datos_json'],true,512,JSON_THROW_ON_ERROR);$serie=$p['establecimiento'].$p['punto_emision'];
+            $regimen=$e['regimen']??'*';$consumidorFinal=($comprador['tipo']??'')==='07';
+            // Cobro anticipado: el IVA de servicios se factura al prestarlos (elección del contribuyente, registrada); la carga o el anticipo no genera comprobante.
+            if($this->r->uno("SELECT pago_id FROM erp_prepago_movimientos WHERE venta_id=? AND tipo='aplicacion' LIMIT 1",[$venta]))$usados[]=ErpFiscalParametroService::referencia($par->requerir('servicios.hecho_generador','*',$fechaEmision));
+            foreach(array_unique(array_filter(array_map('strval',$fiscales?array_column($fiscales,'codigo_porcentaje'):[]),static fn(string $c)=>$c!==''))as $codigo){
+                $pi=$par->requerir(ErpFiscalParametroService::claveIva($codigo),$regimen,$fechaEmision);$usados[]=ErpFiscalParametroService::referencia($pi);
+            }
+            if(in_array($regimen,['rimpe_emprendedor','rimpe_negocio_popular'],true)){$l=$par->requerir('regimen.leyenda',$regimen,$fechaEmision);$usados[]=ErpFiscalParametroService::referencia($l);$e['contribuyente_rimpe']=$l['valor_texto'];}
+            if($consumidorFinal){
+                $max=$par->requerir('consumidor_final.total_maximo_centavos',$regimen,$fechaEmision);$usados[]=ErpFiscalParametroService::referencia($max);
+                if((int)$v['total_centavos']>(int)$max['valor_entero'])throw new ErpException('El total supera el máximo permitido para consumidor final ('.number_format((int)$max['valor_entero']/100,2,'.','').' USD según el parámetro vigente): identifica al comprador.',409);
+                $comprador=['tipo'=>'07','identificacion'=>'9999999999999','nombre'=>'CONSUMIDOR FINAL'];
+            }
             $n=$this->reservarNumero($p,'01');
-            $datos=['fecha'=>substr($this->r::ahora(),0,10),'secuencial'=>str_pad((string)$n,9,'0',STR_PAD_LEFT),'codigo_numerico'=>str_pad((string)random_int(0,99999999),8,'0',STR_PAD_LEFT),'comprador'=>$comprador,'lineas'=>$fiscales,'pagos'=>$pagos,'total_centavos'=>(int)$v['total_centavos']];
+            $datos=['fecha'=>substr($this->r::ahora(),0,10),'secuencial'=>str_pad((string)$n,9,'0',STR_PAD_LEFT),'codigo_numerico'=>str_pad((string)random_int(0,99999999),8,'0',STR_PAD_LEFT),'comprador'=>$comprador,'lineas'=>$fiscales,'pagos'=>$pagos,'total_centavos'=>(int)$v['total_centavos'],'consumidor_final'=>$consumidorFinal];
             [$p12,$password]=$this->certificado($p);$xml=SriFirmaXades::firmar(SriComprobante::factura($e,$datos),$p12,$password);$claveAcceso=SriXml::cargar($xml)->getElementsByTagName('claveAcceso')->item(0)->textContent;
             $this->confirmarNumero($p,'01',$n);
-            $ahora=$this->r::ahora();$numero=$p['establecimiento'].'-'.$p['punto_emision'].'-'.$datos['secuencial'];$snapshot=json_encode(['emisor'=>$e,'factura'=>$datos],JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE);
+            $ahora=$this->r::ahora();$numero=$p['establecimiento'].'-'.$p['punto_emision'].'-'.$datos['secuencial'];$snapshot=json_encode(['emisor'=>$e,'factura'=>$datos,'parametros'=>$usados],JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE);
             $this->r->q('INSERT INTO erp_fiscal_documentos(perfil_id,sustituye_a_id,venta_id,clave_operacion,huella,clave_acceso,numero,snapshot_json,xml_firmado,xml_sha256,creado_por,creado_en,actualizado_en) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',[$perfil,$sust?(int)$sust['id']:null,$venta,$clave,$huella,$claveAcceso,$numero,$snapshot,$xml,hash('sha256',$xml),$actor,$ahora,$ahora]);$id=$this->r->id();$this->evento($actor,'fiscal_documento_preparado','fiscal_documento',$id,['venta_id'=>$venta,'ambiente'=>'1','numero'=>$numero,'xml_sha256'=>hash('sha256',$xml)]);return $id;
     }
 
@@ -134,6 +148,8 @@ final class ErpFiscalService extends ErpService
             $f0=$this->r->uno("SELECT venta_id FROM erp_fiscal_documentos WHERE id=? AND tipo='01'",[$fid])??throw new ErpException('Factura no encontrada.',404);
             $v=(new ErpVentaService($this->r))->bloquear((int)$f0['venta_id']);
             $f=$this->r->uno('SELECT * FROM erp_fiscal_documentos WHERE id=? FOR UPDATE',[$fid]);
+            // Regla del SRI (resolución NAC-DGERCGC25-00000017, según fuentes secundarias; ver docs): una factura a consumidor final no se anula ni se modifica, tampoco con nota de crédito.
+            if((json_decode($f['snapshot_json'],true)['factura']['comprador']['tipo']??'')==='07')throw new ErpException('Una factura a consumidor final no admite nota de crédito. Si requiere ajuste, consulta el procedimiento vigente con el SRI.',409);
             $previa=$this->r->uno('SELECT id,huella FROM erp_fiscal_documentos WHERE clave_operacion=? FOR SHARE',[$clave]);
             if($previa){if(!hash_equals($previa['huella'],$huella))throw new ErpException('La clave de operación ya se usó con otros datos.',409);return (int)$previa['id'];}
             if($f['estado']!=='autorizada')throw new ErpException('La factura todavía no tiene autorización del SRI; no se puede acreditar.',409);
@@ -153,7 +169,7 @@ final class ErpFiscalService extends ErpService
                 if((int)$fl['cantidad_milesimas']!==(int)$lv['cantidad_milesimas']||(int)$fl['precio_centavos']!==(int)$lv['precio_centavos']||(int)($fl['descuento_centavos']??0)!==(int)$lv['descuento_centavos']||(int)$fl['impuesto_pb']!==(int)$lv['impuesto_pb'])throw new ErpException('Las líneas de la venta ya no coinciden con la factura.',409);
                 $fiscalPorLinea[(int)$lv['id']]=$fl;
             }
-            $acum=[];foreach($this->r->q("SELECT l.linea_id,SUM(l.cantidad_milesimas) q,SUM(l.total_centavos) t FROM erp_fiscal_nc_lineas l JOIN erp_fiscal_documentos x ON x.id=l.documento_id WHERE x.documento_origen_id=? AND x.estado<>'rechazada' GROUP BY l.linea_id FOR SHARE",[$fid]) as $a)$acum[(int)$a['linea_id']]=[(int)$a['q'],(int)$a['t']];
+            $acum=[];foreach($this->r->q("SELECT l.linea_id,SUM(l.cantidad_milesimas) q,SUM(l.total_centavos) t FROM erp_fiscal_nc_lineas l JOIN erp_fiscal_documentos x ON x.id=l.documento_id WHERE x.documento_origen_id=? AND x.estado NOT IN('rechazada','bloqueada') GROUP BY l.linea_id FOR SHARE",[$fid]) as $a)$acum[(int)$a['linea_id']]=[(int)$a['q'],(int)$a['t']];
             $lineasNc=[];$filasRel=[];$totalNc=0;
             foreach($porLinea as $lineaId=>$q){
                 $fl=$fiscalPorLinea[$lineaId]??throw new ErpException('La línea no pertenece a la factura.',409);[$qp,$tp]=$acum[$lineaId]??[0,0];
@@ -162,7 +178,7 @@ final class ErpFiscalService extends ErpService
                 $filasRel[]=[$lineaId,$c['cantidad'],$c['base'],$c['iva'],$c['total']];$totalNc+=$c['total'];
             }
             $facturado=0;foreach($fac['lineas'] as $fl)$facturado+=\Services\ErpCalculo::linea((int)$fl['cantidad_milesimas'],(int)$fl['precio_centavos'],(int)($fl['descuento_centavos']??0),(int)$fl['impuesto_pb'])['total'];
-            $previoTotal=(int)$this->r->uno('SELECT COALESCE(SUM(l.total_centavos),0) t FROM erp_fiscal_nc_lineas l JOIN erp_fiscal_documentos x ON x.id=l.documento_id WHERE x.documento_origen_id=? AND x.estado<>\'rechazada\' FOR SHARE',[$fid])['t'];
+            $previoTotal=(int)$this->r->uno('SELECT COALESCE(SUM(l.total_centavos),0) t FROM erp_fiscal_nc_lineas l JOIN erp_fiscal_documentos x ON x.id=l.documento_id WHERE x.documento_origen_id=? AND x.estado NOT IN(\'rechazada\',\'bloqueada\') FOR SHARE',[$fid])['t'];
             if($previoTotal+$totalNc>$facturado)throw new ErpException('Las notas de crédito superarían el total de la factura.',409);
             $p=$this->r->uno('SELECT * FROM erp_fiscal_perfiles WHERE id=? FOR SHARE',[(int)$f['perfil_id']])??throw new ErpException('Perfil fiscal no encontrado.');
             $n=$this->reservarNumero($p,'04');
@@ -206,7 +222,8 @@ final class ErpFiscalService extends ErpService
         if(!$v)throw new ErpException('Solicita primero la verificación del estado con el SRI.',409);
         if($v['estado']==='autorizado_en_sri')throw new ErpException('El SRI reporta este comprobante como autorizado: no se puede sustituir. Revisa la conciliación con la administración.',409);
         if($v['estado']!=='confirmado')throw new ErpException('La verificación con el SRI sigue en curso o fue incierta; se reintentará. Aún no se puede sustituir.',409);
-        if(!$this->r->uno('SELECT id FROM erp_fiscal_verificaciones WHERE id=? AND verificado_en>=DATE_SUB(?,INTERVAL 120 MINUTE)',[(int)$v['id'],$this->r::ahora()]))throw new ErpException('La verificación con el SRI caducó (más de 120 minutos); solicítala otra vez.',409);
+        $minutos=(int)((new ErpFiscalParametroService($this->r))->resolver('sustitucion.verificacion_minutos','*',substr($this->r::ahora(),0,10),true)['valor_entero']??self::VERIFICACION_MINUTOS);
+        if(!$this->r->uno('SELECT id FROM erp_fiscal_verificaciones WHERE id=? AND verificado_en>=DATE_SUB(?,INTERVAL '.$minutos.' MINUTE)',[(int)$v['id'],$this->r::ahora()]))throw new ErpException('La verificación con el SRI caducó (más de '.$minutos.' minutos); solicítala otra vez.',409);
         return $doc;
     }
     /** Nueva factura que sustituye a una rechazada con datos corregidos (emisor, comprador, categorías IVA, pagos): otro número y otra clave. */
@@ -245,12 +262,7 @@ final class ErpFiscalService extends ErpService
             $doc=$this->r->uno('SELECT * FROM erp_fiscal_documentos WHERE id=?',[(int)$v['documento_id']]);$estado='incierta';$resumen=['estado'=>'REINTENTAR','mensaje'=>'No se obtuvo una respuesta verificable del SRI; se volverá a consultar la misma clave.'];
             try{
                 if(!hash_equals($doc['xml_sha256'],hash('sha256',$doc['xml_firmado'])))throw new \RuntimeException('Contenido fiscal inconsistente.');
-                $sri=$transporte?new SriClienteSoap('1',$transporte):new SriClienteSoap('1');$r=$sri->consultar($doc['clave_acceso'],$doc['xml_firmado']);
-                $original=json_decode($doc['respuesta_json']??'null',true)['estado']??'';
-                $resumen=['estado'=>$r['estado'],'mensajes'=>$r['mensajes']??[]];
-                if($r['estado']==='AUTORIZADO'){$estado='autorizado_en_sri';$resumen+=['numero_autorizacion'=>$r['numero_autorizacion'],'fecha_autorizacion'=>$r['fecha_autorizacion']];}
-                elseif($r['estado']==='NO AUTORIZADO'||($r['estado']==='EN_PROCESO'&&$original==='DEVUELTA'))$estado='confirmado';
-                else $resumen['mensaje']='El SRI no confirma el rechazo registrado; se volverá a consultar.';
+                $sri=$transporte?new SriClienteSoap('1',$transporte):new SriClienteSoap('1');[$estado,$resumen]=$this->clasificar($doc,$sri);
             }catch(\Throwable $e){}
             Transaccion::ejecutar($this->r->db,function()use($v,$estado,$resumen,$doc){
                 $actual=$this->r->uno('SELECT lease_token FROM erp_fiscal_verificaciones WHERE id=? FOR UPDATE',[(int)$v['id']]);if(!hash_equals($v['lease_token'],$actual['lease_token']??''))return;
@@ -259,6 +271,15 @@ final class ErpFiscalService extends ErpService
                 $this->evento(0,$estado==='autorizado_en_sri'?'fiscal_conflicto_estado':'fiscal_verificacion_resultado','fiscal_documento',(int)$doc['id'],['verificacion_id'=>(int)$v['id'],'resultado'=>$estado,'sri'=>$resumen['estado'],'ambiente'=>'1']);
             });$hechas++;
         }return $hechas;
+    }
+    /** Clasifica un comprobante rechazado localmente según lo que el SRI responde ahora a su misma clave: confirmado, autorizado_en_sri (conflicto) o incierta. */
+    private function clasificar(array $doc,SriClienteSoap $sri):array
+    {
+        $r=$sri->consultar($doc['clave_acceso'],$doc['xml_firmado']);$original=json_decode($doc['respuesta_json']??'null',true)['estado']??'';
+        $resumen=['estado'=>$r['estado'],'mensajes'=>$r['mensajes']??[]];
+        if($r['estado']==='AUTORIZADO')return ['autorizado_en_sri',$resumen+['numero_autorizacion'=>$r['numero_autorizacion'],'fecha_autorizacion'=>$r['fecha_autorizacion']]];
+        if($r['estado']==='NO AUTORIZADO'||($r['estado']==='EN_PROCESO'&&$original==='DEVUELTA'))return ['confirmado',$resumen];
+        $resumen['mensaje']='El SRI no confirma el rechazo registrado; se volverá a consultar.';return ['incierta',$resumen];
     }
     private function certificado(array $p):array
     {
@@ -269,6 +290,8 @@ final class ErpFiscalService extends ErpService
     }
 
     /** Un lease limita la concurrencia. La consulta y recepción HTTPS siempre ocurren fuera de la transacción. */
+    /** Vigencia por defecto de la verificación previa a sustituir; se puede ajustar con el parámetro «sustitucion.verificacion_minutos». Política interna, no una cifra del SRI. */
+    public const VERIFICACION_MINUTOS=120;
     public function procesar(?\Interfaces\SriTransporteInterface $transporte=null):array
     {
         $this->cli();if($transporte!==null&&getenv('APP_ENV')!=='testing')throw new ErpException('El transporte de ensayo exige entorno de pruebas.');$salida=['autorizados'=>0,'rechazados'=>0,'pendientes'=>0];
@@ -281,6 +304,12 @@ final class ErpFiscalService extends ErpService
                 if(!hash_equals($doc['xml_sha256'],hash('sha256',$doc['xml_firmado'])))throw new \RuntimeException('Contenido fiscal inconsistente.');
                 $sri=$transporte?new SriClienteSoap('1',$transporte):new SriClienteSoap('1');$respuesta=$sri->consultar($doc['clave_acceso'],$doc['xml_firmado']);$estado=$doc['estado'];
                 if($respuesta['estado']==='AUTORIZADO')$estado='autorizada';elseif($respuesta['estado']==='NO AUTORIZADO')$estado='rechazada';elseif($estado==='pendiente'){
+                    // Un sustituto no sale hacia el SRI sin reconfirmar, justo antes de transmitir, que el comprobante sustituido sigue rechazado.
+                    if($doc['sustituye_a_id']){
+                        $orig=$this->r->uno('SELECT * FROM erp_fiscal_documentos WHERE id=?',[(int)$doc['sustituye_a_id']]);[$veredicto,$resumenOriginal]=$this->clasificar($orig,$sri);
+                        if($veredicto==='autorizado_en_sri'){$this->bloquearSustituto($doc,$orig,$resumenOriginal);$salida['bloqueados']=($salida['bloqueados']??0)+1;continue;}
+                        if($veredicto!=='confirmado'){$this->finalizar($doc,'pendiente',['estado'=>'REINTENTAR','mensaje'=>'Aún no se reconfirma el rechazo del comprobante sustituido; el sustituto no se transmite.']);$salida['pendientes']++;continue;}
+                    }
                     $respuesta=$sri->recibir($doc['xml_firmado']);$registrada=(bool)array_filter($respuesta['mensajes'],fn($m)=>in_array($m['identificador'],['43','70'],true));$temporal=(bool)array_filter($respuesta['mensajes'],fn($m)=>$m['identificador']==='50');$estado=$respuesta['estado']==='RECIBIDA'||$registrada?'recibida':($temporal?'pendiente':'rechazada');
                 }
                 $this->finalizar($doc,$estado,$respuesta);$salida[$estado==='autorizada'?'autorizados':($estado==='rechazada'?'rechazados':'pendientes')]++;
@@ -288,6 +317,18 @@ final class ErpFiscalService extends ErpService
         }
         $v=$this->verificar($transporte);if($v)$salida['verificaciones']=$v;
         return $salida;
+    }
+    /** El sustituido apareció AUTORIZADO antes de transmitir el sustituto: no se transmite. El conflicto queda como evidencia inmutable y requiere conciliación manual. */
+    private function bloquearSustituto(array $doc,array $original,array $resumenOriginal):void
+    {
+        Transaccion::ejecutar($this->r->db,function()use($doc,$original,$resumenOriginal){
+            $actual=$this->r->uno('SELECT lease_token FROM erp_fiscal_documentos WHERE id=? FOR UPDATE',[(int)$doc['id']]);if(!hash_equals($doc['lease_token'],$actual['lease_token']??''))return;
+            $ahora=$this->r::ahora();
+            $this->r->q("INSERT INTO erp_fiscal_verificaciones(documento_id,estado,solicitado_por,solicitado_en,respuesta_json,verificado_en) VALUES(?,'autorizado_en_sri',0,?,?,?)",[(int)$original['id'],$ahora,json_encode($resumenOriginal,JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE),$ahora]);
+            $this->r->q("UPDATE erp_fiscal_documentos SET estado='bloqueada',respuesta_json=?,lease_token=NULL,lease_hasta=NULL,actualizado_en=? WHERE id=?",[json_encode(['estado'=>'BLOQUEADA','motivo'=>'El comprobante sustituido aparece autorizado en el SRI; este sustituto no se transmitió.','sustituido_id'=>(int)$original['id']],JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE),$ahora,(int)$doc['id']]);
+            $this->evento(0,'fiscal_conflicto_estado','fiscal_documento',(int)$original['id'],['sustituto_id'=>(int)$doc['id'],'resultado'=>'autorizado_en_sri','momento'=>'previo_a_transmitir','ambiente'=>'1']);
+            $this->evento(0,'fiscal_sustituto_bloqueado','fiscal_documento',(int)$doc['id'],['sustituido_id'=>(int)$original['id'],'ambiente'=>'1']);
+        });
     }
     private function finalizar(array $doc,string $estado,array $respuesta):void
     {
