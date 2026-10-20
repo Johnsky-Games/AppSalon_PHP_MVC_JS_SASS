@@ -18,7 +18,7 @@ final class ErpContabilidadService extends ErpService
         'resultado_ejercicio'=>'patrimonio','resultados_acumulados'=>'patrimonio',
         'ingreso_servicios'=>'ingreso','ingreso_productos'=>'ingreso','devoluciones_ventas'=>'ingreso',
         'costo_ventas'=>'costo','consumo_insumos'=>'costo',
-        'gasto_comisiones'=>'gasto','gasto_sueldos'=>'gasto','gasto_aportes'=>'gasto','gasto_beneficios'=>'gasto','gasto_operativo'=>'gasto','diferencias_caja'=>'gasto',
+        'gasto_comisiones'=>'gasto','gasto_sueldos'=>'gasto','gasto_aportes'=>'gasto','gasto_beneficios'=>'gasto','gasto_utilidades'=>'gasto','gasto_operativo'=>'gasto','diferencias_caja'=>'gasto',
     ];
     private function hoy():string {return (new \DateTimeImmutable('now',new \DateTimeZone('America/Guayaquil')))->format('Y-m-d');}
 

@@ -1,5 +1,5 @@
 <?php $titulo='Nómina';include __DIR__.'/_inicio.php';
-$ver=['resumen'=>'Corridas','novedades'=>'Novedades','beneficios'=>'Beneficios acumulados','finiquitos'=>'Finiquitos'];
+$ver=['resumen'=>'Corridas','novedades'=>'Novedades','beneficios'=>'Beneficios acumulados','finiquitos'=>'Finiquitos','utilidades'=>'Utilidades'];
 if($configura){$ver['parametros']='Parámetros legales';$ver['condiciones']='Condiciones por colaborador';$ver['renta']='Impuesto a la renta';}
 $tabla=static function(array $filas,callable $f):string{$h='';foreach($filas as $x)$h.=$f($x);return $h;};
 $estadoTexto=['calculada'=>'Calculada','revisada'=>'Revisada','aprobada'=>'Aprobada','anulada'=>'Anulada'];
@@ -76,6 +76,22 @@ $formulario=['accion'=>'nom_parametro','ocultos'=>['vista'=>'parametros'],'campo
 <td><?php if($aprueba&&$f['estado']==='calculado'): $formulario=['accion'=>'nom_finiquito_aprobar','ocultos'=>['vista'=>'finiquitos','finiquito_id'=>$f['id']],'campos'=>[],'boton'=>'Aprobar: generar obligación y asiento'];include __DIR__.'/_formulario.php'; endif; ?>
 <?php if($aprueba&&in_array($f['estado'],['calculado','aprobado'],true)): $formulario=['accion'=>'nom_finiquito_anular','ocultos'=>['vista'=>'finiquitos','finiquito_id'=>$f['id']],'campos'=>['motivo'=>['etiqueta'=>'Motivo (solo antes de pagar)','longitud'=>300]],'boton'=>'Anular'];include __DIR__.'/_formulario.php'; endif; ?></td></tr><?php endforeach; ?>
 <?php if(!$finiquitos): ?><tr><td colspan="12">Sin finiquitos.</td></tr><?php endif; ?></tbody></table></div></section>
+<?php endif; ?>
+
+<?php if($vista==='utilidades'): ?>
+<?php if($calcula): ?><section class="ui-card"><h2>Calcular el reparto de utilidades de un ejercicio</h2><p>La utilidad base sale del <strong>libro contable</strong> del ejercicio (debe estar completo y sin hechos pendientes) más los ajustes que registre el contador con respaldo. Los porcentajes (y el tope opcional) son los parámetros <code>utilidades.*</code> que registraste en Parámetros legales. Una parte se reparte por días trabajados con relación de dependencia y otra por las cargas familiares declaradas; sin cargas, todo se reparte por días. El tope por trabajador deja un excedente que <strong>no se paga</strong> y queda registrado para el contador. Valida el resultado con tu contador antes de pagar.</p>
+<?php $formulario=['accion'=>'nom_utilidades','ocultos'=>['vista'=>'utilidades'],'campos'=>['anio'=>['etiqueta'=>'Ejercicio (año ya terminado)','tipo'=>'number','valor'=>(int)substr($hoy,0,4)-1],'ajuste_mas'=>['etiqueta'=>'Ajuste que suma a la utilidad USD (conciliación)','longitud'=>12,'requerido'=>false],'ajuste_menos'=>['etiqueta'=>'Ajuste que resta USD (conciliación)','longitud'=>12,'requerido'=>false],'nota'=>['etiqueta'=>'Respaldo de los ajustes','longitud'=>300,'requerido'=>false]],'boton'=>'Calcular reparto'];include __DIR__.'/_formulario.php'; ?></section>
+<?php endif; ?>
+<?php if($configura): ?><section class="ui-card"><h2>Cargas familiares del trabajador</h2><p>Número de cargas declaradas para el ejercicio. La última declaración del año rige; las anteriores se conservan. Sin declaración se toman 0.</p>
+<?php $formulario=['accion'=>'nom_cargas','ocultos'=>['vista'=>'utilidades'],'campos'=>['colaborador_id'=>['etiqueta'=>'Colaborador','tipo'=>'select','opciones'=>$opcionesColab],'anio'=>['etiqueta'=>'Ejercicio','tipo'=>'number','valor'=>(int)substr($hoy,0,4)-1],'cargas'=>['etiqueta'=>'Cargas familiares (0 a 30)','tipo'=>'number','valor'=>'0','min'=>0,'max'=>30],'fuente'=>['etiqueta'=>'Documento de respaldo','longitud'=>200]],'boton'=>'Registrar cargas'];include __DIR__.'/_formulario.php'; ?></section><?php endif; ?>
+<?php foreach($repartos as $u): ?><section class="ui-card"><h2>Ejercicio <?= (int)$u['anio'] ?> · <?= s($u['estado']) ?></h2>
+<p>Resultado contable <?= s($dinero($u['resultado_contable_centavos'])) ?> + ajustes <?= s($dinero($u['ajuste_mas_centavos'])) ?> − <?= s($dinero($u['ajuste_menos_centavos'])) ?> = <strong>base <?= s($dinero($u['base_centavos'])) ?></strong> · <?= s(number_format($u['pb_trabajadores']/100,2)) ?> % por días (<?= s($dinero($u['pozo_trabajo_centavos'])) ?>) y <?= s(number_format($u['pb_cargas']/100,2)) ?> % por cargas (<?= s($dinero($u['pozo_cargas_centavos'])) ?>)<?= (int)$u['cargas_a_trabajo']===1?' · sin cargas declaradas: todo se reparte por días':'' ?> · distribuido <strong><?= s($dinero($u['total_centavos'])) ?></strong><?= (int)$u['excedente_centavos']>0?' · excedente sobre el tope sin pagar '.s($dinero($u['excedente_centavos'])):'' ?></p>
+<div class="ops-table-wrap"><table class="ops-table"><thead><tr><th>Colaborador</th><th>Días</th><th>Cargas</th><th>Por días</th><th>Por cargas</th><th>Excedente</th><th>A pagar</th></tr></thead><tbody>
+<?= $tabla($repartoLineas[(int)$u['id']]??[],fn($l)=>'<tr><td>'.s($l['nombre']).'</td><td>'.(int)$l['dias'].'</td><td>'.(int)$l['cargas'].'</td><td>'.s($dinero($l['parte_trabajo_centavos'])).'</td><td>'.s($dinero($l['parte_cargas_centavos'])).'</td><td>'.s($dinero($l['excedente_centavos'])).'</td><td><strong>'.s($dinero($l['monto_centavos'])).'</strong></td></tr>') ?>
+</tbody></table></div>
+<?php if($aprueba&&$u['estado']==='calculada'): $formulario=['accion'=>'nom_utilidades_aprobar','ocultos'=>['vista'=>'utilidades','utilidad_id'=>$u['id']],'campos'=>[],'boton'=>'Aprobar: generar obligaciones y asiento'];include __DIR__.'/_formulario.php'; endif; ?>
+<?php if($aprueba&&in_array($u['estado'],['calculada','aprobada'],true)): $formulario=['accion'=>'nom_utilidades_anular','ocultos'=>['vista'=>'utilidades','utilidad_id'=>$u['id']],'campos'=>['motivo'=>['etiqueta'=>'Motivo (solo antes de pagar)','longitud'=>300]],'boton'=>'Anular reparto'];include __DIR__.'/_formulario.php'; endif; ?></section><?php endforeach; ?>
+<?php if(!$repartos): ?><section class="ui-card"><p>Aún no hay repartos de utilidades.</p></section><?php endif; ?>
 <?php endif; ?>
 
 <?php if($vista==='beneficios'): ?>
