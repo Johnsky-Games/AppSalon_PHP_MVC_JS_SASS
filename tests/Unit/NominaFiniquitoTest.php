@@ -17,10 +17,11 @@ final class NominaFiniquitoTest extends TestCase
         $r=NominaFiniquito::calcular($this->e(['dias_servicio'=>1004,'vacaciones_tomadas_cent'=>1500]),$this->p());self::assertSame(4126,$r['vacaciones_devengadas_cent']);self::assertSame(52520,$r['vacaciones_centavos']);
         self::assertSame(0,NominaFiniquito::calcular($this->e(['vacaciones_tomadas_cent'=>999999]),$this->p())['vacaciones_centavos'],'Tomar más de lo devengado no genera valor negativo');
     }
-    public function testElDesahuciosSumaUnPorcentajePorAnioConLaFraccionComoAnioCompleto():void
+    public function testElDesahucioSumaUnPorcentajePorAnioCompletoYLaFraccionSoloCuentaEnLaIndemnizacion():void
     {
         self::assertSame(30000,NominaFiniquito::calcular($this->e(['desahucio'=>true]),$this->p())['desahucio_centavos'],'25 % × 600,00 × 2 años');
-        $r=NominaFiniquito::calcular($this->e(['desahucio'=>true,'dias_servicio'=>731]),$this->p());self::assertSame(3,$r['anios_computados']);self::assertSame(45000,$r['desahucio_centavos']);
+        $r=NominaFiniquito::calcular($this->e(['desahucio'=>true,'dias_servicio'=>731]),$this->p());self::assertSame(2,$r['anios_completos']);self::assertSame(3,$r['anios_computados'],'La fracción cuenta para la indemnización');self::assertSame(30000,$r['desahucio_centavos'],'pero no para el desahucio');
+        self::assertSame(0,NominaFiniquito::calcular($this->e(['desahucio'=>true,'dias_servicio'=>364]),$this->p())['desahucio_centavos'],'Menos de un año completo: sin bonificación');
         self::assertSame(0,NominaFiniquito::calcular($this->e(),$this->p())['desahucio_centavos']);
     }
     public function testLaIndemnizacionPorDespidoRespetaElUmbralYElMaximo():void
@@ -35,7 +36,7 @@ final class NominaFiniquitoTest extends TestCase
     public function testElTotalSumaLosComponentesYNuncaEsNegativo():void
     {
         $r=NominaFiniquito::calcular($this->e(['causa'=>'despido_intempestivo','desahucio'=>true,'d13'=>10000,'d14'=>8034,'otros_ingresos'=>1000,'descuentos'=>2500,'dias_servicio'=>1004,'vacaciones_tomadas_cent'=>1500]),$this->p());
-        self::assertSame(10000+8034+52520+45000+180000+1000-2500,$r['total_centavos']);
+        self::assertSame(10000+8034+52520+30000+180000+1000-2500,$r['total_centavos'],'desahucio con 2 años completos de 1 004 días');
         $this->expectException(\InvalidArgumentException::class);NominaFiniquito::calcular($this->e(['descuentos'=>99999999]),$this->p());
     }
     /** @dataProvider entradasInvalidas */
