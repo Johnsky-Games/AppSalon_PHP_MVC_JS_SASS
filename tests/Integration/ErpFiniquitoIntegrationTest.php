@@ -9,7 +9,7 @@ use Services\Contabilidad\ErpContabilidadAdaptador;
 
 /**
  * Finiquito con parámetros de ENSAYO (no oficiales). Colaboradora A: ingreso 2024-01-01, contrato de 600,00 terminado el 2026-09-30 → 1 004 días de servicio (3 años computados).
- * Valores esperados calculados aparte: vacaciones 82 520 (41,26 d) o 52 520 (con 15 d gozados); desahucio 45 000; indemnización 3 meses = 180 000; décimos de agosto y setiembre: 2 × 5 000 y 2 × 4 017.
+ * Valores esperados calculados aparte: vacaciones 82 520 (41,26 d) o 52 520 (con 15 d gozados); desahucio 30 000 (2 años completos); indemnización 3 meses = 180 000; décimos de agosto y setiembre: 2 × 5 000 y 2 × 4 017.
  */
 final class ErpFiniquitoIntegrationTest extends TestCase
 {
@@ -92,7 +92,7 @@ final class ErpFiniquitoIntegrationTest extends TestCase
         $this->rechazo(fn()=>$this->calcular(['causa'=>'despido_intempestivo','desahucio'=>'1','otros_ingresos'=>'10.00']),422);// sin respaldo
         $this->rechazo(fn()=>$this->calcular(['causa'=>'fin_plazo','desahucio'=>'1']),409);
         $id=$this->calcular(['causa'=>'despido_intempestivo','desahucio'=>'1','vacaciones_tomadas'=>'15','otros_ingresos'=>'10.00','descuentos'=>'25.00','nota'=>'Bono de cierre y anticipo pendiente']);$f=$this->fila($id);
-        self::assertSame(52520,(int)$f['vacaciones_centavos']);self::assertSame(45000,(int)$f['desahucio_centavos']);self::assertSame(180000,(int)$f['indemnizacion_centavos']);self::assertSame(294054,(int)$f['total_centavos']);
+        self::assertSame(52520,(int)$f['vacaciones_centavos']);self::assertSame(30000,(int)$f['desahucio_centavos'],'25 % × 600,00 × 2 años completos (la fracción no cuenta)');self::assertSame(180000,(int)$f['indemnizacion_centavos']);self::assertSame(279054,(int)$f['total_centavos']);
         $this->fin()->aprobar($this->owner,$this->d(['finiquito_id'=>$id]));
         $cont=new ErpContabilidadService($this->r);$a=new ErpContabilidadAdaptador($this->r);
         $x=(new ErpIntegracionService($this->r))->procesar(['contabilidad'=>$a],100);self::assertSame(0,$x['fallidos']);
