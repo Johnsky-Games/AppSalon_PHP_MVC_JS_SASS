@@ -72,7 +72,7 @@ final class ErpFiniquitoIntegrationTest extends TestCase
         $this->corrida(8);$this->corrida(9);$this->parametros(true,false);
         $id=$this->calcular();$f=$this->fila($id);
         self::assertSame(1004,(int)$f['dias_servicio']);self::assertSame(3,(int)$f['anios_computados']);self::assertSame(10000,(int)$f['d13_centavos']);self::assertSame(8034,(int)$f['d14_centavos']);self::assertSame(82520,(int)$f['vacaciones_centavos']);self::assertSame(0,(int)$f['desahucio_centavos']);self::assertSame(0,(int)$f['indemnizacion_centavos']);self::assertSame(100554,(int)$f['total_centavos']);
-        $s=json_decode($f['snapshot_json'],true);self::assertSame('finiquito-v1',$s['formula']);self::assertCount(2,$s['decimo_tercero']);self::assertCount(7,$s['parametros']);self::assertContains('fraccion_de_anio_cuenta_completa',$s['supuestos']);
+        $s=json_decode($f['snapshot_json'],true);self::assertSame('finiquito-v1',$s['formula']);self::assertCount(2,$s['decimo_tercero']);self::assertCount(7,$s['parametros']);self::assertContains('indemnizacion:fraccion_de_anio_cuenta_completa',$s['supuestos']);self::assertContains('desahucio:solo_anios_completos',$s['supuestos']);self::assertSame(2,$s['anios_completos']);
         $this->rechazo(fn()=>$this->calcular(),409);// ya hay uno vigente
         $this->rechazo(fn()=>$this->fin()->aprobar($this->finanzas,$this->d(['finiquito_id'=>$id])),403);
         $this->fin()->aprobar($this->owner,$this->d(['finiquito_id'=>$id]));$f=$this->fila($id);self::assertSame('aprobado',$f['estado']);
