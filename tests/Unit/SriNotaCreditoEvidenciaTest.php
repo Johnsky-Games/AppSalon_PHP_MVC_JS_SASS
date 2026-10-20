@@ -16,7 +16,7 @@ final class SriNotaCreditoEvidenciaTest extends TestCase
     }
     public function testUnaNotaExactaNoDesvia():void
     {
-        self::assertSame(['lineas'=>1,'desviacion_iva'=>0,'desviacion_detalle'=>0,'no_evaluables'=>0],SriNotaCreditoEvidencia::medir($this->xml(5,0)));
+        self::assertSame(['lineas'=>1,'desviacion_iva'=>0,'desviacion_detalle'=>0,'desviacion_tarifa'=>0,'no_evaluables'=>0],SriNotaCreditoEvidencia::medir($this->xml(5,0)));
     }
     public function testUnaNotaConUnCentavoMasDeIvaSeMideComoUno():void
     {
@@ -31,5 +31,12 @@ final class SriNotaCreditoEvidenciaTest extends TestCase
     {
         $xml='<notaCredito><detalles><detalle><cantidad>x</cantidad><precioUnitario>0.17</precioUnitario><descuento>0.00</descuento><precioTotalSinImpuesto>0.34</precioTotalSinImpuesto><impuestos><impuesto><tarifa>15.00</tarifa><baseImponible>0.34</baseImponible><valor>0.05</valor></impuesto></impuestos></detalle></detalles></notaCredito>';
         $m=SriNotaCreditoEvidencia::medir($xml);self::assertSame(1,$m['no_evaluables']);self::assertSame(0,$m['desviacion_iva']);
+    }
+    public function testLaSumaPorTarifaSeMideAparteDelIvaDeCadaLinea():void
+    {
+        // Dos líneas de 0,10 al 15 %: cada una cuadra (0,15 → 0,02 con redondeo comercial) y juntas suman 0,04 frente a 0,03 de la base total 0,20.
+        $linea='<detalle><cantidad>1.000</cantidad><precioUnitario>0.10</precioUnitario><descuento>0.00</descuento><precioTotalSinImpuesto>0.10</precioTotalSinImpuesto><impuestos><impuesto><tarifa>15.00</tarifa><baseImponible>0.10</baseImponible><valor>0.02</valor></impuesto></impuestos></detalle>';
+        $m=SriNotaCreditoEvidencia::medir('<notaCredito><detalles>'.$linea.$linea.'</detalles></notaCredito>');
+        self::assertSame(['lineas'=>2,'desviacion_iva'=>0,'desviacion_detalle'=>0,'desviacion_tarifa'=>1,'no_evaluables'=>0],$m);
     }
 }

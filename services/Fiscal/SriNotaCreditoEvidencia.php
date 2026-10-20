@@ -22,14 +22,18 @@ final class SriNotaCreditoEvidencia
     }
 
     /**
-     * @return array{lineas:int,desviacion_iva:int,desviacion_detalle:int,no_evaluables:int}  desviaciones máximas en valor absoluto, en centavos
+     * Tres dimensiones distintas, porque la tolerancia las habilita por separado:
+     *   · desviacion_iva: IVA de cada línea frente a su propia base;
+     *   · desviacion_detalle: bruto de cada línea frente a cantidad × precio;
+     *   · desviacion_tarifa: suma del IVA de todas las líneas de una tarifa frente al IVA de la suma de sus bases.
+     * @return array{lineas:int,desviacion_iva:int,desviacion_detalle:int,desviacion_tarifa:int,no_evaluables:int}  desviaciones máximas en valor absoluto, en centavos
      */
     public static function medir(string $xml):array
     {
         $doc=new \DOMDocument();
         if(!@$doc->loadXML($xml,LIBXML_NONET|LIBXML_NOERROR|LIBXML_NOWARNING))throw new \InvalidArgumentException('El XML de la nota no es legible.');
         $x=new \DOMXPath($doc);$val=fn(\DOMNode $n,string $ruta)=>($r=$x->query($ruta,$n))&&$r->length?trim($r->item(0)->textContent):null;
-        $res=['lineas'=>0,'desviacion_iva'=>0,'desviacion_detalle'=>0,'no_evaluables'=>0];
+        $res=['lineas'=>0,'desviacion_iva'=>0,'desviacion_detalle'=>0,'desviacion_tarifa'=>0,'no_evaluables'=>0];$tarifas=[];
         foreach($x->query('//detalle') as $d){
             $res['lineas']++;
             $base=self::centavos($val($d,'precioTotalSinImpuesto'));$desc=self::centavos($val($d,'descuento'));$precio=self::centavos($val($d,'precioUnitario'));$q=self::escalado($val($d,'cantidad'),3);
@@ -39,6 +43,7 @@ final class SriNotaCreditoEvidencia
                 if($b===null||$iva===null||$t===null||!preg_match('/^(\d{1,3})(?:\.(\d{1,2}))?$/D',$t,$m)){$ok=false;continue;}
                 $pb=(int)$m[1]*100+(int)str_pad($m[2]??'',2,'0');
                 $res['desviacion_iva']=max($res['desviacion_iva'],abs($iva-intdiv($b*$pb+5000,10000)));
+                $tarifas[$pb]??=['base'=>0,'iva'=>0];$tarifas[$pb]['base']+=$b;$tarifas[$pb]['iva']+=$iva;
             }
             if($base!==null&&$desc!==null&&$precio!==null&&$q!==null){
                 $prod=$q*$precio;
@@ -46,6 +51,7 @@ final class SriNotaCreditoEvidencia
             }else $ok=false;
             if(!$ok)$res['no_evaluables']++;
         }
+        foreach($tarifas as $pb=>$t)$res['desviacion_tarifa']=max($res['desviacion_tarifa'],abs($t['iva']-intdiv($t['base']*$pb+5000,10000)));
         return $res;
     }
 }

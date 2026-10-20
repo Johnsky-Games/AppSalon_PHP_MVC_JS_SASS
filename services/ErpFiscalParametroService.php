@@ -62,20 +62,26 @@ final class ErpFiscalParametroService extends ErpService
     /**
      * Una tolerancia mayor que cero ensancha lo que se firma y se envía al SRI: solo se registra con evidencia comprobable.
      *  A) Enlace oficial de sri.gob.ec y, en la fuente, la ficha técnica con su versión; o
-     *  B) en la nota, la clave de acceso (49 dígitos) de una nota de crédito de esta base, AUTORIZADA por el SRI, cuyo XML firmado muestre una
-     *     desviación de al menos esa magnitud y se pueda medir por completo (el SRI procesó y aceptó ese documento tal como se envió).
+     *  B) en la nota, las claves de acceso (49 dígitos) de notas de crédito de esta base, AUTORIZADAS por el SRI, cuyos XML firmados muestren, entre todas,
+     *     una desviación de al menos esa magnitud en CADA dimensión que la tolerancia habilita (IVA de línea, detalle y suma por tarifa) y se puedan
+     *     medir por completo (el SRI procesó y aceptó esos documentos tal como se enviaron).
      */
     public function verificarEvidenciaTolerancia(int $tolerancia,string $fuente,?string $url,?string $nota):void
     {
         if(is_string($url)&&preg_match('#^https://([a-z0-9-]+\.)*sri\.gob\.ec/#i',$url)&&preg_match('/ficha\s+t[eé]cnica/iu',$fuente)&&preg_match('/\b\d+\.\d+\b/',$fuente))return;
         $sinEvidencia='Una tolerancia mayor que cero requiere evidencia: (A) un enlace oficial de sri.gob.ec y, en la fuente, la ficha técnica con su versión (por ejemplo «Ficha técnica comprobantes electrónicos esquema offline, versión 2.xx, sección …»), o (B) en la nota, la clave de acceso de 49 dígitos de una nota de crédito de esta base con esa desviación AUTORIZADA por el SRI. Sin evidencia, la nota debe cuadrar exactamente y solo se bloquea la operación que no cuadre.';
-        if($nota===null||!preg_match('/(?<!\d)(\d{49})(?!\d)/',$nota,$m))throw new ErpException($sinEvidencia);
-        $ev=$this->evidenciaNota($m[1]);
-        if($ev===null)throw new ErpException('La clave de acceso citada no corresponde a una nota de crédito de esta base. '.$sinEvidencia);
-        if($ev['estado']!=='autorizada')throw new ErpException('La nota citada no está autorizada por el SRI (estado «'.$ev['estado'].'»): una nota rechazada o pendiente no demuestra que la desviación se acepte.',409);
-        if($ev['no_evaluables']>0)throw new ErpException('No se pudo medir por completo la nota citada; no sirve como evidencia.',409);
-        $max=max($ev['desviacion_iva'],$ev['desviacion_detalle']);
-        if($max<$tolerancia)throw new ErpException('La nota citada autorizada muestra una desviación de '.$max.' centavo(s), menor que la tolerancia que se quiere registrar ('.$tolerancia.'): no demuestra que se acepte.',409);
+        if($nota===null||!preg_match_all('/(?<!\d)(\d{49})(?!\d)/',$nota,$m))throw new ErpException($sinEvidencia);
+        // Cada dimensión se demuestra por separado (IVA de línea, detalle y suma por tarifa): una nota puede probar una y no las otras.
+        $maximo=['desviacion_iva'=>0,'desviacion_detalle'=>0,'desviacion_tarifa'=>0];
+        foreach(array_unique($m[1]) as $clave){
+            $ev=$this->evidenciaNota($clave);
+            if($ev===null)throw new ErpException('La clave de acceso '.$clave.' no corresponde a una nota de crédito de esta base. '.$sinEvidencia);
+            if($ev['estado']!=='autorizada')throw new ErpException('La nota '.$clave.' no está autorizada por el SRI (estado «'.$ev['estado'].'»): una nota rechazada o pendiente no demuestra que la desviación se acepte.',409);
+            if($ev['no_evaluables']>0)throw new ErpException('No se pudo medir por completo la nota '.$clave.'; no sirve como evidencia.',409);
+            foreach($maximo as $dim=>$v)$maximo[$dim]=max($v,$ev[$dim]);
+        }
+        $faltan=[];foreach(['desviacion_iva'=>'IVA de línea','desviacion_detalle'=>'detalle (cantidad × precio)','desviacion_tarifa'=>'suma del IVA por tarifa'] as $dim=>$etiqueta)if($maximo[$dim]<$tolerancia)$faltan[]=$etiqueta.' ('.$maximo[$dim].' c)';
+        if($faltan)throw new ErpException('Las notas autorizadas citadas no demuestran la tolerancia de '.$tolerancia.' centavo(s) en: '.implode('; ',$faltan).'. Cita notas autorizadas que cubran cada dimensión, o la ficha técnica oficial (A).',409);
     }
 
     /**
@@ -86,24 +92,40 @@ final class ErpFiscalParametroService extends ErpService
      */
     public function evidenciaTolerancia():array
     {
-        $out=['veredicto'=>'sin_evidencia','autorizadas_con_desviacion'=>[],'rechazadas_con_desviacion'=>[],'autorizadas_exactas'=>0,'rechazadas_exactas'=>0,'no_evaluables'=>0];
+        $dims=['desviacion_iva','desviacion_detalle','desviacion_tarifa'];$aceptadas=[];
+        $out=['veredicto'=>'sin_evidencia','autorizadas_con_desviacion'=>[],'rechazadas_con_desviacion'=>[],'autorizadas_exactas'=>0,'rechazadas_exactas'=>0,'no_evaluables'=>0,'dimensiones_aceptadas'=>[]];
         foreach($this->r->q("SELECT clave_acceso,estado,xml_firmado,respuesta_json FROM erp_fiscal_documentos WHERE tipo='04' AND estado IN('autorizada','rechazada') ORDER BY id") as $d){
             try{$m=\Services\Fiscal\SriNotaCreditoEvidencia::medir((string)$d['xml_firmado']);}catch(\InvalidArgumentException){$out['no_evaluables']++;continue;}
             if($m['no_evaluables']>0){$out['no_evaluables']++;continue;}
-            $max=max($m['desviacion_iva'],$m['desviacion_detalle']);
-            $fila=['clave_acceso'=>$d['clave_acceso'],'ambiente'=>$d['clave_acceso'][23],'desviacion_iva'=>$m['desviacion_iva'],'desviacion_detalle'=>$m['desviacion_detalle']];
-            if($d['estado']==='autorizada'){if($max>0)$out['autorizadas_con_desviacion'][]=$fila;else $out['autorizadas_exactas']++;}
-            else{
-                if($max>0){$txt=mb_substr((string)($d['respuesta_json']??''),0,4000);$out['rechazadas_con_desviacion'][]=$fila+['error_diferencias'=>(bool)preg_match('/DIFERENCIAS|identificador\W{1,6}52\b/i',$txt)];}
+            $max=max($m['desviacion_iva'],$m['desviacion_detalle'],$m['desviacion_tarifa']);
+            $fila=['clave_acceso'=>$d['clave_acceso'],'ambiente'=>$d['clave_acceso'][23],'desviacion_iva'=>$m['desviacion_iva'],'desviacion_detalle'=>$m['desviacion_detalle'],'desviacion_tarifa'=>$m['desviacion_tarifa']];
+            if($d['estado']==='autorizada'){
+                if($max>0){$out['autorizadas_con_desviacion'][]=$fila;foreach($dims as $dim)if($m[$dim]>0)$aceptadas[$dim]=true;}else $out['autorizadas_exactas']++;
+            }else{
+                if($max>0)$out['rechazadas_con_desviacion'][]=$fila+['error_diferencias'=>self::tieneErrorDiferencias($d['respuesta_json'])];
                 else $out['rechazadas_exactas']++;
             }
         }
-        if($out['autorizadas_con_desviacion'])$out['veredicto']='acepta';
+        $out['dimensiones_aceptadas']=array_values(array_filter($dims,fn($x)=>isset($aceptadas[$x])));
+        if(count($out['dimensiones_aceptadas'])===count($dims))$out['veredicto']='acepta';
+        elseif($out['dimensiones_aceptadas'])$out['veredicto']='acepta_parcial';
         elseif(array_filter($out['rechazadas_con_desviacion'],fn($f)=>$f['error_diferencias']))$out['veredicto']='rechaza';
         return $out;
     }
 
-    /** @return ?array{estado:string,ambiente:string,desviacion_iva:int,desviacion_detalle:int,no_evaluables:int,lineas:int} */
+    /** ¿Alguno de los mensajes estructurados del SRI (hasta 100) es el error 52 «ERROR EN DIFERENCIAS»? Se decodifica la respuesta: no se busca en texto truncado. */
+    private static function tieneErrorDiferencias(mixed $json):bool
+    {
+        $r=json_decode((string)$json,true);if(!is_array($r))return false;
+        $mensajes=$r['mensajes']??[];if(!is_array($mensajes))return false;
+        foreach(array_slice($mensajes,0,100) as $m){
+            if(!is_array($m))continue;
+            if(trim((string)($m['identificador']??''))==='52'||preg_match('/ERROR\s+EN\s+DIFERENCIAS/i',(string)($m['mensaje']??'')))return true;
+        }
+        return false;
+    }
+
+    /** @return ?array{estado:string,ambiente:string,desviacion_iva:int,desviacion_detalle:int,desviacion_tarifa:int,no_evaluables:int,lineas:int} */
     public function evidenciaNota(string $clave):?array
     {
         $d=$this->r->uno("SELECT clave_acceso,estado,xml_firmado FROM erp_fiscal_documentos WHERE tipo='04' AND clave_acceso=?",[$clave]);

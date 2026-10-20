@@ -201,16 +201,38 @@ final class ErpFiscalNotaCreditoRedondeoIntegrationTest extends TestCase
         // Una nota pendiente (aún no autorizada) no demuestra nada.
         $e=$this->rechazo(fn()=>$p->verificarEvidenciaTolerancia(1,'Prueba',null,'Clave '.$clave($pendiente)));self::assertStringContainsString('no está autorizada',$e->getMessage());
         // Autorizadas por el SRI (simulado): la exacta no demuestra que se acepte 1 centavo; la que desvía sí.
-        $e=$this->rechazo(fn()=>$p->verificarEvidenciaTolerancia(1,'Prueba',null,'Clave '.$clave($exacta)));self::assertStringContainsString('desviación de 0 centavo',$e->getMessage());
-        $p->verificarEvidenciaTolerancia(1,'Prueba controlada en el ambiente de pruebas del SRI',null,'Nota autorizada '.$clave($conDesviacion));
-        $ev=$p->evidenciaTolerancia();self::assertSame('acepta',$ev['veredicto']);self::assertSame([$clave($conDesviacion)],array_column($ev['autorizadas_con_desviacion'],'clave_acceso'));self::assertSame(1,$ev['autorizadas_exactas']);
-        $m=$p->evidenciaNota($clave($conDesviacion));self::assertSame('autorizada',$m['estado']);self::assertSame('1',$m['ambiente']);self::assertSame(0,$m['no_evaluables']);self::assertSame(1,max($m['desviacion_iva'],$m['desviacion_detalle']));
+        $e=$this->rechazo(fn()=>$p->verificarEvidenciaTolerancia(1,'Prueba',null,'Clave '.$clave($exacta)));self::assertStringContainsString('no demuestran la tolerancia',$e->getMessage());
+        $this->verificarPorDimension($p,$clave($conDesviacion));
+        // Citar además una nota exacta no cambia el resultado: la evidencia es el máximo por dimensión entre las notas autorizadas citadas.
+        $this->verificarPorDimension($p,$clave($conDesviacion).' '.$clave($exacta));
+        $ev=$p->evidenciaTolerancia();self::assertSame($this->veredictoEsperado($p,$clave($conDesviacion)),$ev['veredicto']);self::assertSame([$clave($conDesviacion)],array_column($ev['autorizadas_con_desviacion'],'clave_acceso'));self::assertSame(1,$ev['autorizadas_exactas']);
+        $m=$p->evidenciaNota($clave($conDesviacion));self::assertSame('autorizada',$m['estado']);self::assertSame('1',$m['ambiente']);self::assertSame(0,$m['no_evaluables']);self::assertSame(1,max($m['desviacion_iva'],$m['desviacion_detalle'],$m['desviacion_tarifa']));
     }
 
-    private function rechazarNota(int $id,string $identificador,string $texto):void
+    /** Dimensiones (IVA de línea, detalle, suma por tarifa) en las que la nota autorizada muestra al menos 1 centavo. */
+    private function dimensionesDe(ErpFiscalParametroService $p,string $claves):array
     {
+        preg_match_all('/\d{49}/',$claves,$m);$d=[];
+        foreach($m[0] as $c){$ev=$p->evidenciaNota($c);foreach(['desviacion_iva','desviacion_detalle','desviacion_tarifa'] as $x)if($ev[$x]>=1)$d[$x]=true;}
+        return array_keys($d);
+    }
+    /** Una tolerancia de 1 centavo con evidencia de notas solo se admite si las notas citadas demuestran TODAS las dimensiones; si no, se rechaza nombrando las que faltan. */
+    private function verificarPorDimension(ErpFiscalParametroService $p,string $claves):void
+    {
+        $cubiertas=$this->dimensionesDe($p,$claves);
+        if(count($cubiertas)===3){$p->verificarEvidenciaTolerancia(1,'Prueba controlada en el ambiente de pruebas del SRI',null,'Notas autorizadas '.$claves);self::assertTrue(true);return;}
+        $e=$this->rechazo(fn()=>$p->verificarEvidenciaTolerancia(1,'Prueba controlada en el ambiente de pruebas del SRI',null,'Notas autorizadas '.$claves));
+        self::assertSame(409,$e->getCode());self::assertStringContainsString('no demuestran la tolerancia',$e->getMessage());
+        foreach(['desviacion_iva'=>'IVA de línea','desviacion_detalle'=>'detalle','desviacion_tarifa'=>'suma del IVA por tarifa'] as $dim=>$etiqueta)self::assertSame(!in_array($dim,$cubiertas,true),str_contains($e->getMessage(),$etiqueta),'Solo se nombran las dimensiones sin evidencia: '.$etiqueta);
+    }
+    private function veredictoEsperado(ErpFiscalParametroService $p,string $claves):string {return count($this->dimensionesDe($p,$claves))===3?'acepta':'acepta_parcial';}
+
+
+    private function rechazarNota(int $id,string $identificador,string $texto,int $relleno=0):void
+    {
+        $antes=str_repeat('<mensaje><identificador>35</identificador><mensaje>'.str_repeat('X',900).'</mensaje><informacionAdicional>relleno</informacionAdicional><tipo>ERROR</tipo></mensaje>',$relleno);
         $d=$this->r->uno('SELECT clave_acceso FROM erp_fiscal_documentos WHERE id=?',[$id]);$this->r->q('UPDATE erp_fiscal_documentos SET proximo_intento=NULL,lease_hasta=NULL WHERE id=?',[$id]);
-        $resp='<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><ns2:autorizacionComprobanteResponse xmlns:ns2="http://ec.gob.sri.ws.autorizacion"><RespuestaAutorizacionComprobante><claveAccesoConsultada>'.$d['clave_acceso'].'</claveAccesoConsultada><numeroComprobantes>1</numeroComprobantes><autorizaciones><autorizacion><estado>NO AUTORIZADO</estado><mensajes><mensaje><identificador>'.$identificador.'</identificador><mensaje>'.$texto.'</mensaje><informacionAdicional>detalle de ensayo</informacionAdicional><tipo>ERROR</tipo></mensaje></mensajes></autorizacion></autorizaciones></RespuestaAutorizacionComprobante></ns2:autorizacionComprobanteResponse></soap:Body></soap:Envelope>';
+        $resp='<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><ns2:autorizacionComprobanteResponse xmlns:ns2="http://ec.gob.sri.ws.autorizacion"><RespuestaAutorizacionComprobante><claveAccesoConsultada>'.$d['clave_acceso'].'</claveAccesoConsultada><numeroComprobantes>1</numeroComprobantes><autorizaciones><autorizacion><estado>NO AUTORIZADO</estado><mensajes>'.$antes.'<mensaje><identificador>'.$identificador.'</identificador><mensaje>'.$texto.'</mensaje><informacionAdicional>detalle de ensayo</informacionAdicional><tipo>ERROR</tipo></mensaje></mensajes></autorizacion></autorizaciones></RespuestaAutorizacionComprobante></ns2:autorizacionComprobanteResponse></soap:Body></soap:Envelope>';
         $t=new class([$resp],$this->db) implements SriTransporteInterface {public function __construct(private array $respuestas,private \mysqli $db){}public function post(string $url,string $xml):string {return array_shift($this->respuestas);}};
         $this->fiscal()->procesar($t);self::assertSame('rechazada',$this->r->uno('SELECT estado FROM erp_fiscal_documentos WHERE id=?',[$id])['estado']);
     }
@@ -238,6 +260,16 @@ final class ErpFiscalNotaCreditoRedondeoIntegrationTest extends TestCase
         self::assertSame([],$ev['autorizadas_con_desviacion']);
     }
 
+    public function testElErrorDiferenciasSeDetectaAunqueVengaDespuesDeMuchosMensajes():void
+    {
+        $f=$this->factura();$this->tolerancia(1);$p=new ErpFiscalParametroService($this->r);
+        $id=$this->notaConDesviacion($f);
+        // 6 mensajes previos de ~1 KB: el 52 queda más allá de los primeros 4000 caracteres de la respuesta serializada.
+        $this->rechazarNota($id,'52','ERROR EN DIFERENCIAS',6);
+        self::assertGreaterThan(4000,strpos((string)$this->r->uno('SELECT respuesta_json FROM erp_fiscal_documentos WHERE id=?',[$id])['respuesta_json'],'ERROR EN DIFERENCIAS'),'El caso de prueba debe dejar el 52 fuera de los primeros 4000 caracteres');
+        $ev=$p->evidenciaTolerancia();self::assertSame('rechaza',$ev['veredicto']);self::assertTrue($ev['rechazadas_con_desviacion'][0]['error_diferencias']);
+    }
+
     public function testLaPruebaControladaEmiteUnaNotaDeUnCentavoSinRegistrarLaToleranciaYSuAutorizacionLaDemuestra():void
     {
         $f=$this->factura();
@@ -262,8 +294,10 @@ final class ErpFiscalNotaCreditoRedondeoIntegrationTest extends TestCase
         // Sin autorización del SRI no hay evidencia; autorizada por el SRI (simulado) demuestra la aceptación y habilita el registro.
         $clave=$this->r->uno('SELECT clave_acceso FROM erp_fiscal_documentos WHERE id=?',[$id])['clave_acceso'];$par=new ErpFiscalParametroService($this->r);
         $e=$this->rechazo(fn()=>$this->registrarTolerancia(['fuente'=>'Prueba controlada en el ambiente de pruebas del SRI','nota'=>'Nota '.$clave]));self::assertStringContainsString('no está autorizada',$e->getMessage());
-        $this->autorizarFactura($id);self::assertSame('acepta',$par->evidenciaTolerancia()['veredicto']);
-        $this->registrarTolerancia(['fuente'=>'Prueba controlada en el ambiente de pruebas del SRI','nota'=>'Nota de prueba autorizada '.$clave]);
+        $this->autorizarFactura($id);self::assertSame($this->veredictoEsperado($par,$clave),$par->evidenciaTolerancia()['veredicto']);
+        $this->verificarPorDimension($par,$clave);
+        // Con la evidencia de dimensiones completa (ficha técnica oficial de ensayo) se registra; una sola nota de prueba no basta si no cubre todas.
+        $this->tolerancia(1);
         self::assertSame(1,(int)$this->r->uno("SELECT valor_entero v FROM erp_fiscal_parametros WHERE clave='nota_credito.tolerancia_centavos'")['v']);
         // Con la tolerancia respaldada por evidencia, las devoluciones restantes que el modo estricto rechazaba ya se emiten.
         foreach(array_diff($pendientes,[$usada]) as $dev)self::assertGreaterThan(0,$this->nc($f,[$dev])['recurso_id']);
