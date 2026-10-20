@@ -38,8 +38,14 @@ final class ErpNominaService extends ErpService
         'despido.meses_por_anio'=>['dias','Meses de indemnización por cada año de servicio superado el umbral'],
         'despido.max_meses'=>['dias','Máximo de meses de indemnización'],
     ];
+    /** Parámetros del reparto de utilidades. Los dos porcentajes son obligatorios para calcular; el tope (en SBU por trabajador) es opcional. */
+    public const PARAMETROS_UTILIDADES=[
+        'utilidades.pb_trabajadores'=>['pct','Utilidades: % de la utilidad base que se reparte según los días trabajados'],
+        'utilidades.pb_cargas'=>['pct','Utilidades: % de la utilidad base que se reparte según las cargas familiares'],
+        'utilidades.tope_sbu'=>['dias','Utilidades (opcional): tope por trabajador en salarios básicos unificados'],
+    ];
     /** @return array<string,array{0:string,1:string}> todos los parámetros de nómina registrables */
-    public static function todosLosParametros():array {return self::PARAMETROS+self::PARAMETROS_FINIQUITO;}
+    public static function todosLosParametros():array {return self::PARAMETROS+self::PARAMETROS_FINIQUITO+self::PARAMETROS_UTILIDADES;}
     private function hoy():string {return (new \DateTimeImmutable('now',new \DateTimeZone('America/Guayaquil')))->format('Y-m-d');}
     private function rolActor(int $actor):string {return (new AuthorizationService($this->r->db))->contexto($actor)['rol']??'';}
     /** Quien prepara no aprueba su propio trabajo, salvo el propietario (negocio de una sola persona); queda en la auditoría. */

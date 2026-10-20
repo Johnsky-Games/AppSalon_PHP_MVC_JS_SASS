@@ -56,7 +56,7 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
             if(!$asientos)return null;
             // La nómina se contabiliza en el mes que devenga (fin de mes) cuando ese mes es posterior al inicio contable; el resto, el día del hecho.
             $base=$fecha;$devengo=$documento['datos']['fecha']??null;
-            if(($documento['tipo']??'')==='nomina_aprobada'&&is_string($devengo)&&preg_match('/^\d{4}-\d{2}-\d{2}$/D',$devengo)&&$devengo>=$inicio&&$devengo<=$fecha)$base=$devengo;
+            if(in_array($documento['tipo']??'',['nomina_aprobada','utilidades_aprobadas'],true)&&is_string($devengo)&&preg_match('/^\d{4}-\d{2}-\d{2}$/D',$devengo)&&$devengo>=$inicio&&$devengo<=$fecha)$base=$devengo;
             $fechaContable=$this->fechaContable($base);$primero=null;
             foreach($asientos as $i=>$a){
                 $spec=['fecha'=>$fechaContable,'tipo'=>'automatico','origen'=>'outbox:'.$referencia.'#'.($i+1),'concepto'=>mb_substr($a['concepto'].($fechaContable!==$base?' (hecho del '.$base.')':''),0,240),'lineas'=>$this->lineas($a['lineas'])];
@@ -110,6 +110,8 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
             'nomina_aprobada'=>$this->nominaAprobada($id,$d),
             'nomina_anulada'=>$this->nominaAnulada($id,$d),
             'finiquito_aprobado'=>$this->finiquitoAprobado($id,$d),
+            'utilidades_aprobadas'=>[['concepto'=>'Participación de trabajadores en las utilidades '.(int)$d['anio'],'lineas'=>[['rol'=>'gasto_utilidades','debe'=>(int)$d['total'],'referencia'=>'utilidades '.$id],['rol'=>'sueldos_por_pagar','haber'=>(int)$d['total'],'referencia'=>'utilidades '.$id]]]],
+            'utilidades_anuladas'=>$this->nominaAnulada($id,$d,'utilidades'),
             'finiquito_anulado'=>$this->nominaAnulada($id,$d,'finiquito'),
             'nomina_beneficio_liquidado'=>[['concepto'=>'Liquidación de '.str_replace('_',' ',(string)$d['tipo']).' del colaborador '.(int)$d['colaborador_id'],'lineas'=>[['rol'=>'beneficios_por_pagar','debe'=>(int)$d['monto']],['rol'=>'sueldos_por_pagar','haber'=>(int)$d['monto'],'referencia'=>'obligación '.(int)$d['obligacion_id']]]]],
             default=>null,
@@ -229,7 +231,7 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
     private function obligacion(int $id):array {return $this->r->uno('SELECT * FROM erp_obligaciones WHERE id=?',[$id])??throw new ErpException('Obligación no encontrada.',404);}
     private function pagoObligacion(int $id,int $monto,string $metodo):array
     {
-        $o=$this->obligacion($id);$rol=match($o['origen']){'comision'=>'comisiones_por_pagar','nomina','nomina_beneficio','finiquito'=>'sueldos_por_pagar','iess'=>'iess_por_pagar','sri_ir'=>'ir_por_pagar',default=>'proveedores'};
+        $o=$this->obligacion($id);$rol=match($o['origen']){'comision'=>'comisiones_por_pagar','nomina','nomina_beneficio','finiquito','utilidades'=>'sueldos_por_pagar','iess'=>'iess_por_pagar','sri_ir'=>'ir_por_pagar',default=>'proveedores'};
         return [['concepto'=>'Pago de la obligación '.$id,'lineas'=>[['rol'=>$rol,'debe'=>$monto,'contacto_id'=>$rol==='proveedores'&&$o['contacto_id']?(int)$o['contacto_id']:null,'referencia'=>'obligación '.$id],['rol'=>$this->metodo($metodo),'haber'=>$monto]]]];
     }
     private function creditoProveedor(int $id,int $monto):array
@@ -273,7 +275,7 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
             throw new ErpException('La aprobación de la nómina aún no está contabilizada: el reverso espera.',409);
         }
         $lineas=[];foreach($this->r->q('SELECT * FROM erp_cont_lineas WHERE asiento_id=? ORDER BY nro',[(int)$orig['id']]) as $l)$lineas[]=['cuenta_id'=>(int)$l['cuenta_id'],'debe'=>(int)$l['haber_centavos'],'haber'=>(int)$l['debe_centavos'],'contacto_id'=>$l['contacto_id'],'referencia'=>$l['referencia']];
-        $texto=$que==='finiquito'?'Anulación del finiquito '.$corrida.' (asiento '.$orig['numero'].')':'Anulación de la nómina (corrida '.$corrida.', asiento '.$orig['numero'].')';
+        $texto=match($que){'finiquito'=>'Anulación del finiquito '.$corrida.' (asiento '.$orig['numero'].')','utilidades'=>'Anulación del reparto de utilidades '.$corrida.' (asiento '.$orig['numero'].')',default=>'Anulación de la nómina (corrida '.$corrida.', asiento '.$orig['numero'].')'};
         return [['concepto'=>$texto,'reversa_de'=>(int)$orig['id'],'lineas'=>$lineas]];
     }
 

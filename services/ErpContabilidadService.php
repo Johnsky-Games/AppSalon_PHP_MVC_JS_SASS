@@ -18,7 +18,7 @@ final class ErpContabilidadService extends ErpService
         'resultado_ejercicio'=>'patrimonio','resultados_acumulados'=>'patrimonio',
         'ingreso_servicios'=>'ingreso','ingreso_productos'=>'ingreso','devoluciones_ventas'=>'ingreso',
         'costo_ventas'=>'costo','consumo_insumos'=>'costo',
-        'gasto_comisiones'=>'gasto','gasto_sueldos'=>'gasto','gasto_aportes'=>'gasto','gasto_beneficios'=>'gasto','gasto_operativo'=>'gasto','diferencias_caja'=>'gasto',
+        'gasto_comisiones'=>'gasto','gasto_sueldos'=>'gasto','gasto_aportes'=>'gasto','gasto_beneficios'=>'gasto','gasto_utilidades'=>'gasto','gasto_operativo'=>'gasto','diferencias_caja'=>'gasto',
     ];
     private function hoy():string {return (new \DateTimeImmutable('now',new \DateTimeZone('America/Guayaquil')))->format('Y-m-d');}
 
@@ -198,7 +198,7 @@ final class ErpContabilidadService extends ErpService
         });
     }
     /** Servicios completados desde el inicio contable (y antes de $antesDe, si se indica) que todavía no tienen su asiento de prestación. */
-    private function prestacionesPendientes(string $inicio,?string $antesDe=null):int
+    public function prestacionesPendientes(string $inicio,?string $antesDe=null):int
     {
         $fecha='COALESCE(DATE(c.atencion_fin_at),DATE(c.atencion_efectiva_at),c.fecha)';$a=[$inicio];$tope='';if($antesDe!==null){$tope=" AND $fecha<?";$a[]=$antesDe;}
         return (int)($this->r->uno("SELECT COUNT(*) n FROM erp_ventas v JOIN citas c ON c.id=v.cita_id WHERE v.estado='confirmada' AND c.estado='completada' AND $fecha>=?$tope AND EXISTS(SELECT 1 FROM erp_venta_lineas l WHERE l.venta_id=v.id AND l.servicio_id IS NOT NULL) AND NOT EXISTS(SELECT 1 FROM erp_cont_asientos a WHERE a.origen=CONCAT('prestacion:v',v.id))",$a)['n']??0);
