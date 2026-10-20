@@ -1,4 +1,4 @@
-# Nómina propia (migración 044)
+# Nómina propia (migraciones 044 y 045)
 
 AppSalon calcula su propia nómina para empleados con relación laboral. Esta etapa es de **ensayo**: **no trae cifras legales cargadas**. Sueldo básico, aportes al IESS, fondos de reserva, recargos y jornada los registra una persona autorizada, con su fuente oficial, enlace y fecha de consulta, y **sin ellos la nómina no se calcula**. Valida el resultado con el contador y con asesoría laboral antes de pagar sueldos reales.
 
@@ -9,7 +9,7 @@ Desde el entorno de desarrollo no se pudo abrir `sri.gob.ec`, `iess.gob.ec` ni l
 * **Fondos de reserva:** 8,33 % tras un año de servicio (conocimiento general; no confirmado en esta consulta).
 * **Recargos y jornada:** 25 % nocturno (19h00 a 06h00), suplementarias 50 % (hasta las 24h00) o 100 % (24h00 a 06h00), extraordinarias 100 %, jornada de 40 horas semanales: la mayoría de fuentes coincide, una discrepa (art. 55 del Código del Trabajo). Parámetros.
 * **Décimo tercero:** doceava parte de lo devengado entre el 1 de diciembre y el 30 de noviembre, hasta el 24 de diciembre. **Décimo cuarto:** un SBU, hasta el 15 de agosto (Sierra y Amazonía) o el 15 de marzo (Costa y Galápagos) según prensa.
-* **Impuesto a la renta:** tabla 2026 de la Resolución NAC-DGERCGC25-00000043 (fracción básica USD 12.208) según fuentes secundarias. **No se calcula automáticamente**: la retención se registra como novedad calculada por el contador.
+* **Impuesto a la renta:** tabla 2026 de la Resolución NAC-DGERCGC25-00000043 (fracción básica USD 12.208) según fuentes secundarias, **sin verificar en la norma**. AppSalon **no la trae cargada**: con la migración 045 la tabla se registra por año (con su fuente) y la retención se calcula; sin tabla, sigue siendo una novedad del contador.
 
 ## Qué calcula
 Por colaborador con relación `empleado` vigente en el mes, con **`nomina-v1`** (la fórmula queda en la instantánea de cada línea):
@@ -21,6 +21,17 @@ Por colaborador con relación `empleado` vigente en el mes, con **`nomina-v1`** 
 * **Décimo tercero:** 1/12 de lo devengado. **Décimo cuarto:** SBU × días / 360. **Fondos de reserva:** porcentaje de lo devengado desde la antigüedad configurada.
 * Cada beneficio se **mensualiza** (va al neto) o se **acumula** (provisión pagadera en su fecha); los fondos acumulados se pagan junto con el IESS.
 * **Neto** = ingresos − aporte personal − retención − descuentos. Si queda en cero o negativo, el cálculo se bloquea con el colaborador afectado.
+
+## Impuesto a la renta de relación de dependencia (045)
+**Sin tabla registrada, nada cambia:** la retención es la novedad `retencion_ir` que carga el contador. **Con una tabla vigente del año** (Nómina › Impuesto a la renta, permiso `nomina.configurar`) la retención del mes se calcula (`renta-v1`):
+* **Base anual proyectada** = ingresos gravados ya devengados en el año (líneas no anuladas de meses anteriores) + lo del mes × meses que quedan (hasta diciembre, o hasta el mes en que termina el contrato) + ingresos de otros empleadores − aportes personales al IESS (acumulados y proyectados) − gastos personales (hasta el tope de la tabla) − otras deducciones.
+* **Impuesto** = fracción de la tabla donde cae la base (`base` en `(desde, hasta]`): impuesto de la fracción + porcentaje del excedente; menos la **rebaja** declarada.
+* **Retención del mes** = (impuesto causado − lo ya retenido en el año − lo retenido por otros empleadores) ÷ meses restantes, redondeada; **el último mes cierra exactamente** lo pendiente y nunca es negativa. Un mes de ingreso parcial proyecta con lo devengado ese mes y se corrige en los siguientes.
+* **Tabla** (`erp_nomina_ir_tablas`, solo de anexar, versionada por año con fuente, enlace y fecha de consulta): una línea por tramo `desde;hasta;impuesto de la fracción;% del excedente`, el último «adelante»; se valida que no haya huecos ni saltos y que el impuesto no baje. El **tope de gastos personales** es opcional y también se registra: **si el trabajador declara gastos y la tabla no trae tope, no se calcula** (no se asume ningún límite legal). Una versión «derogada» devuelve el año a la retención manual.
+* **Declaración del trabajador** (`erp_nomina_ir_declaraciones`, solo de anexar; rige la última del año): gastos, otras deducciones, rebaja, ingresos gravados y retenciones de otros empleadores, con su documento de respaldo. Sin declaración se calcula sin deducciones y la instantánea lo marca.
+* Con tabla vigente, **una novedad manual de retención en ese mes bloquea el cálculo** (409, con el id de la novedad): se rechaza para no retener dos veces.
+* La instantánea de cada línea guarda la tabla, la declaración, el acumulado previo y el desglose completo del cálculo. Hay que **calcular los meses en orden**: recalcular un mes anterior después de uno posterior desactualiza la proyección de este último.
+* **Supuestos que el contador debe validar:** los décimos y los fondos de reserva no forman parte de la base; las utilidades y el finiquito no entran en esta proyección; las deducciones especiales (discapacidad, tercera edad) se cargan como «otras deducciones» o «rebaja» calculadas por el contador.
 
 ## Ciclo y controles
 `calculada → revisada → aprobada` (anulable antes de pagar). Calcular y registrar novedades requiere `nomina.calcular`; revisar, aprobar, resolver novedades, liquidar beneficios y anular requieren `nomina.aprobar`; parámetros y condiciones, `nomina.configurar`. Quien prepara no aprueba su propio trabajo, **salvo el propietario** (negocio de una sola persona), y todo queda en la auditoría. Hoy solo el propietario tiene `nomina.aprobar`, y finanzas puede ver y preparar. Cada colaborador ve **solo su propio recibo**, y solo de una corrida aprobada (`nomina.recibo_propio`).
@@ -35,7 +46,7 @@ Al aprobar, en una sola transacción: se consumen las novedades, se crea **una o
 El asiento de la nómina aprobada (`nomina_aprobada`): gasto de sueldos, comisiones, beneficios y aportes patronales contra sueldos por pagar, IESS por pagar, retención por pagar, beneficios por pagar y descuentos por liquidar. Se fecha en el fin del mes que devenga cuando ese mes ya terminó; si no, el día de la aprobación. Pagar cada obligación cancela el pasivo que corresponde a su origen. La comisión pagada por nómina se contabiliza **aquí**, no como comisión de pago directo (no se cuenta dos veces). Anular una corrida contabilizada genera el reverso.
 
 ## Límites conocidos (pendiente concreto)
-* **Impuesto a la renta** de relación de dependencia: sin cálculo automático (proyección anual, deducciones). Se registra como novedad.
+* **Impuesto a la renta:** el motor existe, pero **depende de que se registre la tabla oficial de cada año** y de las declaraciones; no hay cifras cargadas ni formulario 107/anexos (RDEP). Utilidades y finiquito no se integran a la proyección.
 * **Finiquito y liquidación de haberes** (vacaciones no gozadas, décimos proporcionales, desahucio, indemnizaciones, bonificaciones), **utilidades**, **vacaciones** y **licencias remuneradas** (el módulo de ausencias no distingue las no remuneradas: se descuentan con novedades).
 * **Jornada y horas:** las horas extra se registran manualmente; no se derivan de la asistencia.
 * **Archivos y avisos al IESS/Ministerio del Trabajo/SRI** (planillas, SUT, formularios 107/103): sin generar.
