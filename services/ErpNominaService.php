@@ -347,6 +347,7 @@ final class ErpNominaService extends ErpService
             $k=$this->corrida($this->id($d['corrida_id']??null));$motivo=$this->texto($d['motivo']??'',300);if($k['estado']==='anulada')return (int)$k['id'];
             $lineas=$this->r->q('SELECT * FROM erp_nomina_lineas WHERE corrida_id=? ORDER BY id FOR UPDATE',[(int)$k['id']]);
             if($this->r->uno('SELECT 1 x FROM erp_nomina_beneficio_lineas bl JOIN erp_nomina_lineas l ON l.id=bl.linea_id WHERE l.corrida_id=? LIMIT 1 FOR SHARE',[(int)$k['id']]))throw new ErpException('Ya se liquidaron beneficios de esta corrida: corrige con novedades de ajuste.',409);
+            if($this->r->uno('SELECT 1 x FROM erp_nomina_finiquito_lineas fl JOIN erp_nomina_lineas l ON l.id=fl.linea_id WHERE l.corrida_id=? AND fl.activa=1 LIMIT 1 FOR SHARE',[(int)$k['id']]))throw new ErpException('Los décimos de esta corrida están incluidos en un finiquito vigente: anula primero el finiquito.',409);
             $obligs=array_filter(array_merge(array_column($lineas,'obligacion_id'),[$k['obligacion_iess_id'],$k['obligacion_ir_id']]));
             foreach($obligs as $oid){
                 $o=$this->r->uno('SELECT * FROM erp_obligaciones WHERE id=? FOR UPDATE',[(int)$oid]);
