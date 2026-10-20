@@ -236,6 +236,6 @@ final class ErpFiscalReglasIntegrationTest extends TestCase
         [$f,$n]=$this->sustitutoPendiente();$o=$this->doc($f);$s=$this->doc($n);$this->debido();
         $this->fiscal()->procesar($this->transporte([$this->sinAutorizacion($s['clave_acceso']),$this->autorizado($o['clave_acceso'],$o['xml_firmado'])]));
         $html=$this->pagina(['id'=>(string)$n]);self::assertStringContainsString('no se transmitió',$html);self::assertStringContainsString('bloqueada',$html);
-        self::assertStringContainsString('value="bloqueada"',$this->pagina(['desde'=>date('Y-m-01'),'hasta'=>date('Y-m-d')]));
+        self::assertStringContainsString('value="bloqueada"',$this->pagina(['desde'=>substr(\Repositories\OperacionRepository::ahora(),0,8).'01','hasta'=>substr(\Repositories\OperacionRepository::ahora(),0,10)]));
     }
 }

@@ -65,7 +65,7 @@ final class ErpNominaIntegrationTest extends TestCase
     }
     public function testParametrosYCondicionesSonVersionadosAuditadosYConPermiso():void
     {
-        $d=['clave'=>'sbu_centavos','valor'=>'482.00','vigente_desde'=>date('Y-m-d'),'consultado_en'=>date('Y-m-d'),'fuente'=>'Acuerdo ministerial de ensayo','fuente_url'=>'https://www.trabajo.gob.ec/ejemplo'];
+        $d=['clave'=>'sbu_centavos','valor'=>'482.00','vigente_desde'=>substr(\Repositories\OperacionRepository::ahora(),0,10),'consultado_en'=>substr(\Repositories\OperacionRepository::ahora(),0,10),'fuente'=>'Acuerdo ministerial de ensayo','fuente_url'=>'https://www.trabajo.gob.ec/ejemplo'];
         $this->rechazo(fn()=>$this->svc()->parametro($this->finanzas,$this->d($d)),403);
         $id=$this->svc()->parametro($this->owner,$this->d($d))['recurso_id'];self::assertSame(48200,(int)$this->r->uno('SELECT valor_entero FROM erp_nomina_parametros WHERE id=?',[$id])['valor_entero']);
         self::assertSame(1,(int)$this->r->uno("SELECT COUNT(*) n FROM erp_eventos WHERE tipo='nomina_parametro_registrado'")['n']);
