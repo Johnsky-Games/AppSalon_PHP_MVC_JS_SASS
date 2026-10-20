@@ -175,7 +175,7 @@ final class ErpFiscalNotaCreditoIntegrationTest extends TestCase
             self::assertStringContainsString('Nota de crédito de prueba',$html);self::assertStringContainsString('no devuelve dinero',$html);self::assertStringContainsString('Devolución de producto',$html);
             $html=$pagina($this->actor,fn()=>\Controllers\ErpController::fiscalRide($router),['id'=>(string)$n],'/gestion/facturacion/ride');
             self::assertStringContainsString('NOTA DE CRÉDITO',$html);self::assertStringContainsString('Comprobante que se modifica',$html);self::assertStringContainsString('VALOR MODIFICADO',$html);self::assertStringNotContainsString('Formas de pago pactadas',$html);
-            $lista=$pagina($this->actor,fn()=>\Controllers\ErpController::fiscal($router),['desde'=>date('Y-m-01'),'hasta'=>date('Y-m-d'),'estado'=>''],'/gestion/facturacion');
+            $lista=$pagina($this->actor,fn()=>\Controllers\ErpController::fiscal($router),['desde'=>substr(\Repositories\OperacionRepository::ahora(),0,8).'01','hasta'=>substr(\Repositories\OperacionRepository::ahora(),0,10),'estado'=>''],'/gestion/facturacion');
             self::assertStringContainsString('Nota de crédito',$lista);self::assertStringContainsString('<td>Factura</td>',$lista);
             // Un cliente no entra a la facturación (permiso verificado en el servidor, no por ocultar el enlace).
             $cliente=R5CajaFixture::usuario($this->db);$cualquiera=false;

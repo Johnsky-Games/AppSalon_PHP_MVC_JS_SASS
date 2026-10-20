@@ -49,7 +49,7 @@ final class ErpPortalesIntegrationTest extends TestCase
     public function testParametrosFiscalesSoloSeLeenYRegistranDesdeElPortalDeEquipo():void
     {
         $this->sesion('cliente');$_SERVER['REQUEST_METHOD']='GET';self::assertSame(403,$this->ejecutar(fn()=>ErpController::fiscalParametros(new \MVC\Router())));
-        $_SERVER['REQUEST_METHOD']='POST';$_POST=['accion'=>'fiscal_parametro','idem_key'=>R5CajaFixture::clave(),'csrf_token'=>'csrf-erp-portales','clave'=>'iva.codigo.4','valor'=>'1500','fuente'=>'Fuente de ensayo','vigente_desde'=>date('Y-m-d'),'consultado_en'=>date('Y-m-d')];
+        $_SERVER['REQUEST_METHOD']='POST';$_POST=['accion'=>'fiscal_parametro','idem_key'=>R5CajaFixture::clave(),'csrf_token'=>'csrf-erp-portales','clave'=>'iva.codigo.4','valor'=>'1500','fuente'=>'Fuente de ensayo','vigente_desde'=>substr(\Repositories\OperacionRepository::ahora(),0,10),'consultado_en'=>substr(\Repositories\OperacionRepository::ahora(),0,10)];
         self::assertSame(403,$this->ejecutar(fn()=>ErpController::accion()));self::assertSame(0,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_fiscal_parametros')['n']);
         // En el portal de equipo la página se renderiza completa y el formulario registra la versión con auditoría.
         $this->sesion('equipo');$_SERVER['REQUEST_METHOD']='POST';self::assertSame(303,$this->ejecutar(fn()=>ErpController::accion()));

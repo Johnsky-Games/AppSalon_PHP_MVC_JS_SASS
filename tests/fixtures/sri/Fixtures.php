@@ -4,7 +4,7 @@ namespace Tests\Fixtures\Sri;
 final class Fixtures
 {
     public static function emisor():array {return ['ruc'=>'1790012345001','ambiente'=>'1','establecimiento'=>'001','punto_emision'=>'002','razon_social'=>'Salón de ensayo & compañía','dir_matriz'=>'Quito, matriz de ensayo','obligado_contabilidad'=>'NO'];}
-    public static function factura():array {return ['fecha'=>date('Y-m-d'),'secuencial'=>'000000001','codigo_numerico'=>'12345678','comprador'=>['tipo'=>'05','identificacion'=>'1712345678','nombre'=>'Cliente de ensayo','direccion'=>'Dirección & referencia'],'lineas'=>[['codigo'=>'SERV-1','descripcion'=>'Servicio de prueba & cuidado','cantidad_milesimas'=>1000,'precio_centavos'=>3000,'descuento_centavos'=>1000,'impuesto_pb'=>1500,'codigo_porcentaje'=>'4']],'pagos'=>[['forma'=>'01','total_centavos'=>2300]],'total_centavos'=>2300];}
+    public static function factura():array {return ['fecha'=>substr(\Repositories\OperacionRepository::ahora(),0,10),'secuencial'=>'000000001','codigo_numerico'=>'12345678','comprador'=>['tipo'=>'05','identificacion'=>'1712345678','nombre'=>'Cliente de ensayo','direccion'=>'Dirección & referencia'],'lineas'=>[['codigo'=>'SERV-1','descripcion'=>'Servicio de prueba & cuidado','cantidad_milesimas'=>1000,'precio_centavos'=>3000,'descuento_centavos'=>1000,'impuesto_pb'=>1500,'codigo_porcentaje'=>'4']],'pagos'=>[['forma'=>'01','total_centavos'=>2300]],'total_centavos'=>2300];}
     /**
      * Parámetros SOLO de prueba (no son cifras legales): tarifas de IVA, momento del hecho generador y un máximo arbitrario de consumidor final.
      * Se insertan directamente en SQL para no depender del servicio bajo prueba; una producción real los registra una persona con la fuente oficial.
@@ -15,7 +15,7 @@ final class Fixtures
         $filas[]=['servicios.hecho_generador','*',null,'prestacion'];$filas[]=['consumidor_final.total_maximo_centavos','*',5000,null];
         foreach($filas as [$clave,$regimen,$entero,$texto]){
             if(in_array($clave,$omitir,true))continue;
-            $e=$entero;$t=$texto;$f='Parámetro de ensayo (no oficial)';$a=date('Y-m-d');
+            $e=$entero;$t=$texto;$f='Parámetro de ensayo (no oficial)';$a=substr(\Repositories\OperacionRepository::ahora(),0,10);
             $st=$db->prepare("INSERT INTO erp_fiscal_parametros(clave,regimen,vigente_desde,estado,valor_entero,valor_texto,fuente,consultado_en,creado_por,creado_en) VALUES(?,?,'2000-01-01','vigente',?,?,?,?,?,NOW())");
             $st->bind_param('ssisssi',$clave,$regimen,$e,$t,$f,$a,$actor);$st->execute();$st->close();
         }
