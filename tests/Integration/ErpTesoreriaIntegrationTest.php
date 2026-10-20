@@ -133,9 +133,9 @@ final class ErpTesoreriaIntegrationTest extends TestCase
     }
     public function testLosExtractosAntiguosConPendientesSiguenAlcanzablesAunqueSeanMasDe24():void
     {
-        $c=$this->cuenta();$ahora=date('Y-m-d H:i:s');
+        $c=$this->cuenta();$ahora=$this->r::ahora();
         for($i=1;$i<=26;$i++){
-            $desde=date('Y-m-d',strtotime('2020-01-01 +'.($i-1).' months'));$hasta=date('Y-m-d',strtotime($desde.' +27 days'));
+            $ini=(new \DateTimeImmutable('2020-01-01'))->modify('+'.($i-1).' months');$desde=$ini->format('Y-m-d');$hasta=$ini->modify('+27 days')->format('Y-m-d');
             $this->r->q('INSERT INTO erp_tes_extractos(tes_cuenta_id,desde,hasta,saldo_inicial_centavos,saldo_final_centavos,n_lineas,huella,creado_por,creado_en) VALUES(?,?,?,?,?,1,?,?,?)',[$c,$desde,$hasta,0,0,hash('sha256','e'.$i),$this->owner,$ahora]);
             $id=$this->r->id();if($i===1){$primero=$id;$this->r->q('INSERT INTO erp_tes_extracto_lineas(extracto_id,nro,fecha,descripcion,monto_centavos) VALUES(?,1,?,?,?)',[$id,$desde,'Pendiente antiguo',500]);}
         }
