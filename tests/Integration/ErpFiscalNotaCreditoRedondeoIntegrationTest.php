@@ -150,4 +150,13 @@ final class ErpFiscalNotaCreditoRedondeoIntegrationTest extends TestCase
         $x=new \DOMXPath(SriXml::cargar($xml));self::assertSame('0.40',$x->evaluate('string(//infoNotaCredito/valorModificacion)'));self::assertSame('0.34',$x->evaluate('string(//infoNotaCredito/totalSinImpuestos)'));self::assertSame('0.06',$x->evaluate('string(//infoNotaCredito//totalImpuesto/valor)'));
         try{SriComprobante::notaCredito(F::emisor(),['lineas'=>[['iva_centavos'=>8]+$linea]]+$datos+['tolerancia_centavos'=>1]);self::fail('Una desviación de 3 centavos excede cualquier tolerancia');}catch(\InvalidArgumentException){}
     }
+
+    public function testLaToleranciaTambienSeAplicaALaSumaDeLasLineasDeUnaMismaTarifa():void
+    {
+        $linea=['codigo'=>'P1','descripcion'=>'Esmalte','cantidad_milesimas'=>2000,'precio_centavos'=>17,'descuento_centavos'=>0,'impuesto_pb'=>1500,'codigo_porcentaje'=>'4','base_centavos'=>34,'iva_centavos'=>6];// cada línea desvía +1
+        $base=F::factura();$datos=['fecha'=>$this->hoy(),'secuencial'=>'000000001','codigo_numerico'=>'12345678','comprador'=>$base['comprador'],'lineas'=>[$linea,['codigo'=>'P2']+$linea],'motivo'=>'Devolución','sustento'=>['numero'=>'001-001-000000001','fecha'=>$this->hoy()]];
+        try{SriComprobante::notaCredito(F::emisor(),$datos+['tolerancia_centavos'=>1]);self::fail('Dos líneas con +1 suman +2 en la misma tarifa y exceden la tolerancia de 1');}
+        catch(\InvalidArgumentException $e){self::assertStringContainsString('suma de los redondeos',$e->getMessage());}
+        SriXml::validar(SriComprobante::notaCredito(F::emisor(),$datos+['tolerancia_centavos'=>2]));
+    }
 }

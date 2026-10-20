@@ -41,6 +41,11 @@ final class SriComprobante
             $totales['base']+=$base;$totales['descuento']+=$desc;$totales['iva']+=$c['impuesto'];$totales['total']+=$c['total'];
             $impuestos[$codigo]??=['base'=>0,'iva'=>0,'pb'=>$pb];$impuestos[$codigo]['base']+=$base;$impuestos[$codigo]['iva']+=$c['impuesto'];
         }
+        if($nc&&isset($d['tolerancia_centavos'])){
+            $tolDoc=self::entero($d['tolerancia_centavos'],0,2);$desv=[];
+            foreach($calculadas as [$l,$q,$precio,$desc,$pb,$codigo,$base,$iva]){$desv[$codigo]=($desv[$codigo]??0)+$iva-intdiv($base*$pb+5000,10000);}
+            foreach($desv as $dv)if(abs($dv)>$tolDoc)throw new \InvalidArgumentException('La suma de los redondeos de las líneas excede la tolerancia registrada para el documento.');
+        }
         if($totales['total']<1||$totales['total']>99999999)throw new \InvalidArgumentException('Total fiscal fuera de rango.');
         if(isset($d['total_centavos'])&&self::entero($d['total_centavos'],1,99999999)!==$totales['total'])throw new \InvalidArgumentException('Los importes fiscales no coinciden con el total de la operación.');
         $doc=new \DOMDocument('1.0','UTF-8');$doc->formatOutput=false;$raiz=$doc->createElement($nc?'notaCredito':'factura');$raiz->setAttribute('id','comprobante');$raiz->setAttribute('version',$nc?'1.1.0':'2.1.0');$doc->appendChild($raiz);
