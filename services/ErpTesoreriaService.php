@@ -34,9 +34,9 @@ final class ErpTesoreriaService extends ErpService
         foreach(preg_split('/\r\n|\n|\r/',$texto) as $i=>$linea){
             if(trim($linea)==='')continue;$n=$i+1;
             $c=array_map('trim',explode(';',$linea));
-            // Encabezado opcional: solo la primera línea no vacía y solo si su último campo no es un importe (una fecha mal escrita no se descarta en silencio).
+            // Encabezado opcional: solo la primera línea no vacía y solo si su primera columna empieza por «fecha» o «date». Cualquier otra cosa se valida como movimiento y falla con su número de línea.
             $primera=!$vista;$vista=true;
-            if($primera&&self::centavos((string)end($c))===null&&!preg_match('/^\d{4}-\d{2}-\d{2}$/D',$c[0]))continue;
+            if($primera&&preg_match('/^(fecha|date)\b/iu',$c[0]))continue;
             if(count($c)!==4&&count($c)!==3)throw new ErpException('Línea '.$n.': se esperan fecha;descripción;referencia;monto.');
             [$f,$desc,$ref,$monto]=count($c)===4?$c:[$c[0],$c[1],'',$c[2]];
             $d=\DateTimeImmutable::createFromFormat('!Y-m-d',$f);if(!$d||$d->format('Y-m-d')!==$f)throw new ErpException('Línea '.$n.': fecha no válida (AAAA-MM-DD).');
@@ -91,11 +91,14 @@ final class ErpTesoreriaService extends ErpService
         });
     }
 
-    /** Líneas del libro de la cuenta contable de la cuenta bancaria, aún sin vínculo vigente, con el signo del banco (debe = entra). */
-    private function libroSinConciliar(int $cuentaContId,string $desde,string $hasta,bool $bloquear=false):array
+    /** Líneas del libro de la cuenta contable del banco, aún sin vínculo vigente, con el signo del banco (debe = entra). $montos limita a esos importes. */
+    private function libroSinConciliar(int $cuentaContId,?string $desde,string $hasta,bool $bloquear=false,?array $montos=null):array
     {
-        return $this->r->q('SELECT l.id,a.numero,a.fecha,a.concepto,(l.debe_centavos-l.haber_centavos) monto FROM erp_cont_lineas l JOIN erp_cont_asientos a ON a.id=l.asiento_id
-            WHERE l.cuenta_id=? AND a.fecha BETWEEN ? AND ? AND NOT EXISTS(SELECT 1 FROM erp_tes_conciliaciones c WHERE c.cont_linea_id=l.id AND c.estado=\'vigente\') ORDER BY a.fecha,l.id'.($bloquear?' FOR UPDATE':''),[$cuentaContId,$desde,$hasta]);
+        $sql='SELECT l.id,a.numero,a.fecha,a.concepto,(l.debe_centavos-l.haber_centavos) monto FROM erp_cont_lineas l JOIN erp_cont_asientos a ON a.id=l.asiento_id
+            WHERE l.cuenta_id=? AND a.fecha<=?'.($desde!==null?' AND a.fecha>=?':'').' AND NOT EXISTS(SELECT 1 FROM erp_tes_conciliaciones c WHERE c.cont_linea_id=l.id AND c.estado=\'vigente\')';
+        $p=[$cuentaContId,$hasta];if($desde!==null)$p[]=$desde;
+        if($montos!==null){if(!$montos)return [];$sql.=' AND (l.debe_centavos-l.haber_centavos) IN('.implode(',',array_fill(0,count($montos),'?')).')';array_push($p,...$montos);}
+        return $this->r->q($sql.' ORDER BY a.fecha,l.id'.($bloquear?' FOR UPDATE':''),$p);
     }
     private function extractoSinConciliar(int $extractoId):array
     {
@@ -104,17 +107,22 @@ final class ErpTesoreriaService extends ErpService
     private function enVentana(string $a,string $b):bool {return abs((new \DateTimeImmutable($a))->diff(new \DateTimeImmutable($b))->days)<=self::VENTANA_DIAS;}
 
     /**
-     * Pares extracto <-> libro con el mismo importe y signo dentro de la ventana de fechas, sin vínculo vigente.
-     * @return array{pares:list<array{linea:array,candidatos:list<array>}>}
+     * Por cada movimiento sin conciliar: `candidatos` (mismo importe y sentido, dentro de la ventana de fechas; los únicos que usa la conciliación automática) y
+     * `lejanos` (mismo importe y sentido pero fuera de la ventana, hasta 10 los más cercanos; solo se concilian a mano y con nota, p. ej. una partida en tránsito).
+     * @return array{pares:list<array{linea:array,candidatos:list<array>,lejanos:list<array>}>}
      */
     public function sugerencias(int $extractoId,bool $bloquear=false):array
     {
         $e=$this->r->uno('SELECT e.*,c.cuenta_cont_id FROM erp_tes_extractos e JOIN erp_tes_cuentas c ON c.id=e.tes_cuenta_id WHERE e.id=?',[$extractoId])??throw new ErpException('Extracto no encontrado.',404);
-        $ini=(new \DateTimeImmutable($e['desde']))->modify('-'.self::VENTANA_DIAS.' days')->format('Y-m-d');$fin=(new \DateTimeImmutable($e['hasta']))->modify('+'.self::VENTANA_DIAS.' days')->format('Y-m-d');
-        $libro=$this->libroSinConciliar((int)$e['cuenta_cont_id'],$ini,$fin,$bloquear);$pares=[];
-        foreach($this->extractoSinConciliar($extractoId) as $l){
-            $c=array_values(array_filter($libro,fn($x)=>(int)$x['monto']===(int)$l['monto']&&$this->enVentana($x['fecha'],$l['fecha'])));
-            $pares[]=['linea'=>$l,'candidatos'=>$c];
+        $fin=(new \DateTimeImmutable($e['hasta']))->modify('+'.self::VENTANA_DIAS.' days')->format('Y-m-d');
+        $sin=$this->extractoSinConciliar($extractoId);
+        $libro=$this->libroSinConciliar((int)$e['cuenta_cont_id'],null,$fin,$bloquear,array_values(array_unique(array_map(fn($l)=>(int)$l['monto'],$sin))));$pares=[];
+        foreach($sin as $l){
+            $mismo=array_values(array_filter($libro,fn($x)=>(int)$x['monto']===(int)$l['monto']));
+            $dentro=array_values(array_filter($mismo,fn($x)=>$this->enVentana($x['fecha'],$l['fecha'])));
+            $lejos=array_values(array_filter($mismo,fn($x)=>!$this->enVentana($x['fecha'],$l['fecha'])));
+            usort($lejos,fn($a,$b)=>abs(strtotime($a['fecha'])-strtotime($l['fecha']))<=>abs(strtotime($b['fecha'])-strtotime($l['fecha'])));
+            $pares[]=['linea'=>$l,'candidatos'=>$dentro,'lejanos'=>array_slice($lejos,0,10)];
         }
         return ['pares'=>$pares];
     }
@@ -169,7 +177,9 @@ final class ErpTesoreriaService extends ErpService
         foreach($this->r->q('SELECT t.*,c.codigo,c.nombre cuenta_nombre FROM erp_tes_cuentas t JOIN erp_cont_cuentas c ON c.id=t.cuenta_cont_id ORDER BY t.id') as $t){
             $t['extractos']=$this->r->q('SELECT e.id,e.desde,e.hasta,e.n_lineas,e.saldo_inicial_centavos,e.saldo_final_centavos,
                 (SELECT COUNT(*) FROM erp_tes_extracto_lineas x WHERE x.extracto_id=e.id AND NOT EXISTS(SELECT 1 FROM erp_tes_conciliaciones k WHERE k.extracto_linea_id=x.id AND k.estado=\'vigente\')) pendientes
-                FROM erp_tes_extractos e WHERE e.tes_cuenta_id=? ORDER BY e.hasta DESC,e.id DESC LIMIT 24',[(int)$t['id']]);
+                FROM erp_tes_extractos e WHERE e.tes_cuenta_id=? ORDER BY e.hasta DESC,e.id DESC LIMIT 500',[(int)$t['id']]);
+            // Se listan los 24 más recientes y, además, todo extracto con movimientos por conciliar: ninguno queda inalcanzable.
+            $t['extractos']=array_values(array_filter($t['extractos'],fn($e,$i)=>$i<24||(int)$e['pendientes']>0,ARRAY_FILTER_USE_BOTH));
             $out[]=$t;
         }
         return $out;

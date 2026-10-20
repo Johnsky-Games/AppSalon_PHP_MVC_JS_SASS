@@ -125,9 +125,23 @@ final class ErpTesoreriaIntegrationTest extends TestCase
         // La partida en tránsito aparece en el extracto de abril, 21 días después: se concilia con nota.
         $y=$this->tes()->importar($this->owner,$this->d(['tes_cuenta_id'=>$c,'desde'=>'2026-04-01','hasta'=>'2026-04-30','saldo_inicial'=>'138.50','saldo_final'=>'163.50','extracto'=>"2026-04-02;Depósito en tránsito;;25.00"]))['recurso_id'];
         $this->tes()->conciliarAutomatico($this->owner,$this->d(['extracto_id'=>$y]));self::assertSame(0,(int)$this->r->uno("SELECT COUNT(*) n FROM erp_tes_conciliaciones c JOIN erp_tes_extracto_lineas x ON x.id=c.extracto_linea_id WHERE x.extracto_id=?",[$y])['n'],'Fuera de la ventana no se sugiere nada');
+        // La partida lejana sí se ofrece para conciliar a mano (no para la automática).
+        $par=$this->tes()->sugerencias($y)['pares'][0];self::assertSame([],$par['candidatos']);self::assertSame([$this->a['A4']],array_map(fn($f)=>(int)$this->r->uno('SELECT asiento_id a FROM erp_cont_lineas WHERE id=?',[$f['id']])['a'],$par['lejanos']));
         $this->tes()->conciliar($this->owner,$this->d(['extracto_linea_id'=>$this->linea($y,1),'cont_linea_id'=>$this->lineaBanco($this->a['A4']),'nota'=>'Depósito en tránsito acreditado en abril']));
         $i=$this->tes()->informe($c);
         self::assertSame(16350,$i['saldo_banco']);self::assertSame(16350,$i['saldo_libro']);self::assertSame(0,$i['diferencia']);self::assertTrue($i['conciliada']);self::assertSame('2026-04-30',$i['corte']);
+    }
+    public function testLosExtractosAntiguosConPendientesSiguenAlcanzablesAunqueSeanMasDe24():void
+    {
+        $c=$this->cuenta();$ahora=date('Y-m-d H:i:s');
+        for($i=1;$i<=26;$i++){
+            $desde=date('Y-m-d',strtotime('2020-01-01 +'.($i-1).' months'));$hasta=date('Y-m-d',strtotime($desde.' +27 days'));
+            $this->r->q('INSERT INTO erp_tes_extractos(tes_cuenta_id,desde,hasta,saldo_inicial_centavos,saldo_final_centavos,n_lineas,huella,creado_por,creado_en) VALUES(?,?,?,?,?,1,?,?,?)',[$c,$desde,$hasta,0,0,hash('sha256','e'.$i),$this->owner,$ahora]);
+            $id=$this->r->id();if($i===1){$primero=$id;$this->r->q('INSERT INTO erp_tes_extracto_lineas(extracto_id,nro,fecha,descripcion,monto_centavos) VALUES(?,1,?,?,?)',[$id,$desde,'Pendiente antiguo',500]);}
+        }
+        $ids=array_column($this->tes()->cuentas()[0]['extractos'],'id');
+        self::assertCount(25,$ids,'Los 24 más recientes y el antiguo con movimientos por conciliar');self::assertContains((string)$primero,array_map('strval',$ids));
+        self::assertSame(1,(int)$this->tes()->cuentas()[0]['extractos'][24]['pendientes']);
     }
     public function testDeshacerConservaLaHistoriaYPermiteVolverAConciliar():void
     {
@@ -181,6 +195,9 @@ final class ErpTesoreriaIntegrationTest extends TestCase
             // Una descripción maliciosa del extracto se escapa al mostrarse.
             $this->post(['accion'=>'tes_extracto','banco'=>(string)$c,'tes_cuenta_id'=>(string)$c,'desde'=>'2026-04-01','hasta'=>'2026-04-30','saldo_inicial'=>'138.50','saldo_final'=>'139.50','extracto'=>"2026-04-02;<script>alert(1)</script>;;1.00"]);
             $y=(int)$this->r->uno('SELECT MAX(id) n FROM erp_tes_extractos')['n'];$h=$this->pagina(['vista'=>'tesoreria','banco'=>(string)$c,'extracto'=>(string)$y]);self::assertStringNotContainsString('<script>alert(1)',$h);self::assertStringContainsString('&lt;script&gt;',$h);
+            // Una partida lejana (más de 5 días) también se ofrece en el flujo manual, con la nota obligatoria.
+            $this->banco('2026-02-20','7.77');$this->tes()->importar($this->owner,$this->d(['tes_cuenta_id'=>$c,'desde'=>'2026-05-01','hasta'=>'2026-05-31','saldo_inicial'=>'139.50','saldo_final'=>'147.27','extracto'=>"2026-05-10;Depósito tardío;;7.77"]));
+            $z=(int)$this->r->uno('SELECT MAX(id) n FROM erp_tes_extractos')['n'];$hz=$this->pagina(['vista'=>'tesoreria','banco'=>(string)$c,'extracto'=>(string)$z]);self::assertStringContainsString('Conciliar con nota',$hz);self::assertStringContainsString('fuera de la ventana',$hz);
             // Finanzas importa y concilia pero no registra cuentas; gerente solo lee; recepción no entra.
             $this->sesion($this->finanzas);$h=$this->pagina(['vista'=>'tesoreria','banco'=>(string)$c]);self::assertStringContainsString('Importar extracto',$h);self::assertStringNotContainsString('Registrar cuenta bancaria',$h);
             $gerente=R5CajaFixture::usuario($this->db,'gerente');$this->sesion($gerente);$h=$this->pagina(['vista'=>'tesoreria','banco'=>(string)$c]);self::assertStringContainsString('Conciliación de Cuenta corriente',$h);self::assertStringNotContainsString('Importar extracto',$h);

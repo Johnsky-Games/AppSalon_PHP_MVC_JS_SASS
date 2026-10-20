@@ -22,6 +22,13 @@ final class ErpTesoreriaExtractoTest extends TestCase
         $e=$this->falla("26-03-03;Depósito;REF1;100.00");self::assertStringContainsString('Línea 1',$e);
         $e=$this->falla("2026-03-03;Ok;;1.00\n2026-13-40;Mala;;2.00");self::assertStringContainsString('Línea 2: fecha no válida',$e);
     }
+    public function testUnaPrimeraFilaMalformadaNoSeTomaComoEncabezadoAunqueFalleFechaYMonto():void
+    {
+        self::assertStringContainsString('Línea 1: fecha no válida',$this->falla("03/03/2026;Depósito;;1,50\n2026-03-04;Otra;;2.00"));
+        self::assertCount(1,ErpTesoreriaService::leerExtracto("Fecha de operación;Detalle;Ref;Valor\n2026-03-04;Otra;;2.00"));
+        self::assertCount(1,ErpTesoreriaService::leerExtracto("Date;Description;Ref;Amount\n2026-03-04;Otra;;2.00"));
+        self::assertStringContainsString('Línea 2',$this->falla("2026-03-04;Ok;;1.00\nFecha;Detalle;Ref;Monto"),'Un encabezado solo se admite en la primera línea');
+    }
     public function testRechazaLoQueNoSePuedeInterpretarConElNumeroDeLinea():void
     {
         self::assertStringContainsString('Línea 1: monto no válido',$this->falla("2026-03-03;Cero;;0.00"));
