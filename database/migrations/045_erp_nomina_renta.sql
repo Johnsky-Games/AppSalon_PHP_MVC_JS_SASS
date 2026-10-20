@@ -39,6 +39,6 @@ CREATE TABLE IF NOT EXISTS erp_nomina_ir_declaraciones (
  CONSTRAINT ck_nomina_ir_decl CHECK(anio BETWEEN 2000 AND 2100 AND gastos_centavos BETWEEN 0 AND 99999999999 AND otras_deducciones_centavos BETWEEN 0 AND 99999999999 AND rebaja_centavos BETWEEN 0 AND 99999999999 AND otros_ingresos_centavos BETWEEN 0 AND 99999999999 AND retenido_otros_centavos BETWEEN 0 AND 99999999999)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 DROP TRIGGER IF EXISTS trg_nomina_ir_decl_no_update;
-CREATE TRIGGER trg_nomina_ir_decl_no_update BEFORE UPDATE ON erp_nomina_ir_declaraciones FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Registra una declaración nueva; las anteriores se conservan';
+CREATE TRIGGER trg_nomina_ir_decl_no_update BEFORE UPDATE ON erp_nomina_ir_declaraciones FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Registra una declaración nueva y conserva las anteriores';
 DROP TRIGGER IF EXISTS trg_nomina_ir_decl_no_delete;
 CREATE TRIGGER trg_nomina_ir_decl_no_delete BEFORE DELETE ON erp_nomina_ir_declaraciones FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Conserve el historial de declaraciones de impuesto a la renta';
