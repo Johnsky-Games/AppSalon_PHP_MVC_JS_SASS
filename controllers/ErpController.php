@@ -211,9 +211,9 @@ final class ErpController
     public static function nomina(Router $router):void
     {
         exigir_permiso('nomina.ver');$r=new ErpRepository();$n=new \Services\ErpNominaService($r);$q=$_GET;
-        $vista=in_array($q['vista']??'',['resumen','corrida','novedades','parametros','condiciones','beneficios','renta'],true)?$q['vista']:'resumen';
+        $vista=in_array($q['vista']??'',['resumen','corrida','novedades','parametros','condiciones','beneficios','renta','finiquitos'],true)?$q['vista']:'resumen';
         $hoy=(new \DateTimeImmutable('now',new \DateTimeZone('America/Guayaquil')))->format('Y-m-d');
-        $datos=['vista'=>$vista,'hoy'=>$hoy,'calcula'=>puede('nomina.calcular'),'aprueba'=>puede('nomina.aprobar'),'configura'=>puede('nomina.configurar'),'parametrosDef'=>\Services\ErpNominaService::PARAMETROS];
+        $datos=['vista'=>$vista,'hoy'=>$hoy,'calcula'=>puede('nomina.calcular'),'aprueba'=>puede('nomina.aprobar'),'configura'=>puede('nomina.configurar'),'parametrosDef'=>\Services\ErpNominaService::todosLosParametros()];
         $datos['colaboradores']=$r->q("SELECT id,CONCAT(nombre,' ',apellido) nombre FROM colaboradores WHERE estado<>'baja' ORDER BY apellido,nombre");
         match($vista){
             'resumen'=>$datos+=['corridas'=>$n->corridas()],
@@ -222,6 +222,7 @@ final class ErpController
             'parametros'=>$datos+=['parametros'=>$r->q('SELECT * FROM erp_nomina_parametros ORDER BY id DESC LIMIT 200')],
             'condiciones'=>$datos+=['condiciones'=>$r->q("SELECT k.*,CONCAT(c.nombre,' ',c.apellido) nombre FROM erp_nomina_condiciones k JOIN colaboradores c ON c.id=k.colaborador_id ORDER BY k.id DESC LIMIT 200")],
             'beneficios'=>$datos+=['saldos'=>$n->saldosBeneficios()],
+            'finiquitos'=>$datos+=['finiquitos'=>(new \Services\ErpFiniquitoService($r))->listar()],
             'renta'=>$datos+=['tablasIr'=>$r->q('SELECT * FROM erp_nomina_ir_tablas ORDER BY id DESC LIMIT 100'),'declaracionesIr'=>$r->q("SELECT d.*,CONCAT(c.nombre,' ',c.apellido) nombre FROM erp_nomina_ir_declaraciones d JOIN colaboradores c ON c.id=d.colaborador_id ORDER BY d.id DESC LIMIT 200")],
             default=>null,
         };
@@ -417,7 +418,7 @@ final class ErpController
             'fiscal_parametro'=>[\Services\ErpFiscalParametroService::class,'registrar','fiscal_parametros'],
             'nom_parametro'=>[\Services\ErpNominaService::class,'parametro','nomina'],'nom_condicion'=>[\Services\ErpNominaService::class,'condicion','nomina'],'nom_novedad'=>[\Services\ErpNominaService::class,'novedad','nomina'],
             'nom_novedad_resolver'=>[\Services\ErpNominaService::class,'resolverNovedad','nomina'],'nom_calcular'=>[\Services\ErpNominaService::class,'calcular','nomina'],'nom_revisar'=>[\Services\ErpNominaService::class,'revisar','nomina'],
-            'nom_aprobar'=>[\Services\ErpNominaService::class,'aprobar','nomina'],'nom_anular'=>[\Services\ErpNominaService::class,'anular','nomina'],'nom_beneficio'=>[\Services\ErpNominaService::class,'liquidarBeneficio','nomina'],'nom_ir_tabla'=>[\Services\ErpNominaService::class,'tablaRenta','nomina'],'nom_ir_declaracion'=>[\Services\ErpNominaService::class,'declaracionRenta','nomina'],
+            'nom_aprobar'=>[\Services\ErpNominaService::class,'aprobar','nomina'],'nom_anular'=>[\Services\ErpNominaService::class,'anular','nomina'],'nom_beneficio'=>[\Services\ErpNominaService::class,'liquidarBeneficio','nomina'],'nom_ir_tabla'=>[\Services\ErpNominaService::class,'tablaRenta','nomina'],'nom_ir_declaracion'=>[\Services\ErpNominaService::class,'declaracionRenta','nomina'],'nom_finiquito'=>[\Services\ErpFiniquitoService::class,'calcular','nomina'],'nom_finiquito_aprobar'=>[\Services\ErpFiniquitoService::class,'aprobar','nomina'],'nom_finiquito_anular'=>[\Services\ErpFiniquitoService::class,'anular','nomina'],
             'cont_inicio'=>[\Services\ErpContabilidadService::class,'inicio','contabilidad'],'cont_cuenta'=>[\Services\ErpContabilidadService::class,'cuenta','contabilidad'],'cont_cuenta_estado'=>[\Services\ErpContabilidadService::class,'cuentaEstado','contabilidad'],
             'cont_rol'=>[\Services\ErpContabilidadService::class,'rol','contabilidad'],'cont_asiento'=>[\Services\ErpContabilidadService::class,'asiento','contabilidad'],'cont_reverso'=>[\Services\ErpContabilidadService::class,'reversar','contabilidad'],
             'cont_periodo_cerrar'=>[\Services\ErpContabilidadService::class,'cerrarPeriodo','contabilidad'],'cont_periodo_reabrir'=>[\Services\ErpContabilidadService::class,'reabrirPeriodo','contabilidad'],'cont_ejercicio_cerrar'=>[\Services\ErpContabilidadService::class,'cerrarEjercicio','contabilidad'],
@@ -461,7 +462,7 @@ final class ErpController
         $ruta=match($destino){'venta'=>$id?'/ventas/detalle?id='.$id:'/pdv','compra'=>'/gestion/compras'.($id?'?id='.$id:''),'personal'=>'/gestion/personal'.($id?'?id='.$id:''),'seguimiento'=>'/gestion/seguimiento'.($id?'?id='.$id:''),'prepagos'=>'/gestion/prepagos'.($id?'?id='.$id:''),'paquetes'=>'/gestion/paquetes'.($id?'?id='.$id:''),'suscripciones'=>'/gestion/suscripciones'.($id?'?id='.$id:''),default=>'/gestion/'.$destino};
         if($destino==='documentos')$ruta='/gestion/documentos?'.http_build_query(['entidad'=>is_string($_POST['entidad']??null)?$_POST['entidad']:'','id'=>(int)($_POST['entidad_id']??0)]);
         if($destino==='consumos')$ruta='/agenda/detalle?id='.(int)($_POST['cita_id']??0);
-        if($destino==='nomina'){$v=is_string($_POST['vista']??null)&&in_array($_POST['vista'],['resumen','corrida','novedades','parametros','condiciones','beneficios','renta'],true)?$_POST['vista']:'resumen';$k=(int)($_POST['corrida_id']??0);$ruta='/gestion/nomina?vista='.$v.(($v==='corrida'&&$k>0)?'&corrida='.$k:'');}
+        if($destino==='nomina'){$v=is_string($_POST['vista']??null)&&in_array($_POST['vista'],['resumen','corrida','novedades','parametros','condiciones','beneficios','renta','finiquitos'],true)?$_POST['vista']:'resumen';$k=(int)($_POST['corrida_id']??0);$ruta='/gestion/nomina?vista='.$v.(($v==='corrida'&&$k>0)?'&corrida='.$k:'');}
         if($destino==='contabilidad'){$v=is_string($_POST['vista']??null)&&in_array($_POST['vista'],['resumen','diario','mayor','balances','plan','periodos','asiento','conciliacion'],true)?$_POST['vista']:'resumen';$ruta='/gestion/contabilidad?vista='.$v;}
         if($destino==='fiscal_parametros')$ruta='/gestion/facturacion/parametros';
         if($destino==='facturacion')$ruta='/gestion/facturacion?'.(($completada||$esEntrega)?'id=':'venta_id=').$id;

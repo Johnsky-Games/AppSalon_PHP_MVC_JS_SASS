@@ -449,7 +449,8 @@ final class EsquemaTest extends R2bCase
         // 043: contabilidad propia: configuración, secuencia, cuentas, roles, períodos, asientos y líneas (+7).
         // 044: nómina propia: parámetros, condiciones, corridas, líneas, novedades, comisiones, beneficios y sus líneas (+8).
         // 045: tablas de impuesto a la renta y declaraciones del trabajador (+2).
-        $this->assertSame(125, $n, 'tablas del esquema migrado (incluye migraciones y equipo_mutex)');
+        // 046: finiquitos y los décimos que liquidan (+2).
+        $this->assertSame(127, $n, 'tablas del esquema migrado (incluye migraciones y equipo_mutex)');
         // La documentación citaba 30 (tras la 015) y el encabezado de backup_db.php "13 tablas": ya no describen la realidad.
         $this->assertFalse(str_contains((string)file_get_contents(self::RAIZ . '/scripts/backup_db.php'), '13 tablas en total'), 'documentación obsoleta en scripts/backup_db.php: dice "13 tablas en total" y el esquema migrado tiene 35');
     }

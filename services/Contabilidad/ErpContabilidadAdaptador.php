@@ -109,6 +109,8 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
             'activo_registrado'=>[['concepto'=>'Activo registrado '.($d['codigo']??''),'lineas'=>[['rol'=>'activos_fijos','debe'=>(int)$d['costo']],['rol'=>'recepciones_por_facturar','haber'=>(int)$d['costo']]]]],
             'nomina_aprobada'=>$this->nominaAprobada($id,$d),
             'nomina_anulada'=>$this->nominaAnulada($id,$d),
+            'finiquito_aprobado'=>$this->finiquitoAprobado($id,$d),
+            'finiquito_anulado'=>$this->nominaAnulada($id,$d,'finiquito'),
             'nomina_beneficio_liquidado'=>[['concepto'=>'Liquidación de '.str_replace('_',' ',(string)$d['tipo']).' del colaborador '.(int)$d['colaborador_id'],'lineas'=>[['rol'=>'beneficios_por_pagar','debe'=>(int)$d['monto']],['rol'=>'sueldos_por_pagar','haber'=>(int)$d['monto'],'referencia'=>'obligación '.(int)$d['obligacion_id']]]]],
             default=>null,
         };
@@ -227,7 +229,7 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
     private function obligacion(int $id):array {return $this->r->uno('SELECT * FROM erp_obligaciones WHERE id=?',[$id])??throw new ErpException('Obligación no encontrada.',404);}
     private function pagoObligacion(int $id,int $monto,string $metodo):array
     {
-        $o=$this->obligacion($id);$rol=match($o['origen']){'comision'=>'comisiones_por_pagar','nomina','nomina_beneficio'=>'sueldos_por_pagar','iess'=>'iess_por_pagar','sri_ir'=>'ir_por_pagar',default=>'proveedores'};
+        $o=$this->obligacion($id);$rol=match($o['origen']){'comision'=>'comisiones_por_pagar','nomina','nomina_beneficio','finiquito'=>'sueldos_por_pagar','iess'=>'iess_por_pagar','sri_ir'=>'ir_por_pagar',default=>'proveedores'};
         return [['concepto'=>'Pago de la obligación '.$id,'lineas'=>[['rol'=>$rol,'debe'=>$monto,'contacto_id'=>$rol==='proveedores'&&$o['contacto_id']?(int)$o['contacto_id']:null,'referencia'=>'obligación '.$id],['rol'=>$this->metodo($metodo),'haber'=>$monto]]]];
     }
     private function creditoProveedor(int $id,int $monto):array
@@ -253,8 +255,15 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
             ['rol'=>'gasto_sueldos','debe'=>(int)$t['sueldos'],'referencia'=>'corrida '.$corrida],['rol'=>'gasto_comisiones','debe'=>(int)$t['comisiones']],['rol'=>'gasto_beneficios','debe'=>(int)$t['beneficios_gasto']],['rol'=>'gasto_aportes','debe'=>(int)$t['patronal']],
             ['rol'=>'sueldos_por_pagar','haber'=>(int)$t['neto']],['rol'=>'iess_por_pagar','haber'=>(int)$t['iess']],['rol'=>'ir_por_pagar','haber'=>(int)$t['ir']],['rol'=>'beneficios_por_pagar','haber'=>(int)$t['prov']],['rol'=>'descuentos_nomina','haber'=>(int)$t['descuentos']]]]];
     }
+    // Finiquito: los décimos acumulados saldan la provisión (beneficios por pagar); vacaciones, desahucio e indemnización son gasto de beneficios; lo que se paga al colaborador es el neto.
+    private function finiquitoAprobado(int $finiquito,array $d):array
+    {
+        return [['concepto'=>'Finiquito '.$finiquito.' (colaborador '.(int)$d['colaborador_id'].')','lineas'=>[
+            ['rol'=>'beneficios_por_pagar','debe'=>(int)$d['d13']+(int)$d['d14'],'referencia'=>'finiquito '.$finiquito],['rol'=>'gasto_beneficios','debe'=>(int)$d['gasto_beneficios']],['rol'=>'gasto_sueldos','debe'=>(int)$d['otros']],
+            ['rol'=>'sueldos_por_pagar','haber'=>(int)$d['neto'],'referencia'=>'finiquito '.$finiquito],['rol'=>'descuentos_nomina','haber'=>(int)$d['descuentos']]]]];
+    }
     /** Anular una nómina aprobada revierte su asiento. Si el asiento original nunca se generó (hecho previo al inicio contable) no hay nada que revertir; si aún está pendiente, espera. */
-    private function nominaAnulada(int $corrida,array $d):array
+    private function nominaAnulada(int $corrida,array $d,string $que='la nómina'):array
     {
         $ev=(int)$d['aprobacion_evento_id'];$ref='ERP-'.$ev.'-contabilidad';
         $orig=$this->r->uno('SELECT id,numero FROM erp_cont_asientos WHERE origen=?',['outbox:'.$ref.'#1']);
@@ -264,7 +273,8 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
             throw new ErpException('La aprobación de la nómina aún no está contabilizada: el reverso espera.',409);
         }
         $lineas=[];foreach($this->r->q('SELECT * FROM erp_cont_lineas WHERE asiento_id=? ORDER BY nro',[(int)$orig['id']]) as $l)$lineas[]=['cuenta_id'=>(int)$l['cuenta_id'],'debe'=>(int)$l['haber_centavos'],'haber'=>(int)$l['debe_centavos'],'contacto_id'=>$l['contacto_id'],'referencia'=>$l['referencia']];
-        return [['concepto'=>'Anulación de la nómina (corrida '.$corrida.', asiento '.$orig['numero'].')','reversa_de'=>(int)$orig['id'],'lineas'=>$lineas]];
+        $texto=$que==='finiquito'?'Anulación del finiquito '.$corrida.' (asiento '.$orig['numero'].')':'Anulación de la nómina (corrida '.$corrida.', asiento '.$orig['numero'].')';
+        return [['concepto'=>$texto,'reversa_de'=>(int)$orig['id'],'lineas'=>$lineas]];
     }
 
     // ---------------------------------------------------------------- prestación de servicios (hecho propio, sin evento)

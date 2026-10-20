@@ -1,4 +1,4 @@
-# Nómina propia (migraciones 044 y 045)
+# Nómina propia (migraciones 044, 045 y 046)
 
 AppSalon calcula su propia nómina para empleados con relación laboral. Esta etapa es de **ensayo**: **no trae cifras legales cargadas**. Sueldo básico, aportes al IESS, fondos de reserva, recargos y jornada los registra una persona autorizada, con su fuente oficial, enlace y fecha de consulta, y **sin ellos la nómina no se calcula**. Valida el resultado con el contador y con asesoría laboral antes de pagar sueldos reales.
 
@@ -33,6 +33,14 @@ Por colaborador con relación `empleado` vigente en el mes, con **`nomina-v1`** 
 * La instantánea de cada línea guarda la tabla, la declaración, el acumulado previo y el desglose completo del cálculo. Hay que **calcular los meses en orden**: recalcular un mes anterior después de uno posterior desactualiza la proyección de este último.
 * **Supuestos que el contador debe validar:** los décimos y los fondos de reserva no forman parte de la base; las utilidades y el finiquito no entran en esta proyección; las deducciones especiales (discapacidad, tercera edad) se cargan como «otras deducciones» o «rebaja» calculadas por el contador.
 
+## Finiquito y liquidación de haberes (046)
+**Sin cifras legales de fábrica:** los días de vacaciones por año, el año de servicio en días, el porcentaje de desahucio y los meses de indemnización por despido son **parámetros de nómina** (Nómina › Parámetros legales) con su fuente; sin ellos no se calcula un finiquito (409 con la lista).
+* **Requisitos:** la relación de `empleado` ya terminó en Recursos Humanos con **fecha final igual a la fecha de salida**, y la **nómina del mes de salida está aprobada**. Esa nómina paga los días trabajados (el contrato se prorratea) y provisiona los décimos del mes; **el finiquito no vuelve a pagar el sueldo ni a provisionar**.
+* **Componentes** (`finiquito-v1`, todos en la instantánea): décimos tercero y cuarto acumulados sin liquidar (de líneas de nómina aprobadas, sin doble pago con «Beneficios acumulados» ni con otro finiquito); vacaciones no gozadas = `días_anuales × días de servicio ÷ días del año` menos los gozados que se declaren, valoradas a `base ÷ 30` por día; bonificación por desahucio = `base × años × %` (se marca a mano y solo con renuncia, despido intempestivo u «otra» causa con respaldo); indemnización por despido intempestivo = meses × base (los meses mínimos hasta el umbral de años; después un mes por año con tope); otros ingresos y descuentos con su respaldo. Total ≥ 0.
+* **Supuestos a validar con el abogado laboral:** la fracción de año cuenta como año completo; la remuneración de referencia es la base del último contrato (no promedia variables); no se calcula retención de renta sobre indemnizaciones; las vacaciones gozadas se declaran a mano porque el módulo de ausencias no distingue las vacaciones.
+* **Ciclo y controles:** calcular (`nomina.calcular`) → aprobar otra persona (`nomina.aprobar`; el propietario puede ambas) → pagar con Obligaciones. Al aprobar se vuelve a verificar la nómina del mes de salida y que los décimos no cambiaron, se enlazan los décimos incluidos y se crea **una obligación** al colaborador. **Anular** antes del primer pago cancela la obligación, libera los décimos y revierte el asiento. Un colaborador tiene un solo finiquito vigente; el registro no se edita ni se borra (triggers).
+* **Contabilidad** (`finiquito_aprobado`): debe «beneficios por pagar» (saldo de la provisión de los décimos), «gasto de beneficios» (vacaciones, desahucio, indemnización) y «gasto de sueldos» (otros ingresos); haber «sueldos por pagar» (neto) y «descuentos de nómina». El reverso espeja el asiento.
+
 ## Ciclo y controles
 `calculada → revisada → aprobada` (anulable antes de pagar). Calcular y registrar novedades requiere `nomina.calcular`; revisar, aprobar, resolver novedades, liquidar beneficios y anular requieren `nomina.aprobar`; parámetros y condiciones, `nomina.configurar`. Quien prepara no aprueba su propio trabajo, **salvo el propietario** (negocio de una sola persona), y todo queda en la auditoría. Hoy solo el propietario tiene `nomina.aprobar`, y finanzas puede ver y preparar. Cada colaborador ve **solo su propio recibo**, y solo de una corrida aprobada (`nomina.recibo_propio`).
 
@@ -47,7 +55,7 @@ El asiento de la nómina aprobada (`nomina_aprobada`): gasto de sueldos, comisio
 
 ## Límites conocidos (pendiente concreto)
 * **Impuesto a la renta:** el motor existe, pero **depende de que se registre la tabla oficial de cada año** y de las declaraciones; no hay cifras cargadas ni formulario 107/anexos (RDEP). Utilidades y finiquito no se integran a la proyección.
-* **Finiquito y liquidación de haberes** (vacaciones no gozadas, décimos proporcionales, desahucio, indemnizaciones, bonificaciones), **utilidades**, **vacaciones** y **licencias remuneradas** (el módulo de ausencias no distingue las no remuneradas: se descuentan con novedades).
+* **Finiquito:** sin retención de renta sobre indemnizaciones, sin jubilación patronal ni otras bonificaciones; las vacaciones gozadas se declaran a mano. **Utilidades**, **saldos de vacaciones** y **licencias remuneradas** (el módulo de ausencias no distingue vacaciones ni licencias: las no remuneradas se descuentan con novedades) siguen pendientes.
 * **Jornada y horas:** las horas extra se registran manualmente; no se derivan de la asistencia.
 * **Archivos y avisos al IESS/Ministerio del Trabajo/SRI** (planillas, SUT, formularios 107/103): sin generar.
 * **Décimo cuarto de menores de edad o jornada parcial, aprendices y regímenes especiales:** no modelados.

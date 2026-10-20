@@ -28,6 +28,18 @@ final class ErpNominaService extends ErpService
         'recargo.extraordinaria_pb'=>['pct','Recargo por hora extraordinaria (%)'],
         'jornada.horas_mes'=>['dias','Horas mensuales para el valor de la hora (p. ej. 240)'],
     ];
+    /** Parámetros que exige SOLO el finiquito (no frenan el cálculo mensual). Todos obligatorios para calcular un finiquito. */
+    public const PARAMETROS_FINIQUITO=[
+        'vacaciones.dias_anuales'=>['dias','Días de vacaciones por año de servicio'],
+        'vacaciones.dias_base_anio'=>['dias','Días que forman un año de servicio (p. ej. 365)'],
+        'desahucio.pb'=>['pct','Bonificación por desahucio (% de la última remuneración mensual por año de servicio)'],
+        'despido.meses_hasta_umbral'=>['dias','Meses de remuneración de indemnización por despido intempestivo hasta el umbral de años'],
+        'despido.umbral_anios'=>['dias','Años de servicio hasta los que rige la indemnización mínima'],
+        'despido.meses_por_anio'=>['dias','Meses de indemnización por cada año de servicio superado el umbral'],
+        'despido.max_meses'=>['dias','Máximo de meses de indemnización'],
+    ];
+    /** @return array<string,array{0:string,1:string}> todos los parámetros de nómina registrables */
+    public static function todosLosParametros():array {return self::PARAMETROS+self::PARAMETROS_FINIQUITO;}
     private function hoy():string {return (new \DateTimeImmutable('now',new \DateTimeZone('America/Guayaquil')))->format('Y-m-d');}
     private function rolActor(int $actor):string {return (new AuthorizationService($this->r->db))->contexto($actor)['rol']??'';}
     /** Quien prepara no aprueba su propio trabajo, salvo el propietario (negocio de una sola persona); queda en la auditoría. */
@@ -41,16 +53,16 @@ final class ErpNominaService extends ErpService
     public function parametro(int $actor,array $d):array
     {
         return $this->ejecutar($actor,'nomina.configurar','nomina_parametro',$d,function()use($actor,$d){
-            $clave=is_string($d['clave']??null)?$d['clave']:'';if(!isset(self::PARAMETROS[$clave]))throw new ErpException('Parámetro de nómina no reconocido.');
+            $clave=is_string($d['clave']??null)?$d['clave']:'';$defs=self::todosLosParametros();if(!isset($defs[$clave]))throw new ErpException('Parámetro de nómina no reconocido.');
             $hoy=$this->hoy();$desde=$this->fecha($d['vigente_desde']??null);$consultado=$this->fecha($d['consultado_en']??null);
             if($consultado>$hoy)throw new ErpException('La fecha de consulta de la fuente no puede ser futura.');
             if($desde>(new \DateTimeImmutable($hoy))->modify('+366 days')->format('Y-m-d')||$desde<'2000-01-01')throw new ErpException('Vigencia fuera de rango.');
             $estado=$d['estado']??'vigente';if(!in_array($estado,['vigente','derogado'],true))throw new ErpException('Estado no válido.');
             $entero=null;
             if($estado==='vigente'){
-                try{$entero=match(self::PARAMETROS[$clave][0]){'importe'=>$this->importe($d['valor']??null),'pct'=>ValoresExactos::decimal($d['valor']??null,2,true),'dias'=>$this->entero($d['valor']??null,1,100000)};}
+                try{$entero=match($defs[$clave][0]){'importe'=>$this->importe($d['valor']??null),'pct'=>ValoresExactos::decimal($d['valor']??null,2,true),'dias'=>$this->entero($d['valor']??null,1,100000)};}
                 catch(\InvalidArgumentException $e){throw new ErpException($e->getMessage());}
-                if(self::PARAMETROS[$clave][0]==='pct'&&$entero>10000)throw new ErpException('Un porcentaje no supera 100.');
+                if($defs[$clave][0]==='pct'&&$entero>10000)throw new ErpException('Un porcentaje no supera 100.');
             }
             $fuente=$this->texto($d['fuente']??'',200);if(mb_strlen($fuente)<5)throw new ErpException('Indica la norma o documento oficial consultado.');
             $url=$d['fuente_url']??null;if($url!==null&&$url!==''){if(!is_string($url)||!preg_match('#^https://[^\s<>"\']{4,280}$#D',$url))throw new ErpException('El enlace de la fuente debe ser una URL https.');}else $url=null;
@@ -353,7 +365,7 @@ final class ErpNominaService extends ErpService
             $tipo=$d['tipo']??'';if(!in_array($tipo,['decimo_tercero','decimo_cuarto'],true))throw new ErpException('Tipo de beneficio no válido.');
             $campo=$tipo==='decimo_tercero'?'d13_prov_centavos':'d14_prov_centavos';$clave=hash('sha256','nomina.beneficio:'.$actor.':'.$d['idem_key']);
             $previo=$this->r->uno('SELECT id FROM erp_nomina_beneficios WHERE clave_operacion=? FOR SHARE',[$clave]);if($previo)return (int)$previo['id'];
-            $filas=$this->r->q("SELECT l.id,l.$campo m FROM erp_nomina_lineas l JOIN erp_nomina_corridas k ON k.id=l.corrida_id WHERE l.colaborador_id=? AND k.estado='aprobada' AND l.$campo>0 AND NOT EXISTS(SELECT 1 FROM erp_nomina_beneficio_lineas b WHERE b.linea_id=l.id AND b.tipo=?) ORDER BY l.id FOR UPDATE",[(int)$col['id'],$tipo]);
+            $filas=$this->r->q("SELECT l.id,l.$campo m FROM erp_nomina_lineas l JOIN erp_nomina_corridas k ON k.id=l.corrida_id WHERE l.colaborador_id=? AND k.estado='aprobada' AND l.$campo>0 AND NOT EXISTS(SELECT 1 FROM erp_nomina_beneficio_lineas b WHERE b.linea_id=l.id AND b.tipo=?) AND NOT EXISTS(SELECT 1 FROM erp_nomina_finiquito_lineas f WHERE f.linea_id=l.id AND f.tipo=? AND f.activa=1) ORDER BY l.id FOR UPDATE",[(int)$col['id'],$tipo,$tipo]);
             $monto=array_sum(array_map(fn($f)=>(int)$f['m'],$filas));if($monto<=0)throw new ErpException('No hay beneficios acumulados por liquidar.',409);
             $ob=$this->crearObligacion((int)$col['id'],'nomina_beneficio','BEN-'.$tipo.'-'.$col['id'].'-'.substr($clave,0,10),$monto,$this->hoy(),$actor);
             $this->r->q('INSERT INTO erp_nomina_beneficios(clave_operacion,colaborador_id,tipo,monto_centavos,obligacion_id,creado_por,creado_en) VALUES(?,?,?,?,?,?,?)',[$clave,(int)$col['id'],$tipo,$monto,$ob,$actor,$this->r::ahora()]);$id=$this->r->id();
@@ -379,6 +391,6 @@ final class ErpNominaService extends ErpService
     }
     public function saldosBeneficios():array
     {
-        return $this->r->q("SELECT l.colaborador_id,CONCAT(c.nombre,' ',c.apellido) nombre,SUM(CASE WHEN NOT EXISTS(SELECT 1 FROM erp_nomina_beneficio_lineas b WHERE b.linea_id=l.id AND b.tipo='decimo_tercero') THEN l.d13_prov_centavos ELSE 0 END) d13,SUM(CASE WHEN NOT EXISTS(SELECT 1 FROM erp_nomina_beneficio_lineas b WHERE b.linea_id=l.id AND b.tipo='decimo_cuarto') THEN l.d14_prov_centavos ELSE 0 END) d14 FROM erp_nomina_lineas l JOIN erp_nomina_corridas k ON k.id=l.corrida_id JOIN colaboradores c ON c.id=l.colaborador_id WHERE k.estado='aprobada' GROUP BY l.colaborador_id,c.nombre,c.apellido HAVING d13>0 OR d14>0 ORDER BY c.apellido,c.nombre");
+        return $this->r->q("SELECT l.colaborador_id,CONCAT(c.nombre,' ',c.apellido) nombre,SUM(CASE WHEN NOT EXISTS(SELECT 1 FROM erp_nomina_beneficio_lineas b WHERE b.linea_id=l.id AND b.tipo='decimo_tercero') AND NOT EXISTS(SELECT 1 FROM erp_nomina_finiquito_lineas f WHERE f.linea_id=l.id AND f.tipo='decimo_tercero' AND f.activa=1) THEN l.d13_prov_centavos ELSE 0 END) d13,SUM(CASE WHEN NOT EXISTS(SELECT 1 FROM erp_nomina_beneficio_lineas b WHERE b.linea_id=l.id AND b.tipo='decimo_cuarto') AND NOT EXISTS(SELECT 1 FROM erp_nomina_finiquito_lineas f WHERE f.linea_id=l.id AND f.tipo='decimo_cuarto' AND f.activa=1) THEN l.d14_prov_centavos ELSE 0 END) d14 FROM erp_nomina_lineas l JOIN erp_nomina_corridas k ON k.id=l.corrida_id JOIN colaboradores c ON c.id=l.colaborador_id WHERE k.estado='aprobada' GROUP BY l.colaborador_id,c.nombre,c.apellido HAVING d13>0 OR d14>0 ORDER BY c.apellido,c.nombre");
     }
 }
