@@ -3,7 +3,7 @@ namespace Services\Nomina;
 
 /**
  * Participación de trabajadores en las utilidades — cálculo puro en centavos. Los porcentajes y el tope vienen de parámetros registrados con su fuente.
- * Una parte se reparte según los días trabajados en el ejercicio y otra según las cargas familiares; el reparto es exacto (mayor resto, desempate por menor id).
+ * Una parte se reparte según los días trabajados en el ejercicio y otra según días × cargas familiares (el factor de cada trabajador es el producto); el reparto es exacto (mayor resto, desempate por menor id).
  * Supuestos que valida el contador: sin cargas declaradas, la parte de cargas se suma a la de días; el tope se aplica al total de cada trabajador y su excedente
  * no se paga: queda registrado para que el contador decida su destino.
  */
@@ -37,7 +37,7 @@ final class NominaUtilidades
         $cargas=array_sum(array_column($trab,'cargas'));$aTrabajo=$cargas===0;
         if($aTrabajo){$pozoT+=$pozoC;$pozoC=0;}
         $porDias=self::repartir($pozoT,array_map(fn($x)=>$x['dias'],$trab));
-        $porCargas=self::repartir($pozoC,array_map(fn($x)=>$x['cargas'],$trab));
+        $porCargas=self::repartir($pozoC,array_map(fn($x)=>$x['dias']*$x['cargas'],$trab));// factor = días trabajados × cargas acreditadas
         $lineas=[];$total=0;$exc=0;
         foreach($trab as $id=>$x){
             $bruto=$porDias[$id]+$porCargas[$id];$monto=$tope===null?$bruto:min($bruto,$tope);$e=$bruto-$monto;

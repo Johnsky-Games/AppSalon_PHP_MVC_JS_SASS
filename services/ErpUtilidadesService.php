@@ -24,7 +24,7 @@ final class ErpUtilidadesService extends ErpService
     public function cargas(int $actor,array $d):array
     {
         return $this->ejecutar($actor,'nomina.configurar','nomina_cargas',$d,function()use($actor,$d){
-            $col=$this->r->uno("SELECT id FROM colaboradores WHERE id=? FOR UPDATE",[$this->id($d['colaborador_id']??null)])??throw new ErpException('Colaborador no disponible.',404);
+            $col=$this->r->uno('SELECT id FROM colaboradores WHERE id=? FOR UPDATE',[$this->id($d['colaborador_id']??null)])??throw new ErpException('Colaborador no disponible.',404);// también ex colaboradores: participan por el tiempo que trabajaron
             $anio=$this->anio($d['anio']??null);$n=$d['cargas']??null;
             if((!is_int($n)&&!is_string($n))||!preg_match('/^\d{1,2}$/D',(string)$n)||(int)$n>30)throw new ErpException('Las cargas son un número entero de 0 a 30.');
             $fuente=$this->texto($d['fuente']??'',200);if(mb_strlen($fuente)<5)throw new ErpException('Indica el documento de respaldo de las cargas familiares.');
@@ -41,7 +41,9 @@ final class ErpUtilidadesService extends ErpService
         if($cfg['inicio_contable']>$anio.'-01-01')throw new ErpException('El libro empieza el '.$cfg['inicio_contable'].' y no cubre todo el ejercicio '.$anio.': registra la utilidad con un asiento de apertura o calcula el reparto con el contador.',409);
         $pend=(int)$this->r->uno("SELECT COUNT(*) n FROM erp_integraciones_outbox o JOIN erp_eventos e ON e.id=o.evento_id WHERE o.destino='contabilidad' AND o.estado<>'confirmado' AND e.creado_en>=? AND e.creado_en<?",[$anio.'-01-01 00:00:00',($anio+1).'-01-01 00:00:00'])['n'];
         if($pend>0)throw new ErpException('Hay '.$pend.' hecho(s) económicos del ejercicio sin contabilizar. Procésalos antes de calcular las utilidades.',409);
-        $er=(new ErpContabilidadService($this->r))->estadoResultados($anio.'-01-01',$anio.'-12-31');
+        $cont=new ErpContabilidadService($this->r);$sinPrestar=$cont->prestacionesPendientes($cfg['inicio_contable'],($anio+1).'-01-01');
+        if($sinPrestar>0)throw new ErpException('Hay '.$sinPrestar.' servicio(s) prestado(s) del ejercicio sin contabilizar. Ejecuta el supervisor contable antes de calcular las utilidades.',409);
+        $er=$cont->estadoResultados($anio.'-01-01',$anio.'-12-31');
         // El gasto de utilidades (cuenta del rol) no entra en su propia base; sin cuenta asignada, el reparto no se puede contabilizar.
         $rol=$this->r->uno('SELECT c.codigo FROM erp_cont_roles r JOIN erp_cont_cuentas c ON c.id=r.cuenta_id WHERE r.rol=\'gasto_utilidades\'');
         if(!$rol)throw new ErpException('Asigna una cuenta de gasto al rol contable «gasto_utilidades» (Contabilidad › Roles) antes de repartir utilidades.',409);

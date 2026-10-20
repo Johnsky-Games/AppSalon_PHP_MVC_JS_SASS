@@ -222,7 +222,7 @@ final class ErpController
             'parametros'=>$datos+=['parametros'=>$r->q('SELECT * FROM erp_nomina_parametros ORDER BY id DESC LIMIT 200')],
             'condiciones'=>$datos+=['condiciones'=>$r->q("SELECT k.*,CONCAT(c.nombre,' ',c.apellido) nombre FROM erp_nomina_condiciones k JOIN colaboradores c ON c.id=k.colaborador_id ORDER BY k.id DESC LIMIT 200")],
             'beneficios'=>$datos+=['saldos'=>$n->saldosBeneficios()],
-            'utilidades'=>$datos+=(function()use($r){$u=new \Services\ErpUtilidadesService($r);$rep=$u->listar();$lin=[];foreach($rep as $x)$lin[(int)$x['id']]=$u->lineas((int)$x['id']);return ['repartos'=>$rep,'repartoLineas'=>$lin];})(),
+            'utilidades'=>$datos+=(function()use($r){$todos=$r->q("SELECT c.id,CONCAT(c.nombre,' ',c.apellido,IF(c.estado='baja',' (baja)','')) nombre FROM colaboradores c WHERE EXISTS(SELECT 1 FROM erp_contratos k WHERE k.colaborador_id=c.id AND k.tipo='empleado') ORDER BY c.apellido,c.nombre");$u=new \Services\ErpUtilidadesService($r);$rep=$u->listar();$lin=[];foreach($rep as $x)$lin[(int)$x['id']]=$u->lineas((int)$x['id']);return ['repartos'=>$rep,'repartoLineas'=>$lin,'trabajadoresUtil'=>$todos];})(),
             'finiquitos'=>$datos+=['finiquitos'=>(new \Services\ErpFiniquitoService($r))->listar()],
             'renta'=>$datos+=['tablasIr'=>$r->q('SELECT * FROM erp_nomina_ir_tablas ORDER BY id DESC LIMIT 100'),'declaracionesIr'=>$r->q("SELECT d.*,CONCAT(c.nombre,' ',c.apellido) nombre FROM erp_nomina_ir_declaraciones d JOIN colaboradores c ON c.id=d.colaborador_id ORDER BY d.id DESC LIMIT 200")],
             default=>null,

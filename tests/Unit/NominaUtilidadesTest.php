@@ -20,6 +20,15 @@ final class NominaUtilidadesTest extends TestCase
         self::assertSame(100000,$r['pozo_trabajo']);self::assertSame(50000,$r['pozo_cargas']);self::assertFalse($r['cargas_a_trabajo']);
         self::assertSame(116485,$r['lineas'][1]['monto']);self::assertSame(33515,$r['lineas'][2]['monto']);self::assertSame(150000,$r['total']);self::assertSame(0,$r['excedente']);
     }
+    public function testLaParteDeCargasPesaDiasPorCargas():void
+    {
+        // Misma cantidad de cargas, distinta permanencia: 100 y 300 días → 1/4 y 3/4 del 5 %.
+        $r=NominaUtilidades::calcular(1000000,1000,500,[1=>['dias'=>100,'cargas'=>1],2=>['dias'=>300,'cargas'=>1]],null);
+        self::assertSame(12500,$r['lineas'][1]['parte_cargas']);self::assertSame(37500,$r['lineas'][2]['parte_cargas']);
+        // Más cargas pesan más: 200 días × 2 cargas = 400 frente a 200 días × 1 carga = 200.
+        $r=NominaUtilidades::calcular(1000000,1000,500,[1=>['dias'=>200,'cargas'=>2],2=>['dias'=>200,'cargas'=>1]],null);
+        self::assertSame(33333,$r['lineas'][1]['parte_cargas']);self::assertSame(16667,$r['lineas'][2]['parte_cargas'],'mayor resto: el centavo va a quien más se acerca');self::assertSame(50000,$r['lineas'][1]['parte_cargas']+$r['lineas'][2]['parte_cargas']);
+    }
     public function testSinCargasLaParteDeCargasSeSumaALosDias():void
     {
         $r=NominaUtilidades::calcular(1000000,1000,500,[1=>['dias'=>100,'cargas'=>0],2=>['dias'=>100,'cargas'=>0]],null);

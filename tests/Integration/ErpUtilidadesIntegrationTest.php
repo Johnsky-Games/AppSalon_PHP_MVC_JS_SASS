@@ -86,6 +86,26 @@ final class ErpUtilidadesIntegrationTest extends TestCase
         (new ErpIntegracionService($this->r))->procesar(['contabilidad'=>$a],100);self::assertSame(0,$saldo('gasto_utilidades'));self::assertSame(0,$saldo('sueldos_por_pagar'));
         $id2=$this->calcular();self::assertSame(1000000,(int)$this->fila($id2)['base_centavos']);self::assertNotSame($id,$id2);
     }
+    public function testLasCargasSePonderanPorLosDiasTrabajadosYLosExTrabajadoresParticipanYDeclaran():void
+    {
+        $this->parametros();$this->libro();$this->cargas($this->colA,1);$this->cargas($this->colB,1);
+        // Beto ya salió (baja): sigue participando por el tiempo que trabajó y se le pueden registrar cargas.
+        $this->r->q("UPDATE colaboradores SET estado='baja' WHERE id=?",[$this->colB]);$this->cargas($this->colB,1);
+        $u=$this->fila($this->calcular());$l=$this->lineas((int)$u['id']);
+        // Por días 66 485 / 33 515; por días × cargas (365 vs 184 → 549): 50 000 × 365 / 549 = 33 242 y 16 758 (mayor resto).
+        self::assertSame(33242,(int)$l[$this->colA]['parte_cargas_centavos']);self::assertSame(16758,(int)$l[$this->colB]['parte_cargas_centavos']);
+        self::assertSame(66485+33242,(int)$l[$this->colA]['monto_centavos']);self::assertSame(33515+16758,(int)$l[$this->colB]['monto_centavos']);self::assertSame(150000,(int)$u['total_centavos']);
+    }
+    public function testUnServicioPrestadoSinContabilizarDelEjercicioImpideCalcular():void
+    {
+        $this->parametros();$this->libro();
+        $cli=R5CajaFixture::usuario($this->db,'cliente');$c=R5CajaFixture::cita($this->db,$cli,null,['30.00']);$v=new \Services\ErpVentaService($this->r);
+        $venta=$v->crear($this->owner,$this->d(['cita_id'=>$c]))['recurso_id'];
+        $v->confirmar($this->owner,$this->d(['venta_id'=>$venta,'version'=>(int)$this->r->uno('SELECT version FROM erp_ventas WHERE id=?',[$venta])['version']]));
+        $this->r->q("UPDATE citas SET estado='completada',atencion_fin_at='2025-06-15 10:00:00' WHERE id=?",[$c]);
+        $this->r->q("UPDATE erp_integraciones_outbox SET estado='confirmado' WHERE destino='contabilidad'");// solo se prueba la prestación sin asiento
+        $e=$this->rechazo(fn()=>$this->calcular(),409);self::assertStringContainsString('servicio(s) prestado(s)',$e->getMessage());
+    }
     public function testSinCuentaAsignadaAlRolDeGastoNoSeCalculaYElMensajeDicePorQue():void
     {
         $this->parametros();$this->libro();
