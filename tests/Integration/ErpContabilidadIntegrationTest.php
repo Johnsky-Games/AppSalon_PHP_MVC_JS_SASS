@@ -66,9 +66,9 @@ final class ErpContabilidadIntegrationTest extends TestCase
         foreach($casos as $nombre=>$lineas){try{$this->svc()->asiento($this->owner,$this->d(['fecha'=>'2026-02-03','concepto'=>$nombre,'lineas'=>$lineas]));self::fail($nombre);}catch(ErpException|\InvalidArgumentException $e){self::assertContains($e->getCode(),[0,404,422],$nombre.': '.$e->getMessage());}}
         self::assertSame(0,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_cont_asientos')['n']);self::assertSame(0,(int)$this->r->uno('SELECT ultimo FROM erp_cont_secuencia')['ultimo'],'Un rechazo no consume número');
         // Cuenta desactivada: tampoco admite movimientos.
-        $this->svc()->cuenta($this->owner,$this->d(['codigo'=>'6.1.07','nombre'=>'Gasto de ensayo','tipo'=>'gasto','padre'=>'6']));
-        $this->svc()->cuentaEstado($this->owner,$this->d(['cuenta_id'=>$this->cuenta('6.1.07'),'activa'=>'0']));
-        $this->rechazo(fn()=>$this->asiento('2026-02-03','6.1.07','1.1.01','1.00'),422);
+        $this->svc()->cuenta($this->owner,$this->d(['codigo'=>'6.1.99','nombre'=>'Gasto de ensayo','tipo'=>'gasto','padre'=>'6']));
+        $this->svc()->cuentaEstado($this->owner,$this->d(['cuenta_id'=>$this->cuenta('6.1.99'),'activa'=>'0']));
+        $this->rechazo(fn()=>$this->asiento('2026-02-03','6.1.99','1.1.01','1.00'),422);
     }
     public function testElLibroEsInmutableYLaBaseLoGarantiza():void
     {

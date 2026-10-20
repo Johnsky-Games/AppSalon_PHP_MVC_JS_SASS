@@ -12,13 +12,13 @@ final class ErpContabilidadService extends ErpService
 {
     /** Tipo de cuenta que debe tener la cuenta asignada a cada rol. */
     public const ROLES=[
-        'caja'=>'activo','banco'=>'activo','cxc'=>'activo','inventario'=>'activo','iva_compras'=>'activo','activos_fijos'=>'activo',
+        'caja'=>'activo','banco'=>'activo','cxc'=>'activo','inventario'=>'activo','iva_compras'=>'activo','activos_fijos'=>'activo','depreciacion_acumulada'=>'activo',
         'proveedores'=>'pasivo','recepciones_por_facturar'=>'pasivo','iva_ventas'=>'pasivo','anticipos_clientes'=>'pasivo','comisiones_por_pagar'=>'pasivo','sueldos_por_pagar'=>'pasivo','iess_por_pagar'=>'pasivo',
         'ir_por_pagar'=>'pasivo','beneficios_por_pagar'=>'pasivo','descuentos_nomina'=>'pasivo',
         'resultado_ejercicio'=>'patrimonio','resultados_acumulados'=>'patrimonio',
         'ingreso_servicios'=>'ingreso','ingreso_productos'=>'ingreso','devoluciones_ventas'=>'ingreso',
         'costo_ventas'=>'costo','consumo_insumos'=>'costo',
-        'gasto_comisiones'=>'gasto','gasto_sueldos'=>'gasto','gasto_aportes'=>'gasto','gasto_beneficios'=>'gasto','gasto_utilidades'=>'gasto','gasto_operativo'=>'gasto','diferencias_caja'=>'gasto',
+        'gasto_comisiones'=>'gasto','gasto_sueldos'=>'gasto','gasto_aportes'=>'gasto','gasto_beneficios'=>'gasto','gasto_utilidades'=>'gasto','gasto_depreciacion'=>'gasto','perdida_baja_activos'=>'gasto','gasto_operativo'=>'gasto','diferencias_caja'=>'gasto',
     ];
     private function hoy():string {return (new \DateTimeImmutable('now',new \DateTimeZone('America/Guayaquil')))->format('Y-m-d');}
 
@@ -341,6 +341,10 @@ final class ErpContabilidadService extends ErpService
         $controles[]=['nombre'=>'Anticipos de clientes','libro'=>$saldo('anticipos_clientes'),'auxiliar'=>$aux,'fuente'=>'Libro de saldos prepagados (cargas, aplicaciones, restituciones y reembolsos) hasta la fecha de corte'];
         $aux=$n("SELECT COALESCE(SUM(CASE WHEN tipo='ingreso' THEN monto_centavos ELSE -monto_centavos END),0) n FROM caja_movimientos WHERE metodo='efectivo' AND registrado_en<=?",[$fin]);
         $controles[]=['nombre'=>'Caja en efectivo','libro'=>$saldo('caja'),'auxiliar'=>$aux,'fuente'=>'Movimientos de caja en efectivo hasta la fecha de corte. Los ingresos y egresos manuales de caja todavía no tienen regla contable y aparecen como diferencia.'];
+        $aux=$n("SELECT COALESCE((SELECT SUM(acumulado_inicial_centavos) FROM erp_dep_fichas WHERE inicio<=?),0)
+            +COALESCE((SELECT SUM(l.monto_centavos) FROM erp_dep_lineas l JOIN erp_dep_corridas k ON k.id=l.corrida_id WHERE k.estado='contabilizada' AND LAST_DAY(STR_TO_DATE(CONCAT(k.anio,'-',k.mes,'-01'),'%Y-%m-%d'))<=?),0)
+            -COALESCE((SELECT SUM(acumulado_centavos) FROM erp_dep_bajas WHERE estado='vigente' AND fecha<=?),0) n",[$hasta,$hasta,$hasta]);
+        $controles[]=['nombre'=>'Depreciación acumulada','libro'=>-$saldo('depreciacion_acumulada'),'auxiliar'=>$aux,'fuente'=>'Acumulado inicial de las fichas más las corridas contabilizadas hasta el corte, menos el acumulado dado de baja'];
         foreach($controles as &$c)$c['diferencia']=$c['libro']-$c['auxiliar'];unset($c);
         $pendientes=$n("SELECT COUNT(*) n FROM erp_integraciones_outbox WHERE destino='contabilidad' AND estado<>'confirmado'");
         $inicio=$this->config()['inicio_contable']??null;$sinPrestar=$inicio?$this->prestacionesPendientes($inicio):0;

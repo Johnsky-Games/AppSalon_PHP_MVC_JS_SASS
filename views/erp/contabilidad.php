@@ -1,5 +1,5 @@
 <?php $titulo='Contabilidad';include __DIR__.'/_inicio.php';
-$ver=['resumen'=>'Resumen','diario'=>'Libro diario','mayor'=>'Libro mayor','balances'=>'Balances y resultados','conciliacion'=>'Conciliación','plan'=>'Plan de cuentas','periodos'=>'Períodos y cierre'];
+$ver=['resumen'=>'Resumen','diario'=>'Libro diario','mayor'=>'Libro mayor','balances'=>'Balances y resultados','conciliacion'=>'Conciliación','plan'=>'Plan de cuentas','periodos'=>'Períodos y cierre','activos'=>'Activos fijos'];
 if($registra)$ver['asiento']='Asiento manual';
 $tiposTexto=['activo'=>'Activo','pasivo'=>'Pasivo','patrimonio'=>'Patrimonio','ingreso'=>'Ingreso','costo'=>'Costo','gasto'=>'Gasto'];
 $filtro=static function(string $vista,array $q,string $desde,string $hasta,bool $fechas=true):void{ ?>
@@ -69,6 +69,44 @@ $tabla=static function(array $filas,callable $f):string{$h='';foreach($filas as 
 <?= $tabla($conc['controles'],fn($c)=>'<tr><td>'.s($c['nombre']).'</td><td>'.s($dinero($c['libro'])).'</td><td>'.s($dinero($c['auxiliar'])).'</td><td>'.($c['diferencia']===0?'0.00':'<strong>'.s($dinero($c['diferencia'])).'</strong>').'</td><td><small>'.s($c['fuente']).'</small></td></tr>') ?>
 </tbody></table></div><p>Hechos sin contabilizar: <?= (int)$conc['eventos_sin_contabilizar'] ?> · Servicios prestados sin contabilizar: <?= (int)$conc['prestaciones_sin_contabilizar'] ?> · Libro <?= $conc['integridad']?'con inconsistencias':'íntegro' ?></p></section>
 <?php endif; ?>
+
+<?php if($vista==='activos'): $mesesN=['01'=>'Ene','02'=>'Feb','03'=>'Mar','04'=>'Abr','05'=>'May','06'=>'Jun','07'=>'Jul','08'=>'Ago','09'=>'Sep','10'=>'Oct','11'=>'Nov','12'=>'Dic'];
+$estadoDep=['sin_configurar'=>'Sin configurar','en_depreciacion'=>'En depreciación','totalmente_depreciado'=>'Totalmente depreciado','baja'=>'Dado de baja'];
+$optCat=[];foreach($depCategorias as $k)$optCat[$k['id']]=$k['nombre'].' · '.(int)$k['vida_util_meses'].' meses · residual '.number_format((int)$k['residual_bp']/100,2).' %';
+$optAct=[];foreach($depActivos as $x)if($x['estado']==='sin_configurar')$optAct[$x['id']]=$x['codigo'].' '.$x['nombre'];
+$optBaja=[];foreach($depActivos as $x)if(in_array($x['estado'],['en_depreciacion','totalmente_depreciado'],true))$optBaja[$x['id']]=$x['codigo'].' '.$x['nombre'];
+$optMotivo=$depMotivos; ?>
+<section class="ui-card"><h2>Depreciación de activos fijos</h2><p role="note">Es una <strong>política contable</strong> (línea recta por meses completos) que define el propietario con su fuente; el sistema no trae vidas útiles ni porcentajes. Los límites de deducibilidad tributaria, la conciliación contable-tributaria, la venta de activos y la revaluación <strong>no están implementados</strong>: faltan fuentes oficiales verificadas.</p></section>
+<section class="ui-card"><h2>Activos</h2><div class="ops-table-wrap"><table class="ops-table"><thead><tr><th>Activo</th><th>Costo</th><th>Categoría</th><th>Inicio</th><th>Acumulado</th><th>Valor en libros</th><th>Estado</th><th></th></tr></thead><tbody>
+<?= $tabla($depActivos,fn($x)=>'<tr><td>'.s($x['codigo'].' '.$x['nombre']).'</td><td>'.s($dinero($x['costo_centavos'])).'</td><td>'.s($x['categoria']??'').'</td><td>'.s($x['inicio']?substr($x['inicio'],0,7):'').'</td><td>'.s($dinero($x['acumulado'])).'</td><td>'.s($dinero($x['libros'])).'</td><td>'.s($estadoDep[$x['estado']]).'</td><td>'.($x['ficha_id']?'<a href="?vista=activos&amp;activo='.(int)$x['id'].'">Cuadro</a>':'').'</td></tr>') ?>
+</tbody></table></div></section>
+<?php if($depCuadro): $ca=$depCuadro['activo']; ?><section class="ui-card"><h2>Cuadro de depreciación · <?= s($ca['codigo'].' '.$ca['nombre']) ?></h2><div class="ops-table-wrap"><table class="ops-table"><thead><tr><th>#</th><th>Período</th><th>Cuota</th><th>Acumulado</th><th>Valor en libros</th><th>Estado</th></tr></thead><tbody>
+<?= $tabla($depCuadro['filas'],fn($f)=>'<tr><td>'.(int)$f['nro'].'</td><td>'.s($f['periodo']).'</td><td>'.s($dinero($f['cuota'])).'</td><td>'.s($dinero($f['acumulado'])).'</td><td>'.s($dinero($f['libros'])).'</td><td>'.s($f['estado']).'</td></tr>') ?>
+</tbody></table></div></section><?php endif; ?>
+<section class="ui-card"><h2>Corridas mensuales</h2><div class="ops-table-wrap"><table class="ops-table"><thead><tr><th>Período</th><th>Versión</th><th>Estado</th><th>Activos</th><th>Total</th><th></th></tr></thead><tbody>
+<?php foreach($depCorridas as $k): ?><tr><td><?= s(sprintf('%04d-%02d',$k['anio'],$k['mes'])) ?></td><td><?= (int)$k['version'] ?></td><td><?= s($k['estado']) ?></td><td><?= (int)$k['n_lineas'] ?></td><td><?= s($dinero($k['total_centavos'])) ?></td><td>
+<?php if($registra&&$k['estado']==='borrador'): ?><form method="POST" action="/gestion/accion" data-una-vez><?php $clave('dep_contabilizar'); ?><input type="hidden" name="vista" value="activos"><input type="hidden" name="corrida_id" value="<?= (int)$k['id'] ?>"><button class="boton">Contabilizar</button></form><?php endif; ?>
+<?php if($configura&&$k['estado']!=='anulada'): $formulario=['accion'=>'dep_anular','ocultos'=>['vista'=>'activos','corrida_id'=>$k['id']],'campos'=>['motivo'=>['etiqueta'=>'Motivo de la anulación','longitud'=>300]],'boton'=>$k['estado']==='borrador'?'Descartar borrador':'Anular y reversar'];include __DIR__.'/_formulario.php'; endif; ?></td></tr><?php endforeach; ?>
+</tbody></table></div>
+<?php if($registra): $formulario=['accion'=>'dep_calcular','ocultos'=>['vista'=>'activos'],'campos'=>['anio'=>['etiqueta'=>'Año','tipo'=>'number','valor'=>substr($hoy,0,4)],'mes'=>['etiqueta'=>'Mes (1-12, ya terminado)','tipo'=>'number','valor'=>(int)substr($hoy,5,2)-1>0?(int)substr($hoy,5,2)-1:12]],'boton'=>'Calcular corrida (borrador)'];include __DIR__.'/_formulario.php'; endif; ?></section>
+<section class="ui-card"><h2>Depreciación contabilizada de <?= (int)$depAnio ?></h2>
+<form class="formulario ui-filtros" method="GET"><input type="hidden" name="vista" value="activos"><div class="campo"><label for="dep-anio">Año</label><input id="dep-anio" type="number" name="anio" value="<?= (int)$depAnio ?>" min="2000" max="2100"></div><button class="boton">Ver</button></form>
+<div class="ops-table-wrap"><table class="ops-table"><thead><tr><th>Mes</th><th>Activos</th><th>Depreciación</th></tr></thead><tbody>
+<?php $totalAnio=0; foreach($depPorMes as $f): $totalAnio+=$f['total']; ?><tr><td><?= s($mesesN[sprintf('%02d',$f['mes'])]) ?></td><td><?= (int)$f['activos'] ?></td><td><?= s($dinero($f['total'])) ?></td></tr><?php endforeach; ?>
+<tr><th>Total</th><th></th><th><?= s($dinero($totalAnio)) ?></th></tr></tbody></table></div></section>
+<section class="ui-card"><h2>Bajas</h2><div class="ops-table-wrap"><table class="ops-table"><thead><tr><th>Activo</th><th>Fecha</th><th>Motivo</th><th>Costo</th><th>Acumulado</th><th>Pérdida (valor en libros)</th><th>Estado</th><th></th></tr></thead><tbody>
+<?php foreach($depBajas as $b): ?><tr><td><?= s($b['codigo'].' '.$b['nombre']) ?></td><td><?= s($b['fecha']) ?></td><td><?= s($depMotivos[$b['motivo']]??$b['motivo']) ?></td><td><?= s($dinero($b['costo_centavos'])) ?></td><td><?= s($dinero($b['acumulado_centavos'])) ?></td><td><?= s($dinero($b['valor_libros_centavos'])) ?></td><td><?= s($b['estado']) ?></td><td>
+<?php if($configura&&$b['estado']==='vigente'): $formulario=['accion'=>'dep_baja_anular','ocultos'=>['vista'=>'activos','baja_id'=>$b['id']],'campos'=>['motivo'=>['etiqueta'=>'Motivo de la anulación','longitud'=>300]],'boton'=>'Anular baja'];include __DIR__.'/_formulario.php'; endif; ?></td></tr><?php endforeach; ?>
+</tbody></table></div></section>
+<?php if($configura): ?>
+<section class="ui-card"><h2>Políticas de depreciación</h2>
+<?php if($depCategorias): ?><ul><?php foreach($depCategorias as $k): ?><li><?= s($optCat[$k['id']]) ?> — fuente: <?= s($k['fuente']) ?></li><?php endforeach; ?></ul><?php endif; ?>
+<?php $formulario=['accion'=>'dep_categoria','ocultos'=>['vista'=>'activos'],'campos'=>['nombre'=>['etiqueta'=>'Nombre de la política','longitud'=>80],'vida_util_meses'=>['etiqueta'=>'Vida útil (meses)','tipo'=>'number'],'residual_pct'=>['etiqueta'=>'Valor residual (% del costo, 0 si no aplica)','longitud'=>6,'valor'=>'0'],'fuente'=>['etiqueta'=>'Fuente o criterio contable','longitud'=>200]],'boton'=>'Crear política'];include __DIR__.'/_formulario.php'; ?></section>
+<?php if($optAct&&$optCat): ?><section class="ui-card"><h2>Configurar un activo</h2><p>El acumulado inicial solo aplica a activos adquiridos antes del inicio contable (el asiento de apertura debe llevarlo).</p>
+<?php $formulario=['accion'=>'dep_ficha','ocultos'=>['vista'=>'activos'],'campos'=>['activo_id'=>['etiqueta'=>'Activo','tipo'=>'select','opciones'=>$optAct],'categoria_id'=>['etiqueta'=>'Política','tipo'=>'select','opciones'=>$optCat],'inicio'=>['etiqueta'=>'Mes de inicio (AAAA-MM)','longitud'=>7],'acumulado_inicial'=>['etiqueta'=>'Depreciación acumulada inicial','longitud'=>14,'requerido'=>false]],'boton'=>'Guardar ficha'];include __DIR__.'/_formulario.php'; ?></section><?php endif; ?>
+<?php if($optBaja): ?><section class="ui-card"><h2>Dar de baja un activo</h2><p>No hay venta de activos: requiere comprobante electrónico y tratamiento tributario sin fuente verificada. El mes de la baja no se deprecia.</p>
+<?php $formulario=['accion'=>'dep_baja','ocultos'=>['vista'=>'activos'],'campos'=>['activo_id'=>['etiqueta'=>'Activo','tipo'=>'select','opciones'=>$optBaja],'fecha'=>['etiqueta'=>'Fecha de la baja','tipo'=>'date','valor'=>$hoy],'motivo'=>['etiqueta'=>'Motivo','tipo'=>'select','opciones'=>$optMotivo],'nota'=>['etiqueta'=>'Nota','longitud'=>300,'requerido'=>false]],'boton'=>'Registrar baja'];include __DIR__.'/_formulario.php'; ?></section><?php endif; ?>
+<?php endif; endif; ?>
 
 <?php if($vista==='plan'): ?>
 <section class="ui-card"><h2>Plan de cuentas</h2><div class="ops-table-wrap"><table class="ops-table"><thead><tr><th>Código</th><th>Nombre</th><th>Tipo</th><th>Uso</th><th>Estado</th><th></th></tr></thead><tbody>
