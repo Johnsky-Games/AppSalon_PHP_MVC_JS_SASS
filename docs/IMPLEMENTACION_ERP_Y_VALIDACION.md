@@ -68,13 +68,15 @@ git fetch origin
 git switch main
 git pull --ff-only
 
-docker compose --env-file includes/.env -p appsalon-validacion stop web notificaciones
+docker compose --env-file includes/.env -p appsalon-validacion stop notificaciones
 docker compose --env-file includes/.env -p appsalon-validacion up -d db
-docker compose --env-file includes/.env -p appsalon-validacion build web instalador notificaciones
+docker compose --env-file includes/.env -p appsalon-validacion build web notificaciones
 
-docker compose --env-file includes/.env -p appsalon-validacion run --rm --no-deps -T instalador php scripts/backup_db.php --gzip
-docker compose --env-file includes/.env -p appsalon-validacion run --rm --no-deps -T instalador php scripts/instalar.php --migrar
-docker compose --env-file includes/.env -p appsalon-validacion run --rm --no-deps -T instalador php scripts/instalar.php --comprobar
+docker compose --env-file includes/.env -p appsalon-validacion up -d web
+docker compose --env-file includes/.env -p appsalon-validacion exec -T web php scripts/backup_db.php --gzip
+docker compose --env-file includes/.env -p appsalon-validacion exec -T web php database/migrador.php status
+docker compose --env-file includes/.env -p appsalon-validacion exec -T web php database/migrador.php up
+docker compose --env-file includes/.env -p appsalon-validacion exec -T web php database/migrador.php status
 
 docker compose --env-file includes/.env -p appsalon-validacion up -d web notificaciones
 docker compose --env-file includes/.env -p appsalon-validacion ps -a
@@ -83,7 +85,13 @@ docker compose --env-file includes/.env -p appsalon-validacion logs --no-color -
 
 Comprobar cada salida antes de ejecutar el comando siguiente; detenerse si falla respaldo, migración o comprobación. El bind del proyecto conserva el respaldo en `storage/backups`; copiarlo a un destino seguro y verificar su manifiesto. Conservar `APP_KEY` por separado: cambiarla impide descifrar documentos y otras cargas cifradas. Nunca publicar respaldos o claves en Git.
 
-No ejecutar `down -v`, no eliminar `appsalon-validacion_appsalon_db_data` y no recrear cuentas para actualizar. La sesión `instalador` finalizada con código cero es normal. El nombre del proyecto y la red deben coincidir con la configuración que ya utiliza el entorno.
+No ejecutar `down -v`, no eliminar `appsalon-validacion_appsalon_db_data` y no recrear cuentas para actualizar. El respaldo y las migraciones se ejecutan siempre **dentro del servicio `web`** (`exec -T web php …`), que ya tiene la conexión a la base y el volumen de `storage/backups`; conservar `--env-file includes/.env` en cada comando. `migrador.php status` antes y después permite comparar lo aplicado. El nombre del proyecto y la red deben coincidir con la configuración que ya utiliza el entorno.
+
+## Registro de calidad: fallos intermitentes y verificaciones (20 de octubre)
+
+* **CI de main rojo (runs 197–199).** Causa confirmada: pruebas ERP que usaban `date()` (UTC en el CI) mientras la aplicación usa `OperacionRepository::ahora()` (America/Guayaquil). Entre las 19:00 y las 24:00 locales la fecha UTC va un día adelantada y el servicio rechazaba la fecha como futura. Corregido en el PR #15 con una guarda (`RelojDePruebasErpTest`) que impide reintroducir `date()` en esas pruebas.
+* **Fallo CRM del run 160.** Se revisó la corrección 06fcddc y sus pruebas antes de tratarlo como defecto nuevo: era dependencia de orden aleatorio/estado compartido entre pruebas. Sin recurrencias en los runs 161–196. La verificación local de `CrmIntegrationTest` en orden aleatorio sobre 06fcddc y main queda como comprobación pendiente de repetir.
+* **Fallos intermitentes de recuperación y registro (R2b\*; runs 156, 172, 183).** **Causa no confirmada.** Un reintento exitoso no la demuestra. Hipótesis a descartar con medición: dependencia de reloj/tiempo de pared y carga del runner. Acción propuesta: registrar en cada fallo la salida completa, la hora del runner y la carga, y robustecer las aserciones temporales (mediana de varias muestras con calentamiento) en lugar de umbrales únicos. Mientras no se identifique la causa, tratar un nuevo fallo como real: leer el log antes de reintentar.
 
 ## Prueba de aceptación del piloto
 
