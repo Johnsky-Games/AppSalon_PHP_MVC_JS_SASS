@@ -186,14 +186,14 @@ final class ErpFiscalNotaCreditoIntegrationTest extends TestCase
     }
 
     /** @dataProvider casosDeRedondeo */
-    public function testElCalculoNuncaAcreditaMasQueLoFacturadoYLaSumaCuadraConLaUltimaPorcion(int $cantidad,int $precio,int $descuento,int $pb,array $porciones):void
+    public function testElCalculoNuncaAcreditaMasQueLoFacturadoYLaSumaCuadraExacta(int $cantidad,int $precio,int $descuento,int $pb,array $porciones):void
     {
         $original=\Services\ErpCalculo::linea($cantidad,$precio,$descuento,$pb)['total'];$previa=0;$total=0;
         foreach($porciones as $q){
             $c=SriNotaCreditoCalculo::linea(['cantidad'=>$cantidad,'precio'=>$precio,'descuento'=>$descuento,'impuesto_pb'=>$pb],$previa,$q,$total);
             self::assertGreaterThan(0,$c['total']);self::assertSame($c['base']+$c['iva'],$c['total']);$previa+=$q;$total+=$c['total'];self::assertLessThanOrEqual($original,$total);
         }
-        self::assertSame(array_sum($porciones),$previa);self::assertLessThanOrEqual(1,$original-$total,'La última porción cierra la línea con a lo sumo 1 centavo de diferencia por debajo');
+        self::assertSame(array_sum($porciones),$previa);self::assertSame($original,$total,'Al acreditar toda la línea la suma es exactamente lo facturado (reparto acumulado)');
     }
     public static function casosDeRedondeo():array
     {

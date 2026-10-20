@@ -1,0 +1,22 @@
+<?php
+/**
+ * Auditoría de solo lectura del reparto de redondeo de las notas de crédito emitidas (hallazgo P1 de la revisión de #10).
+ * No modifica la base ni los comprobantes. Uso: php scripts/auditar_notas_credito.php [--todo] [--json]
+ *   por omisión lista solo las líneas NO conformes; --todo incluye también las conformes.
+ * Código de salida: 0 sin líneas afectadas; 2 si hay líneas excedidas, con remanente, agotadas o desviadas.
+ */
+if(PHP_SAPI!=='cli'){http_response_code(403);exit;}
+require __DIR__.'/../includes/app.php';
+try {
+    $r=new \Repositories\ErpRepository();
+    if(!$r->q("SHOW TABLES LIKE 'erp_fiscal_nc_lineas'")){echo "Sin notas de crédito: nada que auditar.".PHP_EOL;exit(0);}
+    $res=(new \Services\ErpFiscalService($r))->auditarRedondeoNotas();
+    $todo=in_array('--todo',$argv,true);$afectadas=array_values(array_filter($res['lineas'],fn($l)=>$l['estado']!=='conforme'));
+    if(in_array('--json',$argv,true)){echo json_encode(['resumen'=>$res['resumen'],'lineas'=>$todo?$res['lineas']:$afectadas],JSON_UNESCAPED_UNICODE|JSON_PRETTY_PRINT).PHP_EOL;exit($afectadas?2:0);}
+    echo 'Líneas auditadas: '.count($res['lineas']).' | '.implode(' | ',array_map(fn($k,$v)=>"$k: $v",array_keys($res['resumen']),$res['resumen'])).PHP_EOL;
+    foreach($todo?$res['lineas']:$afectadas as $l){
+        echo sprintf("- factura %s, línea %d «%s»: %s (acreditado base %d / IVA %d / total %d; objetivo base %d / IVA %d; diferencia total %+d centavos) notas: %s",
+            $l['factura'],$l['linea_id'],$l['descripcion'],$l['estado'],$l['base'],$l['iva'],$l['total'],$l['objetivo']['base'],$l['objetivo']['iva'],$l['dif_total'],implode(', ',array_column($l['notas'],'numero'))).PHP_EOL;
+    }
+    exit($afectadas?2:0);
+}catch(\Throwable $e){fwrite(STDERR,'Auditoría no disponible: '.get_class($e).' código '.$e->getCode().PHP_EOL);exit(1);}

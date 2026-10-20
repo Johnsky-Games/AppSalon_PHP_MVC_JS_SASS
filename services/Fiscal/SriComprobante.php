@@ -31,7 +31,12 @@ final class SriComprobante
             $q=self::entero($l['cantidad_milesimas']??null,1,999999999);$precio=self::entero($l['precio_centavos']??null,0,99999999);$desc=self::entero($l['descuento_centavos']??0,0,99999999);$pb=self::entero($l['impuesto_pb']??null,0,10000);
             $codigo=$l['codigo_porcentaje']??null;
             if(!is_string($codigo)||!array_key_exists($codigo,self::IVA)||self::IVA[$codigo]!==$pb)throw new \InvalidArgumentException('Configura la categoría IVA fiscal de cada línea, incluyendo las tarifas cero.');
-            $c=ErpCalculo::linea($q,$precio,$desc,$pb);$base=$c['subtotal']-$desc;
+            if($nc&&isset($l['base_centavos'])){
+                // Nota de crédito: importes del reparto acumulado. Se exige la coherencia del propio documento dentro de la tolerancia registrada (0 = exacta).
+                $base=self::entero($l['base_centavos'],0,99999999);$ivaNc=self::entero($l['iva_centavos']??null,0,99999999);$tol=self::entero($d['tolerancia_centavos']??0,0,2);
+                if(abs($ivaNc-intdiv($base*$pb+5000,10000))>$tol||abs(($base+$desc)-intdiv($q*$precio+500,1000))>$tol)throw new \InvalidArgumentException('Los importes de la nota de crédito no cuadran con su detalle dentro de la tolerancia registrada.');
+                $c=['impuesto'=>$ivaNc,'total'=>$base+$ivaNc];
+            }else{$c=ErpCalculo::linea($q,$precio,$desc,$pb);$base=$c['subtotal']-$desc;}
             $calculadas[]=[$l,$q,$precio,$desc,$pb,$codigo,$base,$c['impuesto']];
             $totales['base']+=$base;$totales['descuento']+=$desc;$totales['iva']+=$c['impuesto'];$totales['total']+=$c['total'];
             $impuestos[$codigo]??=['base'=>0,'iva'=>0,'pb'=>$pb];$impuestos[$codigo]['base']+=$base;$impuestos[$codigo]['iva']+=$c['impuesto'];

@@ -169,12 +169,16 @@ final class ErpFiscalService extends ErpService
                 if((int)$fl['cantidad_milesimas']!==(int)$lv['cantidad_milesimas']||(int)$fl['precio_centavos']!==(int)$lv['precio_centavos']||(int)($fl['descuento_centavos']??0)!==(int)$lv['descuento_centavos']||(int)$fl['impuesto_pb']!==(int)$lv['impuesto_pb'])throw new ErpException('Las líneas de la venta ya no coinciden con la factura.',409);
                 $fiscalPorLinea[(int)$lv['id']]=$fl;
             }
-            $acum=[];foreach($this->r->q("SELECT l.linea_id,SUM(l.cantidad_milesimas) q,SUM(l.total_centavos) t FROM erp_fiscal_nc_lineas l JOIN erp_fiscal_documentos x ON x.id=l.documento_id WHERE x.documento_origen_id=? AND x.estado NOT IN('rechazada','bloqueada') GROUP BY l.linea_id FOR SHARE",[$fid]) as $a)$acum[(int)$a['linea_id']]=[(int)$a['q'],(int)$a['t']];
+            $acum=[];foreach($this->r->q("SELECT l.linea_id,SUM(l.cantidad_milesimas) q,SUM(l.total_centavos) t,SUM(l.base_centavos) b,SUM(l.iva_centavos) i FROM erp_fiscal_nc_lineas l JOIN erp_fiscal_documentos x ON x.id=l.documento_id WHERE x.documento_origen_id=? AND x.estado NOT IN('rechazada','bloqueada') GROUP BY l.linea_id FOR SHARE",[$fid]) as $a)$acum[(int)$a['linea_id']]=[(int)$a['q'],(int)$a['t'],(int)$a['b'],(int)$a['i']];
+            // Tolerancia de cuadre del propio documento (parámetro versionado; sin registro, la nota debe cuadrar exactamente).
+            $parTol=(new ErpFiscalParametroService($this->r))->resolver('nota_credito.tolerancia_centavos','*',substr($this->r::ahora(),0,10),true);$tol=$parTol?(int)$parTol['valor_entero']:0;
             $lineasNc=[];$filasRel=[];$totalNc=0;
             foreach($porLinea as $lineaId=>$q){
-                $fl=$fiscalPorLinea[$lineaId]??throw new ErpException('La línea no pertenece a la factura.',409);[$qp,$tp]=$acum[$lineaId]??[0,0];
-                $c=Fiscal\SriNotaCreditoCalculo::linea(['cantidad'=>(int)$fl['cantidad_milesimas'],'precio'=>(int)$fl['precio_centavos'],'descuento'=>(int)($fl['descuento_centavos']??0),'impuesto_pb'=>(int)$fl['impuesto_pb']],$qp,$q,$tp);
-                $lineasNc[]=['linea_id'=>$lineaId,'codigo'=>$fl['codigo'],'descripcion'=>$fl['descripcion'],'cantidad_milesimas'=>$c['cantidad'],'precio_centavos'=>$c['precio'],'descuento_centavos'=>$c['descuento'],'impuesto_pb'=>(int)$fl['impuesto_pb'],'codigo_porcentaje'=>$fl['codigo_porcentaje']];
+                $fl=$fiscalPorLinea[$lineaId]??throw new ErpException('La línea no pertenece a la factura.',409);[$qp,$tp,$bp,$ip]=$acum[$lineaId]??[0,0,0,0];
+                $c=Fiscal\SriNotaCreditoCalculo::linea(['cantidad'=>(int)$fl['cantidad_milesimas'],'precio'=>(int)$fl['precio_centavos'],'descuento'=>(int)($fl['descuento_centavos']??0),'impuesto_pb'=>(int)$fl['impuesto_pb']],$qp,$q,$tp,['base'=>$bp,'iva'=>$ip]);
+                $dev=max(abs($c['desviacion_iva']),abs($c['desviacion_detalle']));
+                if($dev>$tol)throw new ErpException('El reparto de redondeo de «'.$fl['descripcion'].'» deja la nota con una desviación de '.$dev.' centavo(s) respecto de su propio detalle (IVA '.sprintf('%+d',$c['desviacion_iva']).', detalle '.sprintf('%+d',$c['desviacion_detalle']).') y la tolerancia registrada es '.$tol.'. Agrupa en una sola nota las devoluciones de esa línea o, si ya verificaste en la ficha técnica vigente del SRI que se acepta, registra la tolerancia en Facturación › Parámetros fiscales (nota_credito.tolerancia_centavos).',409);
+                $lineasNc[]=['linea_id'=>$lineaId,'codigo'=>$fl['codigo'],'descripcion'=>$fl['descripcion'],'cantidad_milesimas'=>$c['cantidad'],'precio_centavos'=>$c['precio'],'descuento_centavos'=>$c['descuento'],'impuesto_pb'=>(int)$fl['impuesto_pb'],'codigo_porcentaje'=>$fl['codigo_porcentaje'],'base_centavos'=>$c['base'],'iva_centavos'=>$c['iva'],'desviacion_iva'=>$c['desviacion_iva'],'desviacion_detalle'=>$c['desviacion_detalle']];
                 $filasRel[]=[$lineaId,$c['cantidad'],$c['base'],$c['iva'],$c['total']];$totalNc+=$c['total'];
             }
             $facturado=0;foreach($fac['lineas'] as $fl)$facturado+=\Services\ErpCalculo::linea((int)$fl['cantidad_milesimas'],(int)$fl['precio_centavos'],(int)($fl['descuento_centavos']??0),(int)$fl['impuesto_pb'])['total'];
@@ -182,17 +186,42 @@ final class ErpFiscalService extends ErpService
             if($previoTotal+$totalNc>$facturado)throw new ErpException('Las notas de crédito superarían el total de la factura.',409);
             $p=$this->r->uno('SELECT * FROM erp_fiscal_perfiles WHERE id=? FOR SHARE',[(int)$f['perfil_id']])??throw new ErpException('Perfil fiscal no encontrado.');
             $n=$this->reservarNumero($p,'04');
-            $datos=['fecha'=>max(substr($this->r::ahora(),0,10),$fac['fecha']),'secuencial'=>str_pad((string)$n,9,'0',STR_PAD_LEFT),'codigo_numerico'=>str_pad((string)random_int(0,99999999),8,'0',STR_PAD_LEFT),'comprador'=>$fac['comprador'],'lineas'=>$lineasNc,'motivo'=>$motivo,'sustento'=>['numero'=>$f['numero'],'fecha'=>$fac['fecha']],'total_centavos'=>$totalNc];
+            $datos=['fecha'=>max(substr($this->r::ahora(),0,10),$fac['fecha']),'secuencial'=>str_pad((string)$n,9,'0',STR_PAD_LEFT),'codigo_numerico'=>str_pad((string)random_int(0,99999999),8,'0',STR_PAD_LEFT),'comprador'=>$fac['comprador'],'lineas'=>$lineasNc,'motivo'=>$motivo,'sustento'=>['numero'=>$f['numero'],'fecha'=>$fac['fecha']],'total_centavos'=>$totalNc,'tolerancia_centavos'=>$tol];
             [$p12,$password]=$this->certificado($p);$xml=SriFirmaXades::firmar(SriComprobante::notaCredito($e,$datos),$p12,$password);$claveAcceso=SriXml::cargar($xml)->getElementsByTagName('claveAcceso')->item(0)->textContent;
             $this->confirmarNumero($p,'04',$n);
             $ahora=$this->r::ahora();$numero=$p['establecimiento'].'-'.$p['punto_emision'].'-'.$datos['secuencial'];
             $comercial=array_sum(array_map(fn($x)=>(int)$x['monto_centavos'],$devs));
-            $snapshot=json_encode(['emisor'=>$e,'nota_credito'=>$datos+['devoluciones'=>$ids,'monto_comercial_centavos'=>$comercial,'diferencia_redondeo_centavos'=>$comercial-$totalNc]],JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE);
+            $snapshot=json_encode(['emisor'=>$e,'parametros'=>$parTol?[ErpFiscalParametroService::referencia($parTol)]:[],'nota_credito'=>$datos+['devoluciones'=>$ids,'monto_comercial_centavos'=>$comercial,'diferencia_redondeo_centavos'=>$comercial-$totalNc]],JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE);
             $this->r->q("INSERT INTO erp_fiscal_documentos(perfil_id,tipo,documento_origen_id,sustituye_a_id,venta_id,clave_operacion,huella,clave_acceso,numero,snapshot_json,xml_firmado,xml_sha256,creado_por,creado_en,actualizado_en) VALUES(?,'04',?,?,?,?,?,?,?,?,?,?,?,?,?)",[(int)$f['perfil_id'],$fid,$sust?(int)$sust['id']:null,(int)$f['venta_id'],$clave,$huella,$claveAcceso,$numero,$snapshot,$xml,hash('sha256',$xml),$actor,$ahora,$ahora]);$id=$this->r->id();
             foreach($extra as $devId)$this->r->q('INSERT INTO erp_fiscal_nc_devoluciones(documento_id,devolucion_id) VALUES(?,?)',[$id,$devId]);
             foreach($filasRel as [$li,$qq,$b,$iv,$tt])$this->r->q('INSERT INTO erp_fiscal_nc_lineas(documento_id,linea_id,cantidad_milesimas,base_centavos,iva_centavos,total_centavos) VALUES(?,?,?,?,?,?)',[$id,$li,$qq,$b,$iv,$tt]);
             $this->evento($actor,'fiscal_nota_credito_preparada','fiscal_documento',$id,['factura_id'=>$fid,'venta_id'=>(int)$f['venta_id'],'numero'=>$numero,'devoluciones'=>$ids,'sustituye_a'=>$sust?(int)$sust['id']:null,'total_centavos'=>$totalNc,'monto_comercial_centavos'=>$comercial,'motivo'=>$motivo,'ambiente'=>'1','xml_sha256'=>hash('sha256',$xml)]);
             return $id;
+    }
+
+    /**
+     * Auditoría de solo lectura del reparto de redondeo de las notas de crédito ya emitidas (excluye rechazadas y bloqueadas).
+     * Compara, línea por línea de la factura, lo acreditado con el objetivo acumulado (SriNotaCreditoCalculo::auditar). No modifica nada:
+     * los documentos emitidos y autorizados son evidencia inmutable.
+     * @return array{resumen:array<string,int>,lineas:list<array<string,mixed>>}
+     */
+    public function auditarRedondeoNotas():array
+    {
+        $filas=$this->r->q("SELECT d.documento_origen_id fid,l.linea_id,d.id doc,d.numero,d.estado,l.cantidad_milesimas q,l.base_centavos b,l.iva_centavos i FROM erp_fiscal_nc_lineas l JOIN erp_fiscal_documentos d ON d.id=l.documento_id WHERE d.estado NOT IN('rechazada','bloqueada') ORDER BY d.documento_origen_id,l.linea_id,d.id");
+        $porFactura=[];foreach($filas as $f)$porFactura[(int)$f['fid']][(int)$f['linea_id']][]=$f;
+        $resumen=['conforme'=>0,'excedida'=>0,'con_remanente'=>0,'agotada'=>0,'desviada'=>0];$lineas=[];
+        foreach($porFactura as $fid=>$porLinea){
+            $fac=$this->r->uno("SELECT venta_id,numero,snapshot_json FROM erp_fiscal_documentos WHERE id=? AND tipo='01'",[$fid]);if(!$fac)continue;
+            $snap=json_decode($fac['snapshot_json'],true)['factura']??[];$ventaLineas=$this->r->q('SELECT id FROM erp_venta_lineas WHERE venta_id=? ORDER BY id',[(int)$fac['venta_id']]);
+            $fiscal=[];foreach($ventaLineas as $i=>$lv)if(isset($snap['lineas'][$i]))$fiscal[(int)$lv['id']]=$snap['lineas'][$i];
+            foreach($porLinea as $lineaId=>$notas){
+                $fl=$fiscal[$lineaId]??null;if(!$fl)continue;
+                $a=Fiscal\SriNotaCreditoCalculo::auditar(['cantidad'=>(int)$fl['cantidad_milesimas'],'precio'=>(int)$fl['precio_centavos'],'descuento'=>(int)($fl['descuento_centavos']??0),'impuesto_pb'=>(int)$fl['impuesto_pb']],array_map(fn($n)=>['cantidad'=>(int)$n['q'],'base'=>(int)$n['b'],'iva'=>(int)$n['i']],$notas));
+                $resumen[$a['estado']]++;
+                $lineas[]=['factura_id'=>$fid,'factura'=>$fac['numero'],'linea_id'=>$lineaId,'descripcion'=>$fl['descripcion']??'','notas'=>array_map(fn($n)=>['id'=>(int)$n['doc'],'numero'=>$n['numero'],'estado'=>$n['estado']],$notas)]+$a;
+            }
+        }
+        return ['resumen'=>$resumen,'lineas'=>$lineas];
     }
 
     /**

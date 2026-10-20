@@ -56,7 +56,7 @@ La categoría IVA se indica explícitamente: tarifa cero, exento y no objeto son
 **Reglas.**
 - La factura debe estar `autorizada`; las líneas de la venta deben coincidir con las facturadas (cantidad, precio, descuento, tarifa) o se rechaza (409). Las facturas nuevas guardan `linea_id` en su instantánea; las anteriores se relacionan por posición verificada.
 - Cada devolución puede acreditarse **una sola vez** (`UNIQUE` en `erp_fiscal_nc_devoluciones.devolucion_id`), aunque dos procesos compitan: el segundo recibe 409 tras esperar el candado de la venta.
-- Límites parciales y acumulados por línea: la suma de cantidades y totales de las notas de una línea no supera lo facturado, y la de la factura no supera su total. El descuento se reparte con redondeo acumulado; la última porción absorbe el resto (ajuste ≤ 5 centavos hacia abajo, nunca por encima), de modo que la suma de las notas de una línea cierra con a lo sumo 1 centavo por debajo.
+- Límites parciales y acumulados por línea: la suma de cantidades, bruto, descuento, base, IVA y total de las notas de una línea nunca supera lo facturado, y la de la factura no supera su total. El reparto es **acumulado** (ver «Reparto del redondeo en notas de crédito») y al acreditar toda la línea la suma es exactamente la de la factura.
 - El importe fiscal puede diferir del crédito comercial en centavos por redondeo; la instantánea guarda `monto_comercial_centavos` y `diferencia_redondeo_centavos` y la ficha la muestra.
 - Idempotencia permanente por clave de operación y huella; el emisor, certificado y comprador son los de la factura.
 
@@ -65,6 +65,29 @@ La categoría IVA se indica explícitamente: tarifa cero, exento y no objeto son
 **Evidencia y entrega.** Reutiliza el worker de lease/consulta/reintentos con la misma clave y XML, la descarga del XML autorizado, el RIDE (A4/impresión), el PDF y la cola de correo cifrada (asunto «Nota de crédito», adjuntos `nota-credito-…`). El RIDE se proyecta del XML autorizado (documento modificado, razón y valor modificado; sin formas de pago).
 
 **Límites actuales.** Ambiente de pruebas. Una nota **rechazada** se corrige con la sustitución (sección siguiente). No se emite nota sobre una factura a consumidor final (migración 042) ni sobre devoluciones anteriores a la factura (la factura sigue rechazando ventas con devolución previa).
+
+
+### Reparto del redondeo en notas de crédito
+
+**Problema (hallazgo P1 de la revisión de #10, reproducido).** Redondear cada nota por separado no es aditivo. Con el cálculo anterior, 100 unidades a 0,01 USD más 1 centavo (101 centavos) con IVA 15 % devueltas de a una acreditaban 11 600 de 11 615 (15 centavos de IVA inalcanzables y la línea ya marcada como completa); con unidades de 4 centavos la nota 93 se rechazaba («ya acreditada por completo»); con 30 unidades de 17 centavos y IVA 5 % el total cuadraba, pero a costa de ajustar el descuento (base 506 de 510) y de acreditar más IVA del facturado (30 de 26).
+
+**Qué admite el esquema (verificado en el XSD oficial incluido en `resources/sri/`).** `NotaCredito_V1.1.0.xsd` fija solo formatos: `cantidad` y `precioUnitario` hasta 6 decimales; `descuento`, `precioTotalSinImpuesto`, `baseImponible`, `valor`, `totalSinImpuestos` y `valorModificacion` a 2 decimales y no negativos. El esquema **no** impone relaciones aritméticas entre ellos.
+
+**Qué no se pudo verificar.** Las reglas aritméticas de negocio del SRI (tolerancia de redondeo entre `cantidad × precio − descuento`, `base × tarifa` y los totales; error 52 «ERROR EN DIFERENCIAS») están en la ficha técnica de comprobantes electrónicos (esquema offline), a la que este entorno no tiene acceso (`sri.gob.ec` no resuelve). Las guías de terceros consultadas confirman que existe el error 52 por diferencias de cálculo, pero **ninguna cita una tolerancia concreta**. Por eso el sistema no asume ninguna.
+
+**Tratamiento.**
+1. *Reparto acumulado.* Se calcula el objetivo acumulado de la línea tras acreditar X milésimas (bruto, descuento, base e IVA, cada uno redondeado una sola vez sobre el acumulado) y cada nota acredita la diferencia entre el objetivo de después y lo realmente acreditado. Garantiza (probado con un barrido de 60 000 líneas y 340 000 notas, y con pruebas deterministas) que nunca se supera lo facturado en ninguna dimensión, que al acreditar toda la línea la suma es exacta y que el error no se acumula entre notas. No se toca el descuento para cuadrar el IVA.
+2. *Restricción de representación (inevitable).* Como el redondeo no es aditivo, el IVA de una nota puede diferir en ±1 centavo de `round(base × tarifa)` y su bruto en ±1 centavo de `round(cantidad × precio)`; es el máximo posible (no crece con el número de notas) y se mide en cada nota (`desviacion_iva`, `desviacion_detalle` en la instantánea y en la ficha). En líneas devueltas en dos o más notas, ~28 % de las notas presentan esa desviación en el barrido realista.
+3. *Parámetro `nota_credito.tolerancia_centavos` (0 a 2, versionado, sin valor de fábrica).* Una nota cuya desviación supera la tolerancia registrada **no se emite** (409, devolución pendiente): se agrupan en una sola nota las devoluciones de esa línea o, si se verificó en la ficha técnica vigente (o en el ambiente de pruebas del SRI, emitiendo una nota con desviación de 1 centavo) que se acepta, se registra el parámetro con su fuente. Sin parámetro, cada nota cuadra exactamente con su propio detalle. El generador XML vuelve a verificar la coherencia del documento con la misma tolerancia antes de firmar.
+4. *Límites de granularidad.* Importes inferiores al centavo (cantidades en milésimas de artículos de pocos centavos) pueden producir incrementos nulos (la nota debe ser positiva) o un reparto no representable; el servicio rechaza con un mensaje claro y la devolución queda pendiente. En el rango realista del barrido (precios desde 0,50, unidades enteras o medias) no hubo ningún rechazo.
+
+**Operaciones históricas.** Los documentos emitidos y autorizados no se modifican (son de solo anexar y los activa el SRI). Una línea con notas emitidas con el reparto anterior no se «cierra en silencio»: si cerrarla exige repartir una diferencia negativa o desviar la nota más que la tolerancia máxima, la nota se rechaza (409) y la devolución queda pendiente. La detección es de solo lectura:
+
+```bash
+php scripts/auditar_notas_credito.php [--todo] [--json]   # código de salida 2 si hay líneas afectadas
+```
+
+Estados por línea de factura: `conforme`; `excedida` (alguna dimensión supera lo facturado: IVA acreditado de más); `con_remanente` (línea completa en cantidad que no suma lo facturado: importe no acreditable); `agotada` (total agotado sin completar la cantidad); `desviada` (parcial cuyos acumulados no coinciden con el objetivo). Tratamiento: `con_remanente` y `agotada` se documentan como diferencia de redondeo (no existe un documento fiscal válido para acreditar fracciones de centavo de IVA); `excedida` y `desviada` requieren revisión del contador y, si procede, consulta al SRI; el sistema no genera correcciones automáticas sobre documentos autorizados.
 
 ## Corrección de comprobantes rechazados: sustitución (migración 041)
 
@@ -95,6 +118,7 @@ Solo una verificación `confirmado`, de menos de 120 minutos y sin sucesor, habi
 | `regimen.leyenda` | Texto de régimen que se imprime en `contribuyenteRimpe` (solo RIMPE) | Un perfil RIMPE no factura sin ella |
 | `servicios.hecho_generador` | Momento elegido para el IVA de servicios: hoy solo `prestacion` | Obligatorio para facturar ventas pagadas con saldo anticipado |
 | `sustitucion.verificacion_minutos` | Vigencia de la verificación previa a sustituir (15 a 1440; por defecto 120) | Opcional |
+| `nota_credito.tolerancia_centavos` | Desviación máxima (0 a 2 centavos) que se admite en una nota de crédito entre su IVA y `base × tarifa` y entre su detalle y `cantidad × precio`. Solo se registra tras verificarla en la ficha técnica vigente o en el ambiente de pruebas del SRI | Sin valor, la nota debe cuadrar exactamente y se rechaza la que se desvía |
 
 **Fuentes y su fiabilidad (consultadas el 19 de octubre de 2026).** Desde el entorno de desarrollo no fue posible abrir `sri.gob.ec` (la política de red lo bloquea), de modo que no se leyó el texto de la ficha técnica 2.34 ni de las normas. Lo siguiente proviene de resultados de búsqueda que citan documentos del SRI y de fuentes secundarias; **cada cifra debe verificarse en la fuente antes de registrarla**.
 - Ficha técnica de comprobantes electrónicos, esquema offline: tipo de identificación `07` para consumidor final, identificación de trece nueves; el tiempo máximo de autorización es de 24 horas desde `RECIBIDA` (cita de la ficha 2.25, descargable del SRI). Por eso la vigencia de 120 minutos de la verificación **no** es una cifra del SRI, ver abajo.
