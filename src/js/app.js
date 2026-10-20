@@ -75,6 +75,7 @@ function tabs() {
 
     botones.forEach(boton => {
         boton.addEventListener('click', function (e) {
+            if (disponibilidadOcupada()) return;
             paso = parseInt(e.currentTarget.dataset.paso, 10);
             mostrarSeccion();
             botonesPaginador();
@@ -107,7 +108,7 @@ function paginaAnterior() {
     const btnAnterior = document.querySelector('#anterior');
     if (!btnAnterior) return;
     btnAnterior.addEventListener('click', function () {
-        if (paso <= pasoInicial) return;
+        if (disponibilidadOcupada() || paso <= pasoInicial) return;
         paso--;
         botonesPaginador();
     });
@@ -117,7 +118,7 @@ function paginaSiguiente() {
     const btnSiguiente = document.querySelector('#siguiente');
     if (!btnSiguiente) return;
     btnSiguiente.addEventListener('click', function () {
-        if (paso >= pasoFinal) return;
+        if (disponibilidadOcupada() || paso >= pasoFinal) return;
         paso++;
         botonesPaginador();
     });
@@ -257,6 +258,32 @@ function actualizarEstadoDisponibilidadUI(estado, mensaje) {
     elEstado.dataset.estado = estado;
     elEstado.className = `estado-disponibilidad estado-${estado}`;
     elEstado.textContent = mensaje;
+
+    // Mientras carga se conserva la altura de la lista para que el resto de la página no salte;
+    // al terminar (cualquier estado distinto de «loading») se libera.
+    const contenedor = document.querySelector('#contenedor-horarios-disponibles');
+    if (contenedor) {
+        if (estado === 'loading') {
+            contenedor.setAttribute('aria-busy', 'true');
+        } else {
+            contenedor.removeAttribute('aria-busy');
+            contenedor.style.minHeight = '';
+        }
+    }
+}
+
+// Mientras se consulta la disponibilidad la lista se repinta y puede cambiar de alto: un clic de navegación en ese
+// intervalo caería sobre un destino que se mueve, así que se ignora hasta que la consulta termine (éxito, vacío o error).
+function disponibilidadOcupada() {
+    const contenedor = document.querySelector('#contenedor-horarios-disponibles');
+    return !!contenedor && contenedor.getAttribute('aria-busy') === 'true';
+}
+
+function reservarAlturaHorarios() {
+    const contenedor = document.querySelector('#contenedor-horarios-disponibles');
+    if (contenedor && contenedor.offsetHeight > 0) {
+        contenedor.style.minHeight = `${contenedor.offsetHeight}px`;
+    }
 }
 
 function limpiarContenedorHorarios() {
@@ -595,6 +622,7 @@ async function consultarDisponibilidad() {
     const requestId = ++disponibilidadRequestId;
     const idsServicios = cita.servicios.map(s => s.id).join(',');
 
+    reservarAlturaHorarios();
     limpiarContenedorHorarios();
     actualizarEstadoDisponibilidadUI('loading', 'Consultando horarios disponibles...');
 
@@ -629,12 +657,16 @@ async function consultarDisponibilidad() {
         intervalosDisponiblesActuales = data.intervalos;
         cita.duracion_total_minutos = parseInt(data.duracion_total_minutos, 10) || calcularDuracionTotalServicios();
 
+        // «ok» significa que la lista ya está pintada y la selección conciliada con ella.
+        renderizarBotonesIntervalos(data.intervalos);
+        const conservaSeleccion = reconciliarHorarioSeleccionado(data.intervalos);
         actualizarEstadoDisponibilidadUI(
             'ok',
             `Horarios disponibles (${cita.duracion_total_minutos} min de duración total):`
         );
-
-        renderizarBotonesIntervalos(data.intervalos);
+        if (!conservaSeleccion) {
+            mostrarAlerta('El horario que habías elegido ya no está disponible. Elige otro.', 'error', '.formulario');
+        }
     } catch (error) {
         if (requestId !== disponibilidadRequestId) {
             return;
@@ -664,6 +696,26 @@ function renderizarBotonesIntervalos(intervalos) {
 
         contenedor.appendChild(btn);
     });
+}
+
+/**
+ * Tras repintar la lista, la selección del usuario debe seguir reflejada en ella: si su horario sigue disponible se
+ * vuelve a marcar (y se toma la hora final de la lista); si ya no lo está, se invalida. Devuelve false solo cuando
+ * había una selección y se perdió.
+ */
+function reconciliarHorarioSeleccionado(intervalos) {
+    if (!cita.hora) return true;
+
+    const coincidencia = intervalos.find(i => i.inicio === cita.hora);
+    if (!coincidencia) {
+        invalidarHorarioSeleccionado();
+        return false;
+    }
+
+    const btn = Array.from(document.querySelectorAll('#contenedor-horarios-disponibles .intervalo-btn'))
+        .find(b => b.dataset.inicio === coincidencia.inicio);
+    seleccionarIntervaloHorario(coincidencia, btn || null);
+    return true;
 }
 
 function seleccionarIntervaloHorario(intervalo, botonElemento) {
