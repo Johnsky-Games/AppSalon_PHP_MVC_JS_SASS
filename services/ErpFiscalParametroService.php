@@ -15,6 +15,7 @@ final class ErpFiscalParametroService extends ErpService
         'consumidor_final.total_maximo_centavos'=>['tipo'=>'importe','descripcion'=>'Importe total máximo (USD) de una factura a consumidor final'],
         'regimen.leyenda'=>['tipo'=>'texto','descripcion'=>'Leyenda de régimen que debe imprimirse en el comprobante (solo regímenes RIMPE)'],
         'servicios.hecho_generador'=>['tipo'=>'opcion','opciones'=>['prestacion'],'descripcion'=>'Momento elegido por el contribuyente para el hecho generador del IVA de servicios'],
+        'nota_credito.tolerancia_centavos'=>['tipo'=>'entero','min'=>0,'max'=>2,'descripcion'=>'Desviación máxima (centavos) que se admite en una nota de crédito entre su IVA y base×tarifa, y entre su detalle y cantidad×precio. Solo se registra tras verificar en la ficha técnica vigente del SRI que esa tolerancia se acepta; sin valor, la nota debe cuadrar exactamente'],
         'sustitucion.verificacion_minutos'=>['tipo'=>'entero','min'=>15,'max'=>1440,'descripcion'=>'Minutos de vigencia de la verificación previa a sustituir un comprobante rechazado (política interna)'],
     ];
 
