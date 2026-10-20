@@ -3,6 +3,7 @@ namespace Services;
 
 final class ErpRhService extends ErpService
 {
+    public const TIPOS_AUSENCIA=['permiso','vacaciones','licencia_remunerada','licencia_no_remunerada'];
     public function contrato(int $actor,array $d):array
     {
         return $this->ejecutar($actor,'erp.rh','contrato',$d,function()use($actor,$d){
@@ -60,8 +61,10 @@ final class ErpRhService extends ErpService
             $c=$this->colaborador($this->id($d['colaborador_id']??null));
             if(!(new AuthorizationService($this->r->db))->permite($actor,'erp.rh')&&(int)$c['usuario_id']!==$actor)throw new ErpException('Solo puedes solicitar tu propia ausencia.',403);
             $desde=$this->fecha($d['desde']??null);$hasta=$this->fecha($d['hasta']??null);if($hasta<$desde)throw new ErpException('Rango no válido.');$motivo=$this->texto($d['motivo']??'',300);
-            $this->r->q('INSERT INTO erp_ausencias(colaborador_id,desde,hasta,motivo,solicitante_id,creado_en) VALUES(?,?,?,?,?,?)',[(int)$c['id'],$desde,$hasta,$motivo,$actor,$this->r::ahora()]);
-            $id=$this->r->id();$this->evento($actor,'ausencia_solicitada','colaborador',(int)$c['id'],['ausencia_id'=>$id,'desde'=>$desde,'hasta'=>$hasta]);return (int)$c['id'];
+            $tipo=(string)($d['tipo']??'permiso');if(!in_array($tipo,self::TIPOS_AUSENCIA,true))throw new ErpException('Tipo de ausencia no válido.');
+            if($tipo==='vacaciones'&&$this->r->uno("SELECT id FROM erp_ausencias WHERE colaborador_id=? AND tipo='vacaciones' AND estado IN('solicitada','aprobada') AND desde<=? AND hasta>=? FOR SHARE",[(int)$c['id'],$hasta,$desde]))throw new ErpException('Ya hay vacaciones solicitadas o aprobadas que se cruzan con ese rango.',409);
+            $this->r->q('INSERT INTO erp_ausencias(colaborador_id,desde,hasta,tipo,motivo,solicitante_id,creado_en) VALUES(?,?,?,?,?,?,?)',[(int)$c['id'],$desde,$hasta,$tipo,$motivo,$actor,$this->r::ahora()]);
+            $id=$this->r->id();$this->evento($actor,'ausencia_solicitada','colaborador',(int)$c['id'],['ausencia_id'=>$id,'desde'=>$desde,'hasta'=>$hasta,'tipo'=>$tipo]);return (int)$c['id'];
         });
     }
     public function resolverAusencia(int $actor,array $d):array
