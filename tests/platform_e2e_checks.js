@@ -243,6 +243,27 @@ module.exports = async function verifyPlatform({ browser, baseUrl, recordTest, s
         await owner.emulateMediaType('screen');
         recordTest('PLAT-11','RIDE de factura autorizada: datos originales, responsive e impresión PDF',true,'Autorización sintética por transporte de ensayo en base E2E aislada; cuatro anchos, impresión y PDF; sin llamadas al SRI.');
 
+        const serverPdf=await owner.evaluate(async id=>{const r=await fetch('/gestion/facturacion/pdf?id='+id);const b=new Uint8Array(await r.arrayBuffer());return {status:r.status,type:r.headers.get('content-type'),cache:r.headers.get('cache-control'),header:String.fromCharCode(...b.slice(0,5)),bytes:b.length};},fiscalId);
+        if(serverPdf.status!==200||serverPdf.type!=='application/pdf'||serverPdf.cache!=='private, no-store'||serverPdf.header!=='%PDF-'||serverPdf.bytes<1000)throw new Error('Server RIDE PDF must be private and downloadable.');
+        await owner.goto(`${baseUrl}/gestion/facturacion?id=${fiscalId}`,{waitUntil:'networkidle0'});
+        await fill(owner,erpForm('fiscal_correo'),{email:'fiscal.e2e@platform.test',confirmar_destinatario:'1'});await submit(owner,erpForm('fiscal_correo'));
+        const fiscalMail=query("SELECT id FROM correos_salida WHERE tipo='comprobante_fiscal' AND destinatario_email='fiscal.e2e@platform.test'");
+        if(!/^\d+$/.test(fiscalMail)||query(`SELECT estado FROM correos_salida WHERE id=${fiscalMail}`)!=='pendiente')throw new Error('Fiscal delivery must queue before SMTP.');
+        execFileSync('docker',['exec',web,'php','scripts/procesar_correos.php','--limite=100'],{stdio:['ignore','pipe','pipe']});
+        if(query(`SELECT CONCAT(estado,':',carga_cifrada IS NULL) FROM correos_salida WHERE id=${fiscalMail}`)!=='enviado:1')throw new Error('SMTP acceptance must clear encrypted fiscal attachments.');
+        const fiscalMessage=JSON.parse(fs.readFileSync(process.env.TEST_MAILBOX_PATH,'utf8')).find(m=>m.to.includes('fiscal.e2e@platform.test'));
+        if(!fiscalMessage)throw new Error('Fiscal email did not reach the isolated SMTP mailbox.');
+        for(const ext of ['xml','pdf']){
+            const part=fiscalMessage.body.split(/\r?\n--/).find(p=>p.includes('Content-Type: application/'+ext));
+            if(!part)throw new Error('Missing fiscal '+ext+' attachment in actual MIME message.');
+            const bytes=Buffer.from(part.split(/\r?\n\r?\n/).slice(1).join('\r\n\r\n').replace(/\s/g,''),'base64');
+            const expected=query(`SELECT JSON_UNQUOTE(JSON_EXTRACT(datos_json,'$.${ext}_sha256')) FROM erp_eventos WHERE tipo='fiscal_entrega_programada' AND entidad_id=${fiscalId} ORDER BY id DESC LIMIT 1`);
+            if(crypto.createHash('sha256').update(bytes).digest('hex')!==expected)throw new Error('Fiscal MIME attachment differs from the audited '+ext+' snapshot.');
+        }
+        await fill(owner,erpForm('fiscal_correo'),{email:'fiscal.e2e@platform.test',confirmar_destinatario:'1'});await submit(owner,erpForm('fiscal_correo'));
+        if(query("SELECT COUNT(*) FROM correos_salida WHERE tipo='comprobante_fiscal' AND destinatario_email='fiscal.e2e@platform.test'")!=='1'||query("SELECT COALESCE(SUM(IF(tipo='ingreso',monto_centavos,-monto_centavos)),0) FROM caja_movimientos")!==fiscalCash)throw new Error('Repeated fiscal delivery must not duplicate the queue or cash.');
+        recordTest('PLAT-12','Entrega fiscal por formulario, PDF servidor y adjuntos SMTP reales',true,'XML/PDF coinciden con las huellas auditadas, carga cifrada eliminada tras SMTP, repetición sin otro correo ni cobro.');
+
         const client = await login('carlos@correo.com');
         let response = await client.goto(`${baseUrl}/perfil`,{waitUntil:'networkidle0'});
         if (response.status() !== 200) throw new Error('Client profile unavailable.');

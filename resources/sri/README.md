@@ -11,3 +11,5 @@ Origen: [SRI, facturación electrónica](https://www.sri.gob.ec/facturacion-elec
 El encabezado del esquema W3C contiene su aviso de copyright/licencia. La ficha técnica descargada para revisión tiene SHA-256 `7333aebfbdf2cb3ba83f9fc67a7a7f0346ca59506480a260cc42f96dbdfc13c9`; el PDF no se incluye en el repositorio.
 
 El perfil SRI de firma exige XAdES-BES 1.3.2, RSA-SHA1 y tres referencias firmadas: comprobante, SignedProperties y KeyInfo. SHA-256 se usa además como huella interna de almacenamiento; no sustituye el algoritmo requerido por el receptor. No se fija el certificado TLS del SRI: se verifica contra las autoridades de confianza del sistema.
+
+El RIDE PDF se genera localmente con [Dompdf](https://github.com/dompdf/dompdf), versión resuelta en composer.lock (3.1.6 al incorporar la entrega). Su licencia LGPL y las de sus dependencias se instalan con Composer. Usa fuentes DejaVu incluidas en el paquete, caché temporal privada y ninguna fuente, imagen o URL proporcionada por el usuario.

@@ -1,0 +1,26 @@
+@page { size: A4; margin: 12mm; }
+body { font-family: "DejaVu Sans", sans-serif; font-size: 8pt; color: #111; }
+h2 { font-size: 12pt; margin: 0 0 6pt; }
+h3 { font-size: 9pt; margin: 0 0 5pt; }
+p { margin: 3pt 0; }
+.sri-test-warning { border: 2pt solid #111; text-align: center; padding: 6pt; margin-bottom: 10pt; }
+.sri-ride-heading, .sri-ride-summary { display: table; width: 100%; table-layout: fixed; }
+.sri-ride-heading > section, .sri-ride-summary > section { display: table-cell; width: 50%; vertical-align: top; padding: 6pt; }
+.sri-ride-heading > section, .sri-buyer { border: .5pt solid #777; }
+.sri-access-key { display: block; font-family: monospace; font-size: 7pt; word-wrap: break-word; }
+.sri-buyer { margin: 10pt 0; padding: 6pt; }
+.sri-lines { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.sri-lines caption { text-align: left; margin-bottom: 4pt; }
+.sri-lines th, .sri-lines td { padding: 4pt; border: .5pt solid #888; vertical-align: top; word-wrap: break-word; }
+.sri-lines th:nth-child(3) { width: 30%; }
+.sri-number { text-align: right; }
+.sri-lines thead { display: table-header-group; }
+.sri-lines tr { page-break-inside: avoid; }
+small { display: block; }
+.sri-ride-summary { margin-top: 10pt; page-break-inside: avoid; }
+.sri-totals { width: 100%; border-collapse: collapse; }
+.sri-totals th, .sri-totals td { padding: 3pt 0; vertical-align: top; }
+.sri-totals th { text-align: left; font-weight: normal; width: 72%; }
+.sri-totals td { text-align: right; }
+.sri-totals .sri-grand-total { font-weight: bold; border-top: .5pt solid #111; padding-top: 6pt; }
+footer { border-top: .5pt solid #888; margin-top: 10pt; padding-top: 6pt; font-size: 7pt; }

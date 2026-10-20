@@ -13,6 +13,12 @@ final class ErpFiscalService extends ErpService
         return \Services\Fiscal\SriRide::datos($archivo['contenido']);
     }
 
+    public function pdf(int $actor,int $id):array
+    {
+        $ride=$this->ride($actor,$id);$e=$ride['emisor'];
+        return ['contenido'=>\Services\Fiscal\SriRidePdf::generar($ride),'nombre'=>'pruebas-sri-'.$e['estab'].'-'.$e['ptoEmi'].'-'.$e['secuencial'].'-ride.pdf'];
+    }
+
     /** Descarga privada sin contactar al SRI, reservar números ni alterar la venta. */
     public function descargar(int $actor, int $id, bool $autorizado = false): array
     {

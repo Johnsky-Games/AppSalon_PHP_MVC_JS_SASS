@@ -58,6 +58,20 @@ class Email
         self::$emailsEnviados = [];
     }
 
+    /** Mensaje fiscal ya preparado con adjuntos verificados; comparte la configuración y el transporte SMTP. */
+    public static function despacharFiscal(PHPMailer $mail): array
+    {
+        try {
+            $exito=self::$transport!==null
+                ?(bool)call_user_func(self::$transport,$mail,'comprobante_fiscal',[])
+                :$mail->send();
+            if($exito&&self::$transport!==null)self::$emailsEnviados[]=['proposito'=>'comprobante_fiscal','mailer'=>$mail];
+            return ['exito'=>$exito,'error'=>$exito?null:'El servidor de correo no aceptó la entrega fiscal.'];
+        } catch(\Throwable $e) {
+            return ['exito'=>false,'error'=>self::sanearMensajeError($e->getMessage())];
+        }
+    }
+
     /**
      * Valida y sanea `APP_URL` permitiendo exclusivamente esquemas `http`/`https` y un host válido,
      * rechazando vectores como `javascript:`, `data:`, saltos de línea o comillas, con fallback seguro

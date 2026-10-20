@@ -13,6 +13,7 @@ $router->get('/gestion/integraciones',[\Controllers\ErpController::class,'integr
 $router->get('/gestion/facturacion',[\Controllers\ErpController::class,'fiscal']);
 $router->get('/gestion/facturacion/xml',[\Controllers\ErpController::class,'fiscalXml']);
 $router->get('/gestion/facturacion/ride',[\Controllers\ErpController::class,'fiscalRide']);
+$router->get('/gestion/facturacion/pdf',[\Controllers\ErpController::class,'fiscalPdf']);
 $router->get('/gestion/configuracion',[\Controllers\ErpController::class,'configuracion']);
 $router->post('/gestion/accion',[\Controllers\ErpController::class,'accion']);
 $router->get('/gestion/compras',[\Controllers\ErpController::class,'compras']);

@@ -1,7 +1,7 @@
 <?php
 /**
  * Worker y herramienta operativa de la cola de correos transaccionales (tabla `correos_salida`):
- * confirmación de cuenta, aviso de cuenta existente e invitaciones de colaboradores.
+ * confirmación/recuperación de cuenta, invitaciones y comprobantes fiscales con adjuntos.
  *
  *   php scripts/procesar_correos.php [--limite=20]        Procesa los eventos listos (modo worker, por defecto).
  *   php scripts/procesar_correos.php --estado [--json]    Diagnóstico: conteos por estado/tipo, antigüedad, fallidos.

@@ -144,7 +144,7 @@ final class ErpController
     public static function fiscal(Router $router):void
     {
         exigir_permiso('erp.cobrar');$r=new ErpRepository();$id=filter_var($_GET['id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;$ventaId=filter_var($_GET['venta_id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;
-        if($id){$documento=$r->uno('SELECT d.*,v.comprador_nombre FROM erp_fiscal_documentos d JOIN erp_ventas v ON v.id=d.venta_id WHERE d.id=?',[$id])??throw new ErpException('Documento fiscal no encontrado.',404);self::render($router,'fiscal',compact('documento'));return;}
+        if($id){$documento=$r->uno('SELECT d.*,v.comprador_nombre FROM erp_fiscal_documentos d JOIN erp_ventas v ON v.id=d.venta_id WHERE d.id=?',[$id])??throw new ErpException('Documento fiscal no encontrado.',404);$entregas=(new \Services\ErpFiscalCorreoService($r))->listar((int)$_SESSION['id'],$id);self::render($router,'fiscal',compact('documento','entregas'));return;}
         if($ventaId){
             $previa=$r->uno('SELECT id FROM erp_fiscal_documentos WHERE venta_id=?',[$ventaId]);if($previa){header('Location: /gestion/facturacion?id='.(int)$previa['id'],true,303);detener_ejecucion(303);return;}
             $datos=(new ErpVentaService($r))->detalle((int)$_SESSION['id'],$ventaId);$perfiles=$r->q('SELECT id,ruc,establecimiento,punto_emision,creado_en FROM erp_fiscal_perfiles ORDER BY id DESC LIMIT 100');
@@ -174,6 +174,12 @@ final class ErpController
         $ride=(new ErpFiscalService())->ride((int)$_SESSION['id'],$id);
         header('Cache-Control: private, no-store');header('X-Robots-Tag: noindex, nofollow');
         self::render($router,'fiscal-ride',compact('id','ride'));
+    }
+    public static function fiscalPdf():void
+    {
+        exigir_permiso('erp.cobrar');$id=filter_var($_GET['id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;
+        $doc=(new ErpFiscalService())->pdf((int)$_SESSION['id'],$id);
+        header('Content-Type: application/pdf');header('Content-Disposition: attachment; filename="'.$doc['nombre'].'"');header('Cache-Control: private, no-store');header('X-Content-Type-Options: nosniff');echo $doc['contenido'];
     }
     public static function suscripciones(Router $router):void
     {
@@ -327,6 +333,8 @@ final class ErpController
             'suscripcion_crear'=>[\Services\ErpSuscripcionService::class,'crear','suscripciones'],
             'suscripcion_estado'=>[\Services\ErpSuscripcionService::class,'estado','suscripciones'],
             'fiscal_factura'=>[\Services\ErpFiscalService::class,'factura','facturacion'],
+            'fiscal_correo'=>[\Services\ErpFiscalCorreoService::class,'programar','facturacion'],
+            'fiscal_correo_reintentar'=>[\Services\ErpFiscalCorreoService::class,'reintentar','facturacion'],
             'promocion_estado'=>[\Services\ErpPromocionService::class,'estado','promociones'],
             'promocion_crear'=>[\Services\ErpPromocionService::class,'crear','promociones'],
             'cupon_aplicar'=>[\Services\ErpPromocionService::class,'aplicar','venta'],'cupon_quitar'=>[\Services\ErpPromocionService::class,'quitar','venta'],
@@ -342,6 +350,8 @@ final class ErpController
         $accion=is_string($_POST['accion']??null)?$_POST['accion']:'';
         if(!isset($acciones[$accion])){http_response_code(422);detener_ejecucion(422);return;}
         [$clase,$metodo,$destino]=$acciones[$accion];$campoId=['compra'=>'compra_id','personal'=>'colaborador_id','prepagos'=>'prepago_id','paquetes'=>'paquete_id','suscripciones'=>'suscripcion_id'];$id=filter_var($_POST[$campoId[$destino]??'venta_id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;$completada=false;
+        $esEntrega=in_array($accion,['fiscal_correo','fiscal_correo_reintentar'],true);
+        if($esEntrega)$id=filter_var($_POST['documento_id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;
         try{
             $datos=$_POST;
             if($accion==='documento_subir'){
@@ -359,7 +369,7 @@ final class ErpController
         $ruta=match($destino){'venta'=>$id?'/ventas/detalle?id='.$id:'/pdv','compra'=>'/gestion/compras'.($id?'?id='.$id:''),'personal'=>'/gestion/personal'.($id?'?id='.$id:''),'seguimiento'=>'/gestion/seguimiento'.($id?'?id='.$id:''),'prepagos'=>'/gestion/prepagos'.($id?'?id='.$id:''),'paquetes'=>'/gestion/paquetes'.($id?'?id='.$id:''),'suscripciones'=>'/gestion/suscripciones'.($id?'?id='.$id:''),default=>'/gestion/'.$destino};
         if($destino==='documentos')$ruta='/gestion/documentos?'.http_build_query(['entidad'=>is_string($_POST['entidad']??null)?$_POST['entidad']:'','id'=>(int)($_POST['entidad_id']??0)]);
         if($destino==='consumos')$ruta='/agenda/detalle?id='.(int)($_POST['cita_id']??0);
-        if($destino==='facturacion')$ruta='/gestion/facturacion?'.($completada?'id=':'venta_id=').$id;
+        if($destino==='facturacion')$ruta='/gestion/facturacion?'.(($completada||$esEntrega)?'id=':'venta_id=').$id;
         header('Location: '.$ruta,true,303);detener_ejecucion(303);
     }
 }
