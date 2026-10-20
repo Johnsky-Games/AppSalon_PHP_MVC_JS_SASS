@@ -78,6 +78,9 @@ final class ErpFiniquitoIntegrationTest extends TestCase
         $this->fin()->aprobar($this->owner,$this->d(['finiquito_id'=>$id]));$f=$this->fila($id);self::assertSame('aprobado',$f['estado']);
         $o=$this->r->uno('SELECT * FROM erp_obligaciones WHERE id=?',[(int)$f['obligacion_id']]);self::assertSame('finiquito',$o['origen']);self::assertSame(100554,(int)$o['monto_centavos']);self::assertSame($this->colA,(int)$o['colaborador_id']);
         self::assertSame(4,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_nomina_finiquito_lineas WHERE finiquito_id=? AND activa=1',[$id])['n']);
+        // Una nómina cuyos décimos están en un finiquito vigente no se anula: se anula primero el finiquito.
+        $k9=(int)$this->r->uno("SELECT id FROM erp_nomina_corridas WHERE anio=2026 AND mes=9 AND estado='aprobada'")['id'];
+        $e=$this->rechazo(fn()=>$this->nomina()->anular($this->owner,$this->d(['corrida_id'=>$k9,'motivo'=>'Intento con finiquito vigente'])),409);self::assertStringContainsString('finiquito vigente',$e->getMessage());
         // Idempotencia: aprobar otra vez no duplica.
         $this->fin()->aprobar($this->owner,$this->d(['finiquito_id'=>$id]));self::assertSame(1,(int)$this->r->uno("SELECT COUNT(*) n FROM erp_obligaciones WHERE origen='finiquito'")['n']);
         // Los décimos incluidos ya no se pueden liquidar por separado (no se pagan dos veces).
@@ -102,6 +105,8 @@ final class ErpFiniquitoIntegrationTest extends TestCase
         self::assertTrue($cont->balanceComprobacion('2099-12-31')['cuadra']);self::assertSame([],$cont->integridad());
         // Anular antes de pagar: cancela la obligación, libera los décimos y revierte el asiento.
         $this->fin()->anular($this->owner,$this->d(['finiquito_id'=>$id,'motivo'=>'Fecha de salida mal capturada']));
+        $this->nomina()->anular($this->owner,$this->d(['corrida_id'=>(int)$this->r->uno("SELECT id FROM erp_nomina_corridas WHERE anio=2026 AND mes=9 AND estado='aprobada'")['id'],'motivo'=>'Con el finiquito anulado ya puede anularse']));self::assertSame('anulada',$this->r->uno('SELECT estado FROM erp_nomina_corridas WHERE anio=2026 AND mes=9 ORDER BY id DESC LIMIT 1')['estado']);
+        $this->corrida(9);
         self::assertSame('anulado',$this->fila($id)['estado']);self::assertSame(0,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_nomina_finiquito_lineas WHERE activa=1')['n']);
         (new ErpIntegracionService($this->r))->procesar(['contabilidad'=>$a],100);
         self::assertSame(0,$saldo('descuentos_nomina'));self::assertSame(18034,$saldo('beneficios_por_pagar'),'La provisión vuelve a estar pendiente');self::assertTrue($cont->balanceComprobacion('2099-12-31')['cuadra']);
