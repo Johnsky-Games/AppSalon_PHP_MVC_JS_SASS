@@ -51,15 +51,22 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
         $fecha=substr((string)($documento['creado_en']??''),0,10);if(!preg_match('/^\d{4}-\d{2}-\d{2}$/D',$fecha))throw new \InvalidArgumentException('Evento sin fecha.');
         if($fecha<$inicio)return ['estado'=>'confirmado','referencia_externa'=>'previo-a-inicio-contable'];
         if(in_array($documento['tipo']??'',self::SIN_ASIENTO,true))return ['estado'=>'confirmado','referencia_externa'=>'sin-asiento:'.$documento['tipo']];
-        $numero=Transaccion::ejecutar($this->r->db,function()use($referencia,$documento,$fecha){
-            $asientos=$this->reglas($documento);if(!$asientos)throw new ErpException('El evento «'.($documento['tipo']??'?').'» no tiene regla contable.',409);
-            $fechaContable=$this->fechaContable($fecha);$primero=null;
+        $numero=Transaccion::ejecutar($this->r->db,function()use($referencia,$documento,$fecha,$inicio){
+            $asientos=$this->reglas($documento);if($asientos===null)throw new ErpException('El evento «'.($documento['tipo']??'?').'» no tiene regla contable.',409);
+            if(!$asientos)return null;
+            // La nómina se contabiliza en el mes que devenga (fin de mes) cuando ese mes es posterior al inicio contable; el resto, el día del hecho.
+            $base=$fecha;$devengo=$documento['datos']['fecha']??null;
+            if(($documento['tipo']??'')==='nomina_aprobada'&&is_string($devengo)&&preg_match('/^\d{4}-\d{2}-\d{2}$/D',$devengo)&&$devengo>=$inicio&&$devengo<=$fecha)$base=$devengo;
+            $fechaContable=$this->fechaContable($base);$primero=null;
             foreach($asientos as $i=>$a){
-                $id=$this->c->publicar(0,['fecha'=>$fechaContable,'tipo'=>'automatico','origen'=>'outbox:'.$referencia.'#'.($i+1),'concepto'=>mb_substr($a['concepto'].($fechaContable!==$fecha?' (hecho del '.$fecha.')':''),0,240),'lineas'=>$this->lineas($a['lineas'])]);
+                $spec=['fecha'=>$fechaContable,'tipo'=>'automatico','origen'=>'outbox:'.$referencia.'#'.($i+1),'concepto'=>mb_substr($a['concepto'].($fechaContable!==$base?' (hecho del '.$base.')':''),0,240),'lineas'=>$this->lineas($a['lineas'])];
+                if(isset($a['reversa_de'])){$spec['tipo']='reverso';$spec['reversa_de_id']=(int)$a['reversa_de'];}
+                $id=$this->c->publicar(0,$spec);
                 $primero??=$id;
             }
             return (int)$this->r->uno('SELECT numero FROM erp_cont_asientos WHERE id=?',[$primero])['numero'];
         });
+        if($numero===null)return ['estado'=>'confirmado','referencia_externa'=>'sin-asiento:'.($documento['tipo']??'')];
         return ['estado'=>'confirmado','referencia_externa'=>'AS-'.$numero];
     }
     /** Un hecho de un período ya cerrado se registra hoy (contabilización tardía); el concepto conserva su fecha original. */
@@ -74,14 +81,14 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
         $salida=[];
         foreach($lineas as $l){
             $d=(int)($l['debe']??0);$h=(int)($l['haber']??0);if($d===0&&$h===0)continue;
-            $salida[]=['cuenta_id'=>$this->c->rolCuenta($l['rol']),'debe'=>$d,'haber'=>$h,'contacto_id'=>$l['contacto_id']??null,'referencia'=>$l['referencia']??null];
+            $salida[]=['cuenta_id'=>isset($l['cuenta_id'])?(int)$l['cuenta_id']:$this->c->rolCuenta($l['rol']),'debe'=>$d,'haber'=>$h,'contacto_id'=>$l['contacto_id']??null,'referencia'=>$l['referencia']??null];
         }
         return $salida;
     }
 
     // ---------------------------------------------------------------- reglas por evento
-    /** @return list<array{concepto:string,lineas:list<array>}> */
-    private function reglas(array $e):array
+    /** @return ?list<array{concepto:string,lineas:list<array>}> null = sin regla (falla a la vista); [] = nada que contabilizar */
+    private function reglas(array $e):?array
     {
         $d=$e['datos']??[];$id=(int)($e['entidad_id']??0);
         return match($e['tipo']??''){
@@ -100,7 +107,10 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
             'obligacion_pagada'=>$this->pagoObligacion($id,(int)$d['monto'],(string)$d['metodo']),
             'comision_liquidada'=>$this->comision($id,(int)$d['monto']),
             'activo_registrado'=>[['concepto'=>'Activo registrado '.($d['codigo']??''),'lineas'=>[['rol'=>'activos_fijos','debe'=>(int)$d['costo']],['rol'=>'recepciones_por_facturar','haber'=>(int)$d['costo']]]]],
-            default=>[],
+            'nomina_aprobada'=>$this->nominaAprobada($id,$d),
+            'nomina_anulada'=>$this->nominaAnulada($id,$d),
+            'nomina_beneficio_liquidado'=>[['concepto'=>'Liquidación de '.str_replace('_',' ',(string)$d['tipo']).' del colaborador '.(int)$d['colaborador_id'],'lineas'=>[['rol'=>'beneficios_por_pagar','debe'=>(int)$d['monto']],['rol'=>'sueldos_por_pagar','haber'=>(int)$d['monto'],'referencia'=>'obligación '.(int)$d['obligacion_id']]]]],
+            default=>null,
         };
     }
     /** Tercero de la venta: el contacto de mostrador o, en ventas de una cita, el contacto vinculado a la cuenta del cliente (si lo hay). */
@@ -217,7 +227,7 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
     private function obligacion(int $id):array {return $this->r->uno('SELECT * FROM erp_obligaciones WHERE id=?',[$id])??throw new ErpException('Obligación no encontrada.',404);}
     private function pagoObligacion(int $id,int $monto,string $metodo):array
     {
-        $o=$this->obligacion($id);$rol=$o['origen']==='comision'?'comisiones_por_pagar':'proveedores';
+        $o=$this->obligacion($id);$rol=match($o['origen']){'comision'=>'comisiones_por_pagar','nomina','nomina_beneficio'=>'sueldos_por_pagar','iess'=>'iess_por_pagar','sri_ir'=>'ir_por_pagar',default=>'proveedores'};
         return [['concepto'=>'Pago de la obligación '.$id,'lineas'=>[['rol'=>$rol,'debe'=>$monto,'contacto_id'=>$rol==='proveedores'&&$o['contacto_id']?(int)$o['contacto_id']:null,'referencia'=>'obligación '.$id],['rol'=>$this->metodo($metodo),'haber'=>$monto]]]];
     }
     private function creditoProveedor(int $id,int $monto):array
@@ -234,6 +244,27 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
     private function comision(int $liquidacion,int $monto):array
     {
         return [['concepto'=>'Comisión liquidada '.$liquidacion,'lineas'=>[['rol'=>'gasto_comisiones','debe'=>$monto,'referencia'=>'liquidación '.$liquidacion],['rol'=>'comisiones_por_pagar','haber'=>$monto,'referencia'=>'liquidación '.$liquidacion]]]];
+    }
+
+    // Nómina: gasto de sueldos, comisiones, beneficios y aportes patronales contra lo que se debe al colaborador, al IESS, al SRI y a los beneficios acumulados.
+    private function nominaAprobada(int $corrida,array $t):array
+    {
+        return [['concepto'=>'Nómina '.($t['periodo']??'').' (corrida '.$corrida.')','lineas'=>[
+            ['rol'=>'gasto_sueldos','debe'=>(int)$t['sueldos'],'referencia'=>'corrida '.$corrida],['rol'=>'gasto_comisiones','debe'=>(int)$t['comisiones']],['rol'=>'gasto_beneficios','debe'=>(int)$t['beneficios_gasto']],['rol'=>'gasto_aportes','debe'=>(int)$t['patronal']],
+            ['rol'=>'sueldos_por_pagar','haber'=>(int)$t['neto']],['rol'=>'iess_por_pagar','haber'=>(int)$t['iess']],['rol'=>'ir_por_pagar','haber'=>(int)$t['ir']],['rol'=>'beneficios_por_pagar','haber'=>(int)$t['prov']],['rol'=>'descuentos_nomina','haber'=>(int)$t['descuentos']]]]];
+    }
+    /** Anular una nómina aprobada revierte su asiento. Si el asiento original nunca se generó (hecho previo al inicio contable) no hay nada que revertir; si aún está pendiente, espera. */
+    private function nominaAnulada(int $corrida,array $d):array
+    {
+        $ev=(int)$d['aprobacion_evento_id'];$ref='ERP-'.$ev.'-contabilidad';
+        $orig=$this->r->uno('SELECT id,numero FROM erp_cont_asientos WHERE origen=?',['outbox:'.$ref.'#1']);
+        if(!$orig){
+            $o=$this->r->uno('SELECT estado,respuesta_json FROM erp_integraciones_outbox WHERE evento_id=? AND destino=\'contabilidad\'',[$ev]);
+            if($o&&$o['estado']==='confirmado')return [];
+            throw new ErpException('La aprobación de la nómina aún no está contabilizada: el reverso espera.',409);
+        }
+        $lineas=[];foreach($this->r->q('SELECT * FROM erp_cont_lineas WHERE asiento_id=? ORDER BY nro',[(int)$orig['id']]) as $l)$lineas[]=['cuenta_id'=>(int)$l['cuenta_id'],'debe'=>(int)$l['haber_centavos'],'haber'=>(int)$l['debe_centavos'],'contacto_id'=>$l['contacto_id'],'referencia'=>$l['referencia']];
+        return [['concepto'=>'Anulación de la nómina (corrida '.$corrida.', asiento '.$orig['numero'].')','reversa_de'=>(int)$orig['id'],'lineas'=>$lineas]];
     }
 
     // ---------------------------------------------------------------- prestación de servicios (hecho propio, sin evento)
