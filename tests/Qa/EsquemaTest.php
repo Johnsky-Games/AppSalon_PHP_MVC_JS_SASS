@@ -444,7 +444,8 @@ final class EsquemaTest extends R2bCase
         // 035: planes, paquetes financiados y asignaciones de sesiones.
         // 036: contratos y ciclos de suscripción.
         // 040: vínculos devolución↔nota de crédito y líneas acreditadas (+2).
-        $this->assertSame(106, $n, 'tablas del esquema migrado (incluye migraciones y equipo_mutex)');
+        // 041: verificaciones de comprobantes rechazados con el SRI (+1).
+        $this->assertSame(107, $n, 'tablas del esquema migrado (incluye migraciones y equipo_mutex)');
         // La documentación citaba 30 (tras la 015) y el encabezado de backup_db.php "13 tablas": ya no describen la realidad.
         $this->assertFalse(str_contains((string)file_get_contents(self::RAIZ . '/scripts/backup_db.php'), '13 tablas en total'), 'documentación obsoleta en scripts/backup_db.php: dice "13 tablas en total" y el esquema migrado tiene 35');
     }

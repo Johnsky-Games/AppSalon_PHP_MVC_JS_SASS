@@ -151,7 +151,13 @@ final class ErpController
             $origen=$documento['tipo']==='04'?$r->uno('SELECT id,numero,estado FROM erp_fiscal_documentos WHERE id=?',[(int)$documento['documento_origen_id']]):null;
             $acreditadas=$documento['tipo']==='04'?$r->q('SELECT d.id,d.linea_id,l.nombre,d.cantidad_milesimas,d.monto_centavos,d.motivo FROM erp_fiscal_nc_devoluciones n JOIN erp_devoluciones d ON d.id=n.devolucion_id JOIN erp_venta_lineas l ON l.id=d.linea_id WHERE n.documento_id=? ORDER BY d.id',[$id]):[];
             $pendientes=($documento['tipo']==='01'&&$documento['estado']==='autorizada')?$r->q('SELECT d.id,l.nombre,d.cantidad_milesimas,d.monto_centavos,d.motivo,d.creado_en FROM erp_devoluciones d JOIN erp_venta_lineas l ON l.id=d.linea_id WHERE d.venta_id=? AND NOT EXISTS(SELECT 1 FROM erp_fiscal_nc_devoluciones n WHERE n.devolucion_id=d.id) ORDER BY d.id',[(int)$documento['venta_id']]):[];
-            self::render($router,'fiscal',compact('documento','entregas','notas','origen','acreditadas','pendientes'));return;
+            $sucesor=$r->uno('SELECT id,numero,estado FROM erp_fiscal_documentos WHERE sustituye_a_id=?',[$id]);
+            $predecesor=$documento['sustituye_a_id']?$r->uno('SELECT id,numero,estado FROM erp_fiscal_documentos WHERE id=?',[(int)$documento['sustituye_a_id']]):null;
+            $verificacion=$documento['estado']==='rechazada'?$r->uno('SELECT * FROM erp_fiscal_verificaciones WHERE documento_id=? ORDER BY id DESC LIMIT 1',[$id]):null;
+            $perfilesSust=($documento['estado']==='rechazada'&&$documento['tipo']==='01'&&!$sucesor)?$r->q('SELECT id,ruc,establecimiento,punto_emision,creado_en FROM erp_fiscal_perfiles ORDER BY id DESC LIMIT 100'):[];
+            $lineasSust=$perfilesSust?$r->q('SELECT id,nombre,impuesto_pb FROM erp_venta_lineas WHERE venta_id=? ORDER BY id',[(int)$documento['venta_id']]):[];
+            $pendientesNc=($documento['tipo']==='04'&&$documento['estado']==='rechazada'&&!$sucesor)?$r->q('SELECT d.id,l.nombre,d.cantidad_milesimas,d.monto_centavos FROM erp_devoluciones d JOIN erp_venta_lineas l ON l.id=d.linea_id WHERE d.venta_id=? AND NOT EXISTS(SELECT 1 FROM erp_fiscal_nc_devoluciones n WHERE n.devolucion_id=d.id) ORDER BY d.id',[(int)$documento['venta_id']]):[];
+            self::render($router,'fiscal',compact('documento','entregas','notas','origen','acreditadas','pendientes','sucesor','predecesor','verificacion','perfilesSust','lineasSust','pendientesNc'));return;
         }
         if($ventaId){
             $previa=$r->uno('SELECT id FROM erp_fiscal_documentos WHERE venta_id=? AND tipo=\'01\'',[$ventaId]);if($previa){header('Location: /gestion/facturacion?id='.(int)$previa['id'],true,303);detener_ejecucion(303);return;}
@@ -163,7 +169,7 @@ final class ErpController
         $estado=is_string($q['estado']??null)?$q['estado']:'';if(!in_array($estado,['','pendiente','recibida','autorizada','rechazada'],true))throw new ErpException('Estado fiscal no válido.');
         $where=' WHERE d.creado_en>=? AND d.creado_en<DATE_ADD(?,INTERVAL 1 DAY)';$args=[$desde,$hasta];if($estado!==''){$where.=' AND d.estado=?';$args[]=$estado;}
         $pagina=filter_var($q['pagina']??1,FILTER_VALIDATE_INT,['options'=>['min_range'=>1,'max_range'=>100000]])?:1;$total=(int)$r->uno('SELECT COUNT(*) n FROM erp_fiscal_documentos d'.$where,$args)['n'];$paginas=max(1,(int)ceil($total/25));$pagina=min($pagina,$paginas);
-        $filas=$r->q('SELECT d.id,d.tipo,d.numero,d.estado,d.creado_en,v.comprador_nombre FROM erp_fiscal_documentos d JOIN erp_ventas v ON v.id=d.venta_id'.$where.' ORDER BY d.id DESC LIMIT 25 OFFSET '.(($pagina-1)*25),$args);
+        $filas=$r->q('SELECT d.id,d.tipo,d.numero,d.estado,d.creado_en,d.sustituye_a_id,v.comprador_nombre FROM erp_fiscal_documentos d JOIN erp_ventas v ON v.id=d.venta_id'.$where.' ORDER BY d.id DESC LIMIT 25 OFFSET '.(($pagina-1)*25),$args);
         self::render($router,'fiscal',compact('filas','desde','hasta','estado','pagina','paginas','total'));
     }
     public static function fiscalXml():void
@@ -342,6 +348,9 @@ final class ErpController
             'suscripcion_estado'=>[\Services\ErpSuscripcionService::class,'estado','suscripciones'],
             'fiscal_factura'=>[\Services\ErpFiscalService::class,'factura','facturacion'],
             'fiscal_nota_credito'=>[\Services\ErpFiscalService::class,'notaCredito','facturacion'],
+            'fiscal_verificar'=>[\Services\ErpFiscalService::class,'solicitarVerificacion','facturacion'],
+            'fiscal_sustituir_factura'=>[\Services\ErpFiscalService::class,'sustituirFactura','facturacion'],
+            'fiscal_sustituir_nc'=>[\Services\ErpFiscalService::class,'sustituirNotaCredito','facturacion'],
             'fiscal_correo'=>[\Services\ErpFiscalCorreoService::class,'programar','facturacion'],
             'fiscal_correo_reintentar'=>[\Services\ErpFiscalCorreoService::class,'reintentar','facturacion'],
             'promocion_estado'=>[\Services\ErpPromocionService::class,'estado','promociones'],
@@ -359,7 +368,7 @@ final class ErpController
         $accion=is_string($_POST['accion']??null)?$_POST['accion']:'';
         if(!isset($acciones[$accion])){http_response_code(422);detener_ejecucion(422);return;}
         [$clase,$metodo,$destino]=$acciones[$accion];$campoId=['compra'=>'compra_id','personal'=>'colaborador_id','prepagos'=>'prepago_id','paquetes'=>'paquete_id','suscripciones'=>'suscripcion_id'];$id=filter_var($_POST[$campoId[$destino]??'venta_id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;$completada=false;
-        $esEntrega=in_array($accion,['fiscal_correo','fiscal_correo_reintentar','fiscal_nota_credito'],true);
+        $esEntrega=in_array($accion,['fiscal_correo','fiscal_correo_reintentar','fiscal_nota_credito','fiscal_verificar','fiscal_sustituir_factura','fiscal_sustituir_nc'],true);
         if($esEntrega)$id=filter_var($_POST[$accion==='fiscal_nota_credito'?'factura_id':'documento_id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;
         try{
             $datos=$_POST;
@@ -368,7 +377,7 @@ final class ErpController
                 if(!is_array($f)||($f['error']??-1)!==UPLOAD_ERR_OK||!is_string($f['tmp_name']??null)||!is_uploaded_file($f['tmp_name'])||filesize($f['tmp_name'])>5*1024*1024)throw new ErpException('Selecciona un archivo válido de hasta 5 MB.');
                 $datos['contenido']=file_get_contents($f['tmp_name']);$datos['nombre_archivo']=$f['name'];
             }
-            $resultado=(new $clase())->$metodo((int)$_SESSION['id'],$datos);$id=in_array($accion,['rh_nomina','paquete_plan','paquete_archivar'],true)?0:(int)$resultado['recurso_id'];$completada=true;
+            $resultado=(new $clase())->$metodo((int)$_SESSION['id'],$datos);if($accion!=='fiscal_verificar')$id=in_array($accion,['rh_nomina','paquete_plan','paquete_archivar'],true)?0:(int)$resultado['recurso_id'];$completada=true;
             $_SESSION['erp_alertas']=['exito'=>[!empty($resultado['repetida'])?'Esta operación ya estaba registrada.':'Operación registrada correctamente.']];
         }catch(ErpException $e){
             if(in_array($e->getCode(),[403,404],true)){\Classes\ErrorResponse::render($e->getCode());return;}

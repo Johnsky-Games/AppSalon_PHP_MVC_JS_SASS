@@ -10,7 +10,7 @@
     <p>Clave de acceso:</p><input aria-label="Clave de acceso SRI" readonly value="<?= s($documento['clave_acceso']) ?>" style="width:100%;min-width:0">
     <p>Intentos de proceso: <?= (int)$documento['intentos'] ?> · Última actualización <?= s($documento['actualizado_en']) ?></p>
     <?php if($documento['estado']==='recibida'): ?><p>El SRI recibió el XML. Aún falta su autorización; el supervisor consultará la misma clave.</p><?php endif; ?>
-    <?php if($documento['estado']==='rechazada'): ?><p>El rechazo requiere revisión. Conserva este documento y su número; este piloto todavía no permite corregirlo ni emitir una sustitución.</p><?php endif; ?>
+    <?php if($documento['estado']==='rechazada'): ?><p>El SRI rechazó este comprobante. Se conserva con su número, clave y respuesta; la corrección se hace emitiendo un documento sustituto (abajo).</p><?php endif; ?>
     <?php if($respuesta): ?>
         <?php if(isset($respuesta['mensaje'])): ?><p><?= s($respuesta['mensaje']) ?></p><?php endif; ?>
         <?php foreach($respuesta['mensajes']??[] as $mensaje): ?><p><?= s($mensaje['identificador'].' · '.$mensaje['mensaje'].' · '.$mensaje['informacionAdicional']) ?></p><?php endforeach; ?>
@@ -18,6 +18,29 @@
     <?php endif; ?>
     <nav class="ops-toolbar"><a href="/gestion/facturacion/xml?id=<?= (int)$documento['id'] ?>">Descargar XML firmado de prueba</a><?php if($documento['estado']==='autorizada'): ?><a href="/gestion/facturacion/xml?id=<?= (int)$documento['id'] ?>&amp;formato=autorizado">Descargar XML con autorización de pruebas</a><a href="/gestion/facturacion/ride?id=<?= (int)$documento['id'] ?>">Ver RIDE / imprimir</a><a href="/gestion/facturacion/pdf?id=<?= (int)$documento['id'] ?>">Descargar RIDE PDF</a><?php endif; ?><a href="/ventas/detalle?id=<?= (int)$documento['venta_id'] ?>">Venta de origen</a><a href="/gestion/facturacion">Directorio fiscal</a></nav>
 </section>
+<?php if($documento['estado']==='rechazada' || $predecesor || $sucesor): ?>
+<section class="ui-card"><h2>Corrección por sustitución</h2>
+<?php if($predecesor): ?><p>Este documento sustituye al <?= $esNota?'nota de crédito':'factura' ?> rechazado <a href="?id=<?= (int)$predecesor['id'] ?>"><?= s($predecesor['numero']) ?></a>, que se conserva intacto (XML, clave, número y respuesta del SRI).</p><?php endif; ?>
+<?php if($sucesor): ?><p>Fue sustituido por <a href="?id=<?= (int)$sucesor['id'] ?>"><?= s($sucesor['numero']) ?></a> (<?= s($sucesor['estado']) ?>). Este rechazo queda como evidencia histórica; no se puede sustituir otra vez.</p>
+<?php elseif($documento['estado']==='rechazada'): ?>
+<p>Un comprobante rechazado no se edita ni se reutiliza: se conserva y se emite uno nuevo con otro número y otra clave. Antes de permitirlo se contrasta con el SRI que realmente no esté autorizado.</p>
+<?php if(!$verificacion): ?>
+<?php $formulario=['accion'=>'fiscal_verificar','ocultos'=>['documento_id'=>$documento['id']],'campos'=>[],'boton'=>'Verificar estado con el SRI'];include __DIR__.'/_formulario.php'; ?>
+<?php elseif($verificacion['estado']==='autorizado_en_sri'): ?><p role="alert"><strong>El SRI reporta este comprobante como autorizado.</strong> No se puede sustituir; la administración debe conciliar el estado antes de continuar.</p>
+<?php elseif($verificacion['estado']==='confirmado'): ?><p>Rechazo confirmado con el SRI el <?= s($verificacion['verificado_en']) ?> (válido 120 minutos).</p>
+<?php if($esNota): $opcionesNc=[];foreach($pendientesNc as $p)$opcionesNc[$p['id']]='Devolución #'.$p['id'].' · '.$p['nombre'].' · '.$dinero($p['monto_centavos']); ?>
+<p>La nota sustituta conserva todas las devoluciones de la rechazada; puedes sumar otras aún no acreditadas.</p>
+<?php $formulario=['accion'=>'fiscal_sustituir_nc','ocultos'=>['documento_id'=>$documento['id']],'campos'=>($opcionesNc?['devolucion_ids'=>['etiqueta'=>'Devoluciones adicionales (opcional)','tipo'=>'casillas','opciones'=>$opcionesNc,'requerido'=>false]]:[])+['motivo'=>['etiqueta'=>'Razón de la modificación (corregida)','valor'=>$fiscalDoc['motivo'],'longitud'=>300]],'boton'=>'Preparar y firmar nota sustituta de prueba'];include __DIR__.'/_formulario.php'; ?>
+<?php elseif($perfilesSust): $ops=[];foreach($perfilesSust as $perfil)$ops[$perfil['id']]=$perfil['ruc'].' · '.$perfil['establecimiento'].'-'.$perfil['punto_emision'].' · versión '.$perfil['creado_en'];
+    $campos=['perfil_id'=>['etiqueta'=>'Emisor y punto de emisión de pruebas','tipo'=>'select','opciones'=>$ops,'valor'=>$documento['perfil_id']],'comprador[tipo]'=>['etiqueta'=>'Identificación fiscal','tipo'=>'select','opciones'=>['04'=>'RUC','05'=>'Cédula','06'=>'Pasaporte','08'=>'Identificación del exterior'],'valor'=>$fiscalDoc['comprador']['tipo']],'comprador[identificacion]'=>['etiqueta'=>'Número de identificación fiscal','valor'=>$fiscalDoc['comprador']['identificacion'],'longitud'=>20],'comprador[nombre]'=>['etiqueta'=>'Nombre o razón social fiscal','valor'=>$fiscalDoc['comprador']['nombre'],'longitud'=>300],'forma_pago'=>['etiqueta'=>'Forma pactada para este comprobante de pruebas','tipo'=>'select','opciones'=>['01'=>'Sin utilización del sistema financiero','20'=>'Otros con utilización del sistema financiero']]];
+    $codigos=[500=>'5',800=>'8',1200=>'2',1300=>'10',1400=>'3',1500=>'4'];
+    foreach($lineasSust as $linea){$pb=(int)$linea['impuesto_pb'];$ops2=$pb===0?['0'=>'Tarifa 0 %','6'=>'No objeto de impuesto','7'=>'Exento de IVA']:(isset($codigos[$pb])?[$codigos[$pb]=>number_format($pb/100,2).' %']:[]);$campos['categorias_iva['.(int)$linea['id'].']']=['etiqueta'=>'Categoría IVA · '.$linea['nombre'],'tipo'=>'select','opciones'=>$ops2];}
+    $formulario=['accion'=>'fiscal_sustituir_factura','ocultos'=>['documento_id'=>$documento['id']],'campos'=>$campos,'boton'=>'Preparar y firmar factura sustituta de prueba'];include __DIR__.'/_formulario.php'; ?>
+<?php endif; ?>
+<?php else: ?><p>Verificación solicitada el <?= s($verificacion['solicitado_en']) ?>: <?= $verificacion['estado']==='incierta'?'respuesta incierta del SRI; se volverá a consultar la misma clave.':'pendiente del supervisor (scripts/procesar_erp.php).' ?> Aún no se puede sustituir.</p>
+<?php endif; ?>
+<?php endif; ?></section>
+<?php endif; ?>
 <?php if(!$esNota&&$documento['estado']==='autorizada'): ?>
 <section class="ui-card"><h2>Notas de crédito</h2>
 <?php if($notas): ?><div class="ops-table-wrap"><table class="ops-table"><thead><tr><th>Número</th><th>Estado SRI</th><th>Preparada</th></tr></thead><tbody><?php foreach($notas as $nota): ?><tr><td><a href="?id=<?= (int)$nota['id'] ?>"><?= s($nota['numero']) ?></a></td><td><?= s($nota['estado']) ?></td><td><?= s($nota['creado_en']) ?></td></tr><?php endforeach; ?></tbody></table></div><?php else: ?><p>Esta factura no tiene notas de crédito.</p><?php endif; ?>
@@ -64,7 +87,7 @@ endif; ?>
     <button class="boton">Consultar</button>
 </form>
 <div class="ops-table-wrap"><table class="ops-table"><caption><?= (int)$total ?> comprobantes de prueba</caption><thead><tr><th>Tipo</th><th>Número</th><th>Comprador de la venta</th><th>Preparado</th><th>Estado SRI</th></tr></thead><tbody>
-    <?php foreach($filas as $fila): ?><tr><td><?= $fila['tipo']==='04'?'Nota de crédito':'Factura' ?></td><td><a href="?id=<?= (int)$fila['id'] ?>"><?= s($fila['numero']) ?></a></td><td><?= s($fila['comprador_nombre']) ?></td><td><?= s($fila['creado_en']) ?></td><td><?= s($fila['estado']) ?></td></tr><?php endforeach; ?>
+    <?php foreach($filas as $fila): ?><tr><td><?= $fila['tipo']==='04'?'Nota de crédito':'Factura' ?><?= $fila['sustituye_a_id']?' (sustituta)':'' ?></td><td><a href="?id=<?= (int)$fila['id'] ?>"><?= s($fila['numero']) ?></a></td><td><?= s($fila['comprador_nombre']) ?></td><td><?= s($fila['creado_en']) ?></td><td><?= s($fila['estado']) ?></td></tr><?php endforeach; ?>
     <?php if(!$filas): ?><tr><td colspan="5">No hay documentos para estos filtros.</td></tr><?php endif; ?>
 </tbody></table></div>
 <nav class="ops-toolbar" aria-label="Páginas de facturación"><span>Página <?= (int)$pagina ?> de <?= (int)$paginas ?></span><?php foreach(['Anterior'=>$pagina-1,'Siguiente'=>$pagina+1] as $texto=>$n):if($n<1||$n>$paginas)continue; ?><a href="?<?= s(http_build_query(['desde'=>$desde,'hasta'=>$hasta,'estado'=>$estado,'pagina'=>$n])) ?>"><?= s($texto) ?></a><?php endforeach; ?></nav>
