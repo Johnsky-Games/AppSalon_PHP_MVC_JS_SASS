@@ -13,6 +13,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process');
+const { registrarRed, esperarDisponibilidadEstable, clicEstable, diagnosticoReserva, abrirNavegador } = require('./e2e_sincronizacion');
 
 function consultarHorariosEnMySql(diaSemana) {
     const dbContainer = process.env.TEST_DB_CONTAINER;
@@ -153,7 +154,7 @@ async function runBrowserTests() {
         }
     }
 
-    const browser = await puppeteer.launch({
+    const browser = await abrirNavegador(puppeteer, {
         executablePath: CHROME_PATH,
         headless: 'new',
         args: [
@@ -165,6 +166,7 @@ async function runBrowserTests() {
     });
 
     const page = await browser.newPage();
+    const red = registrarRed(page);
 
     async function abrirFormulario(selector) {
         const resumen = await page.evaluateHandle(sel => {
@@ -1132,6 +1134,8 @@ async function runBrowserTests() {
         }, { fecha: validDate, csrf: csrfTokenCliente });
 
         await page.waitForSelector(`#listado-mis-citas .btn-cancelar-cita[data-cita-id="${citaCancelarClienteId}"]`, { timeout: 5000 });
+        // Cancelar relanza la consulta de disponibilidad (la selección vigente debe sobrevivir al repintado de la lista).
+        const disponibilidadTrasCancelar = page.waitForResponse(res => res.url().includes('/api/disponibilidad'), { timeout: 15000 });
         await Promise.all([
             page.waitForResponse(res => res.url().includes('/api/eliminar') && res.request().method() === 'POST'),
             page.click(`#listado-mis-citas .btn-cancelar-cita[data-cita-id="${citaCancelarClienteId}"]`)
@@ -1144,6 +1148,16 @@ async function runBrowserTests() {
             { timeout: 5000 },
             citaCancelarClienteId
         );
+        // Sincronizar con la interfaz, no con el tiempo: la consulta terminó, la lista está pintada y la geometría quieta.
+        await disponibilidadTrasCancelar;
+        await esperarDisponibilidadEstable(page);
+        const seleccionTrasRepintar = await page.evaluate(() => ({
+            hora: document.querySelector('#hora')?.value,
+            marcado: document.querySelector('#contenedor-horarios-disponibles .intervalo-btn[aria-pressed="true"]')?.dataset.inicio || null
+        }));
+        if (seleccionTrasRepintar.hora !== '11:30' || seleccionTrasRepintar.marcado !== '11:30') {
+            throw new Error(`Tras repintar la disponibilidad la selección debía seguir reflejada: ${JSON.stringify(seleccionTrasRepintar)}`);
+        }
 
         recordTest('RES-01', 'Reserva con profesional en POST /api/citas, descuento de ocupación, rechazo 409 por solapamiento y cancelación desde #mis-citas en UI', true,
             `Cita ID ${citaTemporalId} [10:00, 11:00) creada y descontada; solape 10:30 rechazado con 409; cita ${citaCancelarClienteId} [14:00, 15:00) visualizada y cancelada por el cliente en #mis-citas.`);
@@ -1153,7 +1167,7 @@ async function runBrowserTests() {
         // ------------------------------------------------------------------
         console.log('\n>>> [RECORRIDO 4] Resumen completo de reserva con profesional, envío real vía fetch POST y SweetAlert2...');
 
-        await page.click('#siguiente');
+        await clicEstable(page, '#siguiente');
         await page.waitForFunction(() => document.querySelector('#paso-3.mostrar') !== null);
 
         const textoResumenCompleto = await page.$eval('.contenido-resumen', el => el.textContent);
@@ -1730,6 +1744,7 @@ async function runBrowserTests() {
         const report = {
             timestamp: new Date().toISOString(),
             navegador: 'Chrome Headless (Puppeteer-Core)',
+            intentosArranqueChrome: browser.__intentosArranque || 1,
             citaCreadaId: citaIdCreada,
             citaTemporalEliminadaId: citaTemporalId,
             fechaReservaEsperada: validDate,
@@ -1752,15 +1767,7 @@ async function runBrowserTests() {
 
     } catch (error) {
         console.error('E2E failure stack:', error.stack);
-        console.error('E2E UI state:', await page.evaluate(() => ({
-            url: location.href,
-            pasos: [...document.querySelectorAll('[id^="paso-"]')].map(el => ({ id: el.id, clases: el.className })),
-            hora: document.querySelector('#hora')?.value,
-            disponibilidad: document.querySelector('#estado-disponibilidad')?.dataset.estado,
-            alertas: [...document.querySelectorAll('.alerta')].map(el => el.textContent),
-            siguiente: document.querySelector('#siguiente')?.outerHTML,
-            overlay: document.elementFromPoint(innerWidth / 2, innerHeight / 2)?.outerHTML.slice(0, 500)
-        })).catch(() => ({})));
+        console.error('E2E diagnóstico de reserva (sin cookies, tokens ni valores de formularios):', JSON.stringify(await diagnosticoReserva(page, red).catch(() => ({})), null, 1));
         console.error('E2E console errors:', consoleErrors);
         await page.screenshot({path: path.join(screenshotDir, 'failure.png'), fullPage: false}).catch(() => {});
         throw error;
