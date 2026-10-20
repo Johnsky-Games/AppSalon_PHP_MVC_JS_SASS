@@ -59,7 +59,7 @@ Cada hecho distinto genera su asiento. Un evento con varios hechos genera varios
 
 ## Puesta en marcha
 
-1. Actualizar y migrar (`php database/migrador.php up`, incluye 043).
+1. Actualizar y migrar con respaldo previo (en Docker: `docker compose --env-file includes/.env -p appsalon-validacion run --rm --no-deps -T web php database/migrador.php up`, con `web` detenido, incluye 043; el procedimiento completo está en `IMPLEMENTACION_ERP_Y_VALIDACION.md`).
 2. Con el propietario: `/gestion/contabilidad` → definir la fecha de inicio contable; revisar el plan de cuentas con el contador y, si hace falta, reasignar roles.
 3. Registrar el asiento de apertura con los saldos iniciales (opcional pero recomendado).
 4. El supervisor `scripts/procesar_erp.php` contabiliza la cola y detecta los servicios prestados; los hechos anteriores a la fecha de inicio se confirman sin asiento.
