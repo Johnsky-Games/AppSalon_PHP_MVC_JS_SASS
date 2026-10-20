@@ -163,7 +163,7 @@ final class ErpContabilidadEventosIntegrationTest extends TestCase
     public function testSinReglaOSinInicioElEventoNoSePierdeNiSeInventa():void
     {
         $this->r->q("INSERT INTO erp_eventos(tipo,entidad,entidad_id,actor_id,datos_json,creado_en) VALUES('evento_raro','venta',1,1,'{}',NOW())");$ev=$this->r->id();
-        $this->r->q("INSERT INTO erp_integraciones_outbox(destino,evento_id,referencia,payload_json,estado,actualizado_en) VALUES('contabilidad',?,?,?, 'pendiente',NOW())",[$ev,'ERP-'.$ev.'-contabilidad',json_encode(['esquema'=>1,'evento_id'=>$ev,'tipo'=>'evento_raro','entidad'=>'venta','entidad_id'=>1,'creado_en'=>date('Y-m-d H:i:s'),'datos'=>[]])]);
+        $this->r->q("INSERT INTO erp_integraciones_outbox(destino,evento_id,referencia,payload_json,estado,actualizado_en) VALUES('contabilidad',?,?,?, 'pendiente',NOW())",[$ev,'ERP-'.$ev.'-contabilidad',json_encode(['esquema'=>1,'evento_id'=>$ev,'tipo'=>'evento_raro','entidad'=>'venta','entidad_id'=>1,'creado_en'=>\Repositories\OperacionRepository::ahora(),'datos'=>[]])]);
         $r=$this->contabilizar(true);self::assertSame(1,$r['fallidos']);self::assertSame('fallido',$this->r->uno('SELECT estado FROM erp_integraciones_outbox WHERE evento_id=?',[$ev])['estado']);self::assertSame(0,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_cont_asientos')['n']);
         // Un hecho anterior al inicio contable queda confirmado sin asiento y consta como tal.
         $this->r->q("INSERT INTO erp_eventos(tipo,entidad,entidad_id,actor_id,datos_json,creado_en) VALUES('pago_confirmado','venta',1,1,'{}','2025-06-01 10:00:00')");$ev2=$this->r->id();
@@ -173,9 +173,9 @@ final class ErpContabilidadEventosIntegrationTest extends TestCase
     public function testUnPeriodoCerradoNoRecibeContabilizacionesDirectasYElHechoTardioEsperaALaReapertura():void
     {
         $this->abastecer();$this->contabilizar();
-        $mes=(int)date('n');for($m=1;$m<=$mes;$m++)$this->cont()->cerrarPeriodo($this->owner,$this->d(['anio'=>(int)date('Y'),'mes'=>$m]));
+        $mes=(int)substr(\Repositories\OperacionRepository::ahora(),5,2);for($m=1;$m<=$mes;$m++)$this->cont()->cerrarPeriodo($this->owner,$this->d(['anio'=>(int)substr(\Repositories\OperacionRepository::ahora(),0,4),'mes'=>$m]));
         $venta=$this->ventaDeProductos('1');$r=$this->contabilizar(true);self::assertGreaterThan(0,$r['fallidos'],'El período de hoy está cerrado: el hecho espera, no se pierde');self::assertGreaterThan(0,$this->pendientesDeContabilizar());
-        $this->cont()->reabrirPeriodo($this->owner,$this->d(['anio'=>(int)date('Y'),'mes'=>$mes,'motivo'=>'Contabilizar un hecho pendiente']));$this->r->q("UPDATE erp_integraciones_outbox SET proximo_intento=NULL WHERE destino='contabilidad'");$this->contabilizar();$diag=[];foreach($this->r->q("SELECT * FROM erp_integraciones_outbox WHERE destino='contabilidad' AND estado<>'confirmado'") as $f){try{(new ErpContabilidadAdaptador($this->r))->enviar($f['referencia'],json_decode($f['payload_json'],true));$diag[]='ok?';}catch(\Throwable $e){$diag[]=$f['referencia'].': '.$e->getMessage();}}
+        $this->cont()->reabrirPeriodo($this->owner,$this->d(['anio'=>(int)substr(\Repositories\OperacionRepository::ahora(),0,4),'mes'=>$mes,'motivo'=>'Contabilizar un hecho pendiente']));$this->r->q("UPDATE erp_integraciones_outbox SET proximo_intento=NULL WHERE destino='contabilidad'");$this->contabilizar();$diag=[];foreach($this->r->q("SELECT * FROM erp_integraciones_outbox WHERE destino='contabilidad' AND estado<>'confirmado'") as $f){try{(new ErpContabilidadAdaptador($this->r))->enviar($f['referencia'],json_decode($f['payload_json'],true));$diag[]='ok?';}catch(\Throwable $e){$diag[]=$f['referencia'].': '.$e->getMessage();}}
         self::assertSame(0,$this->pendientesDeContabilizar(),json_encode($diag,JSON_UNESCAPED_UNICODE));self::assertSame([],$this->cont()->integridad());
         self::assertSame(0,$this->saldo('cxc',$this->contacto));
         unset($venta);
