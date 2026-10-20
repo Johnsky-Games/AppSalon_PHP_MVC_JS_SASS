@@ -1,0 +1,2 @@
+# Preserve the exact published bytes and hashes of the official third-party schemas.
+resources/sri/*.xsd -text -whitespace

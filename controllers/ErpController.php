@@ -9,6 +9,7 @@ use Services\ErpPagoService;
 use Services\ErpCajaService;
 use Services\ErpEntregaService;
 use Services\ErpDevolucionService;
+use Services\ErpFiscalService;
 
 final class ErpController
 {
@@ -139,6 +140,32 @@ final class ErpController
     {
         exigir_permiso('erp.reportes');$r=new ErpRepository();
         self::render($router,'integraciones',['filas'=>$r->q('SELECT id,destino,referencia,estado,intentos,actualizado_en FROM erp_integraciones_outbox ORDER BY id DESC LIMIT 200')]);
+    }
+    public static function fiscal(Router $router):void
+    {
+        exigir_permiso('erp.cobrar');$r=new ErpRepository();$id=filter_var($_GET['id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;$ventaId=filter_var($_GET['venta_id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;
+        if($id){$documento=$r->uno('SELECT d.*,v.comprador_nombre FROM erp_fiscal_documentos d JOIN erp_ventas v ON v.id=d.venta_id WHERE d.id=?',[$id])??throw new ErpException('Documento fiscal no encontrado.',404);self::render($router,'fiscal',compact('documento'));return;}
+        if($ventaId){
+            $previa=$r->uno('SELECT id FROM erp_fiscal_documentos WHERE venta_id=?',[$ventaId]);if($previa){header('Location: /gestion/facturacion?id='.(int)$previa['id'],true,303);detener_ejecucion(303);return;}
+            $datos=(new ErpVentaService($r))->detalle((int)$_SESSION['id'],$ventaId);$perfiles=$r->q('SELECT id,ruc,establecimiento,punto_emision,creado_en FROM erp_fiscal_perfiles ORDER BY id DESC LIMIT 100');
+            self::render($router,'fiscal',$datos+compact('ventaId','perfiles'));return;
+        }
+        $q=\Classes\PeriodoFiltro::aplicar($_GET);$hoy=substr($r::ahora(),0,10);$desde=$q['desde']??substr($hoy,0,8).'01';$hasta=$q['hasta']??$hoy;
+        foreach([$desde,$hasta] as $f){$fecha=is_string($f)?\DateTimeImmutable::createFromFormat('!Y-m-d',$f):false;if(!$fecha||$fecha->format('Y-m-d')!==$f)throw new ErpException('Fecha fiscal no válida.');}if($hasta<$desde||(new \DateTimeImmutable($desde))->diff(new \DateTimeImmutable($hasta))->days>366)throw new ErpException('Consulta hasta 366 días.');
+        $estado=is_string($q['estado']??null)?$q['estado']:'';if(!in_array($estado,['','pendiente','recibida','autorizada','rechazada'],true))throw new ErpException('Estado fiscal no válido.');
+        $where=' WHERE d.creado_en>=? AND d.creado_en<DATE_ADD(?,INTERVAL 1 DAY)';$args=[$desde,$hasta];if($estado!==''){$where.=' AND d.estado=?';$args[]=$estado;}
+        $pagina=filter_var($q['pagina']??1,FILTER_VALIDATE_INT,['options'=>['min_range'=>1,'max_range'=>100000]])?:1;$total=(int)$r->uno('SELECT COUNT(*) n FROM erp_fiscal_documentos d'.$where,$args)['n'];$paginas=max(1,(int)ceil($total/25));$pagina=min($pagina,$paginas);
+        $filas=$r->q('SELECT d.id,d.numero,d.estado,d.creado_en,v.comprador_nombre FROM erp_fiscal_documentos d JOIN erp_ventas v ON v.id=d.venta_id'.$where.' ORDER BY d.id DESC LIMIT 25 OFFSET '.(($pagina-1)*25),$args);
+        self::render($router,'fiscal',compact('filas','desde','hasta','estado','pagina','paginas','total'));
+    }
+    public static function fiscalXml():void
+    {
+        exigir_permiso('erp.cobrar');
+        $formato=$_GET['formato']??'firmado';
+        if(!in_array($formato,['firmado','autorizado'],true))throw new ErpException('Formato fiscal no válido.');
+        $id=filter_var($_GET['id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;
+        $doc=(new ErpFiscalService())->descargar((int)$_SESSION['id'],$id,$formato==='autorizado');
+        header('Content-Type: application/xml; charset=UTF-8');header('Content-Disposition: attachment; filename="'.$doc['nombre'].'"');header('Cache-Control: private, no-store');header('X-Content-Type-Options: nosniff');echo $doc['contenido'];
     }
     public static function suscripciones(Router $router):void
     {
@@ -291,6 +318,7 @@ final class ErpController
             'paquete_aplicar'=>[\Services\ErpPaqueteService::class,'aplicar','venta'],
             'suscripcion_crear'=>[\Services\ErpSuscripcionService::class,'crear','suscripciones'],
             'suscripcion_estado'=>[\Services\ErpSuscripcionService::class,'estado','suscripciones'],
+            'fiscal_factura'=>[\Services\ErpFiscalService::class,'factura','facturacion'],
             'promocion_estado'=>[\Services\ErpPromocionService::class,'estado','promociones'],
             'promocion_crear'=>[\Services\ErpPromocionService::class,'crear','promociones'],
             'cupon_aplicar'=>[\Services\ErpPromocionService::class,'aplicar','venta'],'cupon_quitar'=>[\Services\ErpPromocionService::class,'quitar','venta'],
@@ -305,7 +333,7 @@ final class ErpController
         ];
         $accion=is_string($_POST['accion']??null)?$_POST['accion']:'';
         if(!isset($acciones[$accion])){http_response_code(422);detener_ejecucion(422);return;}
-        [$clase,$metodo,$destino]=$acciones[$accion];$campoId=['compra'=>'compra_id','personal'=>'colaborador_id','prepagos'=>'prepago_id','paquetes'=>'paquete_id','suscripciones'=>'suscripcion_id'];$id=filter_var($_POST[$campoId[$destino]??'venta_id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;
+        [$clase,$metodo,$destino]=$acciones[$accion];$campoId=['compra'=>'compra_id','personal'=>'colaborador_id','prepagos'=>'prepago_id','paquetes'=>'paquete_id','suscripciones'=>'suscripcion_id'];$id=filter_var($_POST[$campoId[$destino]??'venta_id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;$completada=false;
         try{
             $datos=$_POST;
             if($accion==='documento_subir'){
@@ -313,7 +341,7 @@ final class ErpController
                 if(!is_array($f)||($f['error']??-1)!==UPLOAD_ERR_OK||!is_string($f['tmp_name']??null)||!is_uploaded_file($f['tmp_name'])||filesize($f['tmp_name'])>5*1024*1024)throw new ErpException('Selecciona un archivo válido de hasta 5 MB.');
                 $datos['contenido']=file_get_contents($f['tmp_name']);$datos['nombre_archivo']=$f['name'];
             }
-            $resultado=(new $clase())->$metodo((int)$_SESSION['id'],$datos);$id=in_array($accion,['rh_nomina','paquete_plan','paquete_archivar'],true)?0:(int)$resultado['recurso_id'];
+            $resultado=(new $clase())->$metodo((int)$_SESSION['id'],$datos);$id=in_array($accion,['rh_nomina','paquete_plan','paquete_archivar'],true)?0:(int)$resultado['recurso_id'];$completada=true;
             $_SESSION['erp_alertas']=['exito'=>[!empty($resultado['repetida'])?'Esta operación ya estaba registrada.':'Operación registrada correctamente.']];
         }catch(ErpException $e){
             if(in_array($e->getCode(),[403,404],true)){\Classes\ErrorResponse::render($e->getCode());return;}
@@ -323,6 +351,7 @@ final class ErpController
         $ruta=match($destino){'venta'=>$id?'/ventas/detalle?id='.$id:'/pdv','compra'=>'/gestion/compras'.($id?'?id='.$id:''),'personal'=>'/gestion/personal'.($id?'?id='.$id:''),'seguimiento'=>'/gestion/seguimiento'.($id?'?id='.$id:''),'prepagos'=>'/gestion/prepagos'.($id?'?id='.$id:''),'paquetes'=>'/gestion/paquetes'.($id?'?id='.$id:''),'suscripciones'=>'/gestion/suscripciones'.($id?'?id='.$id:''),default=>'/gestion/'.$destino};
         if($destino==='documentos')$ruta='/gestion/documentos?'.http_build_query(['entidad'=>is_string($_POST['entidad']??null)?$_POST['entidad']:'','id'=>(int)($_POST['entidad_id']??0)]);
         if($destino==='consumos')$ruta='/agenda/detalle?id='.(int)($_POST['cita_id']??0);
+        if($destino==='facturacion')$ruta='/gestion/facturacion?'.($completada?'id=':'venta_id=').$id;
         header('Location: '.$ruta,true,303);detener_ejecucion(303);
     }
 }

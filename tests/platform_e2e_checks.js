@@ -209,6 +209,24 @@ module.exports = async function verifyPlatform({ browser, baseUrl, recordTest, s
         await responsive(owner,'monthly-subscription');
         recordTest('PLAT-09','Paquetes y suscripciones: financiación, sesión, restitución y ciclos',true,'Plan de dos sesiones; carga40; reserva20; devolución restituye sesión/saldo; contrato mensual pausa/reactiva/cancela sin cobros automáticos.');
 
+        const fiscalCash=query("SELECT COALESCE(SUM(IF(tipo='ingreso',monto_centavos,-monto_centavos)),0) FROM caja_movimientos");
+        await owner.goto(`${baseUrl}/ventas/detalle?id=${sale}`,{waitUntil:'networkidle0'});
+        await Promise.all([owner.waitForNavigation({waitUntil:'networkidle0'}),owner.click('a[href="/gestion/facturacion?venta_id='+sale+'"]')]);
+        const fiscalLine=query(`SELECT id FROM erp_venta_lineas WHERE venta_id=${sale}`);
+        const fiscalProfile=query('SELECT MAX(id) FROM erp_fiscal_perfiles');
+        await fill(owner,erpForm('fiscal_factura'),{perfil_id:fiscalProfile,'comprador[tipo]':'05','comprador[identificacion]':'1712345678','comprador[nombre]':'Comprador fiscal de ensayo','comprador[direccion]':'Dirección de prueba',forma_pago:'01',[`categorias_iva[${fiscalLine}]`]:'4'});
+        await submit(owner,erpForm('fiscal_factura'));
+        const fiscalId=new URL(owner.url()).searchParams.get('id');
+        if(!fiscalId||query(`SELECT CONCAT(estado,':',venta_id) FROM erp_fiscal_documentos WHERE id=${fiscalId}`)!==`pendiente:${sale}`)throw new Error('Native billing must persist the signed invoice without claiming SRI authorization.');
+        if(query(`SELECT COUNT(*) FROM erp_fiscal_documentos WHERE venta_id=${sale}`)!=='1'||query("SELECT COALESCE(SUM(IF(tipo='ingreso',monto_centavos,-monto_centavos)),0) FROM caja_movimientos")!==fiscalCash)throw new Error('Preparing a fiscal document must not duplicate a sale or cash movement.');
+        const fiscalXml=await owner.evaluate(async id=>{const r=await fetch('/gestion/facturacion/xml?id='+id);return {status:r.status,type:r.headers.get('content-type'),cache:r.headers.get('cache-control'),xml:await r.text()};},fiscalId);
+        if(fiscalXml.status!==200||!fiscalXml.type.startsWith('application/xml')||fiscalXml.cache!=='private, no-store'||!fiscalXml.xml.includes('<ds:Signature')||!fiscalXml.xml.includes('<importeTotal>11.50</importeTotal>'))throw new Error('Authenticated XML download must preserve signature, totals and private cache policy.');
+        const pendingAuthorization=await owner.evaluate(async id=>{const r=await fetch('/gestion/facturacion/xml?id='+id+'&formato=autorizado');return {status:r.status,body:await r.text()};},fiscalId);
+        if(pendingAuthorization.status!==409||pendingAuthorization.body.includes('<autorizacion>')||await owner.$('a[href*="formato=autorizado"]'))throw new Error('A pending invoice must not offer or download SRI authorization.');
+        await responsive(owner,'native-fiscal-detail');
+        await owner.goto(`${baseUrl}/gestion/facturacion?periodo=mes`,{waitUntil:'networkidle0'});await responsive(owner,'native-fiscal-directory');
+        recordTest('PLAT-10','Facturación propia desde PDV: XML firmado, estado y descarga privada',true,'Factura de pruebas de la venta entregada; firma sintética; sin segunda caja ni autorización inventada; directorio/ficha responsive. No se contacta al SRI desde este E2E.');
+
         const client = await login('carlos@correo.com');
         let response = await client.goto(`${baseUrl}/perfil`,{waitUntil:'networkidle0'});
         if (response.status() !== 200) throw new Error('Client profile unavailable.');

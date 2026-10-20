@@ -443,7 +443,7 @@ final class EsquemaTest extends R2bCase
         // 034: +4 tablas (beneficiarios, cargas, libro y referencias bancarias compartidas).
         // 035: planes, paquetes financiados y asignaciones de sesiones.
         // 036: contratos y ciclos de suscripción.
-        $this->assertSame(101, $n, 'tablas del esquema migrado (incluye migraciones y equipo_mutex)');
+        $this->assertSame(104, $n, 'tablas del esquema migrado (incluye migraciones y equipo_mutex)');
         // La documentación citaba 30 (tras la 015) y el encabezado de backup_db.php "13 tablas": ya no describen la realidad.
         $this->assertFalse(str_contains((string)file_get_contents(self::RAIZ . '/scripts/backup_db.php'), '13 tablas en total'), 'documentación obsoleta en scripts/backup_db.php: dice "13 tablas en total" y el esquema migrado tiene 35');
     }
