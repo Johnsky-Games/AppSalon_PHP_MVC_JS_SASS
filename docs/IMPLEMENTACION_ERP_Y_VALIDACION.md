@@ -263,3 +263,14 @@ El paso «QA independiente (tests/Qa)» del run 172 (evento `pull_request`, SHA 
 5. **Límite porcentual de notas de crédito** reportado para mayo de 2026: confirmar la resolución antes de implementar.
 6. **Verificación de cada parámetro fiscal** contra el texto oficial vigente (la política de red del entorno de desarrollo bloquea `sri.gob.ec`).
 7. **Anticipo retenido tras cancelación o inasistencia:** tratamiento fiscal sin definir; hoy el sistema obliga a resolverlo (devolverlo) y no lo convierte en ingreso.
+
+## Continuación 043: contabilidad propia por partida doble
+
+Rama `feature/erp-contabilidad`, apilada sobre `feature/erp-fiscal-reglas` (#12). Detalle, tabla de hechos y asientos, reglas deliberadas y límites: `docs/CONTABILIDAD_PROPIA.md`.
+
+* **Migración 043** (aditiva): configuración con inicio contable, numeración continua, plan de cuentas (plan base editable), roles contables, períodos, asientos y líneas. Libro de solo anexar con triggers (sin `UPDATE`/`DELETE`), partida doble verificada por la base al insertar la última línea, período abierto obligatorio, cuentas con movimientos inmutables. Guarda de rollback: se niega si hay asientos o cuentas creadas por usuarios. Deja 115 tablas (+7).
+* **Adaptador contable** (`services/Contabilidad/ErpContabilidadAdaptador.php`) sobre el outbox existente: cada hecho (cobro, anticipo, aplicación, reembolso, entrega, costo, prestación, devolución, restitución, compra, factura del proveedor, pago, comisión, activo, insumos) genera su asiento con identidad permanente (`outbox:<referencia>#n`); reprocesar no duplica. La venta confirmada se confirma sin asiento a propósito. El supervisor (`scripts/procesar_erp.php`) solo lo activa tras definir el inicio contable.
+* **Cambio aditivo en un servicio entregado:** el evento `venta_devuelta` ahora incluye `entregada_ahora` y `reembolsos` (cada devolución de dinero o restitución de saldo) para contabilizar cada hecho por separado. Ningún consumidor anterior leía esas claves.
+* **Permisos nuevos y segregados:** `contabilidad.ver` (propietario, gerente, finanzas), `contabilidad.registrar` (propietario, finanzas), `contabilidad.configurar` (propietario). Contrato de pruebas actualizado a propósito: la tabla escrita a mano de permisos por rol de `AutorizacionMatrizTest`, el registro de rutas y `EsquemaTest` (108 → 115 tablas).
+* **Hallazgo corregido en el camino:** el primer trigger de balance anidaba dos `IF`; el lector de protecciones de la restauración (`ProteccionesRestauradas`) solo admite un `IF … END IF` por trigger y la restauración fallaba. La prueba de respaldo/restauración existente lo detectó; el trigger se aplanó con la misma garantía.
+* **Pruebas:** ledger/inmutabilidad/períodos/cierre/reversos/permisos/concurrencia con procesos reales (15), hechos y conciliaciones con auxiliares (9), pantallas y acciones (en la misma suite).

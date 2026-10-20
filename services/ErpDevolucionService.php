@@ -29,7 +29,7 @@ final class ErpDevolucionService extends ErpService
             foreach($prepagos as $prepago)(new ErpPrepagoService($this->r))->bloquear((int)$prepago['prepago_id']);
             $sesion=$aPagar>0?(new ErpCajaService($this->r))->sesion($actor):null;
             $this->r->q('INSERT INTO erp_devoluciones(venta_id,linea_id,cantidad_milesimas,monto_centavos,cantidad_entregada_milesimas,reintegrar_stock,motivo,actor_id,creado_en) VALUES(?,?,?,?,?,?,?,?,?)',[$id,(int)$l['id'],$qty,$monto,$entregadaAhora,$stock?1:0,$motivo,$actor,$this->r::ahora()]);
-            $devolucion=$this->r->id();$restante=$aPagar;
+            $devolucion=$this->r->id();$restante=$aPagar;$reembolsos=[];
             foreach($pagos as $p){
                 if($restante<=0)break;
                 $importe=CobroCalculo::centavos($p['monto']);$dev=(int)$this->r->uno('SELECT COALESCE(SUM(monto_centavos),0) monto FROM cobros_devoluciones WHERE pago_id=?',[(int)$p['id']])['monto'];
@@ -42,6 +42,7 @@ final class ErpDevolucionService extends ErpService
                 if($dev+$ahora===$importe)$this->r->q("UPDATE pagos SET estado='reembolsado',reembolsado_at=? WHERE id=?",[$this->r::ahora(),(int)$p['id']]);
                 // Los anticipos importados pueden tener devengos históricos; conservar su ajuste nativo.
                 (new ComisionService($this->r))->revertirParcial((int)$p['id'],$devId,$importe,$dev,$dev+$ahora);
+                $reembolsos[]=['cobro_devolucion_id'=>$devId,'pago_id'=>(int)$p['id'],'monto'=>$ahora,'metodo'=>$p['metodo_pago']];
                 $restante-=$ahora;
             }
             if($restante>0)throw new ErpException('No se pudo conciliar el importe por devolver.');
@@ -62,7 +63,7 @@ final class ErpDevolucionService extends ErpService
             $this->r->q('UPDATE erp_venta_lineas SET devuelto_milesimas=devuelto_milesimas+? WHERE id=?',[$qty,(int)$l['id']]);
             (new ErpPaqueteService($this->r))->restituir($actor,(int)$l['id'],$devolucion);
             (new ErpPagoService($this->r))->actualizarCita($id);(new ErpComisionService($this->r))->sincronizar($id,$actor);
-            $evento=$this->evento($actor,'venta_devuelta','venta',$id,['devolucion_id'=>$devolucion,'linea_id'=>$l['id'],'linea_original'=>$l,'cantidad'=>$qty,'devuelto_anterior_milesimas'=>$anterior,'credito'=>$monto,'dinero_devuelto'=>$aPagar,'stock'=>$stock,'motivo'=>$motivo],['fiscal','contabilidad']);
+            $evento=$this->evento($actor,'venta_devuelta','venta',$id,['devolucion_id'=>$devolucion,'linea_id'=>$l['id'],'linea_original'=>$l,'cantidad'=>$qty,'devuelto_anterior_milesimas'=>$anterior,'credito'=>$monto,'dinero_devuelto'=>$aPagar,'entregada_ahora'=>$entregadaAhora,'reembolsos'=>$reembolsos,'stock'=>$stock,'motivo'=>$motivo],['fiscal','contabilidad']);
             (new ErpReciboService($this->r))->emitir($actor,$id,$evento);return $id;
         });
     }

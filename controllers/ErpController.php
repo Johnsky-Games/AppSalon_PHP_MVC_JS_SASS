@@ -183,6 +183,30 @@ final class ErpController
         $vigentes=[];foreach($par->listar($hoy) as $p)$vigentes[$p['clave'].'|'.$p['regimen']]=$p;
         self::render($router,'fiscal-parametros',['vigentes'=>$vigentes,'historial'=>$par->historial(100),'catalogo'=>\Services\ErpFiscalParametroService::catalogo(),'regimenes'=>\Services\ErpFiscalParametroService::REGIMENES,'hoy'=>$hoy,'configura'=>puede('erp.configurar')]);
     }
+    /** Libros y estados contables; se escribe solo con las acciones `cont_*` de /gestion/accion. */
+    public static function contabilidad(Router $router):void
+    {
+        exigir_permiso('contabilidad.ver');$r=new ErpRepository();$c=new \Services\ErpContabilidadService($r);
+        $hoy=(new \DateTimeImmutable('now',new \DateTimeZone('America/Guayaquil')))->format('Y-m-d');$q=$_GET;
+        $vista=in_array($q['vista']??'',['resumen','diario','mayor','balances','plan','periodos','asiento','conciliacion'],true)?$q['vista']:'resumen';
+        $fecha=static function(mixed $v,string $por):string{$d=is_string($v)?\DateTimeImmutable::createFromFormat('!Y-m-d',$v):false;return ($d&&$d->format('Y-m-d')===$v)?$v:$por;};
+        $desde=$fecha($q['desde']??null,substr($hoy,0,4).'-01-01');$hasta=$fecha($q['hasta']??null,$hoy);
+        if($hasta<$desde||(new \DateTimeImmutable($desde))->diff(new \DateTimeImmutable($hasta))->days>3660)throw new ErpException('Rango de fechas no válido.');
+        $datos=['vista'=>$vista,'config'=>$c->config(),'desde'=>$desde,'hasta'=>$hasta,'hoy'=>$hoy,'registra'=>puede('contabilidad.registrar'),'configura'=>puede('contabilidad.configurar')];
+        $datos['cuentas']=$r->q('SELECT id,codigo,nombre,tipo,imputable,activa FROM erp_cont_cuentas ORDER BY codigo');
+        match($vista){
+            'resumen'=>$datos+=['periodos'=>$r->q('SELECT * FROM erp_cont_periodos ORDER BY anio DESC,mes DESC LIMIT 12'),'conc'=>$c->conciliacion($hasta)],
+            'diario'=>$datos+=['diario'=>$c->diario($desde,$hasta,(int)(filter_var($q['pagina']??1,FILTER_VALIDATE_INT,['options'=>['min_range'=>1,'max_range'=>100000]])?:1))],
+            'mayor'=>$datos+=['cuentaId'=>(int)(filter_var($q['cuenta']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0)],
+            'balances'=>$datos+=['comprobacion'=>$c->balanceComprobacion($hasta),'resultados'=>$c->estadoResultados($desde,$hasta),'general'=>$c->balanceGeneral($hasta)],
+            'plan'=>$datos+=['roles'=>$r->q('SELECT r.rol,c.codigo,c.nombre FROM erp_cont_roles r JOIN erp_cont_cuentas c ON c.id=r.cuenta_id ORDER BY r.rol'),'rolesDisponibles'=>\Services\ErpContabilidadService::ROLES],
+            'periodos'=>$datos+=['periodos'=>$r->q('SELECT * FROM erp_cont_periodos ORDER BY anio DESC,mes DESC LIMIT 60')],
+            'conciliacion'=>$datos+=['conc'=>$c->conciliacion($hasta)],
+            default=>null,
+        };
+        if($vista==='mayor'&&$datos['cuentaId'])$datos['mayor']=$c->mayor($datos['cuentaId'],$desde,$hasta);
+        self::render($router,'contabilidad',$datos);
+    }
     public static function fiscalXml():void
     {
         exigir_permiso('erp.cobrar');
@@ -359,6 +383,9 @@ final class ErpController
             'suscripcion_estado'=>[\Services\ErpSuscripcionService::class,'estado','suscripciones'],
             'fiscal_factura'=>[\Services\ErpFiscalService::class,'factura','facturacion'],
             'fiscal_parametro'=>[\Services\ErpFiscalParametroService::class,'registrar','fiscal_parametros'],
+            'cont_inicio'=>[\Services\ErpContabilidadService::class,'inicio','contabilidad'],'cont_cuenta'=>[\Services\ErpContabilidadService::class,'cuenta','contabilidad'],'cont_cuenta_estado'=>[\Services\ErpContabilidadService::class,'cuentaEstado','contabilidad'],
+            'cont_rol'=>[\Services\ErpContabilidadService::class,'rol','contabilidad'],'cont_asiento'=>[\Services\ErpContabilidadService::class,'asiento','contabilidad'],'cont_reverso'=>[\Services\ErpContabilidadService::class,'reversar','contabilidad'],
+            'cont_periodo_cerrar'=>[\Services\ErpContabilidadService::class,'cerrarPeriodo','contabilidad'],'cont_periodo_reabrir'=>[\Services\ErpContabilidadService::class,'reabrirPeriodo','contabilidad'],'cont_ejercicio_cerrar'=>[\Services\ErpContabilidadService::class,'cerrarEjercicio','contabilidad'],
             'fiscal_nota_credito'=>[\Services\ErpFiscalService::class,'notaCredito','facturacion'],
             'fiscal_verificar'=>[\Services\ErpFiscalService::class,'solicitarVerificacion','facturacion'],
             'fiscal_sustituir_factura'=>[\Services\ErpFiscalService::class,'sustituirFactura','facturacion'],
@@ -399,6 +426,7 @@ final class ErpController
         $ruta=match($destino){'venta'=>$id?'/ventas/detalle?id='.$id:'/pdv','compra'=>'/gestion/compras'.($id?'?id='.$id:''),'personal'=>'/gestion/personal'.($id?'?id='.$id:''),'seguimiento'=>'/gestion/seguimiento'.($id?'?id='.$id:''),'prepagos'=>'/gestion/prepagos'.($id?'?id='.$id:''),'paquetes'=>'/gestion/paquetes'.($id?'?id='.$id:''),'suscripciones'=>'/gestion/suscripciones'.($id?'?id='.$id:''),default=>'/gestion/'.$destino};
         if($destino==='documentos')$ruta='/gestion/documentos?'.http_build_query(['entidad'=>is_string($_POST['entidad']??null)?$_POST['entidad']:'','id'=>(int)($_POST['entidad_id']??0)]);
         if($destino==='consumos')$ruta='/agenda/detalle?id='.(int)($_POST['cita_id']??0);
+        if($destino==='contabilidad'){$v=is_string($_POST['vista']??null)&&in_array($_POST['vista'],['resumen','diario','mayor','balances','plan','periodos','asiento','conciliacion'],true)?$_POST['vista']:'resumen';$ruta='/gestion/contabilidad?vista='.$v;}
         if($destino==='fiscal_parametros')$ruta='/gestion/facturacion/parametros';
         if($destino==='facturacion')$ruta='/gestion/facturacion?'.(($completada||$esEntrega)?'id=':'venta_id=').$id;
         header('Location: '.$ruta,true,303);detener_ejecucion(303);
