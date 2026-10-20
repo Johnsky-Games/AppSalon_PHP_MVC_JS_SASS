@@ -2,6 +2,7 @@
 namespace Services;
 
 use Classes\Transaccion;
+use Services\Nomina\NominaRenta;
 
 /**
  * Nómina propia (Ecuador). AppSalon NO trae cifras legales: sueldo básico, aportes, recargos y demás parámetros los registra una persona autorizada con su
@@ -81,6 +82,60 @@ final class ErpNominaService extends ErpService
             if($ultima&&($desde<=$ultima['vigente_desde']||$desde<$hoy))throw new ErpException('La condición nueva rige desde hoy o una fecha futura y posterior a la última ('.$ultima['vigente_desde'].').',409);
             $this->r->q('INSERT INTO erp_nomina_condiciones(colaborador_id,vigente_desde,region,mensualiza_d13,mensualiza_d14,fondos_reserva,aporta_iess,creado_por,creado_en) VALUES(?,?,?,?,?,?,?,?,?)',[(int)$col['id'],$desde,$region,$bool('mensualiza_d13'),$bool('mensualiza_d14'),$fr,$bool('aporta_iess'),$actor,$this->r::ahora()]);
             $id=$this->r->id();$this->evento($actor,'nomina_condicion_registrada','colaborador',(int)$col['id'],['condicion_id'=>$id,'vigente_desde'=>$desde,'region'=>$region,'fondos_reserva'=>$fr]);return (int)$col['id'];
+        });
+    }
+
+    // ---------------------------------------------------------------- impuesto a la renta (tabla anual y declaración del trabajador)
+    /** Tabla progresiva de un año (versionada, con fuente). Una línea por tramo: «desde;hasta;impuesto de la fracción;% del excedente», en USD y %; el último tramo sin límite superior. */
+    public function tablaRenta(int $actor,array $d):array
+    {
+        return $this->ejecutar($actor,'nomina.configurar','nomina_ir_tabla',$d,function()use($actor,$d){
+            $hoy=$this->hoy();$desde=$this->fecha($d['vigente_desde']??null);$consultado=$this->fecha($d['consultado_en']??null);
+            if($consultado>$hoy)throw new ErpException('La fecha de consulta de la fuente no puede ser futura.');
+            $anio=filter_var($d['anio']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>2000,'max_range'=>2100]]);if($anio===false)throw new ErpException('Indica el año de la tabla.');
+            if(substr($desde,0,4)!==(string)$anio)throw new ErpException('La vigencia debe caer dentro del año de la tabla.');
+            $estado=$d['estado']??'vigente';if(!in_array($estado,['vigente','derogado'],true))throw new ErpException('Estado no válido.');
+            $json=null;$tope=null;
+            if($estado==='vigente'){
+                $json=json_encode($this->tramos($d['tramos']??''),JSON_THROW_ON_ERROR);
+                if(($d['tope_gastos']??'')!==''){try{$tope=ValoresExactos::decimal($d['tope_gastos'],2,true);}catch(\InvalidArgumentException $e){throw new ErpException($e->getMessage());}}
+            }
+            $fuente=$this->texto($d['fuente']??'',200);if(mb_strlen($fuente)<5)throw new ErpException('Indica la norma o documento oficial consultado.');
+            $url=$d['fuente_url']??null;if($url!==null&&$url!==''){if(!is_string($url)||!preg_match('#^https://[^\s<>"\']{4,280}$#D',$url))throw new ErpException('El enlace de la fuente debe ser una URL https.');}else $url=null;
+            $nota=isset($d['nota'])&&$d['nota']!==''?$this->texto($d['nota'],300):null;
+            $ultima=$this->r->uno('SELECT vigente_desde FROM erp_nomina_ir_tablas WHERE anio=? ORDER BY vigente_desde DESC LIMIT 1 FOR UPDATE',[$anio]);
+            if($ultima&&$desde<=$ultima['vigente_desde'])throw new ErpException('Ya existe una versión desde '.$ultima['vigente_desde'].'. Registra la corrección con una vigencia posterior.',409);
+            if($ultima&&$desde<$hoy)throw new ErpException('Una versión nueva rige desde hoy o una fecha futura; las anteriores se conservan.',409);
+            $this->r->q('INSERT INTO erp_nomina_ir_tablas(anio,vigente_desde,estado,tramos_json,tope_gastos_centavos,fuente,fuente_url,consultado_en,nota,creado_por,creado_en) VALUES(?,?,?,?,?,?,?,?,?,?,?)',[$anio,$desde,$estado,$json,$tope,$fuente,$url,$consultado,$nota,$actor,$this->r::ahora()]);
+            $id=$this->r->id();$this->evento($actor,'nomina_ir_tabla_registrada','nomina_ir_tabla',$id,['anio'=>$anio,'vigente_desde'=>$desde,'estado'=>$estado,'tramos'=>$json?json_decode($json,true):null,'tope_gastos_centavos'=>$tope,'fuente'=>$fuente,'fuente_url'=>$url,'consultado_en'=>$consultado]);return $id;
+        });
+    }
+    /** @return list<array{desde:int,hasta:?int,impuesto_base:int,excedente_pb:int}> */
+    private function tramos(mixed $texto):array
+    {
+        if(!is_string($texto)||trim($texto)==='')throw new ErpException('Indica los tramos de la tabla.');
+        $filas=[];
+        foreach(preg_split('/\R/u',trim($texto)) as $i=>$linea){
+            $linea=trim($linea);if($linea==='')continue;$c=array_map('trim',explode(';',$linea));
+            if(count($c)!==4)throw new ErpException('Tramo '.($i+1).': usa «desde;hasta;impuesto de la fracción;% del excedente».');
+            try{
+                $filas[]=['desde'=>ValoresExactos::decimal($c[0],2,true),'hasta'=>($c[1]===''||mb_strtolower($c[1])==='adelante')?null:ValoresExactos::decimal($c[1],2,true),'impuesto_base'=>ValoresExactos::decimal($c[2],2,true),'excedente_pb'=>ValoresExactos::decimal($c[3],2,true)];
+            }catch(\InvalidArgumentException $e){throw new ErpException('Tramo '.($i+1).': '.$e->getMessage());}
+        }
+        try{return NominaRenta::validarTramos($filas);}catch(\InvalidArgumentException $e){throw new ErpException($e->getMessage());}
+    }
+    /** Declaración anual del trabajador para proyectar su retención. La última del año rige; las anteriores se conservan. */
+    public function declaracionRenta(int $actor,array $d):array
+    {
+        return $this->ejecutar($actor,'nomina.configurar','nomina_ir_declaracion',$d,function()use($actor,$d){
+            $col=$this->r->uno("SELECT id FROM colaboradores WHERE id=? AND estado<>'baja' FOR UPDATE",[$this->id($d['colaborador_id']??null)])??throw new ErpException('Colaborador no disponible.',404);
+            $anio=filter_var($d['anio']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>2000,'max_range'=>2100]]);if($anio===false)throw new ErpException('Indica el año.');
+            $m=[];foreach(['gastos','otras_deducciones','rebaja','otros_ingresos','retenido_otros'] as $k){
+                try{$m[$k]=($d[$k]??'')===''?0:ValoresExactos::decimal($d[$k],2,true);}catch(\InvalidArgumentException $e){throw new ErpException($e->getMessage());}
+            }
+            $fuente=$this->texto($d['fuente']??'',200);if(mb_strlen($fuente)<5)throw new ErpException('Indica el documento de respaldo (p. ej. proyección de gastos personales o formulario 107 del empleador anterior).');
+            $this->r->q('INSERT INTO erp_nomina_ir_declaraciones(colaborador_id,anio,gastos_centavos,otras_deducciones_centavos,rebaja_centavos,otros_ingresos_centavos,retenido_otros_centavos,fuente,creado_por,creado_en) VALUES(?,?,?,?,?,?,?,?,?,?)',[(int)$col['id'],$anio,$m['gastos'],$m['otras_deducciones'],$m['rebaja'],$m['otros_ingresos'],$m['retenido_otros'],$fuente,$actor,$this->r::ahora()]);
+            $id=$this->r->id();$this->evento($actor,'nomina_ir_declaracion_registrada','colaborador',(int)$col['id'],['declaracion_id'=>$id,'anio'=>$anio]+$m+['fuente'=>$fuente]);return (int)$col['id'];
         });
     }
 
@@ -172,12 +227,12 @@ final class ErpNominaService extends ErpService
             }
             $dias=min(30,$dias);
         }
-        $horasMes=(int)$p['jornada.horas_mes']['valor_entero'];$horas=0;$bonos=0;$bonosGravados=0;$desc=0;$ir=0;$usadas=[];
+        $horasMes=(int)$p['jornada.horas_mes']['valor_entero'];$horas=0;$bonos=0;$bonosGravados=0;$desc=0;$ir=0;$usadas=[];$irManual=[];
         foreach($this->r->q("SELECT * FROM erp_nomina_novedades WHERE colaborador_id=? AND anio=? AND mes=? AND estado='aprobada' ORDER BY id FOR SHARE",[$col,$anio,$mes]) as $n){
             $usadas[]=(int)$n['id'];
             if($n['tipo']==='bono'){$bonos+=(int)$n['monto_centavos'];if((int)$n['grava_iess']===1)$bonosGravados+=(int)$n['monto_centavos'];}
             elseif($n['tipo']==='descuento')$desc+=(int)$n['monto_centavos'];
-            elseif($n['tipo']==='retencion_ir')$ir+=(int)$n['monto_centavos'];
+            elseif($n['tipo']==='retencion_ir'){$ir+=(int)$n['monto_centavos'];$irManual[]=(int)$n['id'];}
             else{
                 $recargo=(int)$p['recargo.'.['hora_suplementaria'=>'suplementaria','hora_extraordinaria'=>'extraordinaria','hora_nocturna'=>'nocturno'][$n['tipo']].'_pb']['valor_entero'];
                 $factor=$n['tipo']==='hora_nocturna'?$recargo:10000+$recargo;
@@ -197,11 +252,27 @@ final class ErpNominaService extends ErpService
         $d14=intdiv((int)$p['sbu_centavos']['valor_entero']*$dias+180,360);
         $antig=(int)(new \DateTimeImmutable($c['fecha_ingreso']??$c['inicio']))->diff(new \DateTimeImmutable($ultimo))->days;
         $fondos=($cond['fondos_reserva']!=='no_aplica'&&$antig>=(int)$p['fondos_reserva.dias_antiguedad']['valor_entero'])?self::pb($regular,(int)$p['fondos_reserva.pb']['valor_entero']):0;
+        // Impuesto a la renta: con una tabla vigente del año se calcula la retención proyectada; sin ella rige la novedad manual del contador.
+        $renta=null;
+        $tablaIr=$this->r->uno('SELECT * FROM erp_nomina_ir_tablas WHERE anio=? AND vigente_desde<=? ORDER BY vigente_desde DESC LIMIT 1 FOR SHARE',[$anio,$ultimo]);
+        if($tablaIr&&$tablaIr['estado']==='vigente'){
+            if($irManual)throw new ErpException('El colaborador '.$col.' tiene retenciones de renta manuales (novedades '.implode(', ',$irManual).') y el año tiene una tabla vigente: rechaza esas novedades para que la retención se calcule una sola vez.',409);
+            $acum=$this->r->uno("SELECT COALESCE(SUM(l.sueldo_centavos+l.horas_centavos+l.bonos_centavos+l.comisiones_centavos),0) g,COALESCE(SUM(l.iess_personal_centavos),0) i,COALESCE(SUM(l.ir_centavos),0) r FROM erp_nomina_lineas l JOIN erp_nomina_corridas k ON k.id=l.corrida_id WHERE l.colaborador_id=? AND k.anio=? AND k.mes<? AND k.estado<>'anulada' FOR SHARE",[$col,$anio,$mes]);
+            $decl=$this->r->uno('SELECT * FROM erp_nomina_ir_declaraciones WHERE colaborador_id=? AND anio=? ORDER BY id DESC LIMIT 1 FOR SHARE',[$col,$anio]);
+            $mesFin=(!empty($c['fin'])&&substr($c['fin'],0,4)===(string)$anio)?(int)substr($c['fin'],5,2):12;
+            try{
+                $renta=NominaRenta::retencion(['anio_mes_restantes'=>max(1,$mesFin-$mes+1),'gravado_ytd'=>(int)$acum['g'],'gravado_mes'=>$regular,'iess_ytd'=>(int)$acum['i'],'iess_mes'=>$iessP,'retenido_ytd'=>(int)$acum['r'],
+                    'otros_ingresos'=>(int)($decl['otros_ingresos_centavos']??0),'retenido_otros'=>(int)($decl['retenido_otros_centavos']??0),'gastos'=>(int)($decl['gastos_centavos']??0),'tope_gastos'=>$tablaIr['tope_gastos_centavos']===null?null:(int)$tablaIr['tope_gastos_centavos'],
+                    'otras_deducciones'=>(int)($decl['otras_deducciones_centavos']??0),'rebaja'=>(int)($decl['rebaja_centavos']??0)],json_decode($tablaIr['tramos_json'],true,512,JSON_THROW_ON_ERROR));
+            }catch(\InvalidArgumentException $e){throw new ErpException($e->getMessage().' (colaborador '.$col.')',409);}
+            $ir=(int)$renta['retencion_mes'];
+            $renta=['formula'=>NominaRenta::FORMULA,'tabla_id'=>(int)$tablaIr['id'],'declaracion_id'=>$decl?(int)$decl['id']:null,'sin_declaracion'=>$decl===null,'acumulado_previo'=>['gravado'=>(int)$acum['g'],'iess'=>(int)$acum['i'],'retenido'=>(int)$acum['r']]]+$renta;
+        }
         $m13=(int)$cond['mensualiza_d13']===1?$d13:0;$m14=(int)$cond['mensualiza_d14']===1?$d14:0;$mf=$cond['fondos_reserva']==='mensualizado'?$fondos:0;
         $ingresos=$sueldo+$horas+$bonos+$comisiones+$m13+$m14+$mf;$neto=$ingresos-$iessP-$ir-$desc;
         if($neto<=0)throw new ErpException('Los descuentos o aportes dejan sin neto a pagar al colaborador '.$col.'. Revisa sus novedades.',409);
         $fila=['colaborador_id'=>$col,'contrato_id'=>(int)$c['id'],'dias'=>$dias,'base_centavos'=>$base,'sueldo_centavos'=>$sueldo,'horas_centavos'=>$horas,'bonos_centavos'=>$bonos,'comisiones_centavos'=>$comisiones,'d13_mensual_centavos'=>$m13,'d14_mensual_centavos'=>$m14,'fondos_mensual_centavos'=>$mf,'ingresos_centavos'=>$ingresos,'gravado_iess_centavos'=>$gravado,'iess_personal_centavos'=>$iessP,'ir_centavos'=>$ir,'descuentos_centavos'=>$desc,'neto_centavos'=>$neto,'iess_patronal_centavos'=>$iessE,'d13_prov_centavos'=>(int)$cond['mensualiza_d13']===1?0:$d13,'d14_prov_centavos'=>(int)$cond['mensualiza_d14']===1?0:$d14,'fondos_acum_centavos'=>$cond['fondos_reserva']==='acumulado'?$fondos:0];
-        $snap=['formula'=>self::FORMULA,'periodo'=>sprintf('%04d-%02d',$anio,$mes),'parametros'=>array_map(fn($x)=>['id'=>(int)$x['id'],'vigente_desde'=>$x['vigente_desde'],'valor'=>(int)$x['valor_entero']],$p),'condicion_id'=>(int)$cond['id'],'novedades'=>$usadas,'comisiones'=>array_map(fn($l)=>(int)$l['id'],$liqs)];
+        $snap=['formula'=>self::FORMULA,'periodo'=>sprintf('%04d-%02d',$anio,$mes),'parametros'=>array_map(fn($x)=>['id'=>(int)$x['id'],'vigente_desde'=>$x['vigente_desde'],'valor'=>(int)$x['valor_entero']],$p),'condicion_id'=>(int)$cond['id'],'novedades'=>$usadas,'comisiones'=>array_map(fn($l)=>(int)$l['id'],$liqs)]+($renta?['renta'=>$renta]:[]);
         return ['fila'=>$fila,'snapshot'=>$snap,'comisiones'=>$liqs];
     }
 
