@@ -67,3 +67,10 @@ El asiento de la nómina aprobada (`nomina_aprobada`): gasto de sueldos, comisio
 * **Archivos y avisos al IESS/Ministerio del Trabajo/SRI** (planillas, SUT, formularios 107/103): sin generar.
 * **Décimo cuarto de menores de edad o jornada parcial, aprendices y regímenes especiales:** no modelados.
 * Los parámetros son por emisor (no por convenio sectorial) y las condiciones se registran por colaborador.
+
+## Control de IESS (049)
+Nómina › IESS. **AppSalon no presenta avisos ni planillas en el portal del IESS**; lleva el control de que se hicieron y entrega un borrador cuadrado contra la nómina. No contiene plazos ni formatos oficiales de carga: no se pudieron verificar contra la fuente oficial (el portal del IESS no es accesible desde el entorno de desarrollo) y no se asumen.
+
+* **Avisos de entrada y salida:** la pantalla lista los contratos de empleado que empiezan (entrada) o terminan (salida) en el rango y no tienen aviso registrado. Quien tiene `nomina.calcular` registra la **referencia que devolvió el portal**; el aviso solo se anula con motivo (no se edita ni se borra, triggers), y un mismo aviso activo no se duplica.
+* **Borrador de aportes del mes:** de la corrida **aprobada**: sueldo aportable, aporte personal, aporte patronal y fondos de reserva acumulados (se depositan al IESS) por colaborador. La suma cuadra contra la obligación al IESS de la corrida; si no cuadra, la pantalla lo avisa y no debe presentarse sin revisar.
+* **Pendiente:** archivo de importación en el formato oficial, plazos legales de presentación, reglas de mora y aviso de novedades (cambio de sueldo, licencias). Verificar todo con la fuente oficial y el contador antes de operar.
