@@ -93,6 +93,40 @@ final class ErpCajaConceptoService extends ErpService
     {
         $out=[];foreach($this->r->q('SELECT k.*,c.codigo cuenta_codigo,c.nombre cuenta_nombre FROM erp_caja_conceptos k LEFT JOIN erp_cont_cuentas c ON c.id=k.cuenta_id ORDER BY k.activo DESC,k.nombre') as $k){$k['problema']=$this->problema((int)$k['id']);$out[]=$k;}return $out;
     }
+    /**
+     * Movimientos manuales de efectivo anteriores a los conceptos (054): registrados por el ERP con la clave `mov:`, sin cobro, sin devolución y sin clasificación.
+     * Es lo único que se puede reclasificar; los cobros, devoluciones, prepagos y pagos de obligaciones ya tienen su propio hecho contable y nunca se ofrecen aquí.
+     */
+    public function historicos(int $limite=50):array
+    {
+        return $this->r->q("SELECT c.id,c.tipo,c.monto_centavos,c.concepto,c.registrado_en FROM caja_movimientos c JOIN erp_caja_movimientos e ON e.caja_id=c.id
+            WHERE c.idempotencia LIKE 'mov:%' AND c.pago_id IS NULL AND c.devolucion_id=0 AND c.metodo='efectivo'
+            AND NOT EXISTS(SELECT 1 FROM erp_caja_mov_conceptos m WHERE m.caja_id=c.id) ORDER BY c.id LIMIT ".(int)$limite);
+    }
+    /**
+     * Reclasificación EXPLÍCITA de un movimiento histórico: una persona con `contabilidad.configurar` elige el concepto y deja el motivo; nada se reclasifica solo.
+     * El movimiento de caja no se toca (sigue igual); solo se anexa su clasificación y se emite el hecho contable, que se contabiliza una sola vez en la fecha de la
+     * decisión (no reabre períodos cerrados) y conserva la fecha original en su texto. Si ocurrió antes del inicio contable no genera asiento.
+     */
+    public function reclasificar(int $actor,array $d):array
+    {
+        return $this->ejecutar($actor,'contabilidad.configurar','caja_reclasificacion',$d,function()use($actor,$d){
+            $id=$this->id($d['movimiento_id']??null);
+            $mov=$this->r->uno('SELECT c.*,e.sesion_id FROM caja_movimientos c JOIN erp_caja_movimientos e ON e.caja_id=c.id WHERE c.id=? FOR UPDATE',[$id])??throw new ErpException('Movimiento de caja no encontrado.',404);
+            if($this->r->uno('SELECT caja_id FROM erp_caja_mov_conceptos WHERE caja_id=? FOR UPDATE',[$id]))throw new ErpException('Ese movimiento ya está clasificado: la clasificación no se edita (para corregir, reversa el movimiento).',409);
+            if(!str_starts_with((string)$mov['idempotencia'],'mov:')||$mov['pago_id']!==null||(int)$mov['devolucion_id']!==0||$mov['metodo']!=='efectivo')throw new ErpException('Solo se reclasifican movimientos manuales de efectivo anteriores a los conceptos; este movimiento tiene su propio hecho contable.',422);
+            $k=$this->r->uno('SELECT * FROM erp_caja_conceptos WHERE id=? FOR SHARE',[$this->id($d['concepto_id']??null)])??throw new ErpException('Concepto de caja no encontrado.',404);
+            if((int)$k['activo']!==1)throw new ErpException('El concepto «'.$k['nombre'].'» está desactivado.',409);
+            $tipo=$mov['tipo']==='ingreso'?'ingreso':'egreso';
+            if($k['tipo']!==$tipo)throw new ErpException('El concepto «'.$k['nombre'].'» es de '.$k['tipo'].': el movimiento fue un '.$tipo.' de efectivo.');
+            $motivo=$this->texto($d['motivo']??'',300);if(mb_strlen($motivo)<5)throw new ErpException('Explica por qué se clasifica así el movimiento (al menos 5 caracteres).');
+            $fecha=substr((string)$mov['registrado_en'],0,10);
+            $evento=$this->evento($actor,'caja_movimiento','caja',(int)$mov['sesion_id'],['movimiento_id'=>$id,'tipo'=>$tipo,'monto'=>(int)$mov['monto_centavos'],'motivo'=>$motivo,'concepto_id'=>(int)$k['id'],'reclasificacion'=>1,'fecha_original'=>$fecha],['contabilidad']);
+            $this->r->q('INSERT INTO erp_caja_mov_conceptos(caja_id,concepto_id,motivo,evento_id,creado_por,creado_en) VALUES(?,?,?,?,?,?)',[$id,(int)$k['id'],$motivo,$evento,$actor,$this->r::ahora()]);
+            return $id;
+        });
+    }
+
     /** Movimientos manuales cuyo asiento aún no existe, con lo que falta para contabilizarlos. */
     public function pendientes():array
     {

@@ -158,6 +158,47 @@ final class ErpCajaConceptosIntegrationTest extends TestCase
         $x=$this->procesar();self::assertSame(0,$x['fallidos']);self::assertSame(2,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_cont_asientos')['n']);
         self::assertSame([],$this->cont()->integridad());self::assertTrue($this->cont()->balanceComprobacion('2099-12-31')['cuadra']);
     }
+    public function testReclasificarUnMovimientoHistoricoEsExplicitoUnicoYSinTocarLaCaja():void
+    {
+        $id=$this->abrir($this->owner,'20');
+        // Histórico del ERP (clave «mov:»), anterior a los conceptos: sin clasificación. Y otro que NO es manual (tiene su propio hecho contable).
+        $hist=$this->caja()->asentar($this->owner,$id,'egreso',700,'efectivo','Compra de limpieza previa a los conceptos','mov:'.$this->owner.':hist-1');
+        $ajeno=$this->caja()->asentar($this->owner,$id,'egreso',300,'efectivo','Pago obligación #9','erp.obligacion:'.$this->owner.':x');
+        $filaAntes=$this->r->uno('SELECT * FROM caja_movimientos WHERE id=?',[$hist]);
+        self::assertSame([$hist],array_map(fn($f)=>(int)$f['id'],$this->con()->historicos()),'Solo se ofrece el manual histórico');
+        $gasto=$this->concepto('Gasto menor','gasto',$this->cuenta('gasto'));$aporte=$this->concepto('Aporte','aporte_propietario',$this->cuenta('patrimonio'));
+        $this->rechazo(fn()=>$this->con()->reclasificar($this->recepcion,$this->d(['movimiento_id'=>$hist,'concepto_id'=>$gasto,'motivo'=>'Compra de limpieza'])),403);
+        $this->rechazo(fn()=>$this->con()->reclasificar($this->owner,$this->d(['movimiento_id'=>$ajeno,'concepto_id'=>$gasto,'motivo'=>'Intento sobre un pago'])),422);
+        $this->rechazo(fn()=>$this->con()->reclasificar($this->owner,$this->d(['movimiento_id'=>$hist,'concepto_id'=>$aporte,'motivo'=>'Sentido contrario'])),422);
+        $this->rechazo(fn()=>$this->con()->reclasificar($this->owner,$this->d(['movimiento_id'=>$hist,'concepto_id'=>$gasto,'motivo'=>'ya'])),422);
+        $x=$this->procesar();self::assertSame(0,$x['fallidos']);self::assertSame(0,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_caja_mov_conceptos')['n'],'Nada se clasificó solo');
+        self::assertSame(1000,$this->control()['diferencia'],'700 histórico + 300 de un pago sin asiento en este ensayo');
+        $this->con()->reclasificar($this->owner,$this->d(['movimiento_id'=>$hist,'concepto_id'=>$gasto,'motivo'=>'Compra de limpieza del mes anterior']));
+        $x=$this->procesar();self::assertSame(0,$x['fallidos']);
+        self::assertSame($filaAntes,$this->r->uno('SELECT * FROM caja_movimientos WHERE id=?',[$hist]),'El movimiento de caja no se tocó');
+        self::assertSame(-700,$this->saldoCaja());self::assertSame(700,$this->saldo($this->cuenta('gasto')));self::assertSame(300,$this->control()['diferencia'],'La diferencia histórica desapareció; queda solo el movimiento ajeno, que no se toca');
+        $asientos=$this->r->q("SELECT concepto FROM erp_cont_asientos WHERE concepto LIKE 'Caja (reclasificado%'");self::assertCount(1,$asientos);self::assertStringContainsString('hecho del '.substr($filaAntes['registrado_en'],0,10),$asientos[0]['concepto']);
+        // Una sola vez: ni se reclasifica de nuevo ni reprocesar duplica; queda auditado y ya no se ofrece.
+        $this->rechazo(fn()=>$this->con()->reclasificar($this->owner,$this->d(['movimiento_id'=>$hist,'concepto_id'=>$gasto,'motivo'=>'Segundo intento distinto'])),409);
+        $x=$this->procesar();self::assertSame(0,$x['fallidos']);self::assertCount(1,$this->r->q("SELECT id FROM erp_cont_asientos WHERE concepto LIKE 'Caja (reclasificado%'"));
+        self::assertSame([],$this->con()->historicos());
+        $c=$this->r->uno('SELECT creado_por,motivo,evento_id FROM erp_caja_mov_conceptos WHERE caja_id=?',[$hist]);self::assertSame($this->owner,(int)$c['creado_por']);self::assertGreaterThan(0,(int)$c['evento_id']);
+        self::assertStringContainsString('no se edita',$this->sqlFalla('UPDATE erp_caja_mov_conceptos SET concepto_id=concepto_id'));
+        // Ya clasificado, se puede reversar con las reglas normales (el asiento existe y se revierte).
+        $this->caja()->movimientoReversar($this->owner,$this->d(['movimiento_id'=>$hist,'motivo'=>'Se reclasificó por error de captura']));
+        $x=$this->procesar();self::assertSame(0,$x['fallidos']);self::assertSame(0,$this->saldoCaja());self::assertSame(0,$this->saldo($this->cuenta('gasto')));self::assertSame([],$this->cont()->integridad());
+    }
+    public function testReclasificarSinCuentaSoloDejaPendienteEseMovimiento():void
+    {
+        $id=$this->abrir($this->owner,'20');
+        $hist=$this->caja()->asentar($this->owner,$id,'ingreso',500,'efectivo','Aporte previo','mov:'.$this->owner.':hist-2');
+        $k=$this->concepto('Aporte sin cuenta','aporte_propietario',null);
+        $this->con()->reclasificar($this->owner,$this->d(['movimiento_id'=>$hist,'concepto_id'=>$k,'motivo'=>'Aporte del propietario en enero']));
+        $x=$this->procesar();self::assertSame(1,$x['fallidos'],'Solo falla el movimiento sin configuración');
+        $p=$this->con()->pendientes();self::assertCount(1,$p);self::assertStringContainsString('Asigna una cuenta del plan',$p[0]['falta']);
+        $this->con()->asignarCuenta($this->owner,$this->d(['concepto_id'=>$k,'cuenta'=>$this->cuenta('patrimonio')]));
+        $x=$this->procesar();self::assertSame(0,$x['fallidos']);self::assertSame(500,$this->saldoCaja());
+    }
     public function testLosMovimientosAnterioresNoSeReclasificanSolos():void
     {
         $id=$this->abrir($this->owner,'20');
