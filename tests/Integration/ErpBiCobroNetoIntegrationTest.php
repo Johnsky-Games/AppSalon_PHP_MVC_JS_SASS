@@ -171,9 +171,54 @@ final class ErpBiCobroNetoIntegrationTest extends TestCase
         $f=$this->r->uno("SELECT * FROM bi_notas_credito");
         self::assertSame([$nota,$v4,'autorizada',1739,261,2000,1],[(int)$f['nota_credito_id'],(int)$f['venta_original_id'],$f['estado'],(int)$f['base_centavos'],(int)$f['iva_centavos'],(int)$f['total_centavos'],(int)$f['lineas']]);
         self::assertSame(1,$this->n("SELECT COUNT(*) n FROM bi_notas_credito"),'la factura (tipo 01) no es nota de crédito');
-        self::assertSame($nota,(int)$this->r->uno("SELECT nota_credito_id FROM bi_devoluciones_venta WHERE devolucion_id=$dev")['nota_credito_id']);
+        $e=$this->r->uno("SELECT nota_credito_vinculada_id v,nota_credito_efectiva_id e FROM bi_devoluciones_venta WHERE devolucion_id=$dev");self::assertSame([$nota,$nota],[(int)$e['v'],(int)$e['e']]);
+        self::assertSame([null,null,1],array_map(fn($x)=>$x===null?null:(int)$x,array_values($this->r->uno("SELECT sustituye_a_id,reemplazada_por_id,es_nota_vigente FROM bi_notas_credito"))));
         self::assertSame($antes,$this->suma('bi_flujo_dinero','importe_con_signo_centavos'),'una nota de crédito no mueve dinero');
-        self::assertSame($this->suma('bi_notas_credito','total_centavos'),$this->suma('bi_devoluciones_venta','monto_con_impuesto_centavos',"nota_credito_id=$nota"),'la nota respalda exactamente la devolución comercial enlazada');
+        self::assertSame($this->suma('bi_notas_credito','total_centavos'),$this->suma('bi_devoluciones_venta','monto_con_impuesto_centavos',"nota_credito_efectiva_id=$nota"),'la nota respalda exactamente la devolución comercial enlazada');
+    }
+
+    public function testUnaNotaRechazadaYSuSustitutaResuelvenLaNotaEfectivaDeCadaDevolucion():void
+    {
+        $v=$this->venta('3');$this->efectivo($v,'60');$this->devolver($v,'1');$this->devolver($v,'1');$this->devolver($v,'1');
+        $devs=array_map(fn($f)=>(int)$f['id'],$this->r->q('SELECT id FROM erp_devoluciones WHERE venta_id=? ORDER BY id',[$v]));
+        $linea=(int)$this->r->uno('SELECT linea_id FROM erp_devoluciones WHERE id=?',[$devs[0]])['linea_id'];
+        $perfil=$this->inserta("INSERT INTO erp_fiscal_perfiles(ruc,ambiente,establecimiento,punto_emision,datos_json,certificado_cifrado,certificado_sha256,creado_por,creado_en) VALUES('1790012345001','1','001','001','{}','x',REPEAT('d',64),{$this->owner},NOW())");
+        $doc=function(string $tipo,?int $origen,?int $sustituye,string $estado,string $k,string $acceso,string $numero)use($perfil,$v):int{
+            $snap=$this->db->real_escape_string(json_encode(['emisor'=>['ruc'=>'1790012345001','ambiente'=>'1'],'k'=>$k]));
+            return $this->inserta("INSERT INTO erp_fiscal_documentos(perfil_id,tipo,documento_origen_id,sustituye_a_id,venta_id,clave_operacion,huella,clave_acceso,numero,snapshot_json,xml_firmado,xml_sha256,estado,creado_por,creado_en,actualizado_en) VALUES($perfil,'$tipo',".($origen??'NULL').",".($sustituye??'NULL').",$v,REPEAT('$k',64),REPEAT('$k',64),REPEAT('$acceso',49),'$numero','$snap','<x/>',REPEAT('$k',64),'$estado',{$this->owner},NOW(),NOW())");
+        };
+        $factura=$doc('01',null,null,'autorizada','1','1','001-001-000000010');
+        $n1=$doc('04',$factura,null,'rechazada','2','2','001-001-000000011');      // rechazada: cubría las devoluciones 1 y 2
+        $n2=$doc('04',$factura,$n1,'rechazada','3','3','001-001-000000012');        // sustituta, también rechazada: hereda 1 y 2 y suma la 3
+        $n3=$doc('04',$factura,$n2,'autorizada','4','4','001-001-000000013');       // segunda sustitución, autorizada: cadena de tres notas
+        foreach([[$n1,[2000,2000],[1739,1739],[261,261]],[$n2,[2000,2000,2000],[1739,1739,1739],[261,261,261]],[$n3,[2000,2000,2000],[1739,1739,1739],[261,261,261]]] as [$nota,$tot,$base,$iva]){
+            // Una línea fiscal por nota (clave primaria documento+línea): el total de la nota es la suma de lo que acredita.
+            $this->inserta("INSERT INTO erp_fiscal_nc_lineas(documento_id,linea_id,cantidad_milesimas,base_centavos,iva_centavos,total_centavos) VALUES($nota,$linea,".(1000*count($tot)).",".array_sum($base).",".array_sum($iva).",".array_sum($tot).")");
+        }
+        $this->inserta("INSERT INTO erp_fiscal_nc_devoluciones(documento_id,devolucion_id) VALUES($n1,{$devs[0]}),($n1,{$devs[1]}),($n3,{$devs[2]})");
+        $f=[];foreach($this->db->query("SELECT devolucion_id,nota_credito_vinculada_id vinculada,nota_credito_efectiva_id efectiva FROM bi_devoluciones_venta WHERE venta_original_id=$v ORDER BY devolucion_id")->fetch_all(MYSQLI_ASSOC) as $x)$f[(int)$x['devolucion_id']]=[(int)$x['vinculada'],(int)$x['efectiva']];
+        self::assertSame([$devs[0]=>[$n1,$n3],$devs[1]=>[$n1,$n3],$devs[2]=>[$n3,$n3]],$f,'las devoluciones heredadas por la nota rechazada se resuelven a la nota vigente');
+        self::assertSame(3,$this->n("SELECT COUNT(*) n FROM bi_devoluciones_venta WHERE venta_original_id=$v"),'una fila por devolución aunque haya cadena de notas');
+        $notas=[];foreach($this->db->query("SELECT nota_credito_id,sustituye_a_id,reemplazada_por_id,es_nota_vigente,estado FROM bi_notas_credito ORDER BY nota_credito_id")->fetch_all(MYSQLI_ASSOC) as $x)$notas[(int)$x['nota_credito_id']]=[$x['sustituye_a_id']===null?null:(int)$x['sustituye_a_id'],$x['reemplazada_por_id']===null?null:(int)$x['reemplazada_por_id'],(int)$x['es_nota_vigente'],$x['estado']];
+        self::assertSame([$n1=>[null,$n2,0,'rechazada'],$n2=>[$n1,$n3,0,'rechazada'],$n3=>[$n2,null,1,'autorizada']],$notas);
+        // Conciliación: lo que acredita la nota vigente y autorizada = devoluciones cuya nota efectiva es esa.
+        self::assertSame($this->suma('bi_notas_credito','total_centavos',"nota_credito_id=$n3 AND es_nota_vigente=1 AND estado='autorizada'"),$this->suma('bi_devoluciones_venta','monto_con_impuesto_centavos',"nota_credito_efectiva_id=$n3"));
+    }
+
+    public function testLaCitaDeUnPagoSobreviveAlBorradoDeLaCitaYUnaVentaSinCitaNoInventaUna():void
+    {
+        $historica=$this->inserta("INSERT INTO pagos(cita_id,cita_referencia_id,referencia_pago,proveedor,monto,moneda,estado,metodo_pago,idempotency_key,pagado_at,estado_verificacion) VALUES(NULL,555,'HIST-1','manual',12.00,'USD','completado','efectivo','hist-1',NOW(),'confirmado')");
+        $this->inserta("INSERT INTO caja_movimientos(tipo,monto_centavos,concepto,metodo,pago_id,idempotencia,huella,registrado_en) VALUES('ingreso',1200,'Cobro histórico','efectivo',$historica,'bc:hist',REPEAT('d',64),NOW())");
+        $this->inserta("INSERT INTO cobros_devoluciones(pago_id,cita_id,monto_centavos,metodo,motivo,origen,registrado_en) VALUES($historica,NULL,200,'efectivo','Histórica','migracion',NOW())");
+        $this->inserta("INSERT INTO caja_movimientos(tipo,monto_centavos,concepto,metodo,pago_id,devolucion_id,idempotencia,huella,registrado_en) VALUES('egreso',200,'Devolución histórica','efectivo',$historica,1,'bc:hist-dev',REPEAT('e',64),NOW())");
+        $sinCita=$this->inserta("INSERT INTO pagos(cita_id,cita_referencia_id,referencia_pago,proveedor,monto,moneda,estado,metodo_pago,idempotency_key,pagado_at,estado_verificacion) VALUES(NULL,0,'SINCITA-1','manual',9.00,'USD','completado','efectivo','sincita-1',NOW(),'confirmado')");
+        $this->inserta("INSERT INTO caja_movimientos(tipo,monto_centavos,concepto,metodo,pago_id,idempotencia,huella,registrado_en) VALUES('ingreso',900,'Sin cita','efectivo',$sinCita,'bc:sincita',REPEAT('f',64),NOW())");
+        self::assertSame([555,555,null],[
+            (int)$this->r->uno("SELECT cita_origen_id FROM bi_flujo_dinero WHERE pago_id=$historica AND sentido='entrada'")['cita_origen_id'],
+            (int)$this->r->uno("SELECT cita_origen_id FROM bi_flujo_dinero WHERE pago_id=$historica AND sentido='salida'")['cita_origen_id'],
+            $this->r->uno("SELECT cita_origen_id FROM bi_flujo_dinero WHERE pago_id=$sinCita")['cita_origen_id'],
+        ]);
+        self::assertSame(555,(int)$this->r->uno("SELECT cita_origen_id FROM bi_devoluciones_dinero WHERE pago_id=$historica")['cita_origen_id'],'la devolución de dinero conserva la cita del pago original');
     }
 
     public function testElGranoSeConservaSinDuplicarFilasAlUnirTablas():void

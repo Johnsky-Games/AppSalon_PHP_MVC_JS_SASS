@@ -44,10 +44,12 @@ Cada vista tiene **una fila por hecho** con su identificador único, y todas las
 | `bi_flujo_dinero` | movimiento de caja | `pagos` (id), `erp_pago_aplicaciones` (pago_id), `erp_prepago_movimientos` (caja_id único), `erp_ventas` (id) |
 | `bi_aplicaciones_saldo` | movimiento de aplicación o restitución de prepago | `erp_paquetes` (prepago_id único) |
 | `bi_devoluciones_dinero` | devolución de cobro (`cobros_devoluciones`) | `pagos` (id), `erp_pago_aplicaciones` (pago_id), `erp_ventas` (id) |
-| `bi_devoluciones_venta` | devolución comercial por línea | `erp_ventas` (id), `erp_fiscal_nc_devoluciones` (devolucion_id único) |
-| `bi_notas_credito` | nota de crédito fiscal | totales por documento calculados aparte (sin multiplicar por líneas) |
+| `bi_devoluciones_venta` | devolución comercial por línea | `erp_ventas` (id), `erp_fiscal_nc_devoluciones` (devolucion_id único), nota efectiva por cadena de sustituciones (una sola sucesora por nota) |
+| `bi_notas_credito` | nota de crédito fiscal | totales por documento calculados aparte (sin multiplicar por líneas); sucesora (`sustituye_a_id` único) |
 
-Los pagos de citas del módulo anterior (sin venta ERP) conservan `cita_origen_id` y tienen `venta_original_id` nulo; no se inventa la venta.
+Los pagos de citas del módulo anterior (sin venta ERP) conservan `cita_origen_id` y tienen `venta_original_id` nulo; no se inventa la venta. `cita_origen_id` usa la referencia duradera de la cita (`cita_referencia_id`, que sobrevive al borrado de la cita) y es nulo cuando la venta no tiene cita.
+
+**Sustitución de notas de crédito.** Una nota rechazada se sustituye por otra (`sustituye_a_id`, una sola sucesora por nota, de forma que puede haber cadenas). Las devoluciones heredadas siguen enlazadas a la rechazada y solo las nuevas a la sustituta, mientras que los totales de la sustituta incluyen ambas. Por eso `bi_devoluciones_venta` expone dos columnas: `nota_credito_vinculada_id` (el enlace tal como está guardado) y `nota_credito_efectiva_id` (resuelve la cadena hasta la nota vigente, la última sucesora). `bi_notas_credito` indica `sustituye_a_id`, `reemplazada_por_id` y `es_nota_vigente`. La nota que cuenta para una métrica fiscal es la vigente con `estado = 'autorizada'`.
 
 ## Reconciliación con los registros existentes (pruebas)
 1. Σ de `bi_flujo_dinero` (entradas y salidas de dinero real) = Σ `caja_movimientos` menos las filas de pagos simulados o no verificados.
@@ -55,7 +57,7 @@ Los pagos de citas del módulo anterior (sin venta ERP) conservan `cita_origen_i
 3. Σ salidas `devolucion_de_cobro` = Σ `bi_devoluciones_dinero` con `sale_de_caja = 1`; y Σ de `bi_devoluciones_dinero` con `retorna_a_saldo_prepago = 1` = Σ restituciones de `bi_aplicaciones_saldo`.
 4. Σ aplicaciones de saldo (`bi_aplicaciones_saldo`, aplicación − restitución) = Σ `pagos` con método `prepago` (no entran en `bi_flujo_dinero`).
 5. Por venta: dinero devuelto ≤ lo cobrado y ≤ la devolución comercial; la devolución comercial coincide con las líneas (`devuelto_milesimas` ↔ `bi_devoluciones_venta`).
-6. Notas de crédito: total de `bi_notas_credito` = Σ de sus líneas fiscales y no aparece en `bi_flujo_dinero`.
+6. Notas de crédito: total de `bi_notas_credito` = Σ de sus líneas fiscales y no aparece en `bi_flujo_dinero`; el total de la nota vigente y autorizada = Σ de las devoluciones cuya nota efectiva es esa, aunque parte de ellas siga enlazada a una nota rechazada anterior.
 
 ## Pruebas (`ErpBiCobroNetoIntegrationTest`)
 Escenario con flujos reales del ERP (efectivo, transferencia pendiente y verificada, carga y aplicación de prepago, devoluciones parciales y totales, reembolso de prepago, un paquete y una nota de crédito) más un pago simulado y uno sin verificar con asiento de caja. Comprueba las seis reconciliaciones de arriba, que cada vista tiene una fila por hecho (incluso con pagos idénticos en una misma venta), que ninguna admite `UPDATE` ni `DELETE`, que no expone datos personales ni texto libre y que un usuario de MySQL con `SELECT` solo sobre las cinco vistas las lee sin poder leer las tablas de origen. Mutaciones comprobadas: sin la exclusión de simulados y no verificados el cobro suma de más (63,00 frente a 53,00), y contar las cargas de prepago como cobro lo infla (103,00 frente a 53,00).
