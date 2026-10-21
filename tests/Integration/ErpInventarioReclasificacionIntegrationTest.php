@@ -166,6 +166,21 @@ final class ErpInventarioReclasificacionIntegrationTest extends TestCase
         $x=$this->procesar();self::assertSame(0,$x['fallidos'],'Al asignar la cuenta se reintenta de inmediato');
         self::assertSame(3,$this->asientos());self::assertSame(0,$this->saldo($g1));self::assertSame(500,$this->saldo($g2));self::assertSame(-500,$this->saldoInventario());self::assertSame([],$this->con()->pendientes());
     }
+    public function testReimputarSobreUnAsientoVigenteYaReversadoAMano_NoLoReversaDeNuevoNiDejaLaColaFallida():void
+    {
+        $g1=$this->cuenta('gasto');$g2=$this->cuenta('gasto',1);$a=$this->concepto('Merma A','merma_o_perdida',$g1);$b=$this->concepto('Merma B','merma_o_perdida',$g2);
+        $mov=$this->historico('salida','2');$this->con()->reclasificar($this->owner,$this->d(['movimiento_id'=>$mov,'concepto_id'=>$a,'motivo'=>'Clasificación inicial del ajuste']));$this->procesar();
+        $orig=(int)$this->r->uno("SELECT id FROM erp_cont_asientos WHERE tipo='automatico'")['id'];
+        // Alguien usa «Reversar este asiento» del Diario sobre el asiento vigente: el original ya está anulado a mano.
+        $this->cont()->reversar($this->owner,$this->d(['asiento_id'=>$orig,'motivo'=>'Anulado a mano desde el diario']));
+        self::assertSame(0,$this->saldo($g1));self::assertSame(2,$this->asientos());
+        $this->con()->reimputar($this->owner,$this->d(['movimiento_id'=>$mov,'concepto_id'=>$b,'esperado_concepto_id'=>$a,'motivo'=>'Imputar al concepto correcto']));
+        $x=$this->procesar();self::assertSame(0,$x['fallidos'],'La reimputación no intenta reversar de nuevo lo ya reversado');
+        self::assertSame(3,$this->asientos(),'Original + reverso manual + nueva imputación; sin segundo reverso');
+        self::assertSame(0,$this->saldo($g1));self::assertSame(500,$this->saldo($g2));self::assertSame(-500,$this->saldoInventario(),'El ajuste queda reconocido una sola vez');
+        self::assertSame([],$this->cont()->integridad());self::assertTrue($this->cont()->balanceComprobacion('2099-12-31')['cuadra']);
+        $x=$this->procesar();self::assertSame(3,$this->asientos(),'Reprocesar no duplica');
+    }
     public function testLaReimputacionSeSerializaSobreElMovimientoYLaCadenaNoSeBifurca():void
     {
         $a=$this->concepto('Merma A','merma_o_perdida',$this->cuenta('gasto'));$b=$this->concepto('Merma B','merma_o_perdida',$this->cuenta('gasto',1));$c=$this->concepto('Merma C','merma_o_perdida',$this->cuenta('gasto',2));

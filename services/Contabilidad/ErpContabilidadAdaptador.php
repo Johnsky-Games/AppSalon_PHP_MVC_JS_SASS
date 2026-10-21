@@ -293,6 +293,8 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
         $ev=(int)$d['vigente_evento_id'];
         $vig=$this->r->uno("SELECT id,numero FROM erp_cont_asientos WHERE origen LIKE ? AND tipo<>'reverso' ORDER BY id LIMIT 1",['outbox:ERP-'.$ev.'-contabilidad#%']);
         $salida=[];
+        // Si alguien ya anuló a mano ese asiento (Diario → «Reversar este asiento»), ya no es la imputación vigente: se contabiliza solo la nueva, sin reversar dos veces.
+        if($vig&&$this->r->uno('SELECT id FROM erp_cont_asientos WHERE reversa_de_id=?',[(int)$vig['id']]))$vig=null;
         if($vig){
             $lineas=[];foreach($this->r->q('SELECT * FROM erp_cont_lineas WHERE asiento_id=? ORDER BY nro',[(int)$vig['id']]) as $l)$lineas[]=['cuenta_id'=>(int)$l['cuenta_id'],'debe'=>(int)$l['haber_centavos'],'haber'=>(int)$l['debe_centavos'],'contacto_id'=>$l['contacto_id'],'referencia'=>$l['referencia']];
             $salida[]=['concepto'=>'Reverso por reimputación del ajuste de inventario '.(int)$d['movimiento_id'].' (asiento '.$vig['numero'].')','reversa_de'=>(int)$vig['id'],'lineas'=>$lineas];
