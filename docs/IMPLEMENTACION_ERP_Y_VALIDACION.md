@@ -325,5 +325,5 @@ Rama `feature/erp-inventario-conceptos` (apilada sobre `docs/reconciliacion-caja
 
 * **Migración 055** (+2 tablas): `erp_inv_conceptos` (nombre, naturaleza, sentido, cuenta del plan; sin siembra) y `erp_inv_ajuste_conceptos` (una clasificación por movimiento y por solicitud, de solo anexar).
 * **Mismo criterio que caja:** el concepto decide el sentido y el tipo de cuenta; nada se clasifica como pérdida o ganancia por defecto; bloqueo acotado a la contabilización sin configurar.
-* **Pruebas:** 6 de integración (74 aserciones): concepto obligatorio, activo y de sentido coincidente; validación de naturaleza y cuenta; asiento valorizado al costo con la cuenta de cada concepto (merma 5,00 y sobrante 3,75 a 2,50 por unidad); pendientes acotados y desbloqueo al configurar; solicitudes previas sin clasificar; pantallas. Mutación comprobada: una contrapartida fija rompe la prueba.
+* **Pruebas:** 7 de integración (82 aserciones): concepto obligatorio, activo y de sentido coincidente; validación de naturaleza y cuenta; asiento valorizado al costo con la cuenta de cada concepto (merma 5,00 y sobrante 3,75 a 2,50 por unidad); pendientes acotados y desbloqueo al configurar; solicitudes previas sin clasificar; pantallas. Mutación comprobada: una contrapartida fija rompe la prueba.
 

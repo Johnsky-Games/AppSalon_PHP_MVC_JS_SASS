@@ -115,6 +115,7 @@ Un ajuste de stock no es por sí mismo pérdida ni ganancia. La solicitud de aju
 | Uso interno u obsequio | disminuye stock | gasto |
 
 * **Asiento al aprobar:** valorizado con el costo del propio movimiento de inventario (foto al aprobar; cantidad × costo, redondeo comercial). Disminuye → Dr cuenta del concepto · Cr inventario; incrementa → Dr inventario · Cr cuenta del concepto. La cuenta de la contrapartida no puede ser la de inventario.
+* **Tope de valor:** un ajuste con concepto cuyo valor (cantidad × costo) no cabe en una línea del libro se rechaza al aprobar, antes de tocar el stock.
 * **Bloqueo acotado:** si el concepto no tiene cuenta válida, el ajuste queda aprobado y aplicado al stock, y solo su contabilización queda pendiente; la pestaña muestra qué completar y, al asignar la cuenta, se reintenta de inmediato.
 * **Corrección:** un ajuste se corrige con otro ajuste contrario aprobado (el inventario es de solo anexar), cada uno con su concepto y su asiento.
 * **Sin duplicados ni reclasificación:** una clasificación por movimiento (clave primaria) y una por solicitud (única); las solicitudes creadas antes de 055 (sin concepto) se aprueban como antes y no se contabilizan solas.

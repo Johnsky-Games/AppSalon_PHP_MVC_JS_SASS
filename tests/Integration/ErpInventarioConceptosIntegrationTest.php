@@ -103,6 +103,17 @@ final class ErpInventarioConceptosIntegrationTest extends TestCase
         $this->con()->asignarCuenta($this->owner,$this->d(['concepto_id'=>$falta,'cuenta'=>$this->cuenta('gasto',1)]));
         $x=$this->procesar();self::assertSame(0,$x['fallidos']);self::assertSame([],$this->con()->pendientes());self::assertSame(-2*250,$this->saldoInventario(),"Dos ajustes de 1 unidad a 2,50");
     }
+    public function testUnAjusteCuyoValorNoCabeEnUnAsientoSeRechazaAntesDeTocarElStock():void
+    {
+        $k=$this->concepto('Sobrante grande','sobrante_de_conteo',$this->cuenta('ingreso'));
+        $this->db->query("UPDATE inventario_productos SET costo_centavos=100000000 WHERE id={$this->prod}");// 1 000 000,00 por unidad
+        $s=$this->solicitar($k,'entrada','1000');// 1 000 u × 1 000 000,00 = 1 000 000 000,00 > máximo de un asiento
+        $e=$this->rechazo(fn()=>$this->aprobar($s),422);self::assertStringContainsString('excede el máximo de un asiento',$e->getMessage());
+        self::assertSame(10000,$this->stock(),'El stock no se tocó');self::assertSame('solicitada',$this->r->uno('SELECT estado FROM erp_solicitudes WHERE id=?',[$s])['estado']);
+        self::assertSame(0,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_inv_ajuste_conceptos')['n']);
+        $ok=$this->solicitar($k,'entrada','1');$this->aprobar($ok);self::assertSame(11000,$this->stock(),'Un ajuste que sí cabe se aplica');
+        $x=$this->procesar();self::assertSame(0,$x['fallidos']);
+    }
     public function testLasSolicitudesAnterioresSinConceptoNoSeClasificanNiSeContabilizanSolas():void
     {
         // Solicitud pendiente creada antes de los conceptos (sin concepto_id).

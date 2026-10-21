@@ -47,6 +47,8 @@ final class ErpAprobacionService extends ErpService
                     $qty=ValoresExactos::decimal($datos['cantidad'],3);$saldo=(int)$p['stock_milesimas']+($datos['tipo']==='entrada'?$qty:-$qty);
                     $reservas=$this->r->q("SELECT cantidad_milesimas FROM erp_stock_reservas WHERE producto_id=? AND estado='activa' FOR SHARE",[(int)$p['id']]);
                     if($saldo<array_sum(array_column($reservas,'cantidad_milesimas'))||$saldo>9999999999)throw new ErpException('El ajuste afectaría stock reservado o excede el rango.');
+                    // Un ajuste con concepto se contabiliza en un solo asiento: su valor (cantidad × costo) debe caber en el límite de una línea del libro, o quedaría pendiente para siempre.
+                    if(!empty($datos['concepto_id'])){$costoU=(int)$p['costo_centavos'];if(($qty>0&&$costoU>intdiv(PHP_INT_MAX-500,$qty))||intdiv($costoU*$qty+500,1000)>99999999999)throw new ErpException('El valor del ajuste (cantidad × costo) excede el máximo de un asiento contable: divídelo en ajustes menores.');}
                     $this->r->q('UPDATE inventario_productos SET stock_milesimas=? WHERE id=?',[$saldo,(int)$p['id']]);$clave='erp.ajuste:'.$id;
                     $this->r->q('INSERT INTO inventario_movimientos(producto_id,actor_id,tipo,cantidad_milesimas,saldo_milesimas,costo_centavos,motivo,idempotencia,huella,registrado_en) VALUES(?,?,?,?,?,?,?,?,?,?)',[(int)$p['id'],$actor,$datos['tipo'],$qty,$saldo,(int)$p['costo_centavos'],mb_substr('Ajuste aprobado #'.$id.' · '.$s['motivo'],0,180),$clave,hash('sha256',$clave),$this->r::ahora()]);
                     $mov=$this->r->id();
