@@ -141,15 +141,22 @@ final class ErpCajaConceptosIntegrationTest extends TestCase
     public function testReversoDeUnMovimientoAnteriorAlInicioContableSeContabilizaComoMovimientoActual():void
     {
         $k=$this->concepto('Retiro del dueño','retiro_propietario',$this->cuenta('patrimonio'));$this->abrir($this->owner,'50');
+        // Asiento de apertura del libro (saldo inicial de caja 50,00): el reverso no debe tocarlo.
+        $this->cont()->asiento($this->owner,$this->d(['fecha'=>'2026-01-01','concepto'=>'Apertura','apertura'=>'1','lineas'=>[['cuenta'=>$this->r->uno("SELECT c.codigo FROM erp_cont_roles r JOIN erp_cont_cuentas c ON c.id=r.cuenta_id WHERE r.rol='caja'")['codigo'],'debe'=>'50.00'],['cuenta'=>$this->cuenta('patrimonio',1),'haber'=>'50.00']]]));
+        $apertura=fn()=>$this->r->q("SELECT l.id,l.cuenta_id,l.debe_centavos,l.haber_centavos FROM erp_cont_lineas l JOIN erp_cont_asientos a ON a.id=l.asiento_id WHERE a.concepto='Apertura' ORDER BY l.id");
+        $antesApertura=$apertura();self::assertCount(2,$antesApertura);
         // El original ocurre antes del inicio contable: se confirma sin asiento.
         $this->db->query("UPDATE erp_cont_config SET inicio_contable='2099-01-01' WHERE id=1");
-        $m=$this->mov($this->owner,$k,'20.00');$x=$this->procesar();self::assertSame(0,$x['fallidos']);self::assertSame(0,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_cont_asientos')['n'],'El original previo al inicio no tiene asiento');
+        $m=$this->mov($this->owner,$k,'20.00');$x=$this->procesar();self::assertSame(0,$x['fallidos']);self::assertSame(1,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_cont_asientos')['n'],'El original previo al inicio no tiene asiento (solo la apertura)');
         $this->db->query("UPDATE erp_cont_config SET inicio_contable='2026-01-01' WHERE id=1");
         $this->caja()->movimientoReversar($this->owner,$this->d(['movimiento_id'=>$m,'motivo'=>'Se registró con el concepto equivocado']));
         $x=$this->procesar();self::assertSame(0,$x['fallidos']);
-        self::assertSame(1,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_cont_asientos')['n'],'El reverso mueve el efectivo de hoy y debe quedar en el libro');
-        self::assertSame(2000,$this->saldoCaja(),'Entró efectivo hoy: Dr caja');self::assertSame('automatico',$this->r->uno('SELECT tipo FROM erp_cont_asientos')['tipo'],'No es una anulación: no hay asiento que revertir');
-        self::assertSame(-2000,$this->saldo($this->cuenta('patrimonio')));
+        self::assertSame(2,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_cont_asientos')['n'],'Apertura + un solo asiento del reverso');
+        self::assertSame(5000+2000,$this->saldoCaja(),'Apertura 50,00 más el efectivo que entró hoy con el reverso');self::assertSame('automatico',$this->r->uno("SELECT tipo FROM erp_cont_asientos WHERE concepto<>'Apertura'")['tipo'],'No es una anulación: no hay asiento que revertir');
+        self::assertSame($antesApertura,$apertura(),'El asiento de apertura no cambió');
+        // Reprocesar la cola no duplica nada.
+        $x=$this->procesar();self::assertSame(0,$x['fallidos']);self::assertSame(2,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_cont_asientos')['n']);
+        self::assertSame([],$this->cont()->integridad());self::assertTrue($this->cont()->balanceComprobacion('2099-12-31')['cuadra']);
     }
     public function testLosMovimientosAnterioresNoSeReclasificanSolos():void
     {
@@ -159,6 +166,7 @@ final class ErpCajaConceptosIntegrationTest extends TestCase
         $k=$this->concepto('Gasto menor','gasto',$this->cuenta('gasto'));$this->mov($this->owner,$k,'1.00');
         $x=$this->procesar();self::assertSame(0,$x['fallidos']);
         self::assertNull($this->r->uno('SELECT caja_id FROM erp_caja_mov_conceptos WHERE caja_id=?',[$hist]),'El histórico no se clasificó');
+        $this->rechazo(fn()=>$this->caja()->movimientoReversar($this->owner,$this->d(['movimiento_id'=>$hist,'motivo'=>'Intento de reversar un histórico'])),404);
         self::assertSame(-100,$this->saldoCaja(),'Solo lo clasificado entró al libro');
         self::assertSame(700,$this->control()['diferencia'],'La diferencia del control es exactamente el movimiento histórico sin clasificar');
     }
