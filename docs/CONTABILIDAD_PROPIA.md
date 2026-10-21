@@ -68,7 +68,7 @@ Cada hecho distinto genera su asiento. Un evento con varios hechos genera varios
 
 * **Ingresos y egresos manuales de caja** y los **ajustes manuales de inventario** todavía no tienen regla contable: la conciliación de caja los muestra como diferencia.
 * El IVA pagado en compras se estima con la proporción de la orden hasta que la factura del proveedor registre su desglose.
-* Sin retenciones, anexos tributarios, depreciación automática, centros de costo, presupuestos ni multimoneda. La conciliación bancaria contra extractos existe desde la migración 051 (ver «Tesorería bancaria»); no hay importación automática de archivos de cada banco ni asientos generados desde el extracto.
+* Sin retenciones, anexos tributarios, depreciación tributaria (la depreciación contable por política está en `docs/DEPRECIACION_ACTIVOS.md`), centros de costo, presupuestos ni multimoneda. La conciliación bancaria contra extractos existe desde la migración 051 (ver «Tesorería bancaria»); no hay importación automática de archivos de cada banco ni asientos generados desde el extracto.
 * La nómina propia (siguiente etapa) agregará su contabilización; hoy solo se contabiliza la comisión pagada de forma directa.
 * Las políticas de reconocimiento (ingreso a la entrega o prestación, gasto de comisión al liquidar) son una propuesta de ensayo sujeta a la validación del contador.
 

@@ -31,6 +31,8 @@ final class RevocacionApiIntegrationTest extends TestCase
         $stmt=$this->db->prepare("INSERT INTO usuarios(nombre,apellido,email,password,telefono,admin,confirmado) VALUES ('Revocation','Test',?,'hash','0991234567',0,1)");
         $stmt->bind_param('s',$email);$stmt->execute();$this->id=(int)$this->db->insert_id;$stmt->close();
         $this->db->query("INSERT INTO usuario_accesos(usuario_id,rol,activo) VALUES ({$this->id},'cliente',1)");
+        // Si esta prueba corre primero en el proceso, iniciar_sesion_segura() de los controladores arrancaría la sesión y descartaría $_SESSION: se inicia antes.
+        iniciar_sesion_segura();
         $_SESSION=['login'=>true,'id'=>$this->id,'admin'=>'0','version_sesion'=>1,'csrf_token'=>'token-valid-qa'];
         $_POST=['csrf_token'=>'token-valid-qa'];$_GET=[];
         $_SERVER['HTTP_ACCEPT']='application/json';$_SERVER['REQUEST_METHOD']='POST';http_response_code(200);

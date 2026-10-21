@@ -188,7 +188,7 @@ final class ErpController
     {
         exigir_permiso('contabilidad.ver');$r=new ErpRepository();$c=new \Services\ErpContabilidadService($r);
         $hoy=(new \DateTimeImmutable('now',new \DateTimeZone('America/Guayaquil')))->format('Y-m-d');$q=$_GET;
-        $vista=in_array($q['vista']??'',['resumen','diario','mayor','balances','plan','periodos','asiento','conciliacion','tesoreria'],true)?$q['vista']:'resumen';
+        $vista=in_array($q['vista']??'',['resumen','diario','mayor','balances','plan','periodos','asiento','conciliacion','tesoreria','activos'],true)?$q['vista']:'resumen';
         $fecha=static function(mixed $v,string $por):string{$d=is_string($v)?\DateTimeImmutable::createFromFormat('!Y-m-d',$v):false;return ($d&&$d->format('Y-m-d')===$v)?$v:$por;};
         $desde=$fecha($q['desde']??null,substr($hoy,0,4).'-01-01');$hasta=$fecha($q['hasta']??null,$hoy);
         if($hasta<$desde||(new \DateTimeImmutable($desde))->diff(new \DateTimeImmutable($hasta))->days>3660)throw new ErpException('Rango de fechas no válido.');
@@ -202,11 +202,20 @@ final class ErpController
             'plan'=>$datos+=['roles'=>$r->q('SELECT r.rol,c.codigo,c.nombre FROM erp_cont_roles r JOIN erp_cont_cuentas c ON c.id=r.cuenta_id ORDER BY r.rol'),'rolesDisponibles'=>\Services\ErpContabilidadService::ROLES],
             'periodos'=>$datos+=['periodos'=>$r->q('SELECT * FROM erp_cont_periodos ORDER BY anio DESC,mes DESC LIMIT 60')],
             'conciliacion'=>$datos+=['conc'=>$c->conciliacion($hasta)],
+            'activos'=>$datos+=self::datosActivosFijos($r,$q,$hoy),
             'tesoreria'=>$datos+=self::datosTesoreria($r,$q),
             default=>null,
         };
         if($vista==='mayor'&&$datos['cuentaId'])$datos['mayor']=$c->mayor($datos['cuentaId'],$desde,$hasta);
         self::render($router,'contabilidad',$datos);
+    }
+    /** Datos de la pestaña «Activos fijos»: políticas, fichas, corridas, bajas, reporte del año y cuadro de un activo. Solo lectura. */
+    private static function datosActivosFijos(ErpRepository $r,array $q,string $hoy):array
+    {
+        $dep=new \Services\ErpDepreciacionService($r);
+        $anio=filter_var($q['anio']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>2000,'max_range'=>2100]])?:(int)substr($hoy,0,4);
+        $activo=(int)(filter_var($q['activo']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0);
+        return ['depCategorias'=>$dep->categorias(),'depActivos'=>$dep->activos(),'depCorridas'=>$dep->corridas(),'depBajas'=>$dep->bajas(),'depAnio'=>$anio,'depPorMes'=>$dep->porMes($anio),'depCuadro'=>$activo?$dep->cuadro($activo):null,'depMotivos'=>\Services\ErpDepreciacionService::MOTIVOS_BAJA];
     }
     /** Tesorería bancaria dentro de Contabilidad: cuentas, extractos importados, sugerencias e informe de conciliación. */
     private static function datosTesoreria(ErpRepository $r,array $q):array
@@ -452,6 +461,8 @@ final class ErpController
             'cont_inicio'=>[\Services\ErpContabilidadService::class,'inicio','contabilidad'],'cont_cuenta'=>[\Services\ErpContabilidadService::class,'cuenta','contabilidad'],'cont_cuenta_estado'=>[\Services\ErpContabilidadService::class,'cuentaEstado','contabilidad'],
             'cont_rol'=>[\Services\ErpContabilidadService::class,'rol','contabilidad'],'cont_asiento'=>[\Services\ErpContabilidadService::class,'asiento','contabilidad'],'cont_reverso'=>[\Services\ErpContabilidadService::class,'reversar','contabilidad'],
             'cont_periodo_cerrar'=>[\Services\ErpContabilidadService::class,'cerrarPeriodo','contabilidad'],'cont_periodo_reabrir'=>[\Services\ErpContabilidadService::class,'reabrirPeriodo','contabilidad'],'cont_ejercicio_cerrar'=>[\Services\ErpContabilidadService::class,'cerrarEjercicio','contabilidad'],
+            'dep_categoria'=>[\Services\ErpDepreciacionService::class,'categoriaCrear','contabilidad'],'dep_ficha'=>[\Services\ErpDepreciacionService::class,'fichaCrear','contabilidad'],'dep_calcular'=>[\Services\ErpDepreciacionService::class,'calcular','contabilidad'],
+            'dep_contabilizar'=>[\Services\ErpDepreciacionService::class,'contabilizar','contabilidad'],'dep_anular'=>[\Services\ErpDepreciacionService::class,'anular','contabilidad'],'dep_baja'=>[\Services\ErpDepreciacionService::class,'bajaRegistrar','contabilidad'],'dep_baja_anular'=>[\Services\ErpDepreciacionService::class,'bajaAnular','contabilidad'],
             'fiscal_nota_credito'=>[\Services\ErpFiscalService::class,'notaCredito','facturacion'],
             'fiscal_verificar'=>[\Services\ErpFiscalService::class,'solicitarVerificacion','facturacion'],
             'fiscal_sustituir_factura'=>[\Services\ErpFiscalService::class,'sustituirFactura','facturacion'],
@@ -493,7 +504,7 @@ final class ErpController
         if($destino==='documentos')$ruta='/gestion/documentos?'.http_build_query(['entidad'=>is_string($_POST['entidad']??null)?$_POST['entidad']:'','id'=>(int)($_POST['entidad_id']??0)]);
         if($destino==='consumos')$ruta='/agenda/detalle?id='.(int)($_POST['cita_id']??0);
         if($destino==='nomina'){$v=is_string($_POST['vista']??null)&&in_array($_POST['vista'],['resumen','corrida','novedades','parametros','condiciones','beneficios','renta','finiquitos','utilidades','iess','anual'],true)?$_POST['vista']:'resumen';$k=(int)($_POST['corrida_id']??0);$ruta='/gestion/nomina?vista='.$v.(($v==='corrida'&&$k>0)?'&corrida='.$k:'');}
-        if($destino==='contabilidad'){$v=is_string($_POST['vista']??null)&&in_array($_POST['vista'],['resumen','diario','mayor','balances','plan','periodos','asiento','conciliacion','tesoreria'],true)?$_POST['vista']:'resumen';$ruta='/gestion/contabilidad?vista='.$v;if($v==='tesoreria'){$b=(int)($_POST['banco']??0);$x=(int)($_POST['extracto']??0);$ruta.=($b>0?'&banco='.$b:'').($x>0?'&extracto='.$x:'');}}
+        if($destino==='contabilidad'){$v=is_string($_POST['vista']??null)&&in_array($_POST['vista'],['resumen','diario','mayor','balances','plan','periodos','asiento','conciliacion','tesoreria','activos'],true)?$_POST['vista']:'resumen';$ruta='/gestion/contabilidad?vista='.$v;if($v==='tesoreria'){$b=(int)($_POST['banco']??0);$x=(int)($_POST['extracto']??0);$ruta.=($b>0?'&banco='.$b:'').($x>0?'&extracto='.$x:'');}}
         if($destino==='fiscal_parametros')$ruta='/gestion/facturacion/parametros';
         if($destino==='facturacion')$ruta='/gestion/facturacion?'.(($completada||$esEntrega)?'id=':'venta_id=').$id;
         header('Location: '.$ruta,true,303);detener_ejecucion(303);

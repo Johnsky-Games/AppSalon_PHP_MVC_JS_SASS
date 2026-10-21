@@ -300,3 +300,13 @@ Rama `feature/erp-nomina`, apilada sobre `feature/erp-contabilidad` (#13). Detal
 * **Calcular → revisar → aprobar** (segregados; solo el propietario aprueba), obligaciones por colaborador, IESS y SRI en una transacción idempotente, anulación antes del primer pago con reverso contable, ajustes por novedades, beneficios acumulados, recibo propio por colaborador y comisión pagada por nómina o por pago directo, nunca por ambos.
 * **Contrato de pruebas cambiado y justificado:** tabla de permisos por rol (+5 permisos `nomina.*`), registro de rutas y conteo de tablas.
 * **Correcciones durante el desarrollo:** una variable (`$inicio`) no llegaba al cierre del adaptador contable y el hecho de nómina se fechaba mal; la prueba lo detectó. Dos vistas reutilizaban nombres de variable de los formularios compartidos (`$clave`, `$k`); las pruebas de pantalla lo detectaron.
+
+## Continuación 052: depreciación de activos fijos
+
+Rama `feature/erp-depreciacion`. Detalle, fórmula, límites y fuentes pendientes: `docs/DEPRECIACION_ACTIVOS.md`.
+
+* **Migración 052** (aditiva; +5 tablas): políticas, fichas (una por activo), corridas mensuales (una vigente por mes), líneas y bajas; triggers de inmutabilidad; tres cuentas y roles nuevos.
+* **Política contable ≠ regla tributaria:** vida útil, residual y método los define el propietario con su fuente; no se carga ninguna cifra. Deducibilidad, conciliación contable-tributaria, venta y revalorización quedan fuera, sin supuestos.
+* **Integración sin duplicar:** el adaptador contable traduce `depreciacion_contabilizada`, `activo_baja` y sus anulaciones (reversos); nuevo control «Depreciación acumulada» en la conciliación; permisos `contabilidad.*` existentes.
+* **Pruebas:** unitarias con cuotas calculadas a mano y 6 de integración (153 aserciones); conteo de tablas del esquema actualizado (+5).
+

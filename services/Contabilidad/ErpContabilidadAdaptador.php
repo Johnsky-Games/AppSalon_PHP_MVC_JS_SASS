@@ -56,7 +56,7 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
             if(!$asientos)return null;
             // La nómina se contabiliza en el mes que devenga (fin de mes) cuando ese mes es posterior al inicio contable; el resto, el día del hecho.
             $base=$fecha;$devengo=$documento['datos']['fecha']??null;
-            if(in_array($documento['tipo']??'',['nomina_aprobada','utilidades_aprobadas'],true)&&is_string($devengo)&&preg_match('/^\d{4}-\d{2}-\d{2}$/D',$devengo)&&$devengo>=$inicio&&$devengo<=$fecha)$base=$devengo;
+            if(in_array($documento['tipo']??'',['nomina_aprobada','utilidades_aprobadas','depreciacion_contabilizada','activo_baja'],true)&&is_string($devengo)&&preg_match('/^\d{4}-\d{2}-\d{2}$/D',$devengo)&&$devengo>=$inicio&&$devengo<=$fecha)$base=$devengo;
             $fechaContable=$this->fechaContable($base);$primero=null;
             foreach($asientos as $i=>$a){
                 $spec=['fecha'=>$fechaContable,'tipo'=>'automatico','origen'=>'outbox:'.$referencia.'#'.($i+1),'concepto'=>mb_substr($a['concepto'].($fechaContable!==$base?' (hecho del '.$base.')':''),0,240),'lineas'=>$this->lineas($a['lineas'])];
@@ -107,6 +107,10 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
             'obligacion_pagada'=>$this->pagoObligacion($id,(int)$d['monto'],(string)$d['metodo']),
             'comision_liquidada'=>$this->comision($id,(int)$d['monto']),
             'activo_registrado'=>[['concepto'=>'Activo registrado '.($d['codigo']??''),'lineas'=>[['rol'=>'activos_fijos','debe'=>(int)$d['costo']],['rol'=>'recepciones_por_facturar','haber'=>(int)$d['costo']]]]],
+            'depreciacion_contabilizada'=>[['concepto'=>'Depreciación de activos fijos '.($d['periodo']??''),'lineas'=>[['rol'=>'gasto_depreciacion','debe'=>(int)$d['total'],'referencia'=>'depreciación '.($d['periodo']??'')],['rol'=>'depreciacion_acumulada','haber'=>(int)$d['total'],'referencia'=>'depreciación '.($d['periodo']??'')]]]],
+            'depreciacion_anulada'=>$this->nominaAnulada($id,$d,'depreciacion'),
+            'activo_baja'=>$this->activoBaja($id,$d),
+            'activo_baja_anulada'=>$this->nominaAnulada($id,$d,'baja'),
             'nomina_aprobada'=>$this->nominaAprobada($id,$d),
             'nomina_anulada'=>$this->nominaAnulada($id,$d),
             'finiquito_aprobado'=>$this->finiquitoAprobado($id,$d),
@@ -264,6 +268,12 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
             ['rol'=>'beneficios_por_pagar','debe'=>(int)$d['d13']+(int)$d['d14'],'referencia'=>'finiquito '.$finiquito],['rol'=>'gasto_beneficios','debe'=>(int)$d['gasto_beneficios']],['rol'=>'gasto_sueldos','debe'=>(int)$d['otros']],
             ['rol'=>'sueldos_por_pagar','haber'=>(int)$d['neto'],'referencia'=>'finiquito '.$finiquito],['rol'=>'descuentos_nomina','haber'=>(int)$d['descuentos']]]]];
     }
+    /** Baja de un activo fijo: se salda la depreciación acumulada y el costo; lo no depreciado se reconoce como pérdida. Sin venta (las ventas de activos exigen factura y no se automatizan). */
+    private function activoBaja(int $activo,array $d):array
+    {
+        return [['concepto'=>'Baja del activo '.($d['codigo']??$activo).' ('.($d['motivo']??'').')','lineas'=>[
+            ['rol'=>'depreciacion_acumulada','debe'=>(int)$d['acumulado'],'referencia'=>'activo '.$activo],['rol'=>'perdida_baja_activos','debe'=>(int)$d['valor_libros'],'referencia'=>'activo '.$activo],['rol'=>'activos_fijos','haber'=>(int)$d['costo'],'referencia'=>'activo '.$activo]]]];
+    }
     /** Anular una nómina aprobada revierte su asiento. Si el asiento original nunca se generó (hecho previo al inicio contable) no hay nada que revertir; si aún está pendiente, espera. */
     private function nominaAnulada(int $corrida,array $d,string $que='la nómina'):array
     {
@@ -275,7 +285,7 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
             throw new ErpException('La aprobación de la nómina aún no está contabilizada: el reverso espera.',409);
         }
         $lineas=[];foreach($this->r->q('SELECT * FROM erp_cont_lineas WHERE asiento_id=? ORDER BY nro',[(int)$orig['id']]) as $l)$lineas[]=['cuenta_id'=>(int)$l['cuenta_id'],'debe'=>(int)$l['haber_centavos'],'haber'=>(int)$l['debe_centavos'],'contacto_id'=>$l['contacto_id'],'referencia'=>$l['referencia']];
-        $texto=match($que){'finiquito'=>'Anulación del finiquito '.$corrida.' (asiento '.$orig['numero'].')','utilidades'=>'Anulación del reparto de utilidades '.$corrida.' (asiento '.$orig['numero'].')',default=>'Anulación de la nómina (corrida '.$corrida.', asiento '.$orig['numero'].')'};
+        $texto=match($que){'finiquito'=>'Anulación del finiquito '.$corrida.' (asiento '.$orig['numero'].')','utilidades'=>'Anulación del reparto de utilidades '.$corrida.' (asiento '.$orig['numero'].')','depreciacion'=>'Anulación de la depreciación (corrida '.$corrida.', asiento '.$orig['numero'].')','baja'=>'Anulación de la baja del activo '.$corrida.' (asiento '.$orig['numero'].')',default=>'Anulación de la nómina (corrida '.$corrida.', asiento '.$orig['numero'].')'};
         return [['concepto'=>$texto,'reversa_de'=>(int)$orig['id'],'lineas'=>$lineas]];
     }
 

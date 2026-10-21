@@ -453,7 +453,7 @@ final class EsquemaTest extends R2bCase
         // 047: cargas familiares, repartos de utilidades y sus líneas (+3).
         // 049: avisos al IESS (+1).
         // 050: identificación tributaria del trabajador (+1).
-        $this->assertSame(136, $n, 'tablas del esquema migrado (incluye migraciones y equipo_mutex)');
+        $this->assertSame(141, $n, 'tablas del esquema migrado (incluye migraciones y equipo_mutex)');
         // La documentación citaba 30 (tras la 015) y el encabezado de backup_db.php "13 tablas": ya no describen la realidad.
         $this->assertFalse(str_contains((string)file_get_contents(self::RAIZ . '/scripts/backup_db.php'), '13 tablas en total'), 'documentación obsoleta en scripts/backup_db.php: dice "13 tablas en total" y el esquema migrado tiene 35');
     }
