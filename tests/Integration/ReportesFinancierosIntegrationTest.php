@@ -120,6 +120,23 @@ class ReportesFinancierosIntegrationTest extends TestCase
         $_SESSION['admin'] = '1';
     }
 
+    /**
+     * N-ésimo día hábil (lun-vie) posterior a hoy en America/Guayaquil.
+     * La reserva exige fecha estrictamente futura y laborable, por lo que las fechas
+     * de estas pruebas no pueden fijarse en el calendario.
+     */
+    private function diaHabilFuturo(int $n): string
+    {
+        $d = new \DateTimeImmutable('today', new \DateTimeZone('America/Guayaquil'));
+        while ($n > 0) {
+            $d = $d->modify('+1 day');
+            if ((int)$d->format('N') <= 5) {
+                $n--;
+            }
+        }
+        return $d->format('Y-m-d');
+    }
+
     private function crearCliente(string $nombre = 'Carlos', string $apellido = 'Pérez', string $email = 'carlos@correo.com'): int
     {
         $stmt = self::$db->prepare("INSERT INTO usuarios (nombre, apellido, email, password, telefono, confirmado, admin) VALUES (?, ?, ?, 'Password123!', '0991234567', 1, 0)");
@@ -179,7 +196,7 @@ class ReportesFinancierosIntegrationTest extends TestCase
         $srvId = $this->crearServicio('Corte Clásico', '75.00', 30);
         $profId = $this->crearProfesionalConHorario('Valeria Castro', [$srvId]);
 
-        $fechaServicio = '2026-10-21';
+        $fechaServicio = $this->diaHabilFuturo(3);
         $citaService = new CitaService(self::$citaRepository, self::$servicioRepository);
 
         // 1. Crear cita confirmada
@@ -275,7 +292,7 @@ class ReportesFinancierosIntegrationTest extends TestCase
         $srv2Id = $this->crearServicio('Corte Barba', '40.00', 20);
         $profId = $this->crearProfesionalConHorario('Sofía Andrade', [$srv1Id, $srv2Id]);
 
-        $fechaServicio = '2026-10-22';
+        $fechaServicio = $this->diaHabilFuturo(4);
         $citaService = new CitaService(self::$citaRepository, self::$servicioRepository);
 
         // Cita 1: $120.00
@@ -381,7 +398,7 @@ class ReportesFinancierosIntegrationTest extends TestCase
         $srvId = $this->crearServicio('Coloración Fantasía Premium', '165.00', 90);
         $profId = $this->crearProfesionalConHorario('Camila Vega', [$srvId]);
 
-        $fechaServicio = '2026-10-23';
+        $fechaServicio = $this->diaHabilFuturo(5);
         $citaService = new CitaService(self::$citaRepository, self::$servicioRepository);
 
         $resReserva = $citaService->reservarConProfesional($clienteId, [
@@ -461,9 +478,9 @@ class ReportesFinancierosIntegrationTest extends TestCase
         $srvId = $this->crearServicio('Tratamiento Facial', '90.00', 45);
         $profId = $this->crearProfesionalConHorario('Andrea Molina', [$srvId]);
 
-        // Fecha de cobro = 2026-10-10, Fecha del servicio = 2026-10-26 (Lunes)
+        // Fecha de cobro = 2026-10-10 (fija, pasada); fecha del servicio = día hábil futuro relativo al reloj
         $fechaCobro = '2026-10-10';
-        $fechaServicio = '2026-10-26';
+        $fechaServicio = $this->diaHabilFuturo(6);
 
         $citaService = new CitaService(self::$citaRepository, self::$servicioRepository);
         $resReserva = $citaService->reservarConProfesional($clienteId, [
