@@ -57,6 +57,9 @@ Los pagos de citas del módulo anterior (sin venta ERP) conservan `cita_origen_i
 5. Por venta: dinero devuelto ≤ lo cobrado y ≤ la devolución comercial; la devolución comercial coincide con las líneas (`devuelto_milesimas` ↔ `bi_devoluciones_venta`).
 6. Notas de crédito: total de `bi_notas_credito` = Σ de sus líneas fiscales y no aparece en `bi_flujo_dinero`.
 
+## Pruebas (`ErpBiCobroNetoIntegrationTest`)
+Escenario con flujos reales del ERP (efectivo, transferencia pendiente y verificada, carga y aplicación de prepago, devoluciones parciales y totales, reembolso de prepago, un paquete y una nota de crédito) más un pago simulado y uno sin verificar con asiento de caja. Comprueba las seis reconciliaciones de arriba, que cada vista tiene una fila por hecho (incluso con pagos idénticos en una misma venta), que ninguna admite `UPDATE` ni `DELETE`, que no expone datos personales ni texto libre y que un usuario de MySQL con `SELECT` solo sobre las cinco vistas las lee sin poder leer las tablas de origen. Mutaciones comprobadas: sin la exclusión de simulados y no verificados el cobro suma de más (63,00 frente a 53,00), y contar las cargas de prepago como cobro lo infla (103,00 frente a 53,00).
+
 ## Límites y decisiones pendientes (no bloquean el modelo)
 * **Responsables de cada indicador** y aprobación del glosario: pendiente, necesaria solo para publicar tableros.
 * **Política de devoluciones en la venta neta sin impuesto**: la devolución comercial se guarda con impuesto; la base y el IVA exactos solo existen en las notas de crédito. Hasta definir la política, la venta neta es **con impuesto**.

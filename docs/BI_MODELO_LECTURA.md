@@ -67,6 +67,6 @@ Ese usuario **no** necesita permisos sobre las tablas de origen (las vistas son 
 ## Alcance y pendientes
 | Estado | Qué |
 | --- | --- |
-| **Entregado (ensayo)** | Las tres vistas, este glosario y las pruebas de cuadre contra origen y contra el control de conciliación |
-| **Pendiente** | Cobro neto (pagos aplicados menos devueltos, prepago y paquetes) con su propio grano; servicio realizado y ocupación; no asistencia/cancelación; saldo por cobrar al corte; asistencia y comisiones (con separación de datos laborales); dimensión fecha con sus roles; dimensiones de producto, servicio y colaborador (sin datos personales); cohortes de retención con identificador seudónimo; **presupuestos** |
+| **Entregado (ensayo)** | Las tres vistas, este glosario y las pruebas de cuadre contra origen y contra el control de conciliación. **Segundo corte (058): flujo de dinero, devoluciones, aplicaciones de saldo y notas de crédito**, en `docs/BI_COBRO_NETO.md` |
+| **Pendiente** | servicio realizado y ocupación; no asistencia/cancelación; saldo por cobrar al corte; asistencia y comisiones (con separación de datos laborales); dimensión fecha con sus roles; dimensiones de producto, servicio y colaborador (sin datos personales); cohortes de retención con identificador seudónimo; **presupuestos** |
 | **Decisión del propietario** | Responsables de cada indicador y aprobación del glosario antes de distribuir tableros; política de devoluciones en la venta neta; alcance por sede/rol cuando exista multi-sede |
