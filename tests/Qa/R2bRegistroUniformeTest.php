@@ -512,6 +512,12 @@ final class R2bRegistroUniformeTest extends R2bCase
      * de la 1.ª ni de la 2.ª solicitud puede depender de la rama. Se mide con un SMTP de 300 ms y SIN `CORREOS_ENVIO_INMEDIATO`: la
      * precondición ahora es que el SMTP lento SÍ está activo (lo demuestra el worker, que tarda ≥ 250 ms por correo) mientras las
      * peticiones tardan mucho menos que esa latencia y son comparables entre ramas.
+     *
+     * Medición (PR #27): 3 rondas con cuentas nuevas y comparación del MÍNIMO por rama y por solicitud. Garantía que conserva: un envío en línea
+     * (300 ms) o una rama con trabajo propio sistemático (probado con 200 ms en una sola rama: falla) siguen rompiendo la prueba. Lo que NO demuestra:
+     * que la fragilidad esté resuelta (una carga sostenida del ejecutor durante las 3 rondas de una rama aún puede subir su mínimo), ni detecta un
+     * retardo intermitente (el mínimo lo oculta) ni diferencias pequeñas con cociente < 3×. Es una comprobación de humo, no una prueba de tiempo
+     * constante. Si vuelve a fallar en CI, registrar los tiempos por rama y ronda en docs/IMPLEMENTACION_ERP_Y_VALIDACION.md antes de reintentar.
      */
     public function test_R2B_02_el_tiempo_de_la_solicitud_no_distingue_cuentas_confirmadas_de_nuevas(): void
     {
@@ -528,10 +534,23 @@ final class R2bRegistroUniformeTest extends R2bCase
             }
             return $t;
         };
-        $nuevo = $medir(self::correo('tn'));
-        $confirmado = $medir(self::cliente(['email' => self::correo('tc')])['email']);
-        $sinConfirmar = $medir(self::cliente(['email' => self::correo('ts'), 'confirmado' => false])['email']);
-        $staff = $medir(self::miembro(self::$dueno['id'], 'recepcion')['email']);
+        // El tiempo de pared de una sola petición en un runner compartido es ruidoso (se vieron 61 a 187 ms entre ramas iguales): se repite la medición
+        // con cuentas nuevas en 3 rondas y se compara el MÍNIMO por rama y por solicitud. El ruido solo suma tiempo, así que el mínimo es el estimador estable
+        // del trabajo propio de cada rama; una diferencia real (p. ej. enviar correo en línea, 300 ms) sube el mínimo de esa rama en todas las rondas.
+        $rondas = [];
+        for ($r = 0; $r < 3; $r++) {
+            $rondas[] = [
+                'nuevo' => $medir(self::correo('tn' . $r)),
+                'confirmado' => $medir(self::cliente(['email' => self::correo('tc' . $r)])['email']),
+                'sin_confirmar' => $medir(self::cliente(['email' => self::correo('ts' . $r), 'confirmado' => false])['email']),
+                'staff' => $medir(self::miembro(self::$dueno['id'], 'recepcion')['email']),
+            ];
+        }
+        $minimo = [];
+        foreach (['nuevo', 'confirmado', 'sin_confirmar', 'staff'] as $rama) {
+            for ($i = 0; $i < 2; $i++) { $minimo[$rama][$i] = min(array_map(fn(array $r) => $r[$rama][$i], $rondas)); }
+        }
+        [$nuevo, $confirmado, $sinConfirmar, $staff] = [$minimo['nuevo'], $minimo['confirmado'], $minimo['sin_confirmar'], $minimo['staff']];
         $this->assertSame([], self::buzonFallo(self::SMTP), 'ninguna petición debe haber enviado correo');
         foreach (['nuevo' => $nuevo, 'confirmado' => $confirmado, 'sin_confirmar' => $sinConfirmar, 'staff' => $staff] as $rama => $t) {
             foreach ($t as $i => $ms) { $this->assertLessThan(250, $ms, sprintf('%s, solicitud %d: %.0f ms; con envío en línea superaría los 300 ms del SMTP', $rama, $i + 1, $ms)); }
