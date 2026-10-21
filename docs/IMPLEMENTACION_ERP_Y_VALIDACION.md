@@ -319,3 +319,11 @@ Rama `feature/erp-caja-conceptos`. Detalle, naturalezas y límites: `docs/CONTAB
 * **Bloqueo acotado:** sin cuenta válida solo queda pendiente la contabilización de ese movimiento; el reintento se adelanta al asignar la cuenta.
 * **Pruebas:** 7 de integración (111 aserciones): sin concepto/permiso no hay movimiento, validación de naturaleza y cuenta, asiento por naturaleza contra la cuenta de cada concepto, pendientes acotados, reverso único con permisos, históricos sin reclasificar y pantallas. Mutación comprobada: forzar una contrapartida fija rompe la prueba de contrapartidas.
 
+## Continuación 055: ajustes de inventario con conceptos configurables
+
+Rama `feature/erp-inventario-conceptos` (apilada sobre `docs/reconciliacion-caja`). Detalle: `docs/CONTABILIDAD_PROPIA.md` («Ajustes de inventario: conceptos configurables»).
+
+* **Migración 055** (+2 tablas): `erp_inv_conceptos` (nombre, naturaleza, sentido, cuenta del plan; sin siembra) y `erp_inv_ajuste_conceptos` (una clasificación por movimiento y por solicitud, de solo anexar).
+* **Mismo criterio que caja:** el concepto decide el sentido y el tipo de cuenta; nada se clasifica como pérdida o ganancia por defecto; bloqueo acotado a la contabilización sin configurar.
+* **Pruebas:** 6 de integración (74 aserciones): concepto obligatorio, activo y de sentido coincidente; validación de naturaleza y cuenta; asiento valorizado al costo con la cuenta de cada concepto (merma 5,00 y sobrante 3,75 a 2,50 por unidad); pendientes acotados y desbloqueo al configurar; solicitudes previas sin clasificar; pantallas. Mutación comprobada: una contrapartida fija rompe la prueba.
+

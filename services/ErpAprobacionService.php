@@ -16,7 +16,9 @@ final class ErpAprobacionService extends ErpService
                 $v=$this->r->uno('SELECT version,estado FROM erp_ventas WHERE id=?',[$datos['venta_id']]);if(!$v||$v['estado']!=='borrador')throw new ErpException('La venta no se puede editar.');
                 ValoresExactos::decimal($datos['cantidad'],3);$this->importe($datos['descuento']);$datos['version']=(int)$v['version'];
             }
-            if($tipo==='ajuste_stock'){ValoresExactos::decimal($datos['cantidad'],3);if(!in_array($datos['tipo'],['entrada','salida'],true))throw new ErpException('Movimiento no válido.');}
+            if($tipo==='ajuste_stock'){ValoresExactos::decimal($datos['cantidad'],3);if(!in_array($datos['tipo'],['entrada','salida'],true))throw new ErpException('Movimiento no válido.');
+                // Todo ajuste nuevo lleva un concepto (merma, faltante, sobrante, uso interno…): el sentido lo valida el concepto y la contabilización usa su cuenta.
+                $datos['concepto_id']=(new ErpInventarioConceptoService($this->r))->validarParaSolicitud($d['concepto_id']??null,$datos['tipo']);}
             $this->r->q('INSERT INTO erp_solicitudes(tipo,datos_json,motivo,solicitante_id,creado_en) VALUES(?,?,?,?,?)',[$tipo,json_encode($datos,JSON_THROW_ON_ERROR),$motivo,$actor,$this->r::ahora()]);
             $id=$this->r->id();$this->evento($actor,'aprobacion_solicitada','solicitud',$id,['tipo'=>$tipo]);return $id;
         });
@@ -47,7 +49,13 @@ final class ErpAprobacionService extends ErpService
                     if($saldo<array_sum(array_column($reservas,'cantidad_milesimas'))||$saldo>9999999999)throw new ErpException('El ajuste afectaría stock reservado o excede el rango.');
                     $this->r->q('UPDATE inventario_productos SET stock_milesimas=? WHERE id=?',[$saldo,(int)$p['id']]);$clave='erp.ajuste:'.$id;
                     $this->r->q('INSERT INTO inventario_movimientos(producto_id,actor_id,tipo,cantidad_milesimas,saldo_milesimas,costo_centavos,motivo,idempotencia,huella,registrado_en) VALUES(?,?,?,?,?,?,?,?,?,?)',[(int)$p['id'],$actor,$datos['tipo'],$qty,$saldo,(int)$p['costo_centavos'],mb_substr('Ajuste aprobado #'.$id.' · '.$s['motivo'],0,180),$clave,hash('sha256',$clave),$this->r::ahora()]);
-                    $this->r->q("INSERT INTO erp_stock_origenes(movimiento_id,documento_tipo,documento_id) VALUES(?,'ajuste',?)",[$this->r->id(),$id]);
+                    $mov=$this->r->id();
+                    $this->r->q("INSERT INTO erp_stock_origenes(movimiento_id,documento_tipo,documento_id) VALUES(?,'ajuste',?)",[$mov,$id]);
+                    // Las solicitudes anteriores a los conceptos (sin concepto_id) conservan su comportamiento: no se clasifican ni se contabilizan solas.
+                    if(!empty($datos['concepto_id'])){
+                        $evento=$this->evento($actor,'inventario_ajuste','inventario',$mov,['movimiento_id'=>$mov,'producto_id'=>(int)$p['id'],'tipo'=>$datos['tipo'],'cantidad_milesimas'=>$qty,'costo_unitario'=>(int)$p['costo_centavos'],'concepto_id'=>(int)$datos['concepto_id'],'solicitud_id'=>$id],['contabilidad']);
+                        $this->r->q('INSERT INTO erp_inv_ajuste_conceptos(movimiento_id,concepto_id,solicitud_id,evento_id,creado_por,creado_en) VALUES(?,?,?,?,?,?)',[$mov,(int)$datos['concepto_id'],$id,$evento,$actor,$this->r::ahora()]);
+                    }
                 }
             }
             $this->r->q('UPDATE erp_solicitudes SET estado=?,resuelto_por=?,nota=?,resuelto_en=? WHERE id=?',[$aprobar?'aprobada':'rechazada',$actor,$nota,$this->r::ahora(),$id]);
