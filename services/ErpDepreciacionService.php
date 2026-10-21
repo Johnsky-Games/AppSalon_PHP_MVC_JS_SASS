@@ -232,10 +232,10 @@ final class ErpDepreciacionService extends ErpService
     }
 
     // ---------------------------------------------------------------- cambios de estimación (prospectivos)
-    /** ¿El activo ya tiene cuota (borrador o contabilizada) en el mes indicado o en uno posterior? */
-    private function tieneCuotaDesde(int $activo,string $desde):bool
+    /** ¿Existe alguna corrida vigente (borrador o contabilizada, de cualquier activo) en el mes indicado o en uno posterior? Ese mes ya fue procesado. */
+    private function hayCorridaDesde(string $desde):bool
     {
-        return (bool)$this->r->uno("SELECT l.id FROM erp_dep_lineas l JOIN erp_dep_corridas c ON c.id=l.corrida_id WHERE l.activo_id=? AND c.estado<>'anulada' AND c.anio*100+c.mes>=? LIMIT 1 FOR SHARE",[$activo,(int)substr($desde,0,4)*100+(int)substr($desde,5,2)]);
+        return (bool)$this->r->uno("SELECT id FROM erp_dep_corridas WHERE estado<>'anulada' AND anio*100+mes>=? LIMIT 1 FOR SHARE",[(int)substr($desde,0,4)*100+(int)substr($desde,5,2)]);
     }
     /**
      * Cambio de estimación PROSPECTIVO (vida restante y, opcionalmente, valor residual). Rige desde un mes en el que el activo todavía no tiene cuota: lo depreciado
@@ -253,7 +253,7 @@ final class ErpDepreciacionService extends ErpService
             if($desde<substr($inicioContable,0,7).'-01')throw new ErpException('La vigencia no puede ser anterior al mes del inicio contable ('.substr($inicioContable,0,7).').');
             $tramos=$this->tramos($f);$ultimo=end($tramos);
             if($desde<=$ultimo['desde'])throw new ErpException('Ya hay una vigencia desde '.substr($ultimo['desde'],0,7).': la nueva debe empezar en un mes posterior.',409);
-            if($this->tieneCuotaDesde((int)$a['id'],$desde))throw new ErpException('El activo ya tiene cuota de depreciación en '.$mes.' o en un mes posterior: un cambio de estimación aplica hacia adelante, sin tocar lo ya calculado.',409);
+            if($this->hayCorridaDesde($desde))throw new ErpException('Ya existe una corrida de depreciación de '.$mes.' o de un mes posterior: un cambio de estimación aplica hacia adelante, desde el primer mes sin corrida, sin tocar lo ya calculado.',409);
             $posted=(int)$f['acumulado_inicial_centavos']+$this->acumuladoContabilizado((int)$a['id']);$esperado=$this->esperadoAlMes($tramos,$anio,$mm);
             if($posted!==$esperado)throw new ErpException('El activo no está al día a '.$mes.': lleva '.number_format($posted/100,2,'.','').' depreciados y le corresponden '.number_format($esperado/100,2,'.','').'. Contabiliza antes los meses anteriores.',409);
             $vida=$this->entero($d['vida_meses']??null,1,600,'Los meses de vida restantes');
@@ -267,14 +267,14 @@ final class ErpDepreciacionService extends ErpService
             return $this->r->id();
         });
     }
-    /** Anula una vigencia que todavía no se usó (el activo no tiene cuota desde ese mes). Lo ya calculado nunca se toca. */
+    /** Anula una vigencia que todavía no se usó (no hay corridas desde ese mes). Lo ya calculado nunca se toca. */
     public function estimacionAnular(int $actor,array $d):array
     {
         return $this->ejecutar($actor,'contabilidad.configurar','dep_estimacion_anular',$d,function()use($actor,$d){
             $e=$this->r->uno('SELECT * FROM erp_dep_estimaciones WHERE id=? FOR UPDATE',[$this->id($d['estimacion_id']??null)])??throw new ErpException('Cambio de estimación no encontrado.',404);
             $motivo=$this->texto($d['motivo']??'',300);if(mb_strlen($motivo)<5)throw new ErpException('Explica el motivo (al menos 5 caracteres).');
             if($e['estado']==='anulada')return (int)$e['id'];
-            if($this->tieneCuotaDesde((int)$e['activo_id'],(string)$e['desde']))throw new ErpException('El activo ya tiene cuotas calculadas con esta vigencia: no se puede anular sin tocar depreciaciones válidas. Registra un nuevo cambio de estimación hacia adelante.',409);
+            if($this->hayCorridaDesde((string)$e['desde']))throw new ErpException('Ya hay corridas de esa vigencia o posteriores: no se puede anular sin tocar depreciaciones válidas. Registra un nuevo cambio de estimación hacia adelante.',409);
             $this->r->q("UPDATE erp_dep_estimaciones SET estado='anulada',anulada_por=?,anulada_en=?,anulacion_motivo=? WHERE id=?",[$actor,$this->r::ahora(),$motivo,(int)$e['id']]);
             $this->evento($actor,'dep_estimacion_anulada','activo',(int)$e['activo_id'],['estimacion_id'=>(int)$e['id'],'motivo'=>$motivo]);
             return (int)$e['id'];

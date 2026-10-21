@@ -171,6 +171,8 @@ final class ErpDepreciacionIntegrationTest extends TestCase
         self::assertSame(0,$this->control()['diferencia']);
         // Con un residual que ya cubre lo depreciado no hay nada que repartir (rechazo, sin dejar fila).
         $b=$this->activo('EQ-2','500.00','2026-01-20');$this->ficha($b,'2026-08');$this->mes(8);
+        // Mes ya procesado aunque el activo no tenga línea en esa corrida (A está totalmente depreciado y agosto solo lleva a B): no se admite la vigencia en agosto.
+        $x=$this->rechazo(fn()=>$this->estimar(['activo_id'=>$a,'desde'=>'2026-08','vida_meses'=>'2','residual_pct'=>'5']),409);self::assertStringContainsString('corrida',$x->getMessage());
         $e=$this->rechazo(fn()=>$this->estimar(['activo_id'=>$b,'desde'=>'2026-09','vida_meses'=>'3','residual_pct'=>'99.99']),422);self::assertStringContainsString('no queda nada',$e->getMessage());
     }
     public function testAnularUnCambioDeEstimacionNoPuedeTocarDepreciacionesValidas():void
