@@ -202,7 +202,7 @@ final class ErpController
             'balances'=>$datos+=['comprobacion'=>$c->balanceComprobacion($hasta),'resultados'=>$c->estadoResultados($desde,$hasta),'general'=>$c->balanceGeneral($hasta)],
             'plan'=>$datos+=['roles'=>$r->q('SELECT r.rol,c.codigo,c.nombre FROM erp_cont_roles r JOIN erp_cont_cuentas c ON c.id=r.cuenta_id ORDER BY r.rol'),'rolesDisponibles'=>\Services\ErpContabilidadService::ROLES],
             'periodos'=>$datos+=['periodos'=>$r->q('SELECT * FROM erp_cont_periodos ORDER BY anio DESC,mes DESC LIMIT 60')],
-            'conciliacion'=>$datos+=['conc'=>$c->conciliacion($hasta)],
+            'conciliacion'=>$datos+=self::datosConciliacionInventario($r,$c,$q,$hasta),
             'activos'=>$datos+=self::datosActivosFijos($r,$q,$hoy),
             'caja'=>$datos+=self::datosCajaConceptos($r),
             'inventario'=>$datos+=self::datosInventarioConceptos($r),
@@ -219,6 +219,15 @@ final class ErpController
         return ['invConceptos'=>$k->conceptos(),'invPendientes'=>$k->pendientes(),'invHistoricos'=>$k->historicos(),'invCadenas'=>$k->cadenas(),'invNaturalezas'=>\Services\ErpInventarioConceptoService::NATURALEZAS];
     }
     /** Datos de la pestaña «Caja y conceptos»: conceptos configurados, movimientos que esperan configuración y movimientos clasificados que aún se pueden reversar. */
+    /** Conciliación: controles contra los auxiliares + inventario valorizado frente al libro (solo lectura; el detalle por estado se pide con `detalle=<estado>&origen=<clase>`). */
+    private static function datosConciliacionInventario(ErpRepository $r,\Services\ErpContabilidadService $c,array $q,string $hasta):array
+    {
+        $inv=new \Services\Contabilidad\InventarioValorizadoConciliacion($r);
+        $estado=is_string($q['detalle']??null)&&isset(\Services\Contabilidad\InventarioValorizadoConciliacion::ESTADOS[$q['detalle']])?$q['detalle']:null;
+        $origen=is_string($q['origen']??null)&&isset(\Services\Contabilidad\InventarioValorizadoConciliacion::CLASES[$q['origen']])?$q['origen']:null;
+        return ['conc'=>$c->conciliacion($hasta),'invConc'=>$inv->informe($hasta),'invEstados'=>\Services\Contabilidad\InventarioValorizadoConciliacion::ESTADOS,
+            'invDetalleEstado'=>$estado,'invDetalleOrigen'=>$origen,'invDetalle'=>$estado?$inv->detalle($hasta,$estado,$origen,200):[]];
+    }
     private static function datosCajaConceptos(ErpRepository $r):array
     {
         $k=new \Services\ErpCajaConceptoService($r);
