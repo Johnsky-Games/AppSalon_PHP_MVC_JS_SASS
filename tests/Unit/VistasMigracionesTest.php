@@ -3,7 +3,7 @@ namespace Tests\Unit;
 use Classes\VistasMigraciones;
 use PHPUnit\Framework\TestCase;
 
-/** Las vistas se recrean desde las migraciones aplicadas, conservando la definición de cada época cuando una migración posterior redefine la misma vista. */
+/** Las vistas se recrean desde las migraciones aplicadas: con una migración posterior que redefine la misma vista rige solo la última; un respaldo histórico recupera la de su época. */
 final class VistasMigracionesTest extends TestCase
 {
     private string $dir;
@@ -21,11 +21,17 @@ final class VistasMigracionesTest extends TestCase
         $s=VistasMigraciones::sentencias($this->dir,['001_a'=>true]);
         self::assertCount(1,$s);self::assertStringContainsString('v1',$s[0]);self::assertStringNotContainsString('v2',$s[0]);
     }
-    public function testConAmbasAplicadasSeEjecutanEnOrdenYLaUltimaDefinicionPrevalece():void
+    public function testConAmbasAplicadasRigeSoloLaUltimaDefinicionDeCadaVista():void
     {
         $s=VistasMigraciones::sentencias($this->dir,['001_a'=>true,'002_b'=>true]);
-        self::assertCount(3,$s);
-        self::assertStringContainsString('v1',$s[0]);self::assertStringContainsString('v2',$s[1]);self::assertStringContainsString('y1',$s[2]);
+        self::assertCount(2,$s,'bi_x una sola vez (la de 002) y bi_y');
+        self::assertStringContainsString('v2',$s[0]);self::assertStringContainsString('y1',$s[1]);
+        foreach($s as $sql)self::assertStringNotContainsString('v1',$sql,'la definición antigua puede apuntar a una columna que ya no existe');
+    }
+    public function testUnaMigracionPosteriorSinLaAnteriorAplicadaSoloAportaLasSuyas():void
+    {
+        $s=VistasMigraciones::sentencias($this->dir,['002_b'=>true]);
+        self::assertCount(2,$s);self::assertStringContainsString('v2',$s[0]);
     }
     public function testSinMigracionesAplicadasNoSeRecreaNada_YLosRollbackNoSeLeen():void
     {

@@ -4,8 +4,8 @@ namespace Classes;
 /**
  * Vistas de lectura definidas por las migraciones (SQL de confianza del repositorio, nunca del archivo de respaldo).
  * Cada una se escribe como `CREATE OR REPLACE SQL SECURITY DEFINER VIEW nombre AS SELECT ...;` sin `;` internos.
- * Se conservan las definiciones POR MIGRACIÓN y en orden: una migración posterior puede redefinir una vista, y un respaldo
- * histórico que solo tenga la anterior aplicada debe recuperar la definición de esa época.
+ * Se conservan las definiciones POR MIGRACIÓN: una migración posterior puede redefinir una vista, y un respaldo histórico que solo
+ * tenga la anterior aplicada debe recuperar la definición de esa época; con ambas aplicadas rige solo la última.
  */
 final class VistasMigraciones
 {
@@ -37,18 +37,23 @@ final class VistasMigraciones
     }
 
     /**
+     * Para cada vista, SOLO su definición más reciente entre las migraciones aplicadas: la base restaurada ya tiene el esquema final del
+     * volcado, así que una definición antigua podría referirse a una columna que una migración posterior renombró o eliminó y fallaría.
+     * Un respaldo histórico (con solo la migración anterior aplicada) recupera, en cambio, la definición de esa época.
+     *
      * @param array<string,bool> $aplicadas migraciones aplicadas (nombre => true)
-     * @return list<string> sentencias a ejecutar, en orden: todas las definiciones de las migraciones aplicadas
+     * @return list<string> sentencias a ejecutar, una por vista
      */
     public static function sentencias(string $directorio, array $aplicadas): array
     {
-        $sentencias = [];
+        $vigentes = [];
         foreach (self::definiciones($directorio) as $d) {
             if (isset($aplicadas[$d['migracion']])) {
-                $sentencias[] = $d['sql'];
+                unset($vigentes[$d['vista']]); // la definición posterior sustituye a la anterior y pasa al final del orden
+                $vigentes[$d['vista']] = $d['sql'];
             }
         }
-        return $sentencias;
+        return array_values($vigentes);
     }
 
     /** Recrea en la base seleccionada las vistas de las migraciones aplicadas en ella. @return int sentencias ejecutadas */
