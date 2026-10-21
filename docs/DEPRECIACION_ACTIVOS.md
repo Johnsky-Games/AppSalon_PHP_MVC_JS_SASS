@@ -40,6 +40,15 @@ Reglas: solo meses ya terminados; no antes del inicio contable ni del mes de adq
 
 Idempotencia: cada acción usa clave de idempotencia; repetir contabilizar sobre una corrida ya contabilizada no duplica el asiento.
 
+## Cambios de estimación (migración 053)
+Un cambio de vida restante o de valor residual de un activo **ya en depreciación** es **prospectivo**: no anula ni recalcula nada de lo depreciado y no toca períodos cerrados.
+* `erp_dep_estimaciones` (solo de anexar; se puede anular, no editar ni borrar): guarda la vigencia (`desde`, día 1), la **foto del acumulado total a esa fecha**, el residual, el saldo por depreciar (`base = costo − residual − acumulado`) y los meses restantes, con el criterio contable (texto obligatorio).
+* El cálculo trabaja por **tramos**: el original de la ficha y cada estimación vigente. El mes rige por el último tramo cuya vigencia no es posterior; el reparto es el mismo método (acumulado objetivo, suma exacta).
+* Reglas: rige desde un mes **sin cuota del activo** (ni borrador ni contabilizada) y el activo debe estar **al día** a esa fecha; una vigencia nueva es posterior a la última; con el residual indicado debe quedar algo por depreciar.
+* Anular una estimación solo es posible mientras el activo no tenga cuotas desde esa vigencia; anular una corrida de la que depende una vigencia posterior se rechaza (primero la vigencia). Nunca se pide revertir depreciaciones válidas.
+* Permiso `contabilidad.configurar`. Pantalla: «Cambios de estimación» en Activos fijos. Evento de auditoría `dep_estimacion_registrada` / `dep_estimacion_anulada`.
+* Pruebas: cuotas calculadas a mano (51 429 en 4 meses: 128,57 · 128,58 · 128,57 · 128,57; residual 10 %: 552,86 en 5 meses), períodos cerrados, líneas anteriores idénticas antes y después, sin reversos ni asientos nuevos, permisos y triggers.
+
 ## Reportes y control
 
 Pestaña **Contabilidad → Activos fijos**: activos con acumulado y valor en libros, cuadro por activo (contabilizado + proyección), corridas, depreciación contabilizada por mes del año y bajas. El control **Depreciación acumulada** de la conciliación compara el libro con (acumulado inicial de las fichas + corridas contabilizadas − acumulado dado de baja).
