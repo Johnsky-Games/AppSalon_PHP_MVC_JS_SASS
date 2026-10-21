@@ -22,6 +22,69 @@ final class VistasMigraciones
     }
 
     /**
+     * Copia del SQL con la misma longitud en la que los comentarios (de línea con `-- ` o `#`, y de bloque) y el contenido de los literales ('…', "…")
+     * se sustituyen por espacios: las búsquedas se hacen sobre ella y el SQL real se extrae por posición, de modo que un `DROP VIEW`,
+     * un `CREATE …` o un `;` escritos dentro de un comentario o de un literal no se confunden con sentencias.
+     */
+    public static function enmascarar(string $sql): string
+    {
+        $n = strlen($sql);
+        $m = $sql;
+        $i = 0;
+        $blanquear = static function (int $desde, int $hasta) use (&$m): void {
+            for ($k = $desde; $k < $hasta; $k++) {
+                if ($m[$k] !== "\n") {
+                    $m[$k] = ' ';
+                }
+            }
+        };
+        while ($i < $n) {
+            $c = $sql[$i];
+            $d = $i + 1 < $n ? $sql[$i + 1] : '';
+            if ($c === '`') { // identificador entre comillas: se conserva tal cual
+                $j = $i + 1;
+                while ($j < $n && !($sql[$j] === '`' && ($j + 1 >= $n || $sql[$j + 1] !== '`'))) {
+                    $j += ($sql[$j] === '`') ? 2 : 1;
+                }
+                $i = $j + 1;
+            } elseif ($c === "'" || $c === '"') {
+                $j = $i + 1;
+                while ($j < $n) {
+                    if ($sql[$j] === '\\') {
+                        $j += 2;
+                        continue;
+                    }
+                    if ($sql[$j] === $c) {
+                        if ($j + 1 < $n && $sql[$j + 1] === $c) {
+                            $j += 2;
+                            continue;
+                        }
+                        break;
+                    }
+                    $j++;
+                }
+                $blanquear($i + 1, min($j, $n));
+                $i = $j + 1;
+            } elseif ($c === '#' || ($c === '-' && $d === '-' && ($i + 2 >= $n || ctype_space($sql[$i + 2])))) {
+                $j = $i;
+                while ($j < $n && $sql[$j] !== "\n") {
+                    $j++;
+                }
+                $blanquear($i, $j);
+                $i = $j;
+            } elseif ($c === '/' && $d === '*') {
+                $j = strpos($sql, '*/', $i + 2);
+                $j = $j === false ? $n : $j + 2;
+                $blanquear($i, $j);
+                $i = $j;
+            } else {
+                $i++;
+            }
+        }
+        return $m;
+    }
+
+    /**
      * @return list<array{migracion:string,accion:string,vista:string,sql:string}> acciones sobre vistas en orden de migración y de
      *         aparición en el archivo; accion = 'crear' | 'retirar'
      */
@@ -30,13 +93,14 @@ final class VistasMigraciones
         $acciones = [];
         foreach (self::archivos($directorio) as $archivo) {
             $contenido = (string)file_get_contents($archivo);
+            $masc = self::enmascarar($contenido);
             $hallazgos = [];
-            if (preg_match_all(self::CREAR, $contenido, $m, PREG_SET_ORDER | PREG_OFFSET_CAPTURE)) {
+            if (preg_match_all(self::CREAR, $masc, $m, PREG_SET_ORDER | PREG_OFFSET_CAPTURE)) {
                 foreach ($m as $c) {
-                    $hallazgos[] = [$c[0][1], 'crear', $c[1][0], rtrim($c[0][0], ';')];
+                    $hallazgos[] = [$c[0][1], 'crear', $c[1][0], rtrim(substr($contenido, $c[0][1], strlen($c[0][0])), ';')];
                 }
             }
-            if (preg_match_all(self::RETIRAR, $contenido, $m, PREG_SET_ORDER | PREG_OFFSET_CAPTURE)) {
+            if (preg_match_all(self::RETIRAR, $masc, $m, PREG_SET_ORDER | PREG_OFFSET_CAPTURE)) {
                 foreach ($m as $c) {
                     $hallazgos[] = [$c[0][1], 'retirar', $c[1][0], ''];
                 }

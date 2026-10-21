@@ -97,4 +97,29 @@ final class VistasMigracionesTest extends TestCase
         self::assertCount(2,$recreada);self::assertStringContainsString('x3',implode("\n",$recreada));self::assertStringNotContainsString('x1',implode("\n",$recreada));
         self::assertContains('bi_x',VistasMigraciones::nombres($d),'el nombre sigue siendo conocido para validar manifiestos históricos');
     }
+
+    public function testUnDropViewEscritoEnUnComentarioOUnLiteralNoRetiraNada():void
+    {
+        $d=$this->aparte(['001_a.sql'=>self::v('bi_x','id AS x1 FROM t'),
+            '002_b.sql'=>"-- No ejecutar DROP VIEW bi_x;\n# DROP VIEW bi_x;\n/* DROP VIEW IF EXISTS bi_x;\nDROP VIEW bi_x; */\nSELECT 'DROP VIEW bi_x;' AS nota;\nSELECT \"DROP VIEW bi_x;\" AS otra;\n"]);
+        $s=VistasMigraciones::sentencias($d,['001_a'=>true,'002_b'=>true]);
+        self::assertCount(1,$s,'ningún retiro real: bi_x sigue vigente');self::assertStringContainsString('x1',$s[0]);
+    }
+    public function testUnCreateComentadoNoCreaVistaYUnPuntoYComaEnUnLiteralNoCortaLaSentencia():void
+    {
+        $d=$this->aparte(['001_a.sql'=>"-- CREATE OR REPLACE SQL SECURITY DEFINER VIEW bi_fantasma AS SELECT 1;\n/* CREATE OR REPLACE SQL SECURITY DEFINER VIEW bi_otra AS SELECT 2; */\n"
+            ."CREATE OR REPLACE SQL SECURITY DEFINER VIEW bi_real AS\nSELECT DISTINCT 'a;b' AS etiqueta, id FROM t; -- comentario ; final\n"]);
+        self::assertSame(['bi_real'],VistasMigraciones::nombres($d));
+        $s=VistasMigraciones::sentencias($d,['001_a'=>true]);
+        self::assertCount(1,$s);self::assertStringContainsString("'a;b'",$s[0],'el SQL real se conserva entero, con su literal');self::assertStringEndsWith('FROM t',$s[0]);
+    }
+    public function testElEnmascaradoConservaLaLongitudYLosSaltosDeLinea():void
+    {
+        $sql="SELECT 'x;y' -- c;\n, \"q\" /* a\nb */ , `col;` ;";
+        $m=VistasMigraciones::enmascarar($sql);
+        self::assertSame(strlen($sql),strlen($m));self::assertSame(substr_count($sql,"\n"),substr_count($m,"\n"));
+        self::assertStringContainsString('`col;`',$m,'los identificadores entre comillas inversas se conservan');
+        self::assertSame(2,substr_count($m,';'),'solo quedan el ; del identificador entre comillas inversas y el ; final real');
+        self::assertStringNotContainsString('x;y',$m);self::assertStringNotContainsString('c;',str_replace('`col;`','',$m));
+    }
 }
