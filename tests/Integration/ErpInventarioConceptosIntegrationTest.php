@@ -107,7 +107,7 @@ final class ErpInventarioConceptosIntegrationTest extends TestCase
         $c=$this->r->uno('SELECT movimiento_id,concepto_id,evento_id,creado_por FROM erp_inv_ajuste_conceptos WHERE solicitud_id=?',[$s]);
         self::assertSame($merma,(int)$c['concepto_id']);self::assertSame($this->owner,(int)$c['creado_por']);self::assertGreaterThan(0,(int)$c['movimiento_id']);self::assertGreaterThan(0,(int)$c['evento_id']);
         $asientos=$this->r->q("SELECT id,origen FROM erp_cont_asientos WHERE concepto LIKE 'Ajuste de inventario:%'");self::assertCount(1,$asientos);
-        self::assertStringContainsString((string)$c['evento_id'],(string)$asientos[0]['origen'],'El asiento remite al evento que lo originó');
+        self::assertSame('outbox:ERP-'.(int)$c['evento_id'].'-contabilidad#1',(string)$asientos[0]['origen'],'El asiento remite exactamente al evento que lo originó');
         // Cambiar la cuenta del concepto no reescribe el asiento ya publicado (inmutable): el gasto sigue en la cuenta original.
         $this->con()->asignarCuenta($this->owner,$this->d(['concepto_id'=>$merma,'cuenta'=>$otra]));$this->procesar();
         self::assertSame(500,$this->saldo($gas));self::assertSame(0,$this->saldo($otra),'El asiento anterior no se movió de cuenta');
