@@ -379,6 +379,47 @@ function validar_manifiesto_y_esquema(mysqli $mysqli, string $dbTarget, ?array $
 
 
 
+/**
+ * Definiciones de vistas de las migraciones del repositorio (SQL de confianza, no del archivo de respaldo).
+ * Cada una se escribe como `CREATE OR REPLACE SQL SECURITY INVOKER VIEW nombre AS SELECT ...;` sin `;` internos.
+ *
+ * @return array<string,string> nombre de vista => sentencia
+ */
+function vistas_del_repositorio(): array
+{
+    $vistas = [];
+    foreach (glob(__DIR__ . '/../database/migrations/*.sql') ?: [] as $archivo) {
+        if (str_ends_with($archivo, '_rollback.sql')) {
+            continue;
+        }
+        $contenido = (string)file_get_contents($archivo);
+        if (preg_match_all('/CREATE\s+OR\s+REPLACE\s+SQL\s+SECURITY\s+INVOKER\s+VIEW\s+([A-Za-z0-9_]+)\s+AS\s[^;]*;/i', $contenido, $m, PREG_SET_ORDER)) {
+            foreach ($m as $coincidencia) {
+                $vistas[$coincidencia[1]] = rtrim($coincidencia[0], ';');
+            }
+        }
+    }
+    return $vistas;
+}
+
+/** Sentencias para recrear las vistas que el manifiesto declara; falla si alguna no tiene definición en el repositorio. */
+function sentencias_de_vistas(?array $manifiesto): array
+{
+    $nombres = is_array($manifiesto['vistas'] ?? null) ? $manifiesto['vistas'] : [];
+    if (!$nombres) {
+        return [];
+    }
+    $definiciones = vistas_del_repositorio();
+    $sentencias = [];
+    foreach ($nombres as $nombre) {
+        if (!is_string($nombre) || !isset($definiciones[$nombre])) {
+            throw new RuntimeException('El respaldo declara la vista ' . (is_string($nombre) ? $nombre : '?') . ' y este repositorio no tiene su definición: no se restaura nada.');
+        }
+        $sentencias[] = $definiciones[$nombre];
+    }
+    return $sentencias;
+}
+
 /** Accept only the portable table dump emitted by backup_db.php. */
 function validar_sentencia_respaldo(string $sql): void
 {
@@ -416,6 +457,7 @@ try {
     foreach ($sentencias as $sql) {
         validar_sentencia_respaldo($sql);
     }
+    $sentenciasVistas = sentencias_de_vistas($datosMan);
     mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
     $mysqli = new mysqli($dbHost, $dbUser, $dbPass, '', $dbPort);
     $mysqli->set_charset('utf8mb4');
@@ -453,6 +495,9 @@ try {
             throw new RuntimeException('Error en sentencia #' . ($indice + 1) . ' durante staging: ' . $error->getMessage(), 0, $error);
         }
     }
+    foreach ($sentenciasVistas as $sql) {
+        $mysqli->query($sql);
+    }
     validar_manifiesto_y_esquema($mysqli, $stagingDb, $datosMan);
     \Classes\ProteccionesRestauradas::aplicar($mysqli);
     // Recheck immediately before any destination DDL. Existing data is never altered.
@@ -471,6 +516,9 @@ try {
         } catch (Throwable $error) {
             throw new RuntimeException('Error en sentencia #' . ($indice + 1) . ' del destino nuevo. Se conserva para diagnóstico; no hubo reemplazo de originales: ' . $error->getMessage(), 0, $error);
         }
+    }
+    foreach ($sentenciasVistas as $sql) {
+        $mysqli->query($sql);
     }
     validar_manifiesto_y_esquema($mysqli, $dbName, $datosMan);
     $protecciones=\Classes\ProteccionesRestauradas::aplicar($mysqli);
