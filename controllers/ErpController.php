@@ -216,7 +216,7 @@ final class ErpController
     private static function datosInventarioConceptos(ErpRepository $r):array
     {
         $k=new \Services\ErpInventarioConceptoService($r);
-        return ['invConceptos'=>$k->conceptos(),'invPendientes'=>$k->pendientes(),'invNaturalezas'=>\Services\ErpInventarioConceptoService::NATURALEZAS];
+        return ['invConceptos'=>$k->conceptos(),'invPendientes'=>$k->pendientes(),'invHistoricos'=>$k->historicos(),'invCadenas'=>$k->cadenas(),'invNaturalezas'=>\Services\ErpInventarioConceptoService::NATURALEZAS];
     }
     /** Datos de la pestaña «Caja y conceptos»: conceptos configurados, movimientos que esperan configuración y movimientos clasificados que aún se pueden reversar. */
     private static function datosCajaConceptos(ErpRepository $r):array
@@ -479,7 +479,7 @@ final class ErpController
             'cont_periodo_cerrar'=>[\Services\ErpContabilidadService::class,'cerrarPeriodo','contabilidad'],'cont_periodo_reabrir'=>[\Services\ErpContabilidadService::class,'reabrirPeriodo','contabilidad'],'cont_ejercicio_cerrar'=>[\Services\ErpContabilidadService::class,'cerrarEjercicio','contabilidad'],
             'dep_categoria'=>[\Services\ErpDepreciacionService::class,'categoriaCrear','contabilidad'],'dep_ficha'=>[\Services\ErpDepreciacionService::class,'fichaCrear','contabilidad'],'dep_calcular'=>[\Services\ErpDepreciacionService::class,'calcular','contabilidad'],
             'dep_contabilizar'=>[\Services\ErpDepreciacionService::class,'contabilizar','contabilidad'],'dep_anular'=>[\Services\ErpDepreciacionService::class,'anular','contabilidad'],'dep_baja'=>[\Services\ErpDepreciacionService::class,'bajaRegistrar','contabilidad'],'dep_baja_anular'=>[\Services\ErpDepreciacionService::class,'bajaAnular','contabilidad'],'caja_concepto'=>[\Services\ErpCajaConceptoService::class,'crear','contabilidad'],'caja_concepto_cuenta'=>[\Services\ErpCajaConceptoService::class,'asignarCuenta','contabilidad'],'caja_concepto_estado'=>[\Services\ErpCajaConceptoService::class,'estado','contabilidad'],'caja_reverso'=>[ErpCajaService::class,'movimientoReversar','contabilidad'],'caja_reclasificar'=>[\Services\ErpCajaConceptoService::class,'reclasificar','contabilidad'],
-            'inv_concepto'=>[\Services\ErpInventarioConceptoService::class,'crear','contabilidad'],'inv_concepto_cuenta'=>[\Services\ErpInventarioConceptoService::class,'asignarCuenta','contabilidad'],'inv_concepto_estado'=>[\Services\ErpInventarioConceptoService::class,'estado','contabilidad'],
+            'inv_concepto'=>[\Services\ErpInventarioConceptoService::class,'crear','contabilidad'],'inv_reclasificar'=>[\Services\ErpInventarioConceptoService::class,'reclasificar','contabilidad'],'inv_reimputar'=>[\Services\ErpInventarioConceptoService::class,'reimputar','contabilidad'],'inv_concepto_cuenta'=>[\Services\ErpInventarioConceptoService::class,'asignarCuenta','contabilidad'],'inv_concepto_estado'=>[\Services\ErpInventarioConceptoService::class,'estado','contabilidad'],
             'dep_estimacion'=>[\Services\ErpDepreciacionService::class,'estimacionRegistrar','contabilidad'],'dep_estimacion_anular'=>[\Services\ErpDepreciacionService::class,'estimacionAnular','contabilidad'],
             'fiscal_nota_credito'=>[\Services\ErpFiscalService::class,'notaCredito','facturacion'],
             'fiscal_verificar'=>[\Services\ErpFiscalService::class,'solicitarVerificacion','facturacion'],
