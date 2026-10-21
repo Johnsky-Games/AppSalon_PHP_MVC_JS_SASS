@@ -53,13 +53,39 @@ final class VistasMigracionesTest extends TestCase
     protected function tearDown():void {foreach(array_merge([$this->dir],$this->extra) as $d){foreach(glob($d.'/*')?:[] as $f)unlink($f);rmdir($d);}}
     private static function v(string $n,string $cuerpo):string {return "CREATE OR REPLACE SQL SECURITY DEFINER VIEW $n AS\nSELECT DISTINCT $cuerpo;\n";}
 
-    public function testUnaVistaDependienteSeCreaDespuesDeLaQueUsaAunqueUnaMigracionPosteriorRedefinaLaBase():void
+    /** Ejecutor que imita al motor: una vista solo se crea si las que menciona en FROM ya existen. */
+    private function motor(array &$creadas):callable
+    {
+        return function(string $sql)use(&$creadas):void{
+            preg_match('/VIEW\s+(\w+)\s+AS/i',$sql,$n);
+            if(preg_match('/\bFROM\s+(bi_\w+)/i',$sql,$d)&&!in_array($d[1],$creadas,true))throw new \RuntimeException("Table '{$d[1]}' doesn't exist");
+            $creadas[]=$n[1];
+        };
+    }
+    public function testUnaVistaDependienteSeCreaAunqueSuBaseVengaDespuesEnElOrdenDeLasMigraciones():void
     {
         $d=$this->aparte(['001_a.sql'=>self::v('bi_a','id AS v1 FROM t').self::v('bi_b','v1 FROM bi_a'),'002_b.sql'=>self::v('bi_a','id AS v2 FROM t')]);
         $s=VistasMigraciones::sentencias($d,['001_a'=>true,'002_b'=>true]);
-        self::assertCount(2,$s);
-        self::assertStringContainsString('VIEW bi_a AS',$s[0]);self::assertStringContainsString('v2',$s[0],'primero la base, con su definición vigente');
-        self::assertStringContainsString('VIEW bi_b AS',$s[1]);
+        self::assertCount(2,$s,'solo la definición vigente de cada vista');
+        $creadas=[];
+        // El orden de las sentencias es el de aparición (bi_b antes que bi_a tras redefinir la base): el reintento lo resuelve.
+        self::assertStringContainsString('v2',$s[0].$s[1]);
+        self::assertSame(2,VistasMigraciones::ejecutar($s,$this->motor($creadas)));
+        self::assertEqualsCanonicalizing(['bi_a','bi_b'],$creadas);self::assertSame('bi_a',$creadas[0],'la base se crea antes que la dependiente');
+    }
+    public function testElNombreDeOtraVistaEnUnLiteralOUnComentarioNoInventaUnaDependencia():void
+    {
+        $d=$this->aparte(['001_a.sql'=>"CREATE OR REPLACE SQL SECURITY DEFINER VIEW bi_a AS\nSELECT DISTINCT 'bi_b' AS etiqueta, id FROM t;\n".self::v('bi_b','id FROM bi_a')]);
+        $creadas=[];
+        self::assertSame(2,VistasMigraciones::ejecutar(VistasMigraciones::sentencias($d,['001_a'=>true]),$this->motor($creadas)),'bi_a menciona bi_b solo como texto');
+        self::assertSame(['bi_a','bi_b'],$creadas);
+    }
+    public function testSiUnaVistaNoSePuedeCrearElErrorLlevaElMotivoDeLaBase():void
+    {
+        $d=$this->aparte(['001_a.sql'=>self::v('bi_p','v FROM bi_q').self::v('bi_q','v FROM bi_p')]);
+        $creadas=[];
+        $this->expectException(\RuntimeException::class);$this->expectExceptionMessage("No se pudieron recrear las vistas (2 pendientes)");
+        VistasMigraciones::ejecutar(VistasMigraciones::sentencias($d,['001_a'=>true]),$this->motor($creadas));
     }
     public function testUnaMigracionQueRetiraUnaVistaLaExcluyeYUnaPosteriorPuedeRecrearla():void
     {
@@ -70,11 +96,5 @@ final class VistasMigracionesTest extends TestCase
         $recreada=VistasMigraciones::sentencias($d,['001_a'=>true,'002_b'=>true,'003_c'=>true]);
         self::assertCount(2,$recreada);self::assertStringContainsString('x3',implode("\n",$recreada));self::assertStringNotContainsString('x1',implode("\n",$recreada));
         self::assertContains('bi_x',VistasMigraciones::nombres($d),'el nombre sigue siendo conocido para validar manifiestos históricos');
-    }
-    public function testLaDependenciaCircularEntreVistasSeRechazaConUnErrorClaro():void
-    {
-        $d=$this->aparte(['001_a.sql'=>self::v('bi_p','v FROM bi_q').self::v('bi_q','v FROM bi_p')]);
-        $this->expectException(\RuntimeException::class);$this->expectExceptionMessage('Dependencia circular');
-        VistasMigraciones::sentencias($d,['001_a'=>true]);
     }
 }
