@@ -1,5 +1,5 @@
 <?php $titulo='Contabilidad';include __DIR__.'/_inicio.php';
-$ver=['resumen'=>'Resumen','diario'=>'Libro diario','mayor'=>'Libro mayor','balances'=>'Balances y resultados','conciliacion'=>'Conciliación','plan'=>'Plan de cuentas','periodos'=>'Períodos y cierre'];
+$ver=['resumen'=>'Resumen','diario'=>'Libro diario','mayor'=>'Libro mayor','balances'=>'Balances y resultados','conciliacion'=>'Conciliación','tesoreria'=>'Tesorería','plan'=>'Plan de cuentas','periodos'=>'Períodos y cierre'];
 if($registra)$ver['asiento']='Asiento manual';
 $tiposTexto=['activo'=>'Activo','pasivo'=>'Pasivo','patrimonio'=>'Patrimonio','ingreso'=>'Ingreso','costo'=>'Costo','gasto'=>'Gasto'];
 $filtro=static function(string $vista,array $q,string $desde,string $hasta,bool $fechas=true):void{ ?>
@@ -68,6 +68,55 @@ $tabla=static function(array $filas,callable $f):string{$h='';foreach($filas as 
 <div class="ops-table-wrap"><table class="ops-table"><thead><tr><th>Control</th><th>Libro</th><th>Auxiliar</th><th>Diferencia</th><th>Fuente del auxiliar</th></tr></thead><tbody>
 <?= $tabla($conc['controles'],fn($c)=>'<tr><td>'.s($c['nombre']).'</td><td>'.s($dinero($c['libro'])).'</td><td>'.s($dinero($c['auxiliar'])).'</td><td>'.($c['diferencia']===0?'0.00':'<strong>'.s($dinero($c['diferencia'])).'</strong>').'</td><td><small>'.s($c['fuente']).'</small></td></tr>') ?>
 </tbody></table></div><p>Hechos sin contabilizar: <?= (int)$conc['eventos_sin_contabilizar'] ?> · Servicios prestados sin contabilizar: <?= (int)$conc['prestaciones_sin_contabilizar'] ?> · Libro <?= $conc['integridad']?'con inconsistencias':'íntegro' ?></p></section>
+<?php endif; ?>
+
+<?php if($vista==='tesoreria'): $dc=static fn($n)=>($n<0?'−':'').$dinero(abs((int)$n)); ?>
+<section class="ui-card"><h2>Tesorería bancaria</h2>
+<p>Los extractos se importan como texto y no se editan. Se concilian línea a línea con el libro de la cuenta contable del banco: el importe y el sentido deben coincidir exactamente y las fechas, dentro de <?= (int)$ventana ?> días (o con una nota). Una diferencia nunca se ajusta sola: se explica con un asiento manual y se concilia. El número completo de la cuenta bancaria no se guarda.</p>
+<div class="ops-table-wrap"><table class="ops-table"><thead><tr><th>Cuenta bancaria</th><th>Cuenta contable</th><th>Último extracto</th><th></th></tr></thead><tbody>
+<?php foreach($bancos as $b): $u=$b['extractos'][0]??null; ?><tr><td><?= s($b['nombre'].' · '.$b['entidad'].($b['ultimos_digitos']?' ····'.$b['ultimos_digitos']:'')) ?></td><td><?= s($b['codigo'].' '.$b['cuenta_nombre']) ?></td><td><?= $u?s($u['desde'].' a '.$u['hasta'].' · saldo '.$dc($u['saldo_final_centavos'])):'Sin extractos' ?></td><td><a href="?<?= s(http_build_query(['vista'=>'tesoreria','banco'=>$b['id']])) ?>">Ver conciliación</a></td></tr><?php endforeach; ?>
+<?php if(!$bancos): ?><tr><td colspan="4">Aún no hay cuentas bancarias registradas.</td></tr><?php endif; ?></tbody></table></div></section>
+<?php if($configura): ?><section class="ui-card"><h2>Registrar cuenta bancaria</h2><?php $formulario=['accion'=>'tes_cuenta','ocultos'=>['vista'=>'tesoreria'],'campos'=>['cuenta'=>['etiqueta'=>'Cuenta contable de activo (sin otro banco ligado)','tipo'=>'select','opciones'=>array_map(fn($c)=>$c['codigo'].' '.$c['nombre'],$cuentasLibres)],'nombre'=>['etiqueta'=>'Nombre interno','longitud'=>80],'entidad'=>['etiqueta'=>'Entidad financiera','longitud'=>80],'ultimos_digitos'=>['etiqueta'=>'Últimos dígitos del número (opcional, 2 a 6)','requerido'=>false,'longitud'=>6]],'boton'=>'Registrar cuenta bancaria'];include __DIR__.'/_formulario.php'; ?></section><?php endif; ?>
+<?php if($banco&&isset($informe)): ?>
+<section class="ui-card"><h2>Conciliación de <?= s($informe['cuenta']['nombre']) ?></h2>
+<?php if($informe['sin_extractos']): ?><p>Aún no hay extractos importados.</p><?php else: ?>
+<p>Al <?= s($informe['corte']) ?>: saldo del banco <strong><?= s($dc($informe['saldo_banco'])) ?></strong> · saldo del libro <strong><?= s($dc($informe['saldo_libro'])) ?></strong> · diferencia <strong><?= s($dc($informe['diferencia'])) ?></strong>.
+<?= $informe['conciliada']?'<strong>Conciliada: sin partidas pendientes.</strong>':'Pendiente de conciliar.' ?></p>
+<?php if($informe['diferencia_apertura']!==0): ?><p role="alert">El saldo inicial del primer extracto no coincide con el libro anterior a <?= s($informe['desde']) ?> (diferencia <?= s($dc($informe['diferencia_apertura'])) ?>): registra el saldo de apertura de la cuenta o corrige el extracto.</p><?php endif; ?>
+<?php if(!$informe['identidad_cumple']): ?><p role="alert">Incoherencia: una conciliación vincula partidas con fechas fuera del rango de los extractos. Revísala y deshaz el vínculo.</p><?php endif; ?>
+<h3>En el extracto, sin registrar en el libro (<?= s($dc($informe['extracto_sin_registrar_total'])) ?>)</h3>
+<div class="ops-table-wrap"><table class="ops-table"><thead><tr><th>Fecha</th><th>Descripción</th><th>Referencia</th><th>Importe</th></tr></thead><tbody>
+<?= $tabla($informe['extracto_sin_registrar'],fn($x)=>'<tr><td>'.s($x['fecha']).'</td><td>'.s($x['descripcion']).'</td><td>'.s($x['referencia']??'').'</td><td>'.s($dc($x['monto'])).'</td></tr>') ?>
+<?php if(!$informe['extracto_sin_registrar']): ?><tr><td colspan="4">Nada pendiente.</td></tr><?php endif; ?></tbody></table></div>
+<p><small>Se registran con un asiento manual (pestaña «Asiento manual») fechado como el movimiento bancario y después se concilian.</small></p>
+<h3>En el libro, sin aparecer en el extracto (<?= s($dc($informe['libro_sin_extracto_total'])) ?>)</h3>
+<div class="ops-table-wrap"><table class="ops-table"><thead><tr><th>Fecha</th><th>Asiento</th><th>Concepto</th><th>Importe</th></tr></thead><tbody>
+<?= $tabla($informe['libro_sin_extracto'],fn($x)=>'<tr><td>'.s($x['fecha']).'</td><td>'.(int)$x['numero'].'</td><td>'.s($x['concepto']).'</td><td>'.s($dc($x['monto'])).'</td></tr>') ?>
+<?php if(!$informe['libro_sin_extracto']): ?><tr><td colspan="4">Nada pendiente.</td></tr><?php endif; ?></tbody></table></div>
+<?php endif; ?></section>
+<?php $cuentaSel=null;foreach($bancos as $b)if((int)$b['id']===(int)$banco)$cuentaSel=$b; if($cuentaSel): ?>
+<section class="ui-card"><h2>Extractos</h2><div class="ops-table-wrap"><table class="ops-table"><thead><tr><th>Período</th><th>Líneas</th><th>Pendientes</th><th>Saldo inicial</th><th>Saldo final</th><th></th></tr></thead><tbody>
+<?= $tabla($cuentaSel['extractos'],fn($e)=>'<tr><td>'.s($e['desde'].' a '.$e['hasta']).'</td><td>'.(int)$e['n_lineas'].'</td><td>'.(int)$e['pendientes'].'</td><td>'.s($dc($e['saldo_inicial_centavos'])).'</td><td>'.s($dc($e['saldo_final_centavos'])).'</td><td><a href="?'.s(http_build_query(['vista'=>'tesoreria','banco'=>$cuentaSel['id'],'extracto'=>$e['id']])).'">Conciliar</a></td></tr>') ?>
+<?php if(!$cuentaSel['extractos']): ?><tr><td colspan="6">Sin extractos.</td></tr><?php endif; ?></tbody></table></div></section>
+<?php if($registra): ?><section class="ui-card"><h2>Importar extracto</h2><p>Un renglón por movimiento: <code>AAAA-MM-DD;descripción;referencia;monto</code> (el monto con signo y punto decimal: positivo entra al banco, negativo sale). La referencia puede ir vacía y el encabezado es opcional. Debe empezar después del último extracto y su saldo inicial debe ser el final del anterior. Hasta <?= (int)\Services\ErpTesoreriaService::MAX_LINEAS ?> renglones.</p>
+<?php $formulario=['accion'=>'tes_extracto','ocultos'=>['vista'=>'tesoreria','banco'=>$cuentaSel['id'],'tes_cuenta_id'=>$cuentaSel['id']],'campos'=>['desde'=>['etiqueta'=>'Desde','tipo'=>'date'],'hasta'=>['etiqueta'=>'Hasta','tipo'=>'date'],'saldo_inicial'=>['etiqueta'=>'Saldo inicial del extracto (p. ej. 1250.00)','longitud'=>16],'saldo_final'=>['etiqueta'=>'Saldo final del extracto','longitud'=>16],'extracto'=>['etiqueta'=>'Movimientos','tipo'=>'textarea','filas'=>10,'longitud'=>\Services\ErpTesoreriaService::MAX_BYTES]],'boton'=>'Importar extracto'];include __DIR__.'/_formulario.php'; ?></section><?php endif; ?>
+<?php endif; ?>
+<?php if($extractoId&&isset($sugerencias)): ?>
+<section class="ui-card"><h2>Conciliar el extracto #<?= (int)$extractoId ?></h2>
+<?php if($registra): $formulario=['accion'=>'tes_conciliar_auto','ocultos'=>['vista'=>'tesoreria','banco'=>$banco,'extracto'=>$extractoId,'extracto_id'=>$extractoId],'campos'=>[],'boton'=>'Conciliar lo inequívoco'];include __DIR__.'/_formulario.php'; ?><p><small>Solo vincula un movimiento con un único candidato del mismo importe y sentido que no sea candidato de otro; lo ambiguo queda para decidirlo aquí.</small></p><?php endif; ?>
+<h3>Movimientos sin conciliar</h3>
+<?php foreach($sugerencias as $p): $l=$p['linea']; ?>
+<div class="ui-card"><p><strong><?= s($l['fecha']) ?></strong> · <?= s($l['descripcion']) ?><?= $l['referencia']?' · '.s($l['referencia']):'' ?> · <strong><?= s($dc($l['monto'])) ?></strong></p>
+<?php if(!$p['candidatos']&&!$p['lejanos']): ?><p><small>Sin partida del libro con el mismo importe y sentido: regístrala con un asiento manual.</small></p><?php endif; ?>
+<?php if($registra): foreach($p['candidatos'] as $c): $formulario=['accion'=>'tes_conciliar','ocultos'=>['vista'=>'tesoreria','banco'=>$banco,'extracto'=>$extractoId,'extracto_linea_id'=>$l['id'],'cont_linea_id'=>$c['id']],'campos'=>['nota'=>['etiqueta'=>'Asiento '.(int)$c['numero'].' · '.$c['fecha'].' · '.$c['concepto'].' (nota opcional)','requerido'=>false,'longitud'=>160]],'boton'=>'Conciliar con este asiento'];include __DIR__.'/_formulario.php'; endforeach;
+foreach($p['lejanos'] as $c): $formulario=['accion'=>'tes_conciliar','ocultos'=>['vista'=>'tesoreria','banco'=>$banco,'extracto'=>$extractoId,'extracto_linea_id'=>$l['id'],'cont_linea_id'=>$c['id']],'campos'=>['nota'=>['etiqueta'=>'Partida fuera de la ventana de '.(int)$ventana.' días: asiento '.(int)$c['numero'].' · '.$c['fecha'].' · '.$c['concepto'].' (explica por qué se concilia)','longitud'=>160]],'boton'=>'Conciliar con nota'];include __DIR__.'/_formulario.php'; endforeach; endif; ?></div>
+<?php endforeach; if(!$sugerencias): ?><p>Todos los movimientos de este extracto están conciliados.</p><?php endif; ?>
+<h3>Vínculos vigentes</h3>
+<div class="ops-table-wrap"><table class="ops-table"><thead><tr><th>Fecha</th><th>Movimiento</th><th>Importe</th><th>Asiento</th><th>Método</th><th></th></tr></thead><tbody>
+<?php foreach($vinculos as $v): ?><tr><td><?= s($v['fecha']) ?></td><td><?= s($v['descripcion']) ?></td><td><?= s($dc($v['monto'])) ?></td><td><?= (int)$v['asiento'] ?></td><td><?= s($v['metodo']) ?><?= $v['nota']?' · '.s($v['nota']):'' ?></td><td>
+<?php if($registra): $formulario=['accion'=>'tes_desconciliar','ocultos'=>['vista'=>'tesoreria','banco'=>$banco,'extracto'=>$extractoId,'conciliacion_id'=>$v['id']],'campos'=>['motivo'=>['etiqueta'=>'Motivo','longitud'=>160]],'boton'=>'Deshacer'];include __DIR__.'/_formulario.php'; endif; ?></td></tr><?php endforeach; ?>
+<?php if(!$vinculos): ?><tr><td colspan="6">Sin vínculos vigentes.</td></tr><?php endif; ?></tbody></table></div></section>
+<?php endif; endif; ?>
 <?php endif; ?>
 
 <?php if($vista==='plan'): ?>
