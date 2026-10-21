@@ -345,6 +345,9 @@ final class ErpContabilidadService extends ErpService
             +COALESCE((SELECT SUM(l.monto_centavos) FROM erp_dep_lineas l JOIN erp_dep_corridas k ON k.id=l.corrida_id WHERE k.estado='contabilizada' AND LAST_DAY(STR_TO_DATE(CONCAT(k.anio,'-',k.mes,'-01'),'%Y-%m-%d'))<=?),0)
             -COALESCE((SELECT SUM(acumulado_centavos) FROM erp_dep_bajas WHERE estado='vigente' AND fecha<=?),0) n",[$hasta,$hasta,$hasta]);
         $controles[]=['nombre'=>'Depreciación acumulada','libro'=>-$saldo('depreciacion_acumulada'),'auxiliar'=>$aux,'fuente'=>'Acumulado inicial de las fichas más las corridas contabilizadas hasta el corte, menos el acumulado dado de baja'];
+        // Inventario valorizado: cada movimiento a su propio costo (entradas suman, salidas restan). El desglose por origen y estado vive en Conciliación → «Inventario valorizado frente al libro».
+        $aux=$n("SELECT COALESCE(SUM(CASE WHEN tipo='entrada' THEN 1 ELSE -1 END*((costo_centavos*cantidad_milesimas+500) DIV 1000)),0) n FROM inventario_movimientos WHERE registrado_en<=?",[$fin]);
+        $controles[]=['nombre'=>'Inventario valorizado','libro'=>$saldo('inventario'),'auxiliar'=>$aux,'fuente'=>'Movimientos de inventario valorizados a su propio costo hasta el corte. La diferencia se explica por origen y estado (pendientes, fallidos, anteriores al inicio contable, ajustes sin clasificar, sin regla); nunca se ajusta sola.'];
         foreach($controles as &$c)$c['diferencia']=$c['libro']-$c['auxiliar'];unset($c);
         $pendientes=$n("SELECT COUNT(*) n FROM erp_integraciones_outbox WHERE destino='contabilidad' AND estado<>'confirmado'");
         $inicio=$this->config()['inicio_contable']??null;$sinPrestar=$inicio?$this->prestacionesPendientes($inicio):0;
