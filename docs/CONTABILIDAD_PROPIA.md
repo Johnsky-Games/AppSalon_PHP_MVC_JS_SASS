@@ -66,7 +66,7 @@ Cada hecho distinto genera su asiento. Un evento con varios hechos genera varios
 
 ## Límites conocidos
 
-* **Ingresos y egresos manuales de caja** y los **ajustes manuales de inventario** todavía no tienen regla contable: la conciliación de caja los muestra como diferencia.
+* Los **ajustes manuales de inventario** todavía no tienen regla contable. Los **movimientos manuales de efectivo** se contabilizan con conceptos configurables (migración 054, ver «Caja: conceptos configurables»); los movimientos anteriores no se reclasifican y la conciliación de caja los muestra como diferencia. Los ingresos y egresos manuales del módulo financiero heredado (`FinanzasService`, p. ej. transferencias recibidas sin cita) siguen sin regla contable.
 * El IVA pagado en compras se estima con la proporción de la orden hasta que la factura del proveedor registre su desglose.
 * Sin retenciones, anexos tributarios, depreciación tributaria (la depreciación contable por política está en `docs/DEPRECIACION_ACTIVOS.md`), centros de costo, presupuestos ni multimoneda. La conciliación bancaria contra extractos existe desde la migración 051 (ver «Tesorería bancaria»); no hay importación automática de archivos de cada banco ni asientos generados desde el extracto.
 * La nómina propia (siguiente etapa) agregará su contabilización; hoy solo se contabiliza la comisión pagada de forma directa.
@@ -82,4 +82,25 @@ Pestaña **Tesorería** de Contabilidad (`/gestion/contabilidad?vista=tesoreria`
 * **Conciliar lo inequívoco**: vincula solo un renglón con un único candidato (mismo importe y sentido, dentro de la ventana) que a su vez no sea candidato de otro renglón. Lo ambiguo (p. ej. dos cobros iguales el mismo día) se decide a mano.
 * **Informe** al cierre del último extracto: saldo del banco, saldo del libro, diferencia, extracto sin registrar en el libro, libro sin aparecer en el extracto (partidas en tránsito) y la diferencia de apertura (saldo inicial del primer extracto frente al libro anterior). Se comprueba la identidad `banco − libro = apertura + extracto sin registrar − libro sin extracto`; si no se cumple se informa como incoherencia. «Conciliada» exige además apertura en cero y ninguna partida pendiente.
 * **Límites**: no hay importación de formatos propios de cada banco (solo el texto descrito), ni conciliación uno-a-muchos (un depósito que agrupa varios cobros se registra como un asiento) ni generación automática de asientos a partir del extracto; los ingresos y egresos manuales de caja siguen sin regla contable. El nombre, la entidad y la descripción del extracto son datos del propio negocio y se muestran escapados; la auditoría no copia las descripciones de los movimientos.
+
+## Caja: conceptos configurables (migración 054)
+Un movimiento de dinero no es por sí mismo ingreso ni gasto. Cada **movimiento manual de efectivo** (Mi caja → «Registrar movimiento manual de efectivo») se clasifica con un **concepto** que el negocio crea en Contabilidad → Caja y conceptos y asocia a una cuenta de **su** plan contable. El sistema no siembra conceptos ni códigos de cuenta; solo valida que la cuenta exista, sea imputable y activa y sea de un tipo que la naturaleza admite:
+
+| Naturaleza | Sentido en caja | Cuenta admitida |
+| --- | --- | --- |
+| Aporte del propietario | entra | patrimonio |
+| Retiro del propietario | sale | patrimonio |
+| Transferencia de caja a banco (depósito) | sale | activo (distinta de la cuenta de caja) |
+| Transferencia de banco a caja (retiro) | entra | activo (distinta de la cuenta de caja) |
+| Gasto pagado en efectivo | sale | gasto o costo |
+| Ajuste por sobrante | entra | ingreso |
+| Ajuste por faltante | sale | gasto |
+
+* **Asiento:** entra efectivo → Dr caja · Cr cuenta del concepto; sale efectivo → Dr cuenta del concepto · Cr caja. El sentido lo fija el concepto.
+* **Se exige:** concepto activo, motivo (≥ 5 caracteres) y el permiso `erp.caja.movimientos`; crear conceptos, asignar cuenta y activar o desactivar exigen `contabilidad.configurar`.
+* **Si falta configuración** (concepto sin cuenta o con cuenta inválida): el movimiento se registra en caja y **solo su contabilización queda pendiente**; la pestaña muestra qué debe completarse. Al asignar la cuenta, los pendientes de ese concepto se reintentan de inmediato.
+* **Reverso** (`contabilidad.registrar` y una caja propia abierta): registra el movimiento contrario y revierte el asiento (si el original fue anterior al inicio contable y no tiene asiento, el reverso se contabiliza como un movimiento actual de sentido contrario); el original se conserva, se reversa una sola vez y un reverso no se reversa.
+* **Sin duplicados:** cada movimiento tiene una sola clasificación (clave primaria) y un solo asiento (origen único por evento). Los pagos de obligaciones, devoluciones y cobros siguen su propio flujo; este concepto es para dinero movido a mano.
+* **Auditoría:** eventos `caja_concepto_creado`, `caja_concepto_cuenta`, `caja_concepto_estado`, `caja_movimiento` y `caja_movimiento_reversado` con actor; conceptos solo cambian de cuenta y estado; las clasificaciones no se editan ni se borran.
+* **Límites:** no se reclasifican movimientos históricos (queda pendiente una acción explícita, movimiento por movimiento); el módulo financiero heredado (`FinanzasService`) no pasa por conceptos; los ajustes de inventario siguen sin regla.
 

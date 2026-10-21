@@ -1,5 +1,5 @@
 <?php $titulo='Contabilidad';include __DIR__.'/_inicio.php';
-$ver=['resumen'=>'Resumen','diario'=>'Libro diario','mayor'=>'Libro mayor','balances'=>'Balances y resultados','conciliacion'=>'Conciliación','tesoreria'=>'Tesorería','plan'=>'Plan de cuentas','periodos'=>'Períodos y cierre','activos'=>'Activos fijos'];
+$ver=['resumen'=>'Resumen','diario'=>'Libro diario','mayor'=>'Libro mayor','balances'=>'Balances y resultados','conciliacion'=>'Conciliación','tesoreria'=>'Tesorería','plan'=>'Plan de cuentas','periodos'=>'Períodos y cierre','activos'=>'Activos fijos','caja'=>'Caja y conceptos'];
 if($registra)$ver['asiento']='Asiento manual';
 $tiposTexto=['activo'=>'Activo','pasivo'=>'Pasivo','patrimonio'=>'Patrimonio','ingreso'=>'Ingreso','costo'=>'Costo','gasto'=>'Gasto'];
 $filtro=static function(string $vista,array $q,string $desde,string $hasta,bool $fechas=true):void{ ?>
@@ -160,6 +160,23 @@ foreach($p['lejanos'] as $c): $formulario=['accion'=>'tes_conciliar','ocultos'=>
 <?php if($registra): $formulario=['accion'=>'tes_desconciliar','ocultos'=>['vista'=>'tesoreria','banco'=>$banco,'extracto'=>$extractoId,'conciliacion_id'=>$v['id']],'campos'=>['motivo'=>['etiqueta'=>'Motivo','longitud'=>160]],'boton'=>'Deshacer'];include __DIR__.'/_formulario.php'; endif; ?></td></tr><?php endforeach; ?>
 <?php if(!$vinculos): ?><tr><td colspan="6">Sin vínculos vigentes.</td></tr><?php endif; ?></tbody></table></div></section>
 <?php endif; endif; ?>
+<?php endif; ?>
+
+<?php if($vista==='caja'): $optNat=[];foreach($cajaNaturalezas as $kn=>$vn)$optNat[$kn]=$vn[2].' · '.($vn[0]==='ingreso'?'entra':'sale').' efectivo · cuenta '.implode(' o ',$vn[1]);
+$optConc=[];foreach($cajaConceptos as $kc)$optConc[$kc['id']]=$kc['nombre']; ?>
+<section class="ui-card"><h2>Conceptos de caja</h2><p role="note">Un movimiento manual de efectivo no es ingreso ni gasto por sí mismo: se clasifica con un concepto que <strong>tú creas y asocias a una cuenta de tu plan contable</strong>. El sistema no trae conceptos ni códigos de cuenta. Si a un concepto le falta la cuenta, el movimiento se registra en caja y <strong>solo su contabilización queda pendiente</strong>. Los movimientos anteriores no se reclasifican solos.</p>
+<div class="ops-table-wrap"><table class="ops-table"><thead><tr><th>Concepto</th><th>Naturaleza</th><th>Sentido</th><th>Cuenta</th><th>Estado</th><th>Qué falta</th><th></th></tr></thead><tbody>
+<?php foreach($cajaConceptos as $kc): ?><tr><td><?= s($kc['nombre']) ?></td><td><?= s($cajaNaturalezas[$kc['naturaleza']][2]) ?></td><td><?= $kc['tipo']==='ingreso'?'entra efectivo':'sale efectivo' ?></td><td><?= $kc['cuenta_codigo']?s($kc['cuenta_codigo'].' '.$kc['cuenta_nombre']):'—' ?></td><td><?= $kc['activo']?'activo':'desactivado' ?></td><td><?= $kc['problema']?s($kc['problema']):'Listo' ?></td><td>
+<?php if($configura): $formulario=['accion'=>'caja_concepto_cuenta','ocultos'=>['vista'=>'caja','concepto_id'=>$kc['id']],'campos'=>['cuenta'=>['etiqueta'=>'Código de la cuenta del plan','longitud'=>20]],'boton'=>$kc['cuenta_id']?'Cambiar cuenta':'Asignar cuenta'];include __DIR__.'/_formulario.php'; ?>
+<form method="POST" action="/gestion/accion" data-una-vez><?php $clave('caja_concepto_estado'); ?><input type="hidden" name="vista" value="caja"><input type="hidden" name="concepto_id" value="<?= (int)$kc['id'] ?>"><input type="hidden" name="activo" value="<?= $kc['activo']?'0':'1' ?>"><button class="boton"><?= $kc['activo']?'Desactivar':'Activar' ?></button></form><?php endif; ?></td></tr><?php endforeach; ?>
+</tbody></table></div>
+<?php if($configura): $formulario=['accion'=>'caja_concepto','ocultos'=>['vista'=>'caja'],'campos'=>['nombre'=>['etiqueta'=>'Nombre del concepto','longitud'=>80],'naturaleza'=>['etiqueta'=>'Naturaleza','tipo'=>'select','opciones'=>$optNat],'cuenta'=>['etiqueta'=>'Código de cuenta del plan (opcional; se puede asignar después)','longitud'=>20,'requerido'=>false]],'boton'=>'Crear concepto'];include __DIR__.'/_formulario.php'; endif; ?></section>
+<section class="ui-card"><h2>Movimientos de caja pendientes de contabilizar</h2>
+<?php if(!$cajaPendientes): ?><p>No hay movimientos manuales esperando contabilización.</p><?php else: ?><div class="ops-table-wrap"><table class="ops-table"><thead><tr><th>Mov.</th><th>Concepto</th><th>Sentido</th><th>Monto</th><th>Estado</th><th>Qué debe completarse</th></tr></thead><tbody>
+<?php foreach($cajaPendientes as $p): ?><tr><td>#<?= (int)$p['movimiento'] ?><?= $p['tipo']==='caja_movimiento_reversado'?' (reverso)':'' ?></td><td><?= s($p['concepto']) ?></td><td><?= s($p['sentido']) ?></td><td><?= s($dinero($p['monto'])) ?></td><td><?= s($p['estado']) ?></td><td><?= $p['falta']?s($p['falta']):'Se contabilizará en el próximo ciclo del supervisor.' ?></td></tr><?php endforeach; ?></tbody></table></div><?php endif; ?></section>
+<?php if($registra&&$cajaReversibles): $optRev=[];foreach($cajaReversibles as $rv)$optRev[$rv['caja_id']]='#'.$rv['caja_id'].' · '.$rv['concepto'].' · '.$dinero($rv['monto_centavos']).' · '.substr($rv['registrado_en'],0,10); ?>
+<section class="ui-card"><h2>Reversar un movimiento manual</h2><p>Registra el movimiento contrario en <strong>tu caja abierta</strong> y revierte el asiento; el original se conserva. Un movimiento se reversa una sola vez.</p>
+<?php $formulario=['accion'=>'caja_reverso','ocultos'=>['vista'=>'caja'],'campos'=>['movimiento_id'=>['etiqueta'=>'Movimiento','tipo'=>'select','opciones'=>$optRev],'motivo'=>['etiqueta'=>'Motivo del reverso','longitud'=>300]],'boton'=>'Reversar movimiento'];include __DIR__.'/_formulario.php'; ?></section><?php endif; ?>
 <?php endif; ?>
 
 <?php if($vista==='plan'): ?>

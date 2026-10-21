@@ -310,3 +310,12 @@ Rama `feature/erp-depreciacion`. Detalle, fórmula, límites y fuentes pendiente
 * **Integración sin duplicar:** el adaptador contable traduce `depreciacion_contabilizada`, `activo_baja` y sus anulaciones (reversos); nuevo control «Depreciación acumulada» en la conciliación; permisos `contabilidad.*` existentes.
 * **Pruebas:** unitarias con cuotas calculadas a mano y 6 de integración (153 aserciones); conteo de tablas del esquema actualizado (+5).
 
+## Continuación 054: movimientos manuales de caja con conceptos configurables
+
+Rama `feature/erp-caja-conceptos`. Detalle, naturalezas y límites: `docs/CONTABILIDAD_PROPIA.md` («Caja: conceptos configurables»).
+
+* **Migración 054** (+2 tablas): `erp_caja_conceptos` (nombre, naturaleza, sentido, cuenta del plan, estado; sin siembra) y `erp_caja_mov_conceptos` (una clasificación por movimiento, de solo anexar, con enlace de reverso único).
+* **Sin contrapartida única:** el sentido y el tipo de cuenta salen de la naturaleza del concepto (aporte o retiro del propietario, depósito o retiro de banco, gasto, sobrante, faltante). Nunca se asume ingreso o gasto.
+* **Bloqueo acotado:** sin cuenta válida solo queda pendiente la contabilización de ese movimiento; el reintento se adelanta al asignar la cuenta.
+* **Pruebas:** 7 de integración (111 aserciones): sin concepto/permiso no hay movimiento, validación de naturaleza y cuenta, asiento por naturaleza contra la cuenta de cada concepto, pendientes acotados, reverso único con permisos, históricos sin reclasificar y pantallas. Mutación comprobada: forzar una contrapartida fija rompe la prueba de contrapartidas.
+
