@@ -128,7 +128,7 @@ final class ErpBiModeloLecturaIntegrationTest extends TestCase
         $this->db->query("CREATE USER '$usuario'@'%' IDENTIFIED BY '$clave'");
         try{
             foreach($vistas as $v)$this->db->query("GRANT SELECT ON `$bd`.`$v` TO '$usuario'@'%'");
-            mysqli_report(MYSQLI_REPORT_OFF);
+            mysqli_report(MYSQLI_REPORT_OFF); // modo real de la aplicación (includes/database.php); no se cambia el global para las demás pruebas
             $bi=new \mysqli(getenv('DB_HOST')?:'appsalon-test-db',$usuario,$clave,$bd,(int)(getenv('DB_PORT')?:3306));
             self::assertSame(0,$bi->connect_errno,'el usuario de BI conecta');
             foreach($vistas as $v){
@@ -147,7 +147,7 @@ final class ErpBiModeloLecturaIntegrationTest extends TestCase
             foreach($g as $linea)if(!str_contains($linea,'USAGE'))self::assertMatchesRegularExpression('/^GRANT SELECT ON `[^`]+`\.`bi_(venta_lineas|libro_lineas|inventario_movimientos)` TO /',$linea,'solo SELECT sobre las vistas autorizadas');
             $bi->close();
         }finally{
-            mysqli_report(MYSQLI_REPORT_ERROR|MYSQLI_REPORT_STRICT);
+            mysqli_report(MYSQLI_REPORT_OFF);
             $this->db->query("DROP USER IF EXISTS '$usuario'@'%'");
         }
     }
