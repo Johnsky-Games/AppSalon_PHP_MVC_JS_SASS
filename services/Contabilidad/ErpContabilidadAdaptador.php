@@ -108,7 +108,7 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
             'comision_liquidada'=>$this->comision($id,(int)$d['monto']),
             'activo_registrado'=>[['concepto'=>'Activo registrado '.($d['codigo']??''),'lineas'=>[['rol'=>'activos_fijos','debe'=>(int)$d['costo']],['rol'=>'recepciones_por_facturar','haber'=>(int)$d['costo']]]]],
             'caja_movimiento'=>$this->cajaManual((int)$d['movimiento_id'],(string)$d['tipo'],(int)$d['monto']),
-            'caja_movimiento_reversado'=>$this->nominaAnulada((int)$d['reversa_de'],$d,'caja'),
+            'caja_movimiento_reversado'=>$this->cajaReverso($d),
             'depreciacion_contabilizada'=>[['concepto'=>'Depreciación de activos fijos '.($d['periodo']??''),'lineas'=>[['rol'=>'gasto_depreciacion','debe'=>(int)$d['total'],'referencia'=>'depreciación '.($d['periodo']??'')],['rol'=>'depreciacion_acumulada','haber'=>(int)$d['total'],'referencia'=>'depreciación '.($d['periodo']??'')]]]],
             'depreciacion_anulada'=>$this->nominaAnulada($id,$d,'depreciacion'),
             'activo_baja'=>$this->activoBaja($id,$d),
@@ -277,6 +277,19 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
         $cuenta=(new \Services\ErpCajaConceptoService($this->r))->cuentaDe((int)$m['concepto_id']);$ref='caja '.$movimiento;
         $caja=['rol'=>'caja','referencia'=>$ref];$otra=['cuenta_id'=>$cuenta,'referencia'=>$ref];
         return [['concepto'=>mb_substr('Caja: '.$m['nombre'],0,200),'lineas'=>$tipo==='ingreso'?[$caja+['debe'=>$monto],$otra+['haber'=>$monto]]:[$otra+['debe'=>$monto],$caja+['haber'=>$monto]]]];
+    }
+    /**
+     * Reverso de un movimiento manual de efectivo. Si el original tiene asiento, se revierte ese asiento. Si el original fue anterior al inicio contable (se confirmó sin
+     * asiento) el reverso NO tiene nada que anular, pero sí mueve el efectivo de hoy: se contabiliza como un movimiento actual de sentido contrario. Si el original aún está
+     * pendiente, el reverso espera su turno.
+     */
+    private function cajaReverso(array $d):array
+    {
+        $ev=(int)$d['aprobacion_evento_id'];
+        if($this->r->uno('SELECT id FROM erp_cont_asientos WHERE origen=?',['outbox:ERP-'.$ev.'-contabilidad#1']))return $this->nominaAnulada((int)$d['reversa_de'],$d,'caja');
+        $o=$this->r->uno("SELECT estado FROM erp_integraciones_outbox WHERE evento_id=? AND destino='contabilidad'",[$ev]);
+        if($o&&$o['estado']==='confirmado')return $this->cajaManual((int)$d['movimiento_id'],(string)$d['tipo'],(int)$d['monto']);
+        throw new ErpException('El movimiento original aún no está contabilizado: el reverso espera.',409);
     }
     /** Baja de un activo fijo: se salda la depreciación acumulada y el costo; lo no depreciado se reconoce como pérdida. Sin venta (las ventas de activos exigen factura y no se automatizan). */
     private function activoBaja(int $activo,array $d):array

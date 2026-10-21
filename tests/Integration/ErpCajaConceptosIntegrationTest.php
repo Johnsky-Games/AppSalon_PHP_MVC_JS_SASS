@@ -138,6 +138,19 @@ final class ErpCajaConceptosIntegrationTest extends TestCase
         $k2=$this->concepto('Aporte','aporte_propietario',$this->cuenta('patrimonio'));$m2=$this->mov($this->owner,$k2,'3.00');
         $otro=R5CajaFixture::usuario($this->db,'finanzas');$this->rechazo(fn()=>$this->caja()->movimientoReversar($otro,$this->d(['movimiento_id'=>$m2,'motivo'=>'Sin caja abierta propia'])),422);
     }
+    public function testReversoDeUnMovimientoAnteriorAlInicioContableSeContabilizaComoMovimientoActual():void
+    {
+        $k=$this->concepto('Retiro del dueño','retiro_propietario',$this->cuenta('patrimonio'));$this->abrir($this->owner,'50');
+        // El original ocurre antes del inicio contable: se confirma sin asiento.
+        $this->db->query("UPDATE erp_cont_config SET inicio_contable='2099-01-01' WHERE id=1");
+        $m=$this->mov($this->owner,$k,'20.00');$x=$this->procesar();self::assertSame(0,$x['fallidos']);self::assertSame(0,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_cont_asientos')['n'],'El original previo al inicio no tiene asiento');
+        $this->db->query("UPDATE erp_cont_config SET inicio_contable='2026-01-01' WHERE id=1");
+        $this->caja()->movimientoReversar($this->owner,$this->d(['movimiento_id'=>$m,'motivo'=>'Se registró con el concepto equivocado']));
+        $x=$this->procesar();self::assertSame(0,$x['fallidos']);
+        self::assertSame(1,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_cont_asientos')['n'],'El reverso mueve el efectivo de hoy y debe quedar en el libro');
+        self::assertSame(2000,$this->saldoCaja(),'Entró efectivo hoy: Dr caja');self::assertSame('automatico',$this->r->uno('SELECT tipo FROM erp_cont_asientos')['tipo'],'No es una anulación: no hay asiento que revertir');
+        self::assertSame(-2000,$this->saldo($this->cuenta('patrimonio')));
+    }
     public function testLosMovimientosAnterioresNoSeReclasificanSolos():void
     {
         $id=$this->abrir($this->owner,'20');
