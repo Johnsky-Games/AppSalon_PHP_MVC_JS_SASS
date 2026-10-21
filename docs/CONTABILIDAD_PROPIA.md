@@ -66,7 +66,7 @@ Cada hecho distinto genera su asiento. Un evento con varios hechos genera varios
 
 ## Límites conocidos
 
-* Los **ajustes manuales de inventario** todavía no tienen regla contable. Los **movimientos manuales de efectivo** se contabilizan con conceptos configurables (migración 054, ver «Caja: conceptos configurables»); los movimientos anteriores no se reclasifican y la conciliación de caja los muestra como diferencia. Los ingresos y egresos manuales del módulo financiero heredado (`FinanzasService`, p. ej. transferencias recibidas sin cita) siguen sin regla contable.
+* Los **ajustes de inventario aprobados** se contabilizan con conceptos configurables (migración 055, ver «Ajustes de inventario: conceptos configurables»); los anteriores a 055 no se reclasifican. Los **movimientos manuales de efectivo** se contabilizan con conceptos configurables (migración 054, ver «Caja: conceptos configurables»); los movimientos anteriores no se reclasifican y la conciliación de caja los muestra como diferencia. Los ingresos y egresos manuales del módulo financiero heredado (`FinanzasService`, p. ej. transferencias recibidas sin cita) siguen sin regla contable.
 * El IVA pagado en compras se estima con la proporción de la orden hasta que la factura del proveedor registre su desglose.
 * Sin retenciones, anexos tributarios, depreciación tributaria (la depreciación contable por política está en `docs/DEPRECIACION_ACTIVOS.md`), centros de costo, presupuestos ni multimoneda. La conciliación bancaria contra extractos existe desde la migración 051 (ver «Tesorería bancaria»); no hay importación automática de archivos de cada banco ni asientos generados desde el extracto.
 * La nómina propia (siguiente etapa) agregará su contabilización; hoy solo se contabiliza la comisión pagada de forma directa.
@@ -103,4 +103,22 @@ Un movimiento de dinero no es por sí mismo ingreso ni gasto. Cada **movimiento 
 * **Sin duplicados:** cada movimiento tiene una sola clasificación (clave primaria) y un solo asiento (origen único por evento). Los pagos de obligaciones, devoluciones y cobros siguen su propio flujo; este concepto es para dinero movido a mano.
 * **Auditoría:** eventos `caja_concepto_creado`, `caja_concepto_cuenta`, `caja_concepto_estado`, `caja_movimiento` y `caja_movimiento_reversado` con actor; conceptos solo cambian de cuenta y estado; las clasificaciones no se editan ni se borran.
 * **Límites:** no se reclasifican movimientos históricos (queda pendiente una acción explícita, movimiento por movimiento); el módulo financiero heredado (`FinanzasService`) no pasa por conceptos; los ajustes de inventario siguen sin regla.
+
+## Ajustes de inventario: conceptos configurables (migración 055)
+Un ajuste de stock no es por sí mismo pérdida ni ganancia. La solicitud de ajuste (`ajuste_stock`) exige ahora un **concepto** activo, de sentido coincidente, que el negocio crea en Contabilidad → Ajustes de inventario y asocia a una cuenta de **su** plan; no se siembran conceptos ni códigos de cuenta.
+
+| Naturaleza | Sentido | Cuenta admitida |
+| --- | --- | --- |
+| Merma o pérdida | disminuye stock | gasto o costo |
+| Faltante de conteo físico | disminuye stock | gasto o costo |
+| Sobrante de conteo físico | incrementa stock | ingreso o costo |
+| Uso interno u obsequio | disminuye stock | gasto |
+
+* **Asiento al aprobar:** valorizado con el costo del propio movimiento de inventario (foto al aprobar; cantidad × costo, redondeo comercial). Disminuye → Dr cuenta del concepto · Cr inventario; incrementa → Dr inventario · Cr cuenta del concepto. La cuenta de la contrapartida no puede ser la de inventario.
+* **Tope de valor:** un ajuste con concepto cuyo valor (cantidad × costo) no cabe en una línea del libro se rechaza al aprobar, antes de tocar el stock.
+* **Bloqueo acotado:** si el concepto no tiene cuenta válida, el ajuste queda aprobado y aplicado al stock, y solo su contabilización queda pendiente; la pestaña muestra qué completar y, al asignar la cuenta, se reintenta de inmediato.
+* **Corrección:** un ajuste se corrige con otro ajuste contrario aprobado (el inventario es de solo anexar), cada uno con su concepto y su asiento.
+* **Sin duplicados ni reclasificación:** una clasificación por movimiento (clave primaria) y una por solicitud (única); las solicitudes creadas antes de 055 (sin concepto) se aprueban como antes y no se contabilizan solas.
+* **Permisos y auditoría:** crear conceptos, asignar cuenta y activar o desactivar = `contabilidad.configurar`; solicitar = `erp.ventas.crear`; aprobar = `erp.aprobaciones` + `inventario.gestionar`. Eventos `inv_concepto_*` e `inventario_ajuste` con actor; conceptos solo cambian cuenta y estado; clasificaciones inmutables.
+* **Límites:** el módulo de inventario heredado (`InventarioService`, movimientos directos fuera de la solicitud) y las ventas, consumos y compras siguen su propio flujo contable; no hay control de conciliación libro-inventario valorizado todavía.
 

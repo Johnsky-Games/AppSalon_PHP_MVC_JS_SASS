@@ -107,6 +107,7 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
             'obligacion_pagada'=>$this->pagoObligacion($id,(int)$d['monto'],(string)$d['metodo']),
             'comision_liquidada'=>$this->comision($id,(int)$d['monto']),
             'activo_registrado'=>[['concepto'=>'Activo registrado '.($d['codigo']??''),'lineas'=>[['rol'=>'activos_fijos','debe'=>(int)$d['costo']],['rol'=>'recepciones_por_facturar','haber'=>(int)$d['costo']]]]],
+            'inventario_ajuste'=>$this->ajusteInventario((int)$d['movimiento_id'],(string)$d['tipo']),
             'caja_movimiento'=>$this->cajaManual((int)$d['movimiento_id'],(string)$d['tipo'],(int)$d['monto']),
             'caja_movimiento_reversado'=>$this->cajaReverso($d),
             'depreciacion_contabilizada'=>[['concepto'=>'Depreciación de activos fijos '.($d['periodo']??''),'lineas'=>[['rol'=>'gasto_depreciacion','debe'=>(int)$d['total'],'referencia'=>'depreciación '.($d['periodo']??'')],['rol'=>'depreciacion_acumulada','haber'=>(int)$d['total'],'referencia'=>'depreciación '.($d['periodo']??'')]]]],
@@ -269,6 +270,15 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
         return [['concepto'=>'Finiquito '.$finiquito.' (colaborador '.(int)$d['colaborador_id'].')','lineas'=>[
             ['rol'=>'beneficios_por_pagar','debe'=>(int)$d['d13']+(int)$d['d14'],'referencia'=>'finiquito '.$finiquito],['rol'=>'gasto_beneficios','debe'=>(int)$d['gasto_beneficios']],['rol'=>'gasto_sueldos','debe'=>(int)$d['otros']],
             ['rol'=>'sueldos_por_pagar','haber'=>(int)$d['neto'],'referencia'=>'finiquito '.$finiquito],['rol'=>'descuentos_nomina','haber'=>(int)$d['descuentos']]]]];
+    }
+    /** Ajuste aprobado de inventario: valorizado con el costo del propio movimiento; la contrapartida es la cuenta del concepto elegido (nunca una fija). */
+    private function ajusteInventario(int $movimiento,string $tipo):array
+    {
+        $m=$this->r->uno('SELECT i.cantidad_milesimas,i.costo_centavos,i.tipo,k.concepto_id,c.nombre FROM inventario_movimientos i JOIN erp_inv_ajuste_conceptos k ON k.movimiento_id=i.id JOIN erp_inv_conceptos c ON c.id=k.concepto_id WHERE i.id=?',[$movimiento])??throw new ErpException('El ajuste de inventario '.$movimiento.' no tiene concepto: no se contabiliza sin clasificarlo.',409);
+        $cuenta=(new \Services\ErpInventarioConceptoService($this->r))->cuentaDe((int)$m['concepto_id']);
+        $valor=self::parte((int)$m['costo_centavos'],(int)$m['cantidad_milesimas'],1000);if($valor<=0)return [];$ref='ajuste '.$movimiento;
+        $inv=['rol'=>'inventario','referencia'=>$ref];$otra=['cuenta_id'=>$cuenta,'referencia'=>$ref];
+        return [['concepto'=>mb_substr('Ajuste de inventario: '.$m['nombre'],0,200),'lineas'=>$m['tipo']==='entrada'?[$inv+['debe'=>$valor],$otra+['haber'=>$valor]]:[$otra+['debe'=>$valor],$inv+['haber'=>$valor]]]];
     }
     /** Movimiento manual de efectivo: la contrapartida es la cuenta del concepto elegido (nunca una fija); sin concepto o sin cuenta válida el movimiento espera su configuración. */
     private function cajaManual(int $movimiento,string $tipo,int $monto):array

@@ -453,8 +453,8 @@ final class EsquemaTest extends R2bCase
         // 047: cargas familiares, repartos de utilidades y sus líneas (+3).
         // 049: avisos al IESS (+1).
         // 050: identificación tributaria del trabajador (+1).
-        // 051: tesorería bancaria (+4). 052: depreciación de activos fijos (+5). 053: cambios de estimación de la depreciación (+1). 054: conceptos de caja y clasificación de movimientos manuales (+2).
-        $this->assertSame(144, $n, 'tablas del esquema migrado (incluye migraciones y equipo_mutex)');
+        // 051: tesorería bancaria (+4). 052: depreciación de activos fijos (+5). 053: cambios de estimación de la depreciación (+1). 054: conceptos de caja y clasificación de movimientos manuales (+2). 055: conceptos de ajuste de inventario (+2).
+        $this->assertSame(146, $n, 'tablas del esquema migrado (incluye migraciones y equipo_mutex)');
         // La documentación citaba 30 (tras la 015) y el encabezado de backup_db.php "13 tablas": ya no describen la realidad.
         $this->assertFalse(str_contains((string)file_get_contents(self::RAIZ . '/scripts/backup_db.php'), '13 tablas en total'), 'documentación obsoleta en scripts/backup_db.php: dice "13 tablas en total" y el esquema migrado tiene 35');
     }
