@@ -91,17 +91,40 @@ final class ErpDepreciacionService extends ErpService
     {
         return (int)$this->r->uno("SELECT COALESCE(SUM(l.monto_centavos),0) s FROM erp_dep_lineas l JOIN erp_dep_corridas c ON c.id=l.corrida_id WHERE l.activo_id=? AND c.estado='contabilizada'",[$activo])['s'];
     }
+    /**
+     * Tramos de depreciación de una ficha: el original y cada cambio de estimación vigente, en orden de fecha. Cada tramo reparte su `base`
+     * (lo que falta por depreciar a su inicio) en `vida` meses a partir de `desde`; `previo` es el acumulado total a esa fecha.
+     * @return list<array{desde:string,previo:int,base:int,vida:int,residual:int}>
+     */
+    private function tramos(array $f):array
+    {
+        $t=[['desde'=>(string)$f['inicio'],'previo'=>(int)$f['acumulado_inicial_centavos'],'base'=>(int)$f['costo_centavos']-(int)$f['residual_centavos']-(int)$f['acumulado_inicial_centavos'],'vida'=>(int)$f['vida_util_meses'],'residual'=>(int)$f['residual_centavos']]];
+        foreach($this->r->q("SELECT * FROM erp_dep_estimaciones WHERE ficha_id=? AND estado='vigente' ORDER BY desde",[(int)$f['id']]) as $e)
+            $t[]=['desde'=>(string)$e['desde'],'previo'=>(int)$e['acumulado_previo_centavos'],'base'=>(int)$e['base_centavos'],'vida'=>(int)$e['vida_meses'],'residual'=>(int)$e['residual_centavos']];
+        return $t;
+    }
+    /** Tramo que rige un mes (el último cuyo inicio no es posterior); null si el mes es anterior al inicio de la ficha. */
+    private function tramoDelMes(array $tramos,int $anio,int $mes):?array
+    {
+        $r=null;foreach($tramos as $t)if(D::numeroDeMes($t['desde'],$anio,$mes)>=1)$r=$t;return $r;
+    }
+    /** Acumulado total que debe llevar contabilizado un activo al empezar el mes, según el tramo que lo rige. */
+    private function esperadoAlMes(array $tramos,int $anio,int $mes):int
+    {
+        $t=$this->tramoDelMes($tramos,$anio,$mes);if(!$t)return $tramos[0]['previo'];
+        $n=min($t['vida'],max(0,D::numeroDeMes($t['desde'],$anio,$mes)-1));return $t['previo']+D::objetivo($t['base'],$t['vida'],$n);
+    }
     /** @return list<array{activo_id:int,codigo:string,nro:int,monto:int,acumulado:int,libros:int}> */
     private function lineasDelMes(int $anio,int $mes):array
     {
         $out=[];
         foreach($this->r->q('SELECT f.*,a.codigo FROM erp_dep_fichas f JOIN erp_activos a ON a.id=f.activo_id WHERE NOT EXISTS(SELECT 1 FROM erp_dep_bajas b WHERE b.activo_id=f.activo_id AND b.estado=\'vigente\') ORDER BY f.activo_id FOR SHARE') as $f){
-            $k=D::numeroDeMes($f['inicio'],$anio,$mes);if($k<1||$k>(int)$f['vida_util_meses'])continue;
-            $base=(int)$f['costo_centavos']-(int)$f['residual_centavos']-(int)$f['acumulado_inicial_centavos'];$vida=(int)$f['vida_util_meses'];
-            $posted=$this->acumuladoContabilizado((int)$f['activo_id']);$esperado=D::objetivo($base,$vida,$k-1);
+            $tramos=$this->tramos($f);$t=$this->tramoDelMes($tramos,$anio,$mes);if(!$t)continue;
+            $k=D::numeroDeMes($t['desde'],$anio,$mes);if($k>$t['vida'])continue;
+            $posted=(int)$f['acumulado_inicial_centavos']+$this->acumuladoContabilizado((int)$f['activo_id']);$esperado=$this->esperadoAlMes($tramos,$anio,$mes);
             if($posted!==$esperado)throw new ErpException('El activo '.$f['codigo'].' no está al día: lleva '.number_format($posted/100,2,'.','').' depreciados y a este mes le corresponden '.number_format($esperado/100,2,'.','').'. Contabiliza antes los meses anteriores.',409);
-            $cuota=D::cuota($base,$vida,$k);if($cuota<1)continue;
-            $acum=(int)$f['acumulado_inicial_centavos']+$posted+$cuota;
+            $cuota=D::cuota($t['base'],$t['vida'],$k);if($cuota<1)continue;
+            $acum=$posted+$cuota;
             $out[]=['activo_id'=>(int)$f['activo_id'],'codigo'=>$f['codigo'],'nro'=>$k,'monto'=>$cuota,'acumulado'=>$acum,'libros'=>(int)$f['costo_centavos']-$acum];
         }
         return $out;
@@ -159,6 +182,7 @@ final class ErpDepreciacionService extends ErpService
             if($k['estado']==='anulada')return (int)$k['id'];
             $clave=(int)$k['anio']*100+(int)$k['mes'];
             if($this->r->uno("SELECT id FROM erp_dep_corridas WHERE estado<>'anulada' AND anio*100+mes>? LIMIT 1 FOR UPDATE",[$clave]))throw new ErpException('Hay corridas de meses posteriores: anúlalas primero, de la más reciente a la más antigua.',409);
+            if($this->r->uno("SELECT e.id FROM erp_dep_estimaciones e JOIN erp_dep_lineas l ON l.activo_id=e.activo_id AND l.corrida_id=? WHERE e.estado='vigente' AND e.desde>? LIMIT 1 FOR UPDATE",[(int)$k['id'],sprintf('%04d-%02d-01',$k['anio'],$k['mes'])]))throw new ErpException('Un cambio de estimación posterior toma como base esta corrida: anúlalo antes.',409);
             if($k['estado']==='contabilizada'&&$this->r->uno("SELECT id FROM erp_dep_bajas WHERE estado='vigente' AND fecha>? LIMIT 1 FOR UPDATE",[D::finDeMes((int)$k['anio'],(int)$k['mes'])]))throw new ErpException('Una baja posterior depende de esta corrida: anula antes la baja.',409);
             $this->r->q("UPDATE erp_dep_corridas SET estado='anulada',anulada_por=?,anulada_en=?,anulacion_motivo=? WHERE id=?",[$actor,$this->r::ahora(),$motivo,(int)$k['id']]);
             $periodo=$this->ym((int)$k['anio'],(int)$k['mes']);
@@ -183,10 +207,9 @@ final class ErpDepreciacionService extends ErpService
             [$fa,$fm]=[(int)substr($fecha,0,4),(int)substr($fecha,5,2)];
             // En el mes de la baja no se deprecia: ese mes (o uno posterior) no puede tener cuota del activo, y todo mes anterior debe estar contabilizado.
             if($this->r->uno("SELECT l.id FROM erp_dep_lineas l JOIN erp_dep_corridas c ON c.id=l.corrida_id WHERE l.activo_id=? AND c.estado<>'anulada' AND c.anio*100+c.mes>=? LIMIT 1 FOR SHARE",[(int)$a['id'],$fa*100+$fm]))throw new ErpException('El activo ya se depreció en el mes de la baja o en uno posterior: la baja va en un mes posterior al último depreciado.',409);
-            $base=(int)$f['costo_centavos']-(int)$f['residual_centavos']-(int)$f['acumulado_inicial_centavos'];$vida=(int)$f['vida_util_meses'];
-            $previos=max(0,min($vida,D::numeroDeMes($f['inicio'],$fa,$fm)-1));$posted=$this->acumuladoContabilizado((int)$a['id']);$esperado=D::objetivo($base,$vida,$previos);
+            $posted=(int)$f['acumulado_inicial_centavos']+$this->acumuladoContabilizado((int)$a['id']);$esperado=$this->esperadoAlMes($this->tramos($f),$fa,$fm);
             if($posted!==$esperado)throw new ErpException('Contabiliza primero la depreciación hasta el mes anterior a la baja (acumulado '.number_format($posted/100,2,'.','').', esperado '.number_format($esperado/100,2,'.','').').',409);
-            $costo=(int)$f['costo_centavos'];$acum=(int)$f['acumulado_inicial_centavos']+$posted;$libros=$costo-$acum;
+            $costo=(int)$f['costo_centavos'];$acum=$posted;$libros=$costo-$acum;
             $evento=$this->evento($actor,'activo_baja','activo',(int)$a['id'],['activo_id'=>(int)$a['id'],'codigo'=>$a['codigo'],'costo'=>$costo,'acumulado'=>$acum,'valor_libros'=>$libros,'fecha'=>$fecha,'motivo'=>$motivo],['contabilidad']);
             $this->r->q("INSERT INTO erp_dep_bajas(activo_id,fecha,motivo,nota,costo_centavos,acumulado_centavos,valor_libros_centavos,evento_contab_id,creado_por,creado_en) VALUES(?,?,?,?,?,?,?,?,?,?)",[(int)$a['id'],$fecha,$motivo,$nota,$costo,$acum,$libros,$evento,$actor,$this->r::ahora()]);
             return $this->r->id();
@@ -208,6 +231,57 @@ final class ErpDepreciacionService extends ErpService
         });
     }
 
+    // ---------------------------------------------------------------- cambios de estimación (prospectivos)
+    /** ¿El activo ya tiene cuota (borrador o contabilizada) en el mes indicado o en uno posterior? */
+    private function tieneCuotaDesde(int $activo,string $desde):bool
+    {
+        return (bool)$this->r->uno("SELECT l.id FROM erp_dep_lineas l JOIN erp_dep_corridas c ON c.id=l.corrida_id WHERE l.activo_id=? AND c.estado<>'anulada' AND c.anio*100+c.mes>=? LIMIT 1 FOR SHARE",[$activo,(int)substr($desde,0,4)*100+(int)substr($desde,5,2)]);
+    }
+    /**
+     * Cambio de estimación PROSPECTIVO (vida restante y, opcionalmente, valor residual). Rige desde un mes en el que el activo todavía no tiene cuota: lo depreciado
+     * hasta el mes anterior queda tal cual (no se anula ni se recalcula) y el saldo por depreciar se reparte en la vida restante. Exige que el activo esté al día.
+     */
+    public function estimacionRegistrar(int $actor,array $d):array
+    {
+        return $this->ejecutar($actor,'contabilidad.configurar','dep_estimacion',$d,function()use($actor,$d){
+            $inicioContable=$this->inicioContable();
+            $a=$this->r->uno('SELECT * FROM erp_activos WHERE id=? FOR UPDATE',[$this->id($d['activo_id']??null)])??throw new ErpException('Activo no encontrado.',404);
+            $f=$this->r->uno('SELECT * FROM erp_dep_fichas WHERE activo_id=? FOR UPDATE',[(int)$a['id']])??throw new ErpException('Configura primero la depreciación del activo.',409);
+            if($this->r->uno("SELECT id FROM erp_dep_bajas WHERE activo_id=? AND estado='vigente' FOR UPDATE",[(int)$a['id']]))throw new ErpException('El activo está dado de baja.',409);
+            $mes=is_string($d['desde']??null)&&preg_match('/^(\d{4})-(\d{2})$/D',$d['desde'],$m)&&(int)$m[2]>=1&&(int)$m[2]<=12?$d['desde']:throw new ErpException('El mes de vigencia va como AAAA-MM.');
+            $desde=$mes.'-01';[$anio,$mm]=[(int)$m[1],(int)$m[2]];
+            if($desde<substr($inicioContable,0,7).'-01')throw new ErpException('La vigencia no puede ser anterior al mes del inicio contable ('.substr($inicioContable,0,7).').');
+            $tramos=$this->tramos($f);$ultimo=end($tramos);
+            if($desde<=$ultimo['desde'])throw new ErpException('Ya hay una vigencia desde '.substr($ultimo['desde'],0,7).': la nueva debe empezar en un mes posterior.',409);
+            if($this->tieneCuotaDesde((int)$a['id'],$desde))throw new ErpException('El activo ya tiene cuota de depreciación en '.$mes.' o en un mes posterior: un cambio de estimación aplica hacia adelante, sin tocar lo ya calculado.',409);
+            $posted=(int)$f['acumulado_inicial_centavos']+$this->acumuladoContabilizado((int)$a['id']);$esperado=$this->esperadoAlMes($tramos,$anio,$mm);
+            if($posted!==$esperado)throw new ErpException('El activo no está al día a '.$mes.': lleva '.number_format($posted/100,2,'.','').' depreciados y le corresponden '.number_format($esperado/100,2,'.','').'. Contabiliza antes los meses anteriores.',409);
+            $vida=$this->entero($d['vida_meses']??null,1,600,'Los meses de vida restantes');
+            $costo=(int)$f['costo_centavos'];
+            if(trim((string)($d['residual_pct']??''))===''){$residual=(int)$ultimo['residual'];}
+            else{$bp=D::puntosBasicos((string)$d['residual_pct']);if($bp===null||$bp>9999)throw new ErpException('El valor residual es un porcentaje del costo entre 0 y 99,99 (hasta 2 decimales).');$residual=D::residual($costo,$bp);}
+            $base=$costo-$residual-$posted;if($base<1)throw new ErpException('Con ese valor residual no queda nada por depreciar: el acumulado ya cubre costo menos residual.');
+            $criterio=$this->texto($d['criterio']??'',300);if(mb_strlen($criterio)<5)throw new ErpException('Indica el criterio contable del cambio de estimación (al menos 5 caracteres).');
+            $evento=$this->evento($actor,'dep_estimacion_registrada','activo',(int)$a['id'],['activo_id'=>(int)$a['id'],'desde'=>$desde,'acumulado_previo'=>$posted,'residual'=>$residual,'base'=>$base,'vida_meses'=>$vida,'criterio'=>$criterio]);
+            $this->r->q("INSERT INTO erp_dep_estimaciones(ficha_id,activo_id,desde,acumulado_previo_centavos,residual_centavos,base_centavos,vida_meses,criterio,evento_id,creado_por,creado_en) VALUES(?,?,?,?,?,?,?,?,?,?,?)",[(int)$f['id'],(int)$a['id'],$desde,$posted,$residual,$base,$vida,$criterio,$evento,$actor,$this->r::ahora()]);
+            return $this->r->id();
+        });
+    }
+    /** Anula una vigencia que todavía no se usó (el activo no tiene cuota desde ese mes). Lo ya calculado nunca se toca. */
+    public function estimacionAnular(int $actor,array $d):array
+    {
+        return $this->ejecutar($actor,'contabilidad.configurar','dep_estimacion_anular',$d,function()use($actor,$d){
+            $e=$this->r->uno('SELECT * FROM erp_dep_estimaciones WHERE id=? FOR UPDATE',[$this->id($d['estimacion_id']??null)])??throw new ErpException('Cambio de estimación no encontrado.',404);
+            $motivo=$this->texto($d['motivo']??'',300);if(mb_strlen($motivo)<5)throw new ErpException('Explica el motivo (al menos 5 caracteres).');
+            if($e['estado']==='anulada')return (int)$e['id'];
+            if($this->tieneCuotaDesde((int)$e['activo_id'],(string)$e['desde']))throw new ErpException('El activo ya tiene cuotas calculadas con esta vigencia: no se puede anular sin tocar depreciaciones válidas. Registra un nuevo cambio de estimación hacia adelante.',409);
+            $this->r->q("UPDATE erp_dep_estimaciones SET estado='anulada',anulada_por=?,anulada_en=?,anulacion_motivo=? WHERE id=?",[$actor,$this->r::ahora(),$motivo,(int)$e['id']]);
+            $this->evento($actor,'dep_estimacion_anulada','activo',(int)$e['activo_id'],['estimacion_id'=>(int)$e['id'],'motivo'=>$motivo]);
+            return (int)$e['id'];
+        });
+    }
+    public function estimaciones():array {return $this->r->q('SELECT e.*,a.codigo,a.nombre FROM erp_dep_estimaciones e JOIN erp_activos a ON a.id=e.activo_id ORDER BY e.id DESC LIMIT 100');}
+
     // ---------------------------------------------------------------- lectura / reportes
     /** Auxiliar de activos: costo, acumulado, valor en libros y estado de cada activo (con o sin ficha). */
     public function activos():array
@@ -220,7 +294,8 @@ final class ErpDepreciacionService extends ErpService
             $posted=$this->acumuladoContabilizado((int)$a['id']);$acum=(int)$a['acumulado_inicial_centavos']+$posted;
             $meses=(int)$this->r->uno("SELECT COUNT(*) n FROM erp_dep_lineas l JOIN erp_dep_corridas c ON c.id=l.corrida_id WHERE l.activo_id=? AND c.estado='contabilizada'",[(int)$a['id']])['n'];
             $a['acumulado']=$acum;$a['libros']=(int)$a['costo_centavos']-$acum;$a['meses_depreciados']=$meses;
-            $a['estado']=$a['baja_id']?'baja':($acum+(int)$a['residual_centavos']>=(int)$a['costo_centavos']?'totalmente_depreciado':'en_depreciacion');$out[]=$a;
+            $tr=$this->tramos($this->r->uno('SELECT * FROM erp_dep_fichas WHERE id=?',[(int)$a['ficha_id']]));$resid=(int)end($tr)['residual'];$a['residual_vigente']=$resid;$a['estimaciones']=count($tr)-1;
+            $a['estado']=$a['baja_id']?'baja':($acum+$resid>=(int)$a['costo_centavos']?'totalmente_depreciado':'en_depreciacion');$out[]=$a;
         }
         return $out;
     }
@@ -234,19 +309,23 @@ final class ErpDepreciacionService extends ErpService
             $this->r->q("SELECT c.mes,SUM(l.monto_centavos) total,COUNT(*) activos FROM erp_dep_corridas c JOIN erp_dep_lineas l ON l.corrida_id=c.id WHERE c.anio=? AND c.estado='contabilizada' GROUP BY c.mes ORDER BY c.mes",[$anio]));
     }
     /**
-     * Cuadro de depreciación de un activo: lo contabilizado y la proyección de lo que falta con las mismas cuotas que calculará el sistema.
+     * Cuadro de depreciación de un activo, mes a mes: lo contabilizado y la proyección con los mismos tramos (ficha y cambios de estimación vigentes)
+     * que usará el cálculo.
      * @return array{activo:array,filas:list<array<string,mixed>>}|null
      */
     public function cuadro(int $activo):?array
     {
         $f=$this->r->uno('SELECT f.*,a.codigo,a.nombre FROM erp_dep_fichas f JOIN erp_activos a ON a.id=f.activo_id WHERE f.activo_id=?',[$activo]);if(!$f)return null;
         $baja=$this->r->uno("SELECT fecha FROM erp_dep_bajas WHERE activo_id=? AND estado='vigente'",[$activo]);
-        $hechas=[];foreach($this->r->q("SELECT l.nro_cuota,l.monto_centavos,l.acumulado_centavos,l.valor_libros_centavos,c.anio,c.mes FROM erp_dep_lineas l JOIN erp_dep_corridas c ON c.id=l.corrida_id WHERE l.activo_id=? AND c.estado='contabilizada'",[$activo]) as $l)$hechas[(int)$l['nro_cuota']]=$l;
-        $base=(int)$f['costo_centavos']-(int)$f['residual_centavos']-(int)$f['acumulado_inicial_centavos'];$vida=(int)$f['vida_util_meses'];$filas=[];$acum=(int)$f['acumulado_inicial_centavos'];
-        for($k=1;$k<=$vida;$k++){
-            $cuota=D::cuota($base,$vida,$k);$p=(new \DateTimeImmutable($f['inicio']))->modify('+'.($k-1).' months')->format('Y-m');
-            if(isset($hechas[$k])){$acum=(int)$hechas[$k]['acumulado_centavos'];$filas[]=['nro'=>$k,'periodo'=>$p,'cuota'=>(int)$hechas[$k]['monto_centavos'],'acumulado'=>$acum,'libros'=>(int)$hechas[$k]['valor_libros_centavos'],'estado'=>'contabilizada'];continue;}
-            $acum+=$cuota;$filas[]=['nro'=>$k,'periodo'=>$p,'cuota'=>$cuota,'acumulado'=>$acum,'libros'=>(int)$f['costo_centavos']-$acum,'estado'=>$baja?'no aplica (baja)':'proyectada'];
+        $hechas=[];foreach($this->r->q("SELECT l.nro_cuota,l.monto_centavos,l.acumulado_centavos,l.valor_libros_centavos,c.anio,c.mes FROM erp_dep_lineas l JOIN erp_dep_corridas c ON c.id=l.corrida_id WHERE l.activo_id=? AND c.estado='contabilizada'",[$activo]) as $l)$hechas[(int)$l['anio']*100+(int)$l['mes']]=$l;
+        $tramos=$this->tramos($f);$fin=0;foreach($tramos as $t)$fin=max($fin,D::numeroDeMes($tramos[0]['desde'],(int)substr($t['desde'],0,4),(int)substr($t['desde'],5,2))-1+$t['vida']);
+        $filas=[];$acum=(int)$f['acumulado_inicial_centavos'];
+        for($m=0;$m<$fin;$m++){
+            $d=(new \DateTimeImmutable($tramos[0]['desde']))->modify('+'.$m.' months');$anio=(int)$d->format('Y');$mes=(int)$d->format('n');$p=$d->format('Y-m');$t=$this->tramoDelMes($tramos,$anio,$mes);if(!$t)continue;
+            $k=D::numeroDeMes($t['desde'],$anio,$mes);$clave=$anio*100+$mes;
+            if(isset($hechas[$clave])){$acum=(int)$hechas[$clave]['acumulado_centavos'];$filas[]=['nro'=>(int)$hechas[$clave]['nro_cuota'],'periodo'=>$p,'cuota'=>(int)$hechas[$clave]['monto_centavos'],'acumulado'=>$acum,'libros'=>(int)$hechas[$clave]['valor_libros_centavos'],'estado'=>'contabilizada'];continue;}
+            if($k>$t['vida'])continue;
+            $cuota=D::cuota($t['base'],$t['vida'],$k);$acum+=$cuota;$filas[]=['nro'=>$k,'periodo'=>$p,'cuota'=>$cuota,'acumulado'=>$acum,'libros'=>(int)$f['costo_centavos']-$acum,'estado'=>$baja?'no aplica (baja)':'proyectada'];
         }
         return ['activo'=>$f,'filas'=>array_values(array_filter($filas,fn($x)=>$x['cuota']>0))];
     }
