@@ -175,7 +175,10 @@ final class ErpInventarioConceptoService extends ErpService
             foreach($this->r->q('SELECT concepto_nuevo_id,evento_id,motivo,creado_en FROM erp_inv_reimputaciones WHERE movimiento_id=? ORDER BY id',[(int)$f['id']]) as $x)$pasos[]=['etiqueta'=>'Reimputación','concepto_id'=>(int)$x['concepto_nuevo_id'],'evento_id'=>(int)$x['evento_id'],'motivo'=>$x['motivo']];
             foreach($pasos as &$p){
                 $p['concepto']=$this->r->uno('SELECT nombre FROM erp_inv_conceptos WHERE id=?',[$p['concepto_id']])['nombre']??'—';
-                $p['asientos']=array_map(fn($a)=>$a['numero'].($a['tipo']==='reverso'?' (reverso)':''),$this->r->q("SELECT numero,tipo FROM erp_cont_asientos WHERE origen LIKE ? ORDER BY id",['outbox:ERP-'.(int)$p['evento_id'].'-contabilidad#%']));
+                // Los asientos del paso y los reversos DE esos asientos (cada reverso se muestra bajo el asiento que anula), también los hechos a mano desde el Diario («reverso:<id>»), para que la cadena quede completa.
+                $pat='outbox:ERP-'.(int)$p['evento_id'].'-contabilidad#%';
+                $p['asientos']=array_map(fn($a)=>$a['numero'].($a['tipo']==='reverso'?(str_starts_with((string)$a['origen'],'reverso:')?' (reverso manual)':' (reverso)'):''),
+                    $this->r->q("SELECT numero,tipo,origen FROM erp_cont_asientos WHERE (origen LIKE ? AND tipo<>'reverso') OR reversa_de_id IN(SELECT id FROM erp_cont_asientos WHERE origen LIKE ? AND tipo<>'reverso') ORDER BY id",[$pat,$pat]));
             }unset($p);
             $f['pasos']=$pasos;$f['vigente']=end($pasos);$out[]=$f;
         }

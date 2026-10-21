@@ -105,7 +105,7 @@ final class ErpInventarioReclasificacionIntegrationTest extends TestCase
         $cad=$this->r->q('SELECT id,anterior_id,concepto_origen_id,concepto_nuevo_id FROM erp_inv_reimputaciones WHERE movimiento_id=? ORDER BY id',[$mov]);
         self::assertSame([[0,$a,$b],[$r1,$b,$c]],array_map(fn($f)=>[(int)$f['anterior_id'],(int)$f['concepto_origen_id'],(int)$f['concepto_nuevo_id']],$cad));self::assertSame($r2,(int)$cad[1]['id']);
         $ch=$this->con()->cadenas()[0];self::assertCount(3,$ch['pasos']);self::assertSame('Uso interno C',$ch['vigente']['concepto']);
-        self::assertCount(1,$ch['pasos'][0]['asientos']);self::assertCount(2,$ch['pasos'][1]['asientos'],'Reverso del original + nueva imputación');self::assertCount(2,$ch['pasos'][2]['asientos']);
+        self::assertCount(2,$ch['pasos'][0]['asientos'],'El original y su reverso');self::assertCount(2,$ch['pasos'][1]['asientos'],'La primera reimputación y el reverso que la anula');self::assertCount(1,$ch['pasos'][2]['asientos'],'La imputación vigente');
         $rev=$this->r->q("SELECT r.numero,o.numero original FROM erp_cont_asientos r JOIN erp_cont_asientos o ON o.id=r.reversa_de_id WHERE r.tipo='reverso' ORDER BY r.id");self::assertCount(2,$rev,'Dos reversos, cada uno ligado a su asiento vigente');
         self::assertSame(5,$this->asientos(),'1 original + 2×(reverso + nueva imputación)');
         self::assertSame([],$this->cont()->integridad());self::assertTrue($this->cont()->balanceComprobacion('2099-12-31')['cuadra']);
@@ -180,6 +180,70 @@ final class ErpInventarioReclasificacionIntegrationTest extends TestCase
         self::assertSame(0,$this->saldo($g1));self::assertSame(500,$this->saldo($g2));self::assertSame(-500,$this->saldoInventario(),'El ajuste queda reconocido una sola vez');
         self::assertSame([],$this->cont()->integridad());self::assertTrue($this->cont()->balanceComprobacion('2099-12-31')['cuadra']);
         $x=$this->procesar();self::assertSame(3,$this->asientos(),'Reprocesar no duplica');
+    }
+    public function testReimputacionesSucesivasTrasUnReversoManualConservanLaCadenaAuditable():void
+    {
+        $g=[$this->cuenta('gasto'),$this->cuenta('gasto',1),$this->cuenta('gasto',2)];
+        $a=$this->concepto('Merma A','merma_o_perdida',$g[0]);$b=$this->concepto('Merma B','merma_o_perdida',$g[1]);$c=$this->concepto('Merma C','merma_o_perdida',$g[2]);
+        $mov=$this->historico('salida','2');$this->con()->reclasificar($this->owner,$this->d(['movimiento_id'=>$mov,'concepto_id'=>$a,'motivo'=>'Clasificación inicial del ajuste']));$this->procesar();
+        $orig=(int)$this->r->uno("SELECT id FROM erp_cont_asientos WHERE tipo='automatico'")['id'];
+        $this->cont()->reversar($this->owner,$this->d(['asiento_id'=>$orig,'motivo'=>'Anulado a mano desde el diario']));
+        $r1=$this->con()->reimputar($this->owner,$this->d(['movimiento_id'=>$mov,'concepto_id'=>$b,'esperado_concepto_id'=>$a,'motivo'=>'Primera reimputación tras el reverso']))['recurso_id'];$x=$this->procesar();self::assertSame(0,$x['fallidos']);
+        $r2=$this->con()->reimputar($this->owner,$this->d(['movimiento_id'=>$mov,'concepto_id'=>$c,'esperado_concepto_id'=>$b,'motivo'=>'Segunda reimputación sucesiva']))['recurso_id'];$x=$this->procesar();self::assertSame(0,$x['fallidos']);
+        // original + reverso manual + B + reverso de B + C
+        self::assertSame(5,$this->asientos());self::assertSame(0,$this->saldo($g[0]));self::assertSame(0,$this->saldo($g[1]));self::assertSame(500,$this->saldo($g[2]));self::assertSame(-500,$this->saldoInventario(),'Reconocido una sola vez');
+        $rev=(int)$this->r->uno("SELECT COUNT(*) n FROM erp_cont_asientos WHERE tipo='reverso'")['n'];self::assertSame(2,$rev);
+        self::assertSame(0,(int)$this->r->uno('SELECT COUNT(*) n FROM (SELECT reversa_de_id FROM erp_cont_asientos WHERE reversa_de_id IS NOT NULL GROUP BY reversa_de_id HAVING COUNT(*)>1) x')['n'],'Ningún asiento reversado dos veces');
+        $cad=$this->r->q('SELECT id,anterior_id FROM erp_inv_reimputaciones WHERE movimiento_id=? ORDER BY id',[$mov]);self::assertSame([[$r1,0],[$r2,$r1]],array_map(fn($f)=>[(int)$f['id'],(int)$f['anterior_id']],$cad));
+        $ch=$this->con()->cadenas()[0];self::assertCount(3,$ch['pasos']);
+        self::assertCount(2,$ch['pasos'][0]['asientos']);self::assertStringContainsString('reverso manual',implode(' ',$ch['pasos'][0]['asientos']),'El reverso hecho a mano figura en la cadena');
+        self::assertCount(2,$ch['pasos'][1]['asientos'],'B y el reverso que la anuló');self::assertCount(1,$ch['pasos'][2]['asientos']);self::assertSame('Merma C',$ch['vigente']['concepto']);
+        self::assertSame([],$this->cont()->integridad());self::assertTrue($this->cont()->balanceComprobacion('2099-12-31')['cuadra']);
+        $x=$this->procesar();self::assertSame(5,$this->asientos(),'Reprocesar no duplica');self::assertSame(8000,$this->stock());
+    }
+    public function testReintentoDeUnaReimputacionFallidaConReversoManualEnMedioNoDuplicaElReverso():void
+    {
+        $g1=$this->cuenta('gasto');$g2=$this->cuenta('gasto',1);$a=$this->concepto('Merma A','merma_o_perdida',$g1);$b=$this->concepto('Faltante sin cuenta','faltante_de_conteo',null);
+        $mov=$this->historico('salida','2');$this->con()->reclasificar($this->owner,$this->d(['movimiento_id'=>$mov,'concepto_id'=>$a,'motivo'=>'Clasificación inicial del ajuste']));$this->procesar();
+        $orig=(int)$this->r->uno("SELECT id FROM erp_cont_asientos WHERE tipo='automatico'")['id'];
+        $this->con()->reimputar($this->owner,$this->d(['movimiento_id'=>$mov,'concepto_id'=>$b,'esperado_concepto_id'=>$a,'motivo'=>'Era un faltante, aún sin cuenta']));
+        $x=$this->procesar();self::assertSame(1,$x['fallidos'],'Primer intento: falla por falta de cuenta, sin dejar nada a medias');self::assertSame(1,$this->asientos());
+        // Mientras tanto alguien reversa a mano el asiento original y luego se completa la configuración: el reintento no vuelve a reversarlo.
+        $this->cont()->reversar($this->owner,$this->d(['asiento_id'=>$orig,'motivo'=>'Anulado a mano mientras tanto']));
+        $this->con()->asignarCuenta($this->owner,$this->d(['concepto_id'=>$b,'cuenta'=>$g2]));
+        $x=$this->procesar();self::assertSame(0,$x['fallidos'],'El reintento completa la reimputación');
+        self::assertSame(3,$this->asientos(),'Original + reverso manual + nueva imputación');self::assertSame(0,$this->saldo($g1));self::assertSame(500,$this->saldo($g2));self::assertSame(-500,$this->saldoInventario());
+        self::assertSame(1,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_cont_asientos WHERE reversa_de_id=?',[$orig])['n'],'Un solo reverso del original');
+        $x=$this->procesar();self::assertSame(3,$this->asientos());self::assertSame([],$this->cont()->integridad());
+    }
+    public function testElReversoManualYElWorkerSeSerializanSobreElAsientoVigente():void
+    {
+        $g1=$this->cuenta('gasto');$g2=$this->cuenta('gasto',1);$a=$this->concepto('Merma A','merma_o_perdida',$g1);$b=$this->concepto('Merma B','merma_o_perdida',$g2);
+        $mov=$this->historico('salida','2');$this->con()->reclasificar($this->owner,$this->d(['movimiento_id'=>$mov,'concepto_id'=>$a,'motivo'=>'Clasificación inicial del ajuste']));$this->procesar();
+        $orig=(int)$this->r->uno("SELECT id FROM erp_cont_asientos WHERE tipo='automatico'")['id'];
+        $this->con()->reimputar($this->owner,$this->d(['movimiento_id'=>$mov,'concepto_id'=>$b,'esperado_concepto_id'=>$a,'motivo'=>'Reimputación en carrera con el diario']));
+        $db2=new \mysqli(getenv('DB_HOST')?:'appsalon-test-db',getenv('DB_USER')?:'root',getenv('DB_PASS')?:'root',BaseDatosAislada::nombre($this->db),(int)(getenv('DB_PORT')?:3306));$db2->set_charset('utf8mb4');$db2->query('SET SESSION innodb_lock_wait_timeout=1');
+        try{
+            $r2=new ErpRepository($db2);$worker=fn()=>(new ErpIntegracionService($r2))->procesar(['contabilidad'=>new ErpContabilidadAdaptador($r2)],100);
+            // Una persona está reversando el asiento vigente (transacción abierta, aún sin confirmar)...
+            \Classes\Transaccion::ejecutar($this->db,function()use($orig,$worker){
+                $this->cont()->reversar($this->owner,$this->d(['asiento_id'=>$orig,'motivo'=>'Reverso manual en curso']));
+                // ...y el worker llega en ese momento: no puede avanzar sobre el mismo asiento ni dejar nada a medias.
+                $x=$worker();self::assertSame(1,$x['fallidos'],'El worker espera su turno y, vencido el plazo, queda para reintento');
+            });
+            self::assertSame(2,$this->asientos(),'Solo existen el original y el reverso manual: el worker no publicó nada');
+            // Confirmado el reverso manual, el reintento lo ve y contabiliza únicamente la nueva imputación.
+            $this->db->query("UPDATE erp_integraciones_outbox SET proximo_intento=NULL,estado='pendiente' WHERE destino='contabilidad' AND estado='fallido'");
+            $x=$worker();self::assertSame(0,$x['fallidos']);
+        }finally{$db2->close();}
+        self::assertSame(3,$this->asientos());self::assertSame(1,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_cont_asientos WHERE reversa_de_id=?',[$orig])['n'],'Un solo reverso del original');
+        self::assertSame(0,$this->saldo($g1));self::assertSame(500,$this->saldo($g2));self::assertSame(-500,$this->saldoInventario());self::assertSame([],$this->cont()->integridad());
+        // El orden inverso también es seguro: si el worker ya reversó, el reverso manual devuelve ese mismo reverso en vez de duplicarlo.
+        $mov2=$this->historico('salida','1');$this->con()->reclasificar($this->owner,$this->d(['movimiento_id'=>$mov2,'concepto_id'=>$a,'motivo'=>'Segundo ajuste clasificado']));$this->procesar();
+        $o2=(int)$this->r->uno("SELECT id FROM erp_cont_asientos WHERE tipo='automatico' AND concepto LIKE 'Ajuste de inventario (reclasificado%' ORDER BY id DESC LIMIT 1")['id'];
+        $this->con()->reimputar($this->owner,$this->d(['movimiento_id'=>$mov2,'concepto_id'=>$b,'esperado_concepto_id'=>$a,'motivo'=>'Reimputación antes del reverso manual']));$this->procesar();
+        $n=$this->asientos();$rev=$this->cont()->reversar($this->owner,$this->d(['asiento_id'=>$o2,'motivo'=>'Intento manual tardío']));
+        self::assertSame($n,$this->asientos(),'El reverso manual tardío no crea un segundo reverso');self::assertSame(1,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_cont_asientos WHERE reversa_de_id=?',[$o2])['n']);self::assertGreaterThan(0,(int)$rev['recurso_id']);
     }
     public function testLaReimputacionSeSerializaSobreElMovimientoYLaCadenaNoSeBifurca():void
     {

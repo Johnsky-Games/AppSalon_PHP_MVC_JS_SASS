@@ -291,10 +291,12 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
     private function inventarioReimputado(array $d):array
     {
         $ev=(int)$d['vigente_evento_id'];
-        $vig=$this->r->uno("SELECT id,numero FROM erp_cont_asientos WHERE origen LIKE ? AND tipo<>'reverso' ORDER BY id LIMIT 1",['outbox:ERP-'.$ev.'-contabilidad#%']);
+        // El asiento vigente se bloquea (igual que hace el reverso manual del Diario) y se relee con lectura actual: el worker y una persona que lo reversa a la vez se serializan
+        // y el segundo ve el reverso del primero en lugar de intentar un reverso duplicado (reversa_de_id es único).
+        $vig=$this->r->uno("SELECT id,numero FROM erp_cont_asientos WHERE origen LIKE ? AND tipo<>'reverso' ORDER BY id LIMIT 1 FOR UPDATE",['outbox:ERP-'.$ev.'-contabilidad#%']);
         $salida=[];
         // Si alguien ya anuló a mano ese asiento (Diario → «Reversar este asiento»), ya no es la imputación vigente: se contabiliza solo la nueva, sin reversar dos veces.
-        if($vig&&$this->r->uno('SELECT id FROM erp_cont_asientos WHERE reversa_de_id=?',[(int)$vig['id']]))$vig=null;
+        if($vig&&$this->r->uno('SELECT id FROM erp_cont_asientos WHERE reversa_de_id=? FOR SHARE',[(int)$vig['id']]))$vig=null;
         if($vig){
             $lineas=[];foreach($this->r->q('SELECT * FROM erp_cont_lineas WHERE asiento_id=? ORDER BY nro',[(int)$vig['id']]) as $l)$lineas[]=['cuenta_id'=>(int)$l['cuenta_id'],'debe'=>(int)$l['haber_centavos'],'haber'=>(int)$l['debe_centavos'],'contacto_id'=>$l['contacto_id'],'referencia'=>$l['referencia']];
             $salida[]=['concepto'=>'Reverso por reimputación del ajuste de inventario '.(int)$d['movimiento_id'].' (asiento '.$vig['numero'].')','reversa_de'=>(int)$vig['id'],'lineas'=>$lineas];
