@@ -52,7 +52,7 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
         if($fecha<$inicio)return ['estado'=>'confirmado','referencia_externa'=>'previo-a-inicio-contable'];
         // Un movimiento histórico reclasificado hoy conserva la fecha en que ocurrió: si fue anterior al inicio contable su efectivo ya está en la apertura.
         $datos=$documento['datos']??[];
-        if(($documento['tipo']??'')==='caja_movimiento'&&!empty($datos['reclasificacion'])&&is_string($datos['fecha_original']??null)&&$datos['fecha_original']<$inicio)return ['estado'=>'confirmado','referencia_externa'=>'previo-a-inicio-contable'];
+        if(in_array($documento['tipo']??'',['caja_movimiento','inventario_ajuste','inventario_reimputado'],true)&&(!empty($datos['reclasificacion'])||($documento['tipo']??'')==='inventario_reimputado')&&is_string($datos['fecha_original']??null)&&$datos['fecha_original']<$inicio)return ['estado'=>'confirmado','referencia_externa'=>'previo-a-inicio-contable'];
         if(in_array($documento['tipo']??'',self::SIN_ASIENTO,true))return ['estado'=>'confirmado','referencia_externa'=>'sin-asiento:'.$documento['tipo']];
         $numero=Transaccion::ejecutar($this->r->db,function()use($referencia,$documento,$fecha,$inicio){
             $asientos=$this->reglas($documento);if($asientos===null)throw new ErpException('El evento «'.($documento['tipo']??'?').'» no tiene regla contable.',409);
@@ -110,7 +110,8 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
             'obligacion_pagada'=>$this->pagoObligacion($id,(int)$d['monto'],(string)$d['metodo']),
             'comision_liquidada'=>$this->comision($id,(int)$d['monto']),
             'activo_registrado'=>[['concepto'=>'Activo registrado '.($d['codigo']??''),'lineas'=>[['rol'=>'activos_fijos','debe'=>(int)$d['costo']],['rol'=>'recepciones_por_facturar','haber'=>(int)$d['costo']]]]],
-            'inventario_ajuste'=>$this->ajusteInventario((int)$d['movimiento_id'],(string)$d['tipo']),
+            'inventario_ajuste'=>$this->ajusteInventario((int)$d['movimiento_id'],(string)$d['tipo'],isset($d['reclasificacion'])?(string)($d['fecha_original']??''):null),
+            'inventario_reimputado'=>$this->inventarioReimputado($d),
             'caja_movimiento'=>$this->cajaManual((int)$d['movimiento_id'],(string)$d['tipo'],(int)$d['monto'],isset($d['reclasificacion'])?(string)($d['fecha_original']??''):null),
             'caja_movimiento_reversado'=>$this->cajaReverso($d),
             'depreciacion_contabilizada'=>[['concepto'=>'Depreciación de activos fijos '.($d['periodo']??''),'lineas'=>[['rol'=>'gasto_depreciacion','debe'=>(int)$d['total'],'referencia'=>'depreciación '.($d['periodo']??'')],['rol'=>'depreciacion_acumulada','haber'=>(int)$d['total'],'referencia'=>'depreciación '.($d['periodo']??'')]]]],
@@ -275,13 +276,35 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
             ['rol'=>'sueldos_por_pagar','haber'=>(int)$d['neto'],'referencia'=>'finiquito '.$finiquito],['rol'=>'descuentos_nomina','haber'=>(int)$d['descuentos']]]]];
     }
     /** Ajuste aprobado de inventario: valorizado con el costo del propio movimiento; la contrapartida es la cuenta del concepto elegido (nunca una fija). */
-    private function ajusteInventario(int $movimiento,string $tipo):array
+    private function ajusteInventario(int $movimiento,string $tipo,?string $hechoDel=null,?int $conceptoId=null):array
     {
-        $m=$this->r->uno('SELECT i.cantidad_milesimas,i.costo_centavos,i.tipo,k.concepto_id,c.nombre FROM inventario_movimientos i JOIN erp_inv_ajuste_conceptos k ON k.movimiento_id=i.id JOIN erp_inv_conceptos c ON c.id=k.concepto_id WHERE i.id=?',[$movimiento])??throw new ErpException('El ajuste de inventario '.$movimiento.' no tiene concepto: no se contabiliza sin clasificarlo.',409);
+        $m=$this->r->uno('SELECT i.cantidad_milesimas,i.costo_centavos,i.tipo,c.id concepto_id,c.nombre FROM inventario_movimientos i JOIN erp_inv_ajuste_conceptos k ON k.movimiento_id=i.id JOIN erp_inv_conceptos c ON c.id=COALESCE(?,k.concepto_id) WHERE i.id=?',[$conceptoId,$movimiento])??throw new ErpException('El ajuste de inventario '.$movimiento.' no tiene concepto: no se contabiliza sin clasificarlo.',409);
         $cuenta=(new \Services\ErpInventarioConceptoService($this->r))->cuentaDe((int)$m['concepto_id']);
         $valor=self::parte((int)$m['costo_centavos'],(int)$m['cantidad_milesimas'],1000);if($valor<=0)return [];$ref='ajuste '.$movimiento;
         $inv=['rol'=>'inventario','referencia'=>$ref];$otra=['cuenta_id'=>$cuenta,'referencia'=>$ref];
-        return [['concepto'=>mb_substr('Ajuste de inventario: '.$m['nombre'],0,200),'lineas'=>$m['tipo']==='entrada'?[$inv+['debe'=>$valor],$otra+['haber'=>$valor]]:[$otra+['debe'=>$valor],$inv+['haber'=>$valor]]]];
+        return [['concepto'=>mb_substr(($hechoDel!==null?'Ajuste de inventario (reclasificado, hecho del '.$hechoDel.'): ':'Ajuste de inventario: ').$m['nombre'],0,200),'lineas'=>$m['tipo']==='entrada'?[$inv+['debe'=>$valor],$otra+['haber'=>$valor]]:[$otra+['debe'=>$valor],$inv+['haber'=>$valor]]]];
+    }
+    /**
+     * Reimputación de un ajuste ya clasificado: revierte el asiento VIGENTE (el original o la imputación anterior) y contabiliza el nuevo concepto. Si el vigente aún no existe y no
+     * está confirmado, espera su turno; si se confirmó sin asiento no hay nada que revertir. Ambos asientos quedan ligados al mismo hecho (origen único por evento).
+     */
+    private function inventarioReimputado(array $d):array
+    {
+        $ev=(int)$d['vigente_evento_id'];
+        // El asiento vigente se bloquea (igual que hace el reverso manual del Diario) y se relee con lectura actual: el worker y una persona que lo reversa a la vez se serializan
+        // y el segundo ve el reverso del primero en lugar de intentar un reverso duplicado (reversa_de_id es único).
+        $vig=$this->r->uno("SELECT id,numero FROM erp_cont_asientos WHERE origen LIKE ? AND tipo<>'reverso' ORDER BY id LIMIT 1 FOR UPDATE",['outbox:ERP-'.$ev.'-contabilidad#%']);
+        $salida=[];
+        // Si alguien ya anuló a mano ese asiento (Diario → «Reversar este asiento»), ya no es la imputación vigente: se contabiliza solo la nueva, sin reversar dos veces.
+        if($vig&&$this->r->uno('SELECT id FROM erp_cont_asientos WHERE reversa_de_id=? FOR SHARE',[(int)$vig['id']]))$vig=null;
+        if($vig){
+            $lineas=[];foreach($this->r->q('SELECT * FROM erp_cont_lineas WHERE asiento_id=? ORDER BY nro',[(int)$vig['id']]) as $l)$lineas[]=['cuenta_id'=>(int)$l['cuenta_id'],'debe'=>(int)$l['haber_centavos'],'haber'=>(int)$l['debe_centavos'],'contacto_id'=>$l['contacto_id'],'referencia'=>$l['referencia']];
+            $salida[]=['concepto'=>'Reverso por reimputación del ajuste de inventario '.(int)$d['movimiento_id'].' (asiento '.$vig['numero'].')','reversa_de'=>(int)$vig['id'],'lineas'=>$lineas];
+        }else{
+            $o=$this->r->uno("SELECT estado FROM erp_integraciones_outbox WHERE evento_id=? AND destino='contabilidad'",[$ev]);
+            if(!$o||$o['estado']!=='confirmado')throw new ErpException('La imputación vigente del ajuste aún no está contabilizada: la reimputación espera.',409);
+        }
+        return array_merge($salida,$this->ajusteInventario((int)$d['movimiento_id'],(string)$d['tipo'],(string)($d['fecha_original']??''),(int)$d['concepto_id']));
     }
     /** Movimiento manual de efectivo: la contrapartida es la cuenta del concepto elegido (nunca una fija); sin concepto o sin cuenta válida el movimiento espera su configuración. */
     private function cajaManual(int $movimiento,string $tipo,int $monto,?string $hechoDel=null):array
