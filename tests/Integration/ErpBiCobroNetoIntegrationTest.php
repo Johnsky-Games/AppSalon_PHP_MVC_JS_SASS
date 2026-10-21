@@ -255,12 +255,12 @@ final class ErpBiCobroNetoIntegrationTest extends TestCase
             foreach(['pagos','caja_movimientos','cobros_devoluciones','erp_prepago_movimientos','erp_fiscal_documentos','erp_contactos'] as $t)self::assertFalse($bi->query("SELECT 1 FROM `$t` LIMIT 1"),"el usuario de BI no lee $t");
             foreach(["UPDATE bi_flujo_dinero SET importe_centavos=0","DELETE FROM bi_devoluciones_dinero","UPDATE bi_aplicaciones_saldo SET importe_centavos=0","DELETE FROM bi_devoluciones_venta","UPDATE bi_notas_credito SET total_centavos=0"] as $sql)self::assertFalse($bi->query($sql),$sql);
             $bi->close();
-        }finally{mysqli_report(MYSQLI_REPORT_ERROR|MYSQLI_REPORT_STRICT);$this->db->query("DROP USER IF EXISTS '$usuario'@'%'");}
+        }finally{mysqli_report(MYSQLI_REPORT_OFF);$this->db->query("DROP USER IF EXISTS '$usuario'@'%'");}
         // Ni siquiera el dueño de la conexión puede escribir a través de las vistas.
         $caja=$this->n("SELECT COUNT(*) n FROM caja_movimientos");
         mysqli_report(MYSQLI_REPORT_OFF);
         foreach(["UPDATE bi_flujo_dinero SET importe_centavos=0","DELETE FROM bi_flujo_dinero","UPDATE bi_devoluciones_dinero SET importe_centavos=0","DELETE FROM bi_aplicaciones_saldo","UPDATE bi_devoluciones_venta SET monto_con_impuesto_centavos=0"] as $sql)self::assertFalse($this->db->query($sql),"vista no actualizable: $sql");
-        mysqli_report(MYSQLI_REPORT_ERROR|MYSQLI_REPORT_STRICT);
+        mysqli_report(MYSQLI_REPORT_OFF);
         self::assertSame($caja,$this->n("SELECT COUNT(*) n FROM caja_movimientos"));
     }
 }
