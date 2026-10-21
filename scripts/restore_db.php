@@ -383,7 +383,7 @@ function validar_manifiesto_y_esquema(mysqli $mysqli, string $dbTarget, ?array $
  * Definiciones de vistas de las migraciones del repositorio (SQL de confianza, no del archivo de respaldo).
  * Cada una se escribe como `CREATE OR REPLACE SQL SECURITY INVOKER VIEW nombre AS SELECT ...;` sin `;` internos.
  *
- * @return array<string,string> nombre de vista => sentencia
+ * @return array<string,array{migracion:string,sql:string}> nombre de vista => migración que la define y sentencia
  */
 function vistas_del_repositorio(): array
 {
@@ -395,29 +395,50 @@ function vistas_del_repositorio(): array
         $contenido = (string)file_get_contents($archivo);
         if (preg_match_all('/CREATE\s+OR\s+REPLACE\s+SQL\s+SECURITY\s+INVOKER\s+VIEW\s+([A-Za-z0-9_]+)\s+AS\s[^;]*;/i', $contenido, $m, PREG_SET_ORDER)) {
             foreach ($m as $coincidencia) {
-                $vistas[$coincidencia[1]] = rtrim($coincidencia[0], ';');
+                $vistas[$coincidencia[1]] = ['migracion' => basename($archivo, '.sql'), 'sql' => rtrim($coincidencia[0], ';')];
             }
         }
     }
     return $vistas;
 }
 
-/** Sentencias para recrear las vistas que el manifiesto declara; falla si alguna no tiene definición en el repositorio. */
-function sentencias_de_vistas(?array $manifiesto): array
+/** El manifiesto (si existe) no puede declarar una vista que este repositorio no sabe construir. Se comprueba antes de tocar nada. */
+function validar_vistas_del_manifiesto(?array $manifiesto): void
 {
     $nombres = is_array($manifiesto['vistas'] ?? null) ? $manifiesto['vistas'] : [];
-    if (!$nombres) {
-        return [];
-    }
     $definiciones = vistas_del_repositorio();
-    $sentencias = [];
     foreach ($nombres as $nombre) {
         if (!is_string($nombre) || !isset($definiciones[$nombre])) {
             throw new RuntimeException('El respaldo declara la vista ' . (is_string($nombre) ? $nombre : '?') . ' y este repositorio no tiene su definición: no se restaura nada.');
         }
-        $sentencias[] = $definiciones[$nombre];
     }
-    return $sentencias;
+}
+
+/**
+ * Recrea en la base seleccionada las vistas de todas las migraciones que quedaron aplicadas en la base restaurada, igual que las
+ * protecciones versionadas: se deriva del historial de migraciones, así que también funciona sin manifiesto (restauración solo con --hash).
+ *
+ * @return int vistas recreadas
+ */
+function recrear_vistas_de_migraciones(mysqli $mysqli): int
+{
+    if ($mysqli->query("SHOW TABLES LIKE 'migraciones'")->num_rows === 0) {
+        return 0;
+    }
+    $aplicadas = [];
+    $res = $mysqli->query('SELECT migracion FROM migraciones');
+    while ($fila = $res->fetch_row()) {
+        $aplicadas[(string)$fila[0]] = true;
+    }
+    $res->free();
+    $n = 0;
+    foreach (vistas_del_repositorio() as $definicion) {
+        if (isset($aplicadas[$definicion['migracion']])) {
+            $mysqli->query($definicion['sql']);
+            $n++;
+        }
+    }
+    return $n;
 }
 
 /** Accept only the portable table dump emitted by backup_db.php. */
@@ -457,7 +478,7 @@ try {
     foreach ($sentencias as $sql) {
         validar_sentencia_respaldo($sql);
     }
-    $sentenciasVistas = sentencias_de_vistas($datosMan);
+    validar_vistas_del_manifiesto($datosMan);
     mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
     $mysqli = new mysqli($dbHost, $dbUser, $dbPass, '', $dbPort);
     $mysqli->set_charset('utf8mb4');
@@ -495,9 +516,7 @@ try {
             throw new RuntimeException('Error en sentencia #' . ($indice + 1) . ' durante staging: ' . $error->getMessage(), 0, $error);
         }
     }
-    foreach ($sentenciasVistas as $sql) {
-        $mysqli->query($sql);
-    }
+    recrear_vistas_de_migraciones($mysqli);
     validar_manifiesto_y_esquema($mysqli, $stagingDb, $datosMan);
     \Classes\ProteccionesRestauradas::aplicar($mysqli);
     // Recheck immediately before any destination DDL. Existing data is never altered.
@@ -517,9 +536,7 @@ try {
             throw new RuntimeException('Error en sentencia #' . ($indice + 1) . ' del destino nuevo. Se conserva para diagnóstico; no hubo reemplazo de originales: ' . $error->getMessage(), 0, $error);
         }
     }
-    foreach ($sentenciasVistas as $sql) {
-        $mysqli->query($sql);
-    }
+    recrear_vistas_de_migraciones($mysqli);
     validar_manifiesto_y_esquema($mysqli, $dbName, $datosMan);
     $protecciones=\Classes\ProteccionesRestauradas::aplicar($mysqli);
     $mysqli->query('SET FOREIGN_KEY_CHECKS = 1');
