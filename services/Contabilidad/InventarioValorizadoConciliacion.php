@@ -75,9 +75,12 @@ final class InventarioValorizadoConciliacion
     {
         $doc=$m['documento_tipo'];$clase=$doc?(self::CLASE_DOCUMENTO[$doc]??'heredado'):'heredado';
         $previo=$inicio!==null&&substr((string)$m['registrado_en'],0,10)<$inicio;
-        if(!$doc)return [$clase,$previo?'previo_inicio':'heredado'];
-        if($doc==='ajuste'&&!(int)$m['clasificado'])return [$clase,$previo?'previo_inicio':'sin_clasificar'];
-        if(!$m['evento_id'])return [$clase,$previo?'previo_inicio':'sin_evento'];
+        // El inicio contable manda sobre el estado de la cola: lo anterior ya está en la apertura y su hecho contable nunca generará asiento (el adaptador lo confirma como
+        // «previo-a-inicio-contable»), así que no se presenta como pendiente ni fallido aunque la cola aún no lo haya procesado. Si de todos modos tiene asiento, se trata como contabilizado.
+        if($previo&&!$m['primer_asiento'])return [$clase,'previo_inicio'];
+        if(!$doc)return [$clase,'heredado'];
+        if($doc==='ajuste'&&!(int)$m['clasificado'])return [$clase,'sin_clasificar'];
+        if(!$m['evento_id'])return [$clase,'sin_evento'];
         $e=(string)$m['outbox_estado'];
         if($e==='fallido')return [$clase,'fallido'];
         if($e!=='confirmado')return [$clase,'pendiente'];

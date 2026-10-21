@@ -121,6 +121,19 @@ final class ErpInventarioConciliacionIntegrationTest extends TestCase
         $this->movimientoSinOrigen('entrada',1000,300,'2025-11-01');$inf=$this->inv()->informe('2099-12-31');
         self::assertSame(800,$inf['auxiliar']);self::assertSame(500,$inf['libro']);self::assertSame(-300,$inf['diferencia']);self::assertSame(-800,$this->partida($inf,'previo_inicio')['monto']);self::assertTrue($inf['cuadra_partidas']);
     }
+    public function testUnMovimientoAnteriorAlInicioContableNoSeMuestraComoPendienteNiFallidoAunqueSuColaNoSeHayaProcesado():void
+    {
+        // Compra recibida y ajuste con concepto sin cuenta, ambos con hecho contable aún en cola (pendiente y fallido)...
+        $this->recibir('4','5.00');$sinCuenta=$this->concepto('Faltante sin cuenta','faltante_de_conteo',null);$aj=$this->ajuste('1',$sinCuenta);
+        $compra=(int)$this->r->uno("SELECT movimiento_id m FROM erp_stock_origenes WHERE documento_tipo='compra' ORDER BY id DESC LIMIT 1")['m'];
+        $this->db->query("UPDATE erp_integraciones_outbox SET estado='fallido',intentos=2 WHERE evento_id=(SELECT evento_id FROM erp_inv_ajuste_conceptos WHERE movimiento_id={$aj})");
+        // ...pero ambos movimientos son anteriores al inicio contable (2026-01-01): su hecho nunca generará asiento, ya están en la apertura.
+        $this->db->query("UPDATE inventario_movimientos SET registrado_en='2025-12-05 10:00:00' WHERE id IN({$compra},{$aj})");
+        $inf=$this->inv()->informe('2099-12-31');
+        self::assertNull($this->partida($inf,'pendiente'));self::assertNull($this->partida($inf,'fallido'),'La cola no se interpreta antes que el inicio contable');
+        self::assertSame(2,$this->partida($inf,'previo_inicio')['movimientos']);self::assertSame(-(2000-500),$this->partida($inf,'previo_inicio')['monto']);self::assertTrue($inf['cuadra_partidas']);
+        self::assertSame(2,count($this->inv()->detalle('2099-12-31','previo_inicio')));self::assertSame([],$this->inv()->detalle('2099-12-31','fallido'));
+    }
     public function testLaFechaDeCorteYLosContabilizadosTardeSeSeparanDelResto():void
     {
         $this->recibir('10','5.00');$k=$this->concepto('Merma','merma_o_perdida',$this->cuenta('gasto'));$mov=$this->ajuste('2',null);
