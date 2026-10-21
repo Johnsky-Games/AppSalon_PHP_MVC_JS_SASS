@@ -50,6 +50,9 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
         $inicio=$this->inicio();if(!$inicio)throw new ErpException('Define el inicio contable antes de contabilizar.',409);
         $fecha=substr((string)($documento['creado_en']??''),0,10);if(!preg_match('/^\d{4}-\d{2}-\d{2}$/D',$fecha))throw new \InvalidArgumentException('Evento sin fecha.');
         if($fecha<$inicio)return ['estado'=>'confirmado','referencia_externa'=>'previo-a-inicio-contable'];
+        // Un movimiento histórico reclasificado hoy conserva la fecha en que ocurrió: si fue anterior al inicio contable su efectivo ya está en la apertura.
+        $datos=$documento['datos']??[];
+        if(($documento['tipo']??'')==='caja_movimiento'&&!empty($datos['reclasificacion'])&&is_string($datos['fecha_original']??null)&&$datos['fecha_original']<$inicio)return ['estado'=>'confirmado','referencia_externa'=>'previo-a-inicio-contable'];
         if(in_array($documento['tipo']??'',self::SIN_ASIENTO,true))return ['estado'=>'confirmado','referencia_externa'=>'sin-asiento:'.$documento['tipo']];
         $numero=Transaccion::ejecutar($this->r->db,function()use($referencia,$documento,$fecha,$inicio){
             $asientos=$this->reglas($documento);if($asientos===null)throw new ErpException('El evento «'.($documento['tipo']??'?').'» no tiene regla contable.',409);
@@ -108,7 +111,7 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
             'comision_liquidada'=>$this->comision($id,(int)$d['monto']),
             'activo_registrado'=>[['concepto'=>'Activo registrado '.($d['codigo']??''),'lineas'=>[['rol'=>'activos_fijos','debe'=>(int)$d['costo']],['rol'=>'recepciones_por_facturar','haber'=>(int)$d['costo']]]]],
             'inventario_ajuste'=>$this->ajusteInventario((int)$d['movimiento_id'],(string)$d['tipo']),
-            'caja_movimiento'=>$this->cajaManual((int)$d['movimiento_id'],(string)$d['tipo'],(int)$d['monto']),
+            'caja_movimiento'=>$this->cajaManual((int)$d['movimiento_id'],(string)$d['tipo'],(int)$d['monto'],isset($d['reclasificacion'])?(string)($d['fecha_original']??''):null),
             'caja_movimiento_reversado'=>$this->cajaReverso($d),
             'depreciacion_contabilizada'=>[['concepto'=>'Depreciación de activos fijos '.($d['periodo']??''),'lineas'=>[['rol'=>'gasto_depreciacion','debe'=>(int)$d['total'],'referencia'=>'depreciación '.($d['periodo']??'')],['rol'=>'depreciacion_acumulada','haber'=>(int)$d['total'],'referencia'=>'depreciación '.($d['periodo']??'')]]]],
             'depreciacion_anulada'=>$this->nominaAnulada($id,$d,'depreciacion'),
@@ -281,12 +284,12 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
         return [['concepto'=>mb_substr('Ajuste de inventario: '.$m['nombre'],0,200),'lineas'=>$m['tipo']==='entrada'?[$inv+['debe'=>$valor],$otra+['haber'=>$valor]]:[$otra+['debe'=>$valor],$inv+['haber'=>$valor]]]];
     }
     /** Movimiento manual de efectivo: la contrapartida es la cuenta del concepto elegido (nunca una fija); sin concepto o sin cuenta válida el movimiento espera su configuración. */
-    private function cajaManual(int $movimiento,string $tipo,int $monto):array
+    private function cajaManual(int $movimiento,string $tipo,int $monto,?string $hechoDel=null):array
     {
         $m=$this->r->uno('SELECT m.concepto_id,k.nombre FROM erp_caja_mov_conceptos m JOIN erp_caja_conceptos k ON k.id=m.concepto_id WHERE m.caja_id=?',[$movimiento])??throw new ErpException('El movimiento de caja '.$movimiento.' no tiene concepto: no se contabiliza sin clasificarlo.',409);
         $cuenta=(new \Services\ErpCajaConceptoService($this->r))->cuentaDe((int)$m['concepto_id']);$ref='caja '.$movimiento;
         $caja=['rol'=>'caja','referencia'=>$ref];$otra=['cuenta_id'=>$cuenta,'referencia'=>$ref];
-        return [['concepto'=>mb_substr('Caja: '.$m['nombre'],0,200),'lineas'=>$tipo==='ingreso'?[$caja+['debe'=>$monto],$otra+['haber'=>$monto]]:[$otra+['debe'=>$monto],$caja+['haber'=>$monto]]]];
+        return [['concepto'=>mb_substr(($hechoDel!==null?'Caja (reclasificado, hecho del '.$hechoDel.'): ':'Caja: ').$m['nombre'],0,200),'lineas'=>$tipo==='ingreso'?[$caja+['debe'=>$monto],$otra+['haber'=>$monto]]:[$otra+['debe'=>$monto],$caja+['haber'=>$monto]]]];
     }
     /**
      * Reverso de un movimiento manual de efectivo. Si el original tiene asiento, se revierte ese asiento. Si el original fue anterior al inicio contable (se confirmó sin
