@@ -188,6 +188,23 @@ final class ErpCajaConceptosIntegrationTest extends TestCase
         $this->caja()->movimientoReversar($this->owner,$this->d(['movimiento_id'=>$hist,'motivo'=>'Se reclasificó por error de captura']));
         $x=$this->procesar();self::assertSame(0,$x['fallidos']);self::assertSame(0,$this->saldoCaja());self::assertSame(0,$this->saldo($this->cuenta('gasto')));self::assertSame([],$this->cont()->integridad());
     }
+    public function testReclasificarUnMovimientoAnteriorAlInicioContableNoCreaAsientoYSuReversoSiMueveElEfectivoDeHoy():void
+    {
+        $id=$this->abrir($this->owner,'20');
+        // El movimiento ocurrió antes del inicio contable (2026-01-01): su efectivo ya está en el saldo de apertura.
+        $hist=$this->caja()->asentar($this->owner,$id,'egreso',700,'efectivo','Compra previa al inicio contable','mov:'.$this->owner.':hist-3');
+        $this->db->query("UPDATE caja_movimientos SET registrado_en='2025-12-15 10:00:00' WHERE id={$hist}");
+        $gasto=$this->concepto('Gasto menor','gasto',$this->cuenta('gasto'));
+        $this->con()->reclasificar($this->owner,$this->d(['movimiento_id'=>$hist,'concepto_id'=>$gasto,'motivo'=>'Compra de diciembre clasificada ahora']));
+        $x=$this->procesar();self::assertSame(0,$x['fallidos']);
+        self::assertSame(0,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_cont_asientos')['n'],'Anterior al inicio contable: no se contabiliza otra vez');
+        $o=$this->r->uno("SELECT o.estado,o.respuesta_json r FROM erp_integraciones_outbox o JOIN erp_eventos e ON e.id=o.evento_id WHERE e.tipo='caja_movimiento' AND o.destino='contabilidad'");
+        self::assertSame('confirmado',$o['estado']);self::assertStringContainsString('previo-a-inicio-contable',(string)$o['r']);
+        // Reversarlo mueve el efectivo de hoy: se contabiliza una sola vez como movimiento actual contrario.
+        $this->caja()->movimientoReversar($this->owner,$this->d(['movimiento_id'=>$hist,'motivo'=>'Clasificación equivocada del gasto']));
+        $x=$this->procesar();self::assertSame(0,$x['fallidos']);self::assertSame(1,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_cont_asientos')['n']);
+        $x=$this->procesar();self::assertSame(1,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_cont_asientos')['n'],'Reprocesar no duplica');
+    }
     public function testReclasificarSinCuentaSoloDejaPendienteEseMovimiento():void
     {
         $id=$this->abrir($this->owner,'20');

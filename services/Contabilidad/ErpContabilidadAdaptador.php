@@ -50,6 +50,9 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
         $inicio=$this->inicio();if(!$inicio)throw new ErpException('Define el inicio contable antes de contabilizar.',409);
         $fecha=substr((string)($documento['creado_en']??''),0,10);if(!preg_match('/^\d{4}-\d{2}-\d{2}$/D',$fecha))throw new \InvalidArgumentException('Evento sin fecha.');
         if($fecha<$inicio)return ['estado'=>'confirmado','referencia_externa'=>'previo-a-inicio-contable'];
+        // Un movimiento histórico reclasificado hoy conserva la fecha en que ocurrió: si fue anterior al inicio contable su efectivo ya está en la apertura.
+        $datos=$documento['datos']??[];
+        if(($documento['tipo']??'')==='caja_movimiento'&&!empty($datos['reclasificacion'])&&is_string($datos['fecha_original']??null)&&$datos['fecha_original']<$inicio)return ['estado'=>'confirmado','referencia_externa'=>'previo-a-inicio-contable'];
         if(in_array($documento['tipo']??'',self::SIN_ASIENTO,true))return ['estado'=>'confirmado','referencia_externa'=>'sin-asiento:'.$documento['tipo']];
         $numero=Transaccion::ejecutar($this->r->db,function()use($referencia,$documento,$fecha,$inicio){
             $asientos=$this->reglas($documento);if($asientos===null)throw new ErpException('El evento «'.($documento['tipo']??'?').'» no tiene regla contable.',409);
