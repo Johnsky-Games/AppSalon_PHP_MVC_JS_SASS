@@ -49,7 +49,7 @@ final class ErpBiModeloLecturaIntegrationTest extends TestCase
     public function testLasVistasExistenYSonDeSoloLectura():void
     {
         foreach(['bi_venta_lineas','bi_libro_lineas','bi_inventario_movimientos'] as $v){
-            self::assertSame(1,$this->n("SELECT COUNT(*) n FROM information_schema.views WHERE table_schema=DATABASE() AND table_name='$v' AND security_type='INVOKER'"),"$v existe y es SQL SECURITY INVOKER");
+            self::assertSame(1,$this->n("SELECT COUNT(*) n FROM information_schema.views WHERE table_schema=DATABASE() AND table_name='$v' AND security_type='DEFINER'"),"$v existe y es SQL SECURITY DEFINER");
         }
         $this->flujo();
         $huella=fn()=>[$this->n("SELECT COALESCE(SUM(total_centavos),0) n FROM erp_venta_lineas"),$this->n("SELECT COUNT(*) n FROM erp_cont_lineas"),$this->n("SELECT COALESCE(SUM(costo_centavos),0) n FROM inventario_movimientos")];
@@ -118,5 +118,54 @@ final class ErpBiModeloLecturaIntegrationTest extends TestCase
         $antes=$huella();
         foreach(['bi_venta_lineas','bi_libro_lineas','bi_inventario_movimientos'] as $v){$this->db->query("SELECT * FROM $v")->fetch_all();}
         self::assertSame($antes,$huella());
+    }
+
+    public function testUnUsuarioDeBiConSoloSelectSobreLasVistasPuedeConsultarlasYNadaMas():void
+    {
+        $this->flujo();
+        $bd=\Tests\Integration\BaseDatosAislada::nombre($this->db);$usuario='bi_t_'.bin2hex(random_bytes(4));$clave='Bi'.bin2hex(random_bytes(6));
+        $vistas=['bi_venta_lineas','bi_libro_lineas','bi_inventario_movimientos'];
+        $this->db->query("CREATE USER '$usuario'@'%' IDENTIFIED BY '$clave'");
+        try{
+            foreach($vistas as $v)$this->db->query("GRANT SELECT ON `$bd`.`$v` TO '$usuario'@'%'");
+            mysqli_report(MYSQLI_REPORT_OFF);
+            $bi=new \mysqli(getenv('DB_HOST')?:'appsalon-test-db',$usuario,$clave,$bd,(int)(getenv('DB_PORT')?:3306));
+            self::assertSame(0,$bi->connect_errno,'el usuario de BI conecta');
+            foreach($vistas as $v){
+                $r=$bi->query("SELECT COUNT(*) n FROM `$v`");
+                self::assertNotFalse($r,"el usuario de BI consulta $v sin permisos sobre las tablas de origen: ".$bi->error);
+                self::assertGreaterThan(0,(int)$r->fetch_assoc()['n'],"$v devuelve filas al usuario de BI");
+            }
+            foreach(['usuarios','erp_contactos','erp_venta_lineas','erp_cont_lineas','inventario_movimientos'] as $t){
+                self::assertFalse($bi->query("SELECT 1 FROM `$t` LIMIT 1"),"el usuario de BI no debe leer la tabla base $t");
+                self::assertContains($bi->errno,[1142,1143],"acceso a $t denegado");
+            }
+            foreach(["UPDATE bi_venta_lineas SET total_centavos=0","DELETE FROM bi_libro_lineas","INSERT INTO bi_inventario_movimientos(movimiento_id) VALUES(1)","DROP VIEW bi_venta_lineas"] as $sql){
+                self::assertFalse($bi->query($sql),"el usuario de BI no escribe: $sql");
+            }
+            $g=array_map(fn($f)=>implode('',$f),$bi->query('SHOW GRANTS')->fetch_all());
+            foreach($g as $linea)if(!str_contains($linea,'USAGE'))self::assertMatchesRegularExpression('/^GRANT SELECT ON `[^`]+`\.`bi_(venta_lineas|libro_lineas|inventario_movimientos)` TO /',$linea,'solo SELECT sobre las vistas autorizadas');
+            $bi->close();
+        }finally{
+            mysqli_report(MYSQLI_REPORT_ERROR|MYSQLI_REPORT_STRICT);
+            $this->db->query("DROP USER IF EXISTS '$usuario'@'%'");
+        }
+    }
+
+    public function testDistinctNoEliminaFilasLegitimasAunqueSeanIdenticasEnTodoMenosElId():void
+    {
+        $this->recibir('10','4.00');
+        // Dos ventas con líneas idénticas (mismo producto, cantidad y precio) y movimientos de inventario idénticos en sus valores.
+        $a=$this->vender('1');$b=$this->vender('1');
+        $this->db->query("INSERT INTO inventario_movimientos(producto_id,actor_id,tipo,cantidad_milesimas,saldo_milesimas,costo_centavos,motivo,idempotencia,huella,registrado_en) SELECT producto_id,actor_id,tipo,cantidad_milesimas,saldo_milesimas,costo_centavos,motivo,CONCAT(idempotencia,'#dup'),huella,registrado_en FROM inventario_movimientos ORDER BY id DESC LIMIT 1");
+        $this->procesar();
+        self::assertNotSame($a,$b);
+        $dup=$this->r->uno("SELECT COUNT(*) n FROM (SELECT producto_id,cantidad_milesimas,precio_centavos,total_centavos FROM erp_venta_lineas GROUP BY producto_id,cantidad_milesimas,precio_centavos,total_centavos HAVING COUNT(*)>1) x");
+        self::assertGreaterThan(0,(int)$dup['n'],'la prueba debe tener líneas de venta idénticas salvo el id');
+        self::assertSame($this->n("SELECT COUNT(*) n FROM erp_venta_lineas l JOIN erp_ventas v ON v.id=l.venta_id WHERE v.estado='confirmada'"),$this->n("SELECT COUNT(*) n FROM bi_venta_lineas"),'una fila por línea de venta confirmada, aunque dos sean idénticas');
+        self::assertSame($this->n("SELECT COUNT(*) n FROM inventario_movimientos"),$this->n("SELECT COUNT(*) n FROM bi_inventario_movimientos"),'una fila por movimiento aunque dos sean idénticos');
+        foreach(['bi_venta_lineas'=>'linea_id','bi_libro_lineas'=>'linea_id','bi_inventario_movimientos'=>'movimiento_id'] as $v=>$id){
+            self::assertSame($this->n("SELECT COUNT(*) n FROM `$v`"),$this->n("SELECT COUNT(DISTINCT $id) n FROM `$v`"),"$v: el identificador es único por fila, así que DISTINCT no puede colapsar filas distintas");
+        }
     }
 }

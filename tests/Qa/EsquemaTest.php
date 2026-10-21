@@ -365,7 +365,7 @@ final class EsquemaTest extends R2bCase
         // Esquema y datos idénticos.
         $this->assertEquals($this->esquema($o), $this->esquema($d), 'el esquema restaurado difiere');
         $db = $this->conectar($d);
-        foreach (['bi_venta_lineas', 'bi_libro_lineas', 'bi_inventario_movimientos'] as $v) { $this->assertSame('INVOKER', $this->filas($db, "SELECT security_type s FROM information_schema.views WHERE table_schema=DATABASE() AND table_name='$v'")[0]['s'] ?? null, "la vista $v no se restauró con su definición"); $this->assertNotFalse($db->query("SELECT * FROM `$v` LIMIT 1"), "la vista restaurada $v no es consultable"); }
+        foreach (['bi_venta_lineas', 'bi_libro_lineas', 'bi_inventario_movimientos'] as $v) { $this->assertSame('DEFINER', $this->filas($db, "SELECT security_type s FROM information_schema.views WHERE table_schema=DATABASE() AND table_name='$v'")[0]['s'] ?? null, "la vista $v no se restauró con su definición"); $this->assertNotFalse($db->query("SELECT * FROM `$v` LIMIT 1"), "la vista restaurada $v no es consultable"); }
         foreach ($filasOrigen as $t => $n) { $this->assertSame($n, (int)$this->filas($db, "SELECT COUNT(*) n FROM `$t`")[0]['n'], "filas de $t"); }
         $this->assertSame($raro, $this->filas($db, "SELECT notas_rh FROM colaboradores WHERE email_norm='inv@rb.test'")[0]['notas_rh'], 'texto hostil alterado por el ciclo respaldo/restauración');
         $this->assertSame(3, (int)$this->filas($db, 'SELECT COUNT(*) n FROM usuarios')[0]['n'], 'una inyección en un dato restaurado alteró la tabla usuarios');
@@ -397,7 +397,7 @@ final class EsquemaTest extends R2bCase
         $out = stream_get_contents($pipes[1]) . stream_get_contents($pipes[2]);
         $this->assertSame(0, proc_close($p), $out);
         $db = $this->conectar($d);
-        foreach (['bi_venta_lineas', 'bi_libro_lineas', 'bi_inventario_movimientos'] as $v) { $this->assertSame('INVOKER', $this->filas($db, "SELECT security_type s FROM information_schema.views WHERE table_schema=DATABASE() AND table_name='$v'")[0]['s'] ?? null, "restaurar solo con --hash (sin manifiesto) perdió la vista $v"); }
+        foreach (['bi_venta_lineas', 'bi_libro_lineas', 'bi_inventario_movimientos'] as $v) { $this->assertSame('DEFINER', $this->filas($db, "SELECT security_type s FROM information_schema.views WHERE table_schema=DATABASE() AND table_name='$v'")[0]['s'] ?? null, "restaurar solo con --hash (sin manifiesto) perdió la vista $v"); }
         $db->close();
     }
 

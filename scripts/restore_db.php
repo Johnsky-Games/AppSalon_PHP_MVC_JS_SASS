@@ -381,7 +381,7 @@ function validar_manifiesto_y_esquema(mysqli $mysqli, string $dbTarget, ?array $
 
 /**
  * Definiciones de vistas de las migraciones del repositorio (SQL de confianza, no del archivo de respaldo).
- * Cada una se escribe como `CREATE OR REPLACE SQL SECURITY INVOKER VIEW nombre AS SELECT ...;` sin `;` internos.
+ * Cada una se escribe como `CREATE OR REPLACE SQL SECURITY DEFINER VIEW nombre AS SELECT ...;` sin `;` internos.
  *
  * @return array<string,array{migracion:string,sql:string}> nombre de vista => migración que la define y sentencia
  */
@@ -393,7 +393,7 @@ function vistas_del_repositorio(): array
             continue;
         }
         $contenido = (string)file_get_contents($archivo);
-        if (preg_match_all('/CREATE\s+OR\s+REPLACE\s+SQL\s+SECURITY\s+INVOKER\s+VIEW\s+([A-Za-z0-9_]+)\s+AS\s[^;]*;/i', $contenido, $m, PREG_SET_ORDER)) {
+        if (preg_match_all('/CREATE\s+OR\s+REPLACE\s+SQL\s+SECURITY\s+DEFINER\s+VIEW\s+([A-Za-z0-9_]+)\s+AS\s[^;]*;/i', $contenido, $m, PREG_SET_ORDER)) {
             foreach ($m as $coincidencia) {
                 $vistas[$coincidencia[1]] = ['migracion' => basename($archivo, '.sql'), 'sql' => rtrim($coincidencia[0], ';')];
             }
