@@ -85,7 +85,8 @@ final class ErpController
         $esperado=$sesion?(new ErpCajaService($r))->esperado((int)$sesion['id']):0;
         $historial=$r->q('SELECT * FROM erp_caja_sesiones WHERE actor_id=? ORDER BY id DESC LIMIT 30',[$actor]);
         $movimientos=$sesion?$r->q('SELECT c.* FROM erp_caja_movimientos m JOIN caja_movimientos c ON c.id=m.caja_id WHERE m.sesion_id=? ORDER BY c.id DESC LIMIT 100',[(int)$sesion['id']]):[];
-        self::render($router,'caja',compact('sesion','esperado','historial','movimientos'));
+        $conceptos=$r->q('SELECT id,nombre,tipo FROM erp_caja_conceptos WHERE activo=1 ORDER BY nombre');
+        self::render($router,'caja',compact('sesion','esperado','historial','movimientos','conceptos'));
     }
     public static function prepagos(Router $router):void
     {
@@ -188,7 +189,7 @@ final class ErpController
     {
         exigir_permiso('contabilidad.ver');$r=new ErpRepository();$c=new \Services\ErpContabilidadService($r);
         $hoy=(new \DateTimeImmutable('now',new \DateTimeZone('America/Guayaquil')))->format('Y-m-d');$q=$_GET;
-        $vista=in_array($q['vista']??'',['resumen','diario','mayor','balances','plan','periodos','asiento','conciliacion','tesoreria','activos'],true)?$q['vista']:'resumen';
+        $vista=in_array($q['vista']??'',['resumen','diario','mayor','balances','plan','periodos','asiento','conciliacion','tesoreria','activos','caja'],true)?$q['vista']:'resumen';
         $fecha=static function(mixed $v,string $por):string{$d=is_string($v)?\DateTimeImmutable::createFromFormat('!Y-m-d',$v):false;return ($d&&$d->format('Y-m-d')===$v)?$v:$por;};
         $desde=$fecha($q['desde']??null,substr($hoy,0,4).'-01-01');$hasta=$fecha($q['hasta']??null,$hoy);
         if($hasta<$desde||(new \DateTimeImmutable($desde))->diff(new \DateTimeImmutable($hasta))->days>3660)throw new ErpException('Rango de fechas no válido.');
@@ -203,11 +204,19 @@ final class ErpController
             'periodos'=>$datos+=['periodos'=>$r->q('SELECT * FROM erp_cont_periodos ORDER BY anio DESC,mes DESC LIMIT 60')],
             'conciliacion'=>$datos+=['conc'=>$c->conciliacion($hasta)],
             'activos'=>$datos+=self::datosActivosFijos($r,$q,$hoy),
+            'caja'=>$datos+=self::datosCajaConceptos($r),
             'tesoreria'=>$datos+=self::datosTesoreria($r,$q),
             default=>null,
         };
         if($vista==='mayor'&&$datos['cuentaId'])$datos['mayor']=$c->mayor($datos['cuentaId'],$desde,$hasta);
         self::render($router,'contabilidad',$datos);
+    }
+    /** Datos de la pestaña «Caja y conceptos»: conceptos configurados, movimientos que esperan configuración y movimientos clasificados que aún se pueden reversar. */
+    private static function datosCajaConceptos(ErpRepository $r):array
+    {
+        $k=new \Services\ErpCajaConceptoService($r);
+        return ['cajaConceptos'=>$k->conceptos(),'cajaPendientes'=>$k->pendientes(),'cajaNaturalezas'=>\Services\ErpCajaConceptoService::NATURALEZAS,
+            'cajaReversibles'=>$r->q("SELECT m.caja_id,m.motivo,k.nombre concepto,c.tipo,c.monto_centavos,c.registrado_en FROM erp_caja_mov_conceptos m JOIN erp_caja_conceptos k ON k.id=m.concepto_id JOIN caja_movimientos c ON c.id=m.caja_id WHERE m.reversa_de_id IS NULL AND NOT EXISTS(SELECT 1 FROM erp_caja_mov_conceptos x WHERE x.reversa_de_id=m.caja_id) ORDER BY m.caja_id DESC LIMIT 30")];
     }
     /** Datos de la pestaña «Activos fijos»: políticas, fichas, corridas, bajas, reporte del año y cuadro de un activo. Solo lectura. */
     private static function datosActivosFijos(ErpRepository $r,array $q,string $hoy):array
@@ -462,7 +471,8 @@ final class ErpController
             'cont_rol'=>[\Services\ErpContabilidadService::class,'rol','contabilidad'],'cont_asiento'=>[\Services\ErpContabilidadService::class,'asiento','contabilidad'],'cont_reverso'=>[\Services\ErpContabilidadService::class,'reversar','contabilidad'],
             'cont_periodo_cerrar'=>[\Services\ErpContabilidadService::class,'cerrarPeriodo','contabilidad'],'cont_periodo_reabrir'=>[\Services\ErpContabilidadService::class,'reabrirPeriodo','contabilidad'],'cont_ejercicio_cerrar'=>[\Services\ErpContabilidadService::class,'cerrarEjercicio','contabilidad'],
             'dep_categoria'=>[\Services\ErpDepreciacionService::class,'categoriaCrear','contabilidad'],'dep_ficha'=>[\Services\ErpDepreciacionService::class,'fichaCrear','contabilidad'],'dep_calcular'=>[\Services\ErpDepreciacionService::class,'calcular','contabilidad'],
-            'dep_contabilizar'=>[\Services\ErpDepreciacionService::class,'contabilizar','contabilidad'],'dep_anular'=>[\Services\ErpDepreciacionService::class,'anular','contabilidad'],'dep_baja'=>[\Services\ErpDepreciacionService::class,'bajaRegistrar','contabilidad'],'dep_baja_anular'=>[\Services\ErpDepreciacionService::class,'bajaAnular','contabilidad'],'dep_estimacion'=>[\Services\ErpDepreciacionService::class,'estimacionRegistrar','contabilidad'],'dep_estimacion_anular'=>[\Services\ErpDepreciacionService::class,'estimacionAnular','contabilidad'],
+            'dep_contabilizar'=>[\Services\ErpDepreciacionService::class,'contabilizar','contabilidad'],'dep_anular'=>[\Services\ErpDepreciacionService::class,'anular','contabilidad'],'dep_baja'=>[\Services\ErpDepreciacionService::class,'bajaRegistrar','contabilidad'],'dep_baja_anular'=>[\Services\ErpDepreciacionService::class,'bajaAnular','contabilidad'],'caja_concepto'=>[\Services\ErpCajaConceptoService::class,'crear','contabilidad'],'caja_concepto_cuenta'=>[\Services\ErpCajaConceptoService::class,'asignarCuenta','contabilidad'],'caja_concepto_estado'=>[\Services\ErpCajaConceptoService::class,'estado','contabilidad'],'caja_reverso'=>[ErpCajaService::class,'movimientoReversar','contabilidad'],
+            'dep_estimacion'=>[\Services\ErpDepreciacionService::class,'estimacionRegistrar','contabilidad'],'dep_estimacion_anular'=>[\Services\ErpDepreciacionService::class,'estimacionAnular','contabilidad'],
             'fiscal_nota_credito'=>[\Services\ErpFiscalService::class,'notaCredito','facturacion'],
             'fiscal_verificar'=>[\Services\ErpFiscalService::class,'solicitarVerificacion','facturacion'],
             'fiscal_sustituir_factura'=>[\Services\ErpFiscalService::class,'sustituirFactura','facturacion'],
@@ -504,7 +514,7 @@ final class ErpController
         if($destino==='documentos')$ruta='/gestion/documentos?'.http_build_query(['entidad'=>is_string($_POST['entidad']??null)?$_POST['entidad']:'','id'=>(int)($_POST['entidad_id']??0)]);
         if($destino==='consumos')$ruta='/agenda/detalle?id='.(int)($_POST['cita_id']??0);
         if($destino==='nomina'){$v=is_string($_POST['vista']??null)&&in_array($_POST['vista'],['resumen','corrida','novedades','parametros','condiciones','beneficios','renta','finiquitos','utilidades','iess','anual'],true)?$_POST['vista']:'resumen';$k=(int)($_POST['corrida_id']??0);$ruta='/gestion/nomina?vista='.$v.(($v==='corrida'&&$k>0)?'&corrida='.$k:'');}
-        if($destino==='contabilidad'){$v=is_string($_POST['vista']??null)&&in_array($_POST['vista'],['resumen','diario','mayor','balances','plan','periodos','asiento','conciliacion','tesoreria','activos'],true)?$_POST['vista']:'resumen';$ruta='/gestion/contabilidad?vista='.$v;if($v==='tesoreria'){$b=(int)($_POST['banco']??0);$x=(int)($_POST['extracto']??0);$ruta.=($b>0?'&banco='.$b:'').($x>0?'&extracto='.$x:'');}}
+        if($destino==='contabilidad'){$v=is_string($_POST['vista']??null)&&in_array($_POST['vista'],['resumen','diario','mayor','balances','plan','periodos','asiento','conciliacion','tesoreria','activos','caja'],true)?$_POST['vista']:'resumen';$ruta='/gestion/contabilidad?vista='.$v;if($v==='tesoreria'){$b=(int)($_POST['banco']??0);$x=(int)($_POST['extracto']??0);$ruta.=($b>0?'&banco='.$b:'').($x>0?'&extracto='.$x:'');}}
         if($destino==='fiscal_parametros')$ruta='/gestion/facturacion/parametros';
         if($destino==='facturacion')$ruta='/gestion/facturacion?'.(($completada||$esEntrega)?'id=':'venta_id=').$id;
         header('Location: '.$ruta,true,303);detener_ejecucion(303);

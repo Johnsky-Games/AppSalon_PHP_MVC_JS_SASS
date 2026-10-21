@@ -107,6 +107,8 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
             'obligacion_pagada'=>$this->pagoObligacion($id,(int)$d['monto'],(string)$d['metodo']),
             'comision_liquidada'=>$this->comision($id,(int)$d['monto']),
             'activo_registrado'=>[['concepto'=>'Activo registrado '.($d['codigo']??''),'lineas'=>[['rol'=>'activos_fijos','debe'=>(int)$d['costo']],['rol'=>'recepciones_por_facturar','haber'=>(int)$d['costo']]]]],
+            'caja_movimiento'=>$this->cajaManual((int)$d['movimiento_id'],(string)$d['tipo'],(int)$d['monto']),
+            'caja_movimiento_reversado'=>$this->nominaAnulada((int)$d['reversa_de'],$d,'caja'),
             'depreciacion_contabilizada'=>[['concepto'=>'Depreciación de activos fijos '.($d['periodo']??''),'lineas'=>[['rol'=>'gasto_depreciacion','debe'=>(int)$d['total'],'referencia'=>'depreciación '.($d['periodo']??'')],['rol'=>'depreciacion_acumulada','haber'=>(int)$d['total'],'referencia'=>'depreciación '.($d['periodo']??'')]]]],
             'depreciacion_anulada'=>$this->nominaAnulada($id,$d,'depreciacion'),
             'activo_baja'=>$this->activoBaja($id,$d),
@@ -268,6 +270,14 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
             ['rol'=>'beneficios_por_pagar','debe'=>(int)$d['d13']+(int)$d['d14'],'referencia'=>'finiquito '.$finiquito],['rol'=>'gasto_beneficios','debe'=>(int)$d['gasto_beneficios']],['rol'=>'gasto_sueldos','debe'=>(int)$d['otros']],
             ['rol'=>'sueldos_por_pagar','haber'=>(int)$d['neto'],'referencia'=>'finiquito '.$finiquito],['rol'=>'descuentos_nomina','haber'=>(int)$d['descuentos']]]]];
     }
+    /** Movimiento manual de efectivo: la contrapartida es la cuenta del concepto elegido (nunca una fija); sin concepto o sin cuenta válida el movimiento espera su configuración. */
+    private function cajaManual(int $movimiento,string $tipo,int $monto):array
+    {
+        $m=$this->r->uno('SELECT m.concepto_id,k.nombre FROM erp_caja_mov_conceptos m JOIN erp_caja_conceptos k ON k.id=m.concepto_id WHERE m.caja_id=?',[$movimiento])??throw new ErpException('El movimiento de caja '.$movimiento.' no tiene concepto: no se contabiliza sin clasificarlo.',409);
+        $cuenta=(new \Services\ErpCajaConceptoService($this->r))->cuentaDe((int)$m['concepto_id']);$ref='caja '.$movimiento;
+        $caja=['rol'=>'caja','referencia'=>$ref];$otra=['cuenta_id'=>$cuenta,'referencia'=>$ref];
+        return [['concepto'=>mb_substr('Caja: '.$m['nombre'],0,200),'lineas'=>$tipo==='ingreso'?[$caja+['debe'=>$monto],$otra+['haber'=>$monto]]:[$otra+['debe'=>$monto],$caja+['haber'=>$monto]]]];
+    }
     /** Baja de un activo fijo: se salda la depreciación acumulada y el costo; lo no depreciado se reconoce como pérdida. Sin venta (las ventas de activos exigen factura y no se automatizan). */
     private function activoBaja(int $activo,array $d):array
     {
@@ -285,7 +295,7 @@ final class ErpContabilidadAdaptador implements IntegracionErpInterface
             throw new ErpException('La aprobación de la nómina aún no está contabilizada: el reverso espera.',409);
         }
         $lineas=[];foreach($this->r->q('SELECT * FROM erp_cont_lineas WHERE asiento_id=? ORDER BY nro',[(int)$orig['id']]) as $l)$lineas[]=['cuenta_id'=>(int)$l['cuenta_id'],'debe'=>(int)$l['haber_centavos'],'haber'=>(int)$l['debe_centavos'],'contacto_id'=>$l['contacto_id'],'referencia'=>$l['referencia']];
-        $texto=match($que){'finiquito'=>'Anulación del finiquito '.$corrida.' (asiento '.$orig['numero'].')','utilidades'=>'Anulación del reparto de utilidades '.$corrida.' (asiento '.$orig['numero'].')','depreciacion'=>'Anulación de la depreciación (corrida '.$corrida.', asiento '.$orig['numero'].')','baja'=>'Anulación de la baja del activo '.$corrida.' (asiento '.$orig['numero'].')',default=>'Anulación de la nómina (corrida '.$corrida.', asiento '.$orig['numero'].')'};
+        $texto=match($que){'finiquito'=>'Anulación del finiquito '.$corrida.' (asiento '.$orig['numero'].')','utilidades'=>'Anulación del reparto de utilidades '.$corrida.' (asiento '.$orig['numero'].')','depreciacion'=>'Anulación de la depreciación (corrida '.$corrida.', asiento '.$orig['numero'].')','baja'=>'Anulación de la baja del activo '.$corrida.' (asiento '.$orig['numero'].')','caja'=>'Reverso del movimiento de caja '.$corrida.' (asiento '.$orig['numero'].')',default=>'Anulación de la nómina (corrida '.$corrida.', asiento '.$orig['numero'].')'};
         return [['concepto'=>$texto,'reversa_de'=>(int)$orig['id'],'lineas'=>$lineas]];
     }
 
