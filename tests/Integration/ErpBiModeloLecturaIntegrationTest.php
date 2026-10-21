@@ -92,7 +92,7 @@ final class ErpBiModeloLecturaIntegrationTest extends TestCase
         $t=$this->r->uno("SELECT COALESCE(SUM(debe_centavos),0) d, COALESCE(SUM(haber_centavos),0) h, COALESCE(SUM(neto_deudor_centavos),0) n FROM bi_libro_lineas");
         self::assertGreaterThan(0,(int)$t['d']);self::assertSame((int)$t['d'],(int)$t['h'],'debe = haber en toda la vista');self::assertSame(0,(int)$t['n']);
         self::assertSame($this->n("SELECT COUNT(*) n FROM erp_cont_lineas"),$this->n("SELECT COUNT(*) n FROM bi_libro_lineas"),'una fila por línea contable, sin duplicar por los cruces');
-        $ids=(new InventarioValorizadoConciliacion($this->r))->informe(date('Y-m-d'));
+        $ids=(new InventarioValorizadoConciliacion($this->r))->informe('2099-12-31');
         $codigoInv=$this->r->uno("SELECT c.codigo FROM erp_cont_roles rc JOIN erp_cont_cuentas c ON c.id=rc.cuenta_id WHERE rc.rol='inventario'")['codigo']??null;
         self::assertNotNull($codigoInv);
         $saldo=(int)$this->r->uno("SELECT COALESCE(SUM(neto_deudor_centavos),0) n FROM bi_libro_lineas WHERE cuenta_codigo=?",[$codigoInv])['n'];
@@ -102,7 +102,7 @@ final class ErpBiModeloLecturaIntegrationTest extends TestCase
     public function testElInventarioValorizadoDeLaVistaCuadraConElAuxiliarDelControl():void
     {
         $this->flujo();
-        $inf=(new InventarioValorizadoConciliacion($this->r))->informe(date('Y-m-d'));
+        $inf=(new InventarioValorizadoConciliacion($this->r))->informe('2099-12-31');
         $vista=(int)$this->r->uno("SELECT COALESCE(SUM(valor_con_signo_centavos),0) n FROM bi_inventario_movimientos")['n'];
         self::assertSame((int)$inf['auxiliar'],$vista,'Σ valor con signo de la vista = auxiliar valorizado del control');
         self::assertSame($this->n("SELECT COUNT(*) n FROM inventario_movimientos"),$this->n("SELECT COUNT(*) n FROM bi_inventario_movimientos"));
