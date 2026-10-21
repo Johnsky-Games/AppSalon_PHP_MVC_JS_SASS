@@ -128,6 +128,69 @@ final class ErpDepreciacionIntegrationTest extends TestCase
         $this->ficha($b,'2026-02');$this->mes(2);// el mes siguiente incluye a ambos y no se bloquea
         self::assertSame(2,(int)$this->r->uno("SELECT n_lineas n FROM erp_dep_corridas WHERE mes=2 AND estado='contabilizada'")['n']);
     }
+    private function estimar(array $d,?int $actor=null):int
+    {
+        return $this->dep()->estimacionRegistrar($actor??$this->owner,$this->d($d+['criterio'=>'Revisión de la vida útil por el contador (ensayo)']))['recurso_id'];
+    }
+    public function testCambioDeEstimacionEsProspectivoYNoTocaLoYaDepreciado():void
+    {
+        $a=$this->activo();$this->ficha($a);$this->mes(1);$this->mes(2);$this->mes(3);// acumulado 38571; quedan 51429
+        $antes=$this->r->q("SELECT l.id,l.monto_centavos,l.acumulado_centavos,c.estado FROM erp_dep_lineas l JOIN erp_dep_corridas c ON c.id=l.corrida_id ORDER BY l.id");
+        $asientos=(int)$this->r->uno('SELECT COUNT(*) n FROM erp_cont_asientos')['n'];
+        // Se cierra marzo: el cambio no necesita abrirlo ni reversar nada.
+        foreach([1,2,3] as $m)$this->cont()->cerrarPeriodo($this->owner,$this->d(['anio'=>2026,'mes'=>$m]));
+        $this->rechazo(fn()=>$this->estimar(['activo_id'=>$a,'desde'=>'2026-03','vida_meses'=>'4']),409);// marzo ya tiene cuota
+        $this->rechazo(fn()=>$this->estimar(['activo_id'=>$a,'desde'=>'2026-05','vida_meses'=>'4']),409);// salta abril: no está al día
+        foreach([['vida_meses'=>'0'],['vida_meses'=>'601'],['vida_meses'=>'x'],['residual_pct'=>'100'],['criterio'=>'no']] as $malo){
+            try{$this->estimar($malo+['activo_id'=>$a,'desde'=>'2026-04','vida_meses'=>'4']);self::fail(json_encode($malo));}catch(ErpException|\InvalidArgumentException $e){self::assertContains($e->getCode(),[0,409,422],json_encode($malo));}
+        }
+        $this->rechazo(fn()=>$this->estimar(['activo_id'=>$a,'desde'=>'2026-04','vida_meses'=>'4'],$this->finanzas),403);
+        self::assertSame(0,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_dep_estimaciones')['n'],'Lo rechazado no dejó nada');
+        $e=$this->estimar(['activo_id'=>$a,'desde'=>'2026-04','vida_meses'=>'4']);
+        $row=$this->r->uno('SELECT * FROM erp_dep_estimaciones WHERE id=?',[$e]);self::assertSame([38571,51429,4],[(int)$row['acumulado_previo_centavos'],(int)$row['base_centavos'],(int)$row['vida_meses']]);
+        $this->rechazo(fn()=>$this->estimar(['activo_id'=>$a,'desde'=>'2026-04','vida_meses'=>'3']),409);// ya hay vigencia desde abril
+        // Nada de lo anterior cambió: mismas líneas, mismos estados y ningún asiento nuevo ni reverso.
+        self::assertSame($antes,$this->r->q("SELECT l.id,l.monto_centavos,l.acumulado_centavos,c.estado FROM erp_dep_lineas l JOIN erp_dep_corridas c ON c.id=l.corrida_id ORDER BY l.id"));
+        $this->asientos();self::assertSame($asientos,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_cont_asientos')['n']);self::assertSame(0,(int)$this->r->uno("SELECT COUNT(*) n FROM erp_cont_asientos WHERE tipo='reverso'")['n']);
+        // Abril a julio con el saldo (51 429) repartido en 4 meses, calculado a mano: 128,57 · 128,58 · 128,57 · 128,57.
+        $nuevas=[];foreach([4,5,6,7] as $m){$k=$this->mes($m);$nuevas[]=(int)$this->r->uno('SELECT total_centavos t FROM erp_dep_corridas WHERE id=?',[$k])['t'];}
+        self::assertSame([12857,12858,12857,12857],$nuevas);self::assertSame(90000,array_sum($nuevas)+38571);
+        $this->rechazo(fn()=>$this->dep()->calcular($this->owner,$this->d(['anio'=>2026,'mes'=>8])),409);
+        self::assertSame(90000,$this->saldoRol('gasto_depreciacion'));self::assertSame(0,$this->control()['diferencia']);self::assertTrue($this->cont()->balanceComprobacion('2099-12-31')['cuadra']);self::assertSame([],$this->cont()->integridad());
+        $cuadro=$this->dep()->cuadro($a)['filas'];self::assertCount(7,$cuadro);self::assertSame('0',(string)$cuadro[6]['libros']);self::assertSame('contabilizada',$cuadro[6]['estado']);
+        $ev=$this->r->uno("SELECT actor_id a,datos_json d FROM erp_eventos WHERE tipo='dep_estimacion_registrada'");self::assertSame($this->owner,(int)$ev['a']);self::assertStringNotContainsStringIgnoringCase('idem_key',(string)$ev['d']);
+        self::assertStringContainsString('solo se anula',$this->sqlFalla("UPDATE erp_dep_estimaciones SET vida_meses=9 WHERE id=$e"));self::assertStringContainsString('conserva',$this->sqlFalla('DELETE FROM erp_dep_estimaciones'));
+    }
+    public function testCambioDeEstimacionPuedeCambiarElResidualHaciaAdelante():void
+    {
+        $a=$this->activo();$this->ficha($a);$this->mes(1);$this->mes(2);// acumulado 25714
+        $this->estimar(['activo_id'=>$a,'desde'=>'2026-03','vida_meses'=>'5','residual_pct'=>'10']);// residual 90,00; saldo 552,86 en 5 meses
+        $cuotas=[];foreach([3,4,5,6,7] as $m){$k=$this->mes($m);$cuotas[]=(int)$this->r->uno('SELECT total_centavos t FROM erp_dep_corridas WHERE id=?',[$k])['t'];}
+        self::assertSame([11057,11057,11058,11057,11057],$cuotas,'55 286 en 5 meses, calculado a mano');
+        $act=$this->dep()->activos()[0];self::assertSame([81000,9000,'totalmente_depreciado'],[$act['acumulado'],$act['libros'],$act['estado']],'Queda el residual en libros');
+        self::assertSame(0,$this->control()['diferencia']);
+        // Con un residual que ya cubre lo depreciado no hay nada que repartir (rechazo, sin dejar fila).
+        $b=$this->activo('EQ-2','500.00','2026-01-20');$this->ficha($b,'2026-08');$this->mes(8);
+        // Mes ya procesado aunque el activo no tenga línea en esa corrida (A está totalmente depreciado y agosto solo lleva a B): no se admite la vigencia en agosto.
+        $x=$this->rechazo(fn()=>$this->estimar(['activo_id'=>$a,'desde'=>'2026-08','vida_meses'=>'2','residual_pct'=>'5']),409);self::assertStringContainsString('corrida',$x->getMessage());
+        $e=$this->rechazo(fn()=>$this->estimar(['activo_id'=>$b,'desde'=>'2026-09','vida_meses'=>'3','residual_pct'=>'99.99']),422);self::assertStringContainsString('no queda nada',$e->getMessage());
+    }
+    public function testAnularUnCambioDeEstimacionNoPuedeTocarDepreciacionesValidas():void
+    {
+        $a=$this->activo();$this->ficha($a);$this->mes(1);$this->mes(2);$k3=$this->mes(3);
+        $e=$this->estimar(['activo_id'=>$a,'desde'=>'2026-04','vida_meses'=>'4']);
+        // Marzo es la base de la vigencia de abril: no se anula mientras esta exista.
+        $x=$this->rechazo(fn()=>$this->dep()->anular($this->owner,$this->d(['corrida_id'=>$k3,'motivo'=>'Intento de reversar marzo'])),409);self::assertStringContainsString('estimación',$x->getMessage());
+        $this->rechazo(fn()=>$this->dep()->estimacionAnular($this->owner,$this->d(['estimacion_id'=>$e,'motivo'=>'x'])),422);
+        $this->rechazo(fn()=>$this->dep()->estimacionAnular($this->finanzas,$this->d(['estimacion_id'=>$e,'motivo'=>'Sin permiso de configurar'])),403);
+        $this->dep()->estimacionAnular($this->owner,$this->d(['estimacion_id'=>$e,'motivo'=>'Se había registrado por error']));// aún sin cuotas: se puede
+        self::assertSame('anulada',$this->r->uno('SELECT estado FROM erp_dep_estimaciones WHERE id=?',[$e])['estado']);
+        $abril=$this->mes(4,false);self::assertSame(12858,(int)$this->r->uno('SELECT total_centavos t FROM erp_dep_corridas WHERE id=?',[$abril])['t'],'Sin la vigencia vuelve la cuota original');
+        $this->dep()->anular($this->owner,$this->d(['corrida_id'=>$abril,'motivo'=>'Descarte del borrador de abril']));
+        $e2=$this->estimar(['activo_id'=>$a,'desde'=>'2026-04','vida_meses'=>'4']);$this->mes(4,false);
+        $this->rechazo(fn()=>$this->dep()->estimacionAnular($this->owner,$this->d(['estimacion_id'=>$e2,'motivo'=>'Ya hay cuota de abril'])),409);
+        self::assertSame('vigente',$this->r->uno('SELECT estado FROM erp_dep_estimaciones WHERE id=?',[$e2])['estado']);
+    }
     public function testAnularReversaEnOrdenInversoYPermiteRecalcular():void
     {
         $a=$this->activo();$this->ficha($a);$k1=$this->mes(1);$k2=$this->mes(2);
@@ -205,7 +268,7 @@ final class ErpDepreciacionIntegrationTest extends TestCase
         $anterior=['s'=>$_SESSION??[],'g'=>$_GET,'p'=>$_POST,'srv'=>$_SERVER];
         try{
             $a=$this->activo();$this->sesion($this->owner);
-            $h=$this->pagina(['vista'=>'activos']);self::assertStringContainsString('Depreciación de activos fijos',$h);self::assertStringContainsString('no están implementados',$h);self::assertStringContainsString('Configurar un activo',$h);
+            $h=$this->pagina(['vista'=>'activos']);self::assertStringContainsString('Depreciación de activos fijos',$h);self::assertStringContainsString('no están implementados',$h);self::assertStringContainsString('Configurar un activo',$h);self::assertStringContainsString('Cambios de estimación',$h);
             $_SERVER['REQUEST_METHOD']='POST';$_SERVER['REQUEST_URI']='/gestion/accion';
             $_POST=['accion'=>'dep_ficha','vista'=>'activos','idem_key'=>R5CajaFixture::clave(),'csrf_token'=>'csrf-dep','activo_id'=>(string)$a,'categoria_id'=>(string)$this->cat,'inicio'=>'2026-01','acumulado_inicial'=>''];
             self::assertSame(303,$this->estado(fn()=>\Controllers\ErpController::accion()));self::assertSame(1,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_dep_fichas')['n']);

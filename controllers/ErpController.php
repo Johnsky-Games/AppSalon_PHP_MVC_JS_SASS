@@ -215,7 +215,7 @@ final class ErpController
         $dep=new \Services\ErpDepreciacionService($r);
         $anio=filter_var($q['anio']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>2000,'max_range'=>2100]])?:(int)substr($hoy,0,4);
         $activo=(int)(filter_var($q['activo']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0);
-        return ['depCategorias'=>$dep->categorias(),'depActivos'=>$dep->activos(),'depCorridas'=>$dep->corridas(),'depBajas'=>$dep->bajas(),'depAnio'=>$anio,'depPorMes'=>$dep->porMes($anio),'depCuadro'=>$activo?$dep->cuadro($activo):null,'depMotivos'=>\Services\ErpDepreciacionService::MOTIVOS_BAJA];
+        return ['depCategorias'=>$dep->categorias(),'depActivos'=>$dep->activos(),'depCorridas'=>$dep->corridas(),'depBajas'=>$dep->bajas(),'depEstimaciones'=>$dep->estimaciones(),'depAnio'=>$anio,'depPorMes'=>$dep->porMes($anio),'depCuadro'=>$activo?$dep->cuadro($activo):null,'depMotivos'=>\Services\ErpDepreciacionService::MOTIVOS_BAJA];
     }
     /** Tesorería bancaria dentro de Contabilidad: cuentas, extractos importados, sugerencias e informe de conciliación. */
     private static function datosTesoreria(ErpRepository $r,array $q):array
@@ -462,7 +462,7 @@ final class ErpController
             'cont_rol'=>[\Services\ErpContabilidadService::class,'rol','contabilidad'],'cont_asiento'=>[\Services\ErpContabilidadService::class,'asiento','contabilidad'],'cont_reverso'=>[\Services\ErpContabilidadService::class,'reversar','contabilidad'],
             'cont_periodo_cerrar'=>[\Services\ErpContabilidadService::class,'cerrarPeriodo','contabilidad'],'cont_periodo_reabrir'=>[\Services\ErpContabilidadService::class,'reabrirPeriodo','contabilidad'],'cont_ejercicio_cerrar'=>[\Services\ErpContabilidadService::class,'cerrarEjercicio','contabilidad'],
             'dep_categoria'=>[\Services\ErpDepreciacionService::class,'categoriaCrear','contabilidad'],'dep_ficha'=>[\Services\ErpDepreciacionService::class,'fichaCrear','contabilidad'],'dep_calcular'=>[\Services\ErpDepreciacionService::class,'calcular','contabilidad'],
-            'dep_contabilizar'=>[\Services\ErpDepreciacionService::class,'contabilizar','contabilidad'],'dep_anular'=>[\Services\ErpDepreciacionService::class,'anular','contabilidad'],'dep_baja'=>[\Services\ErpDepreciacionService::class,'bajaRegistrar','contabilidad'],'dep_baja_anular'=>[\Services\ErpDepreciacionService::class,'bajaAnular','contabilidad'],
+            'dep_contabilizar'=>[\Services\ErpDepreciacionService::class,'contabilizar','contabilidad'],'dep_anular'=>[\Services\ErpDepreciacionService::class,'anular','contabilidad'],'dep_baja'=>[\Services\ErpDepreciacionService::class,'bajaRegistrar','contabilidad'],'dep_baja_anular'=>[\Services\ErpDepreciacionService::class,'bajaAnular','contabilidad'],'dep_estimacion'=>[\Services\ErpDepreciacionService::class,'estimacionRegistrar','contabilidad'],'dep_estimacion_anular'=>[\Services\ErpDepreciacionService::class,'estimacionAnular','contabilidad'],
             'fiscal_nota_credito'=>[\Services\ErpFiscalService::class,'notaCredito','facturacion'],
             'fiscal_verificar'=>[\Services\ErpFiscalService::class,'solicitarVerificacion','facturacion'],
             'fiscal_sustituir_factura'=>[\Services\ErpFiscalService::class,'sustituirFactura','facturacion'],
