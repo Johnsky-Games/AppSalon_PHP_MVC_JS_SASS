@@ -92,6 +92,32 @@ final class ErpInventarioConceptosIntegrationTest extends TestCase
         $ev=$this->r->uno("SELECT actor_id a,datos_json d FROM erp_eventos WHERE tipo='inventario_ajuste' ORDER BY id LIMIT 1");self::assertSame($this->owner,(int)$ev['a']);self::assertStringContainsString('concepto_id',$ev['d']);self::assertStringNotContainsStringIgnoringCase('idem_key',$ev['d']);
         self::assertStringContainsString('no se edita',$this->sqlFalla('UPDATE erp_inv_ajuste_conceptos SET concepto_id=concepto_id'));
     }
+    public function testTrazabilidadCorreccionYAprobacionRepetidaNoDuplicanNiReescribenElLibro():void
+    {
+        $gas=$this->cuenta('gasto');$otra=$this->cuenta('gasto',1);$ing=$this->cuenta('ingreso');
+        $merma=$this->concepto('Merma de insumos','merma_o_perdida',$gas);$sobrante=$this->concepto('Sobrante de conteo','sobrante_de_conteo',$ing);
+        $s=$this->solicitar($merma,'salida','2');$this->aprobar($s);
+        // Aprobar de nuevo la misma solicitud no la reaplica: una sola clasificación, un solo movimiento y un solo evento.
+        try{$this->aprobar($s);}catch(ErpException $e){self::assertContains($e->getCode(),[404,409,422],$e->getMessage());}
+        self::assertSame(8000,$this->stock(),'El stock se ajustó una sola vez');
+        self::assertSame(1,(int)$this->r->uno('SELECT COUNT(*) n FROM erp_inv_ajuste_conceptos WHERE solicitud_id=?',[$s])['n']);
+        self::assertSame(1,(int)$this->r->uno("SELECT COUNT(*) n FROM erp_eventos WHERE tipo='inventario_ajuste'")['n']);
+        $x=$this->procesar();self::assertSame(0,$x['fallidos']);
+        // Trazabilidad: solicitud → movimiento → evento → asiento, con el concepto y quien lo creó.
+        $c=$this->r->uno('SELECT movimiento_id,concepto_id,evento_id,creado_por FROM erp_inv_ajuste_conceptos WHERE solicitud_id=?',[$s]);
+        self::assertSame($merma,(int)$c['concepto_id']);self::assertSame($this->owner,(int)$c['creado_por']);self::assertGreaterThan(0,(int)$c['movimiento_id']);self::assertGreaterThan(0,(int)$c['evento_id']);
+        $asientos=$this->r->q("SELECT id,origen FROM erp_cont_asientos WHERE concepto LIKE 'Ajuste de inventario:%'");self::assertCount(1,$asientos);
+        self::assertStringContainsString((string)$c['evento_id'],(string)$asientos[0]['origen'],'El asiento remite al evento que lo originó');
+        // Cambiar la cuenta del concepto no reescribe el asiento ya publicado (inmutable): el gasto sigue en la cuenta original.
+        $this->con()->asignarCuenta($this->owner,$this->d(['concepto_id'=>$merma,'cuenta'=>$otra]));$this->procesar();
+        self::assertSame(500,$this->saldo($gas));self::assertSame(0,$this->saldo($otra),'El asiento anterior no se movió de cuenta');
+        // Corrección: un ajuste contrario aprobado (el inventario es de solo anexar) deja el stock y la cuenta de inventario como estaban.
+        $this->aprobar($this->solicitar($sobrante,'entrada','2'));$x=$this->procesar();self::assertSame(0,$x['fallidos']);
+        self::assertSame(10000,$this->stock(),'La corrección devuelve el stock');self::assertSame(0,$this->saldoInventario(),'Merma 5,00 y sobrante 5,00 se compensan en inventario');
+        self::assertSame(500,$this->saldo($gas),'El gasto original se conserva: la corrección no lo borra');self::assertSame(-500,$this->saldo($ing));
+        $x=$this->procesar();self::assertSame(0,$x['fallidos']);self::assertCount(2,$this->r->q("SELECT id FROM erp_cont_asientos WHERE concepto LIKE 'Ajuste de inventario:%'"),'Reprocesar no duplica');
+        self::assertTrue($this->cont()->balanceComprobacion('2099-12-31')['cuadra']);self::assertSame([],$this->cont()->integridad());
+    }
     public function testSinCuentaSoloQuedaPendienteLaContabilizacionDeEseAjuste():void
     {
         $ok=$this->concepto('Merma con cuenta','merma_o_perdida',$this->cuenta('gasto'));$falta=$this->concepto('Faltante sin cuenta','faltante_de_conteo',null);
