@@ -6,7 +6,7 @@ namespace Classes;
  * Cada una se escribe como `CREATE OR REPLACE SQL SECURITY DEFINER VIEW nombre AS SELECT ...;` sin `;` internos, y se retira con
  * `DROP VIEW [IF EXISTS] nombre;`. Se conservan las definiciones POR MIGRACIÓN: un respaldo histórico que solo tenga aplicada una
  * migración anterior recupera la definición de esa época; con varias aplicadas rige, para cada vista, la última acción
- * (crear o redefinir, o retirarla) y se crean en orden de dependencias.
+ * (crear o redefinir, o retirarla).
  */
 final class VistasMigraciones
 {
@@ -64,7 +64,7 @@ final class VistasMigraciones
     /**
      * Sentencias para recrear las vistas de una base restaurada, que ya tiene el esquema final del volcado: para cada vista, solo su
      * definición vigente entre las migraciones aplicadas (una definición antigua podría apuntar a una columna renombrada), omitiendo
-     * las que una migración aplicada retiró, y ordenadas para que cada vista se cree después de las vistas que usa.
+     * las que una migración aplicada retiró. El orden entre vistas que dependen unas de otras lo resuelve `ejecutar()`.
      *
      * @param array<string,bool> $aplicadas migraciones aplicadas (nombre => true)
      * @return list<string> sentencias a ejecutar, una por vista vigente
@@ -82,31 +82,41 @@ final class VistasMigraciones
                 $vigentes[$a['vista']] = $a['sql'];
             }
         }
-        $orden = [];
-        $estado = [];
-        $visitar = static function (string $vista, array $pila) use (&$visitar, &$orden, &$estado, $vigentes): void {
-            if (($estado[$vista] ?? 0) === 2) {
-                return;
-            }
-            if (($estado[$vista] ?? 0) === 1) {
-                throw new \RuntimeException('Dependencia circular entre vistas: ' . implode(' → ', [...$pila, $vista]));
-            }
-            $estado[$vista] = 1;
-            foreach (array_keys($vigentes) as $otra) {
-                if ($otra !== $vista && preg_match('/\b' . preg_quote($otra, '/') . '\b/', preg_replace('/^[^;]*?\bVIEW\s+[A-Za-z0-9_]+\s+AS\b/is', '', $vigentes[$vista]) ?? '')) {
-                    $visitar($otra, [...$pila, $vista]);
-                }
-            }
-            $estado[$vista] = 2;
-            $orden[] = $vigentes[$vista];
-        };
-        foreach (array_keys($vigentes) as $vista) {
-            $visitar($vista, []);
-        }
-        return $orden;
+        return array_values($vigentes);
     }
 
-    /** Recrea en la base seleccionada las vistas de las migraciones aplicadas en ella. @return int sentencias ejecutadas */
+    /**
+     * Ejecuta las sentencias reintentando las que fallan hasta que no haya progreso: una vista que usa otra falla mientras esa no exista y
+     * se crea en la ronda siguiente. El motor decide la dependencia real (sin interpretar el texto SQL); si queda alguna sin crear, error
+     * con el motivo de la base.
+     *
+     * @param list<string> $sentencias
+     * @param callable(string):void $ejecutar lanza una excepción si la sentencia falla
+     * @return int sentencias ejecutadas
+     */
+    public static function ejecutar(array $sentencias, callable $ejecutar): int
+    {
+        $pendientes = $sentencias;
+        while ($pendientes) {
+            $siguientes = [];
+            $ultimoError = '';
+            foreach ($pendientes as $sql) {
+                try {
+                    $ejecutar($sql);
+                } catch (\Throwable $e) {
+                    $siguientes[] = $sql;
+                    $ultimoError = $e->getMessage();
+                }
+            }
+            if (count($siguientes) === count($pendientes)) {
+                throw new \RuntimeException('No se pudieron recrear las vistas (' . count($siguientes) . ' pendientes): ' . $ultimoError);
+            }
+            $pendientes = $siguientes;
+        }
+        return count($sentencias);
+    }
+
+    /** Recrea en la base seleccionada las vistas de las migraciones aplicadas en ella. @return int vistas recreadas */
     public static function recrear(\mysqli $db, string $directorio): int
     {
         if ($db->query("SHOW TABLES LIKE 'migraciones'")->num_rows === 0) {
@@ -118,10 +128,10 @@ final class VistasMigraciones
             $aplicadas[(string)$fila[0]] = true;
         }
         $res->free();
-        $sentencias = self::sentencias($directorio, $aplicadas);
-        foreach ($sentencias as $sql) {
-            $db->query($sql);
-        }
-        return count($sentencias);
+        return self::ejecutar(self::sentencias($directorio, $aplicadas), static function (string $sql) use ($db): void {
+            if ($db->query($sql) === false) { // la aplicación corre con mysqli_report(OFF); con STRICT la propia consulta lanza
+                throw new \RuntimeException($db->error);
+            }
+        });
     }
 }
