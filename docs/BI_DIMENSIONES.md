@@ -50,8 +50,10 @@ Atributos del catálogo **actual**: `sku`/`nombre`/`unidad`/`activo` (producto),
 
 ```sql
 GRANT SELECT ON appsalon.bi_dim_fecha TO 'bi_comercial'@'%';      -- y bi_dim_producto, bi_dim_servicio, bi_dim_profesional
+GRANT SELECT ON appsalon.bi_dim_fecha TO 'bi_laboral'@'%';        -- la fecha es COMPARTIDA: los hechos laborales también se relacionan con ella
 GRANT SELECT ON appsalon.bi_rh_dim_colaborador TO 'bi_laboral'@'%';
 ```
+`bi_dim_fecha` es la única dimensión que se concede a **ambos** grupos: solo tiene calendario, sin datos personales, y sin ella un modelo laboral no puede relacionar asistencia, ausencias y comisiones por fecha. Como su rango sale de las fechas de todos los hechos (también los laborales), revela únicamente la fecha más antigua y la más reciente existentes, no quién ni qué. Las demás dimensiones comerciales (`bi_dim_producto`, `bi_dim_servicio`, `bi_dim_profesional`) siguen restringidas al grupo comercial, y `bi_rh_dim_colaborador` al laboral.
 El proyecto no crea usuarios ni toca Docker; los crea el propietario.
 
 ## Reconciliación (pruebas)
@@ -59,7 +61,7 @@ El proyecto no crea usuarios ni toca Docker; los crea el propietario.
 * Fecha: continua y sin repetidos entre la fecha más antigua y la más reciente, incluye hoy, **cada fecha de cada columna de fecha de cada vista de hechos tiene su día** (la prueba recorre `information_schema`, de modo que una vista nueva con fechas que no se añada al rango falla), incluidas una ausencia futura y una liquidación antigua, atributos exactos (día de la semana, trimestre, `anio_mes`, semana ISO, fin de semana, año ISO de enero de 2027); unir un hecho a la dimensión no duplica ni pierde filas ni cambia la suma de minutos; sin hechos tiene una fila (hoy).
 * Producto, servicio y profesional: una fila por entidad (también las que no están en el catálogo), `19.99 → 1999` centavos exactos, sin inventar precio, unir hechos no duplica, y cambiar el precio del catálogo no cambia el precio reservado.
 * Colaborador: una fila por colaborador, rol, estado, fechas y enlace con su agenda; se une a los hechos laborales sin duplicarlos.
-* Acceso: usuarios reales de MySQL; el comercial lee sus cuatro dimensiones y **no** la laboral, el laboral lee la suya y no las comerciales, ninguno lee las tablas de origen; ninguna vista admite `UPDATE`/`DELETE`; sin columnas ni valores de datos personales (nombres, correos, teléfonos, notas).
+* Acceso: usuarios reales de MySQL; el comercial lee sus cuatro dimensiones y **no** la laboral; el laboral lee la suya y la fecha compartida (`bi_dim_fecha`) y **no** producto, servicio ni profesional; ninguno lee las tablas de origen; ninguna vista admite `UPDATE`/`DELETE`; sin columnas ni valores de datos personales (nombres, correos, teléfonos, notas).
 * Un artículo de consumo no se marca como de venta ni expone precio de venta.
 * Mutaciones comprobadas (cada una rompe la prueba): quitar `DISTINCT` a `bi_dim_profesional` (vista actualizable), perder el último día de la fecha, tomar los límites solo de unas tablas de origen, truncar el precio en lugar de redondearlo y usar el año calendario como año ISO.
 * `EsquemaTest` (respaldo y restauración, con y sin manifiesto) exige las 23 vistas (057–062) y compara su esquema restaurado columna por columna.

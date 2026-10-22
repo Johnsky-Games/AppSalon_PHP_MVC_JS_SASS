@@ -13,6 +13,7 @@ final class ErpBiDimensionesIntegrationTest extends TestCase
 {
     private const COMERCIALES=['bi_dim_fecha','bi_dim_producto','bi_dim_servicio','bi_dim_profesional'];
     private const LABORALES=['bi_rh_dim_colaborador'];
+    private const VISTAS_HECHOS_COMERCIALES=['bi_venta_lineas','bi_flujo_dinero','bi_atenciones','bi_cxc_movimientos'];
     private \mysqli $db;private int $cliente;private int $profA;private int $profB;private int $srv;private int $colA;private int $colB;
     protected function setUp():void
     {
@@ -184,12 +185,14 @@ final class ErpBiDimensionesIntegrationTest extends TestCase
             $this->db->query("CREATE USER '$u'@'%' IDENTIFIED BY '$c'");foreach($vistas as $v)$this->db->query("GRANT SELECT ON `$bd`.`$v` TO '$u'@'%'");
             mysqli_report(MYSQLI_REPORT_OFF);$bi=new \mysqli(getenv('DB_HOST')?:'appsalon-test-db',$u,$c,$bd,(int)(getenv('DB_PORT')?:3306));self::assertSame(0,$bi->connect_errno);return [$u,$bi];
         };
-        [$uCom,$com]=$crear(self::COMERCIALES);[$uLab,$lab]=$crear(self::LABORALES);
+        [$uCom,$com]=$crear(self::COMERCIALES);[$uLab,$lab]=$crear(array_merge(self::LABORALES,['bi_dim_fecha']));
         try{
             foreach(self::COMERCIALES as $v)self::assertNotFalse($com->query("SELECT COUNT(*) FROM `$v`"),"$v legible por el usuario comercial: ".$com->error);
             self::assertFalse($com->query("SELECT 1 FROM bi_rh_dim_colaborador LIMIT 1"),'el usuario comercial no lee la dimensión laboral');
             self::assertNotFalse($lab->query("SELECT COUNT(*) FROM bi_rh_dim_colaborador"));
-            foreach(self::COMERCIALES as $v)self::assertFalse($lab->query("SELECT 1 FROM `$v` LIMIT 1"),"el usuario laboral (solo su dimensión) no lee $v");
+            self::assertNotFalse($lab->query("SELECT COUNT(*) FROM bi_dim_fecha"),'la fecha es compartida: el grupo laboral también la lee ('.$lab->error.')');
+            foreach(['bi_dim_producto','bi_dim_servicio','bi_dim_profesional'] as $v)self::assertFalse($lab->query("SELECT 1 FROM `$v` LIMIT 1"),"el usuario laboral no lee la dimensión comercial $v");
+            foreach(self::VISTAS_HECHOS_COMERCIALES as $v)self::assertFalse($lab->query("SELECT 1 FROM `$v` LIMIT 1"),"el usuario laboral no lee el hecho comercial $v");
             foreach(['servicios','profesionales','inventario_productos','erp_catalogo','colaboradores','citas'] as $t){self::assertFalse($com->query("SELECT 1 FROM `$t` LIMIT 1"),"no lee la tabla $t");self::assertFalse($lab->query("SELECT 1 FROM `$t` LIMIT 1"),"no lee la tabla $t");}
         }finally{mysqli_report(MYSQLI_REPORT_OFF);foreach([$uCom,$uLab] as $u)$this->db->query("DROP USER IF EXISTS '$u'@'%'");}
         $filas=[$this->n("SELECT COUNT(*) FROM servicios"),$this->n("SELECT COUNT(*) FROM profesionales"),$this->n("SELECT COUNT(*) FROM colaboradores")];
