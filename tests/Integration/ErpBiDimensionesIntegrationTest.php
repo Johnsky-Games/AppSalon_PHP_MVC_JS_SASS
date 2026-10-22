@@ -114,6 +114,14 @@ final class ErpBiDimensionesIntegrationTest extends TestCase
         self::assertSame(['0','1','consumo',null],[$c3['en_catalogo_de_venta'],$c3['es_insumo'],$c3['tipo_catalogo'],$c3['precio_catalogo_centavos']],'el consumo interno no se vende ni muestra precio de venta');
         $c4=$this->db->query("SELECT * FROM bi_dim_producto WHERE producto_id=$p4")->fetch_assoc();
         self::assertSame(['1','0','700'],[$c4['en_catalogo_de_venta'],$c4['es_insumo'],$c4['precio_catalogo_centavos']]);
+        // Una entrada desactivada ya no está a la venta (como en el punto de venta): sin bandera ni precio de venta, pero el dato se conserva.
+        $p5=$this->ins("INSERT INTO inventario_productos(sku,nombre,unidad,stock_milesimas) VALUES('SKU-5','Producto descontinuado','unidad',0)");
+        $this->ins("INSERT INTO erp_catalogo(producto_id,precio_centavos,impuesto_pb,tipo,activo,actualizado_por,actualizado_en) VALUES($p5,500,0,'venta',0,1,NOW())");
+        $c5=$this->db->query("SELECT * FROM bi_dim_producto WHERE producto_id=$p5")->fetch_assoc();
+        self::assertSame(['0','0','0','venta',null],[$c5['en_catalogo_de_venta'],$c5['es_insumo'],$c5['catalogo_activo'],$c5['tipo_catalogo'],$c5['precio_catalogo_centavos']],'descontinuado: no está a la venta y no muestra precio de venta');
+        $this->db->query("UPDATE erp_catalogo SET activo=0 WHERE servicio_id={$this->srv}");
+        self::assertSame(['0','0','1999'],[$this->db->query("SELECT en_catalogo_de_venta FROM bi_dim_servicio WHERE servicio_id={$this->srv}")->fetch_row()[0],$this->db->query("SELECT catalogo_activo FROM bi_dim_servicio WHERE servicio_id={$this->srv}")->fetch_row()[0],$this->db->query("SELECT precio_actual_centavos FROM bi_dim_servicio WHERE servicio_id={$this->srv}")->fetch_row()[0]],'servicio descontinuado: no a la venta; el precio base de la agenda se conserva');
+        $this->db->query("UPDATE erp_catalogo SET activo=1 WHERE servicio_id={$this->srv}");
         $s=$this->db->query("SELECT * FROM bi_dim_servicio WHERE servicio_id={$this->srv}")->fetch_assoc();
         self::assertSame(['Corte de ensayo','1999','40','1'],[$s['nombre'],$s['precio_actual_centavos'],$s['duracion_minutos'],$s['en_catalogo_de_venta']],'19.99 → 1999 centavos exactos');
         self::assertSame(2,$this->n("SELECT COUNT(*) FROM bi_dim_servicio"));

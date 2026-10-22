@@ -60,20 +60,20 @@ SELECT fecha, YEAR(fecha) AS anio, QUARTER(fecha) AS trimestre, MONTH(fecha) AS 
  YEARWEEK(fecha, 3) DIV 100 AS anio_iso, WEEK(fecha, 3) AS semana_iso
 FROM dias;
 
--- Grano: una fila por producto de inventario. `en_catalogo_de_venta` exige tipo venta o ambos (un insumo `consumo` no se vende: es_insumo = 1 y sin precio de venta).
+-- Grano: una fila por producto de inventario. `en_catalogo_de_venta` = a la venta HOY: tipo venta o ambos y entrada activa, igual que el punto de venta (un insumo `consumo` no se vende: es_insumo = 1; una entrada desactivada tampoco: sin precio de venta).
 -- Atributos del catálogo ACTUAL: los hechos guardan su propio precio e importe históricos
 -- (bi_venta_lineas), así que cambiar el precio de catálogo no reescribe lo vendido.
 CREATE OR REPLACE SQL SECURITY DEFINER VIEW bi_dim_producto AS
 SELECT DISTINCT p.id AS producto_id, p.sku, p.nombre, p.unidad, p.activo,
- COALESCE(c.tipo IN ('venta', 'ambos'), 0) AS en_catalogo_de_venta, COALESCE(c.tipo = 'consumo', 0) AS es_insumo, COALESCE(c.activo, 0) AS catalogo_activo, c.tipo AS tipo_catalogo,
- IF(c.tipo IN ('venta', 'ambos'), c.precio_centavos, NULL) AS precio_catalogo_centavos, c.impuesto_pb
+ COALESCE(c.tipo IN ('venta', 'ambos') AND c.activo = 1, 0) AS en_catalogo_de_venta, COALESCE(c.tipo = 'consumo', 0) AS es_insumo, COALESCE(c.activo, 0) AS catalogo_activo, c.tipo AS tipo_catalogo,
+ IF(c.tipo IN ('venta', 'ambos') AND c.activo = 1, c.precio_centavos, NULL) AS precio_catalogo_centavos, c.impuesto_pb
 FROM inventario_productos p
 LEFT JOIN erp_catalogo c ON c.producto_id = p.id;
 
 -- Grano: una fila por servicio. Mismo criterio: precio y duración ACTUALES; lo reservado conserva los suyos (bi_atencion_servicios).
 CREATE OR REPLACE SQL SECURITY DEFINER VIEW bi_dim_servicio AS
 SELECT DISTINCT s.id AS servicio_id, s.nombre, ROUND(s.precio * 100) AS precio_actual_centavos, s.duracion_minutos,
- COALESCE(c.tipo IN ('venta', 'ambos'), 0) AS en_catalogo_de_venta, COALESCE(c.activo, 0) AS catalogo_activo, c.tipo AS tipo_catalogo, c.impuesto_pb
+ COALESCE(c.tipo IN ('venta', 'ambos') AND c.activo = 1, 0) AS en_catalogo_de_venta, COALESCE(c.activo, 0) AS catalogo_activo, c.tipo AS tipo_catalogo, c.impuesto_pb
 FROM servicios s
 LEFT JOIN erp_catalogo c ON c.servicio_id = s.id;
 
