@@ -379,6 +379,18 @@ function validar_manifiesto_y_esquema(mysqli $mysqli, string $dbTarget, ?array $
 
 
 
+/** El manifiesto (si existe) no puede declarar una vista que este repositorio no sabe construir. Se comprueba antes de tocar nada. */
+function validar_vistas_del_manifiesto(?array $manifiesto): void
+{
+    $nombres = is_array($manifiesto['vistas'] ?? null) ? $manifiesto['vistas'] : [];
+    $conocidas = \Classes\VistasMigraciones::nombres(__DIR__ . '/../database/migrations');
+    foreach ($nombres as $nombre) {
+        if (!is_string($nombre) || !in_array($nombre, $conocidas, true)) {
+            throw new RuntimeException('El respaldo declara la vista ' . (is_string($nombre) ? $nombre : '?') . ' y este repositorio no tiene su definición: no se restaura nada.');
+        }
+    }
+}
+
 /** Accept only the portable table dump emitted by backup_db.php. */
 function validar_sentencia_respaldo(string $sql): void
 {
@@ -416,6 +428,7 @@ try {
     foreach ($sentencias as $sql) {
         validar_sentencia_respaldo($sql);
     }
+    validar_vistas_del_manifiesto($datosMan);
     mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
     $mysqli = new mysqli($dbHost, $dbUser, $dbPass, '', $dbPort);
     $mysqli->set_charset('utf8mb4');
@@ -453,6 +466,7 @@ try {
             throw new RuntimeException('Error en sentencia #' . ($indice + 1) . ' durante staging: ' . $error->getMessage(), 0, $error);
         }
     }
+    \Classes\VistasMigraciones::recrear($mysqli, __DIR__ . '/../database/migrations');
     validar_manifiesto_y_esquema($mysqli, $stagingDb, $datosMan);
     \Classes\ProteccionesRestauradas::aplicar($mysqli);
     // Recheck immediately before any destination DDL. Existing data is never altered.
@@ -472,6 +486,7 @@ try {
             throw new RuntimeException('Error en sentencia #' . ($indice + 1) . ' del destino nuevo. Se conserva para diagnóstico; no hubo reemplazo de originales: ' . $error->getMessage(), 0, $error);
         }
     }
+    \Classes\VistasMigraciones::recrear($mysqli, __DIR__ . '/../database/migrations');
     validar_manifiesto_y_esquema($mysqli, $dbName, $datosMan);
     $protecciones=\Classes\ProteccionesRestauradas::aplicar($mysqli);
     $mysqli->query('SET FOREIGN_KEY_CHECKS = 1');

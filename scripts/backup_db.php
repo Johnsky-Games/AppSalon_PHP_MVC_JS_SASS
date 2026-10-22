@@ -124,6 +124,19 @@ try {
     $resTablas->free();
     sort($tablas);
 
+    // Vistas (modelo de lectura bi_*, migración 057): no guardan datos, así que el volcado solo registra sus nombres en el manifiesto.
+    // Su definición NO viaja en el archivo (no es SQL de confianza): al restaurar se recrean desde las migraciones del repositorio.
+    $resVistas = $mysqli->query("SHOW FULL TABLES WHERE Table_type = 'VIEW'");
+    if (!$resVistas) {
+        throw new RuntimeException('Fallo al listar vistas de la base de datos: ' . $mysqli->error);
+    }
+    $vistas = [];
+    while ($fila = $resVistas->fetch_row()) {
+        $vistas[] = (string)$fila[0];
+    }
+    $resVistas->free();
+    sort($vistas);
+
     $lineas = [];
     $lineas[] = "-- ============================================================================";
     $lineas[] = "-- AppSalon SQL Backup (Snapshot Consistente InnoDB)";
@@ -247,6 +260,7 @@ try {
             'total_filas' => $totalFilasRespaldadas,
             'schema_version' => $schemaVersion,
             'tablas' => $tablas,
+            'vistas' => $vistas,
             'filas_por_tabla' => $filasPorTabla,
         ];
 

@@ -340,7 +340,7 @@ final class EsquemaTest extends R2bCase
         $db->query("UPDATE colaboradores SET notas_rh='" . $db->real_escape_string($raro) . "' WHERE email_norm='inv@rb.test'");
         $db->query("INSERT INTO correos_salida(clave_unica,tipo,destinatario_email,destinatario_nombre,carga_cifrada) VALUES ('invitacion:99','invitacion_colaborador','x@rb.test','X','" . base64_encode(random_bytes(80)) . "')");
         $filasOrigen = [];
-        foreach (array_column($this->filas($db, 'SHOW TABLES'), 'Tables_in_' . $o) as $t) { $filasOrigen[$t] = (int)$this->filas($db, "SELECT COUNT(*) n FROM `$t`")[0]['n']; }
+        foreach (array_column($this->filas($db, "SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'"), 'Tables_in_' . $o) as $t) { $filasOrigen[$t] = (int)$this->filas($db, "SELECT COUNT(*) n FROM `$t`")[0]['n']; }
         $db->close();
         $archivo = sys_get_temp_dir() . '/qa_bk_' . getmypid() . '.sql.gz';
         $env = array_merge(getenv(), ['DB_NAME' => $o]);
@@ -350,6 +350,7 @@ final class EsquemaTest extends R2bCase
         $man = json_decode((string)file_get_contents($archivo . '.manifest.json'), true);
         $this->assertSame(count($filasOrigen), $man['total_tablas']);
         foreach (['colaboradores', 'colaborador_invitaciones', 'correos_salida', 'operaciones_idempotentes', 'clientes'] as $t) { $this->assertContains($t, $man['tablas'], "el respaldo omite $t"); }
+        foreach (['bi_venta_lineas', 'bi_libro_lineas', 'bi_inventario_movimientos'] as $v) { $this->assertContains($v, $man['vistas'], "el respaldo omite la vista $v (la migración 057 ya figura como aplicada: sin ella se perdería al restaurar)"); }
         $a = self::admin(); $a->query("DROP DATABASE IF EXISTS `$d`"); $a->query("CREATE DATABASE `$d` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"); $a->close();
         $hash = hash_file('sha256', $archivo);
         $p = proc_open([PHP_BINARY, '-d', 'variables_order=EGPCS', self::RAIZ . '/scripts/restore_db.php', "--db=$d", "--input=$archivo", "--hash=$hash"], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, self::RAIZ, $env);
@@ -364,6 +365,7 @@ final class EsquemaTest extends R2bCase
         // Esquema y datos idénticos.
         $this->assertEquals($this->esquema($o), $this->esquema($d), 'el esquema restaurado difiere');
         $db = $this->conectar($d);
+        foreach (['bi_venta_lineas', 'bi_libro_lineas', 'bi_inventario_movimientos'] as $v) { $this->assertSame('DEFINER', $this->filas($db, "SELECT security_type s FROM information_schema.views WHERE table_schema=DATABASE() AND table_name='$v'")[0]['s'] ?? null, "la vista $v no se restauró con su definición"); $this->assertNotFalse($db->query("SELECT * FROM `$v` LIMIT 1"), "la vista restaurada $v no es consultable"); }
         foreach ($filasOrigen as $t => $n) { $this->assertSame($n, (int)$this->filas($db, "SELECT COUNT(*) n FROM `$t`")[0]['n'], "filas de $t"); }
         $this->assertSame($raro, $this->filas($db, "SELECT notas_rh FROM colaboradores WHERE email_norm='inv@rb.test'")[0]['notas_rh'], 'texto hostil alterado por el ciclo respaldo/restauración');
         $this->assertSame(3, (int)$this->filas($db, 'SELECT COUNT(*) n FROM usuarios')[0]['n'], 'una inyección en un dato restaurado alteró la tabla usuarios');
@@ -386,6 +388,16 @@ final class EsquemaTest extends R2bCase
         $this->assertNotSame(0, proc_close($p));
         $db = $this->conectar($d);
         $this->assertSame([], $this->filas($db, 'SHOW TABLES'), 'restauración con hash inválido modificó la base destino');
+        $db->close();
+        // Sin manifiesto (copia del archivo sin su sidecar, solo con --hash): las vistas se derivan del historial de migraciones restaurado.
+        $sinManifiesto = sys_get_temp_dir() . '/qa_bk_sinman_' . getmypid() . '.sql.gz';
+        copy($archivo, $sinManifiesto);
+        $a = self::admin(); $a->query("DROP DATABASE IF EXISTS `$d`"); $a->query("CREATE DATABASE `$d` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"); $a->close();
+        $p = proc_open([PHP_BINARY, '-d', 'variables_order=EGPCS', self::RAIZ . '/scripts/restore_db.php', "--db=$d", "--input=$sinManifiesto", "--hash=$hash"], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, self::RAIZ, $env);
+        $out = stream_get_contents($pipes[1]) . stream_get_contents($pipes[2]);
+        $this->assertSame(0, proc_close($p), $out);
+        $db = $this->conectar($d);
+        foreach (['bi_venta_lineas', 'bi_libro_lineas', 'bi_inventario_movimientos'] as $v) { $this->assertSame('DEFINER', $this->filas($db, "SELECT security_type s FROM information_schema.views WHERE table_schema=DATABASE() AND table_name='$v'")[0]['s'] ?? null, "restaurar solo con --hash (sin manifiesto) perdió la vista $v"); }
         $db->close();
     }
 
