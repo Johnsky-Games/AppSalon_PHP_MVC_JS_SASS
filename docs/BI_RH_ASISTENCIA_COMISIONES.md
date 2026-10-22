@@ -64,7 +64,16 @@ Reconciliación: Σ comisiones liquidadas en nómina de la vista (`en_corrida_ac
 * Acceso: usuarios reales de MySQL laboral y comercial se ven mutuamente denegados; sin columnas ni valores de datos personales; ninguna vista admite UPDATE/DELETE (la prueba lo exigió tras comprobar que, sin `SELECT DISTINCT`, un `DELETE` sobre `bi_rh_asistencia` llegaba a la tabla).
 * Mutaciones comprobadas (cada una rompe la prueba): contar devengos heredados anulados, no filtrar el vínculo de nómina vigente, ignorar la anulación en los minutos vigentes, marcar la liquidación de nómina como obligación directa.
 
+### Comisión de una cita cobrada antes del PDV (extremo a extremo)
+`ErpBiRhComisionesEntreLibrosIntegrationTest` (3 pruebas, MySQL real, servicios reales de cobro en caja, venta, liquidación, pago de obligación y devolución). Cita de $100.00 al 10 %: anticipo de $40.00 cobrado en caja (libro heredado, $4.00), cita atendida, vendida en el ERP y cobrado el resto (libro ERP, $6.00):
+* La comisión es **$10.00 en total** ($4.00 + $6.00), no $14.00; recalcular no devenga de nuevo.
+* Liquidada y pagada por su canal (`caja_directa` $4.00, `obligacion_directa` $6.00; pagado = devengado).
+* Devolución completa **después** de liquidar y pagar: cada libro reversa lo suyo (−$4.00 y −$6.00), neto 0, y −$10.00 queda pendiente para compensar con comisiones futuras; las liquidaciones pagadas no se alteran.
+* Devolución completa **antes** de liquidar: el devengo heredado se anula, el ERP se compensa y no hay doble reverso; sin saldo positivo no se puede liquidar.
+* Mutaciones comprobadas (cada una rompe la prueba): ignorar el devengo heredado al calcular el ERP (daría $16.00 en lugar de $10.00) y no descontar las reversas heredadas (el ERP quedaría en −$4.00).
+
 ## Límites conocidos
-* **No se prueba de extremo a extremo el descuento entre libros** (cita pagada antes del PDV y luego vendida en el ERP): el BI suma ambos y confía en la regla de `ErpComisionService`. Si esa regla fallara, el BI heredaría el error. Queda como prueba pendiente de integración.
+* **Los datos por `colaborador_id` son laborales identificables (seudónimo), no anónimos.** Se conserva la separación de permisos; la distribución de tableros con detalle por persona es decisión del propietario.
+* El descuento entre libros se prueba de extremo a extremo solo con una cita de un servicio y devolución completa; las devoluciones parciales con importes que redondeen se apoyan en la regla de `ErpComisionService::sincronizar` sin prueba propia.
 * Las comisiones por pagar de nómina se pagan cuando se paga la corrida; el estado de pago de la nómina vive en sus obligaciones y no se replica aquí.
 * Sin dimensión fecha aún no hay cuadrícula día por día de ausencias ni de cobertura de jornadas.

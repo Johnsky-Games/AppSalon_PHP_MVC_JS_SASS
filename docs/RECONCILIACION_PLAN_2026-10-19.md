@@ -109,20 +109,24 @@ El módulo **no se da por completo**: solo están implementados y validados el c
 | **Revalorización** | **Pendiente** | Fuera de alcance del plan actual. |
 | Otros métodos (saldos decrecientes, unidades) | Pendiente | Decisión del propietario y del contador. |
 
-## Modelo de lectura para BI (057–060): entregas y limitaciones vigentes (22 de octubre de 2026)
+## Modelo de lectura para BI (057–061): entregas y limitaciones vigentes (22 de octubre de 2026)
 | Corte | PR | Fusión en `main` | CI de `main` en ese SHA |
 | --- | --- | --- | --- |
 | 057 modelo de lectura (ventas, libro, inventario) | #40 | `bda9ffa` | éxito (run 353) |
 | 058 cobro neto, devoluciones y notas de crédito | #41 | `9001b10` | éxito (run 356) |
-| Corrección de la prueba de reintento SMTP de colaboradores (cola de correos compartida) | #44 | `19c2b06` | ver el CI de `main` final |
-| 059 atenciones y ocupación | #42 | `9bd7804` | ver el CI de `main` final |
-| 060 saldo por cobrar | #43 | se registra en el siguiente PR de documentación, con su CI | pendiente |
+| Corrección de la prueba de reintento SMTP de colaboradores (cola de correos compartida) | #44 | `19c2b06` | éxito (run 372) |
+| 059 atenciones y ocupación | #42 | `9bd7804` | éxito (run 373) |
+| 060 saldo por cobrar | #43 | `d18a03e` | éxito (run 380) |
+| 061 asistencia y comisiones (acceso laboral separado) | #45 | se registra en el siguiente PR de documentación, con su CI | pendiente |
 
 **Limitaciones que permanecen explícitas (no son errores abiertos, son alcance):**
 * **Ocupación con horarios vigentes.** `bi_ocupacion_profesional_dia` calcula la capacidad de cualquier día, también pasado, con el horario, los descansos y los bloqueos **de hoy**; no hay historial de horarios y por tanto no hay reconstrucción histórica. Un cambio de horario reescribe la capacidad de días anteriores. Un profesional inactivo tiene 0 minutos disponibles. Igual criterio que `/admin/reportes`.
 * **Reembolsos históricos sin fecha propia.** Un pago reembolsado sin `reembolsado_at` ni filas de devolución se fecha con `COALESCE(reembolsado_at, pagado_at, created_at)`, es decir, **aproximadamente** (la del cobro): no debe presentarse como cronología exacta del reembolso. Los reembolsos con fecha propia sí son exactos.
 * **DAX de saldo por cobrar sin ejecutar.** La medida «Saldo por cobrar al corte» de `docs/BI_SALDO_POR_COBRAR.md` no se ha ejecutado ni validado en Power BI; solo la lógica equivalente en SQL está comprobada por pruebas. Debe validarse contra `bi_saldo_por_cobrar_venta` antes de publicar tableros.
 * Sin plazos de crédito no hay «vencido»; las citas eliminadas (no canceladas) no aparecen en las vistas de atenciones.
+* **Datos laborales identificables, no anónimos.** Las vistas `bi_rh_*` no llevan nombre, documento, contacto, sueldo, motivo ni actor, pero cada fila se vincula por `colaborador_id`: con ese identificador (y el catálogo de colaboradores) la persona es identificable. Son **datos laborales personales con seudónimo, no anónimos**. Se conserva la separación de permisos: usuarios de base de datos distintos para `bi_rh_*` y para las vistas comerciales (la prueba exige denegación mutua con usuarios reales de MySQL), y la distribución de tableros con asistencia o comisiones por persona es decisión del propietario.
+* **Comisiones entre libros (061).** Una cita cobrada antes del PDV y vendida después en el ERP devenga una sola vez entre el libro heredado (por profesional) y el del ERP (por colaborador), también al liquidar, pagar y revertir con una devolución; lo prueba `ErpBiRhComisionesEntreLibrosIntegrationTest` con flujos reales y dos mutaciones comprobadas. Alcance de la prueba: una cita de un servicio con devolución completa; las devoluciones parciales con redondeo por libro se apoyan en la regla de `ErpComisionService::sincronizar`, que no se ha probado de extremo a extremo con importes que redondeen.
+* La asistencia no alimenta la nómina (las horas extra se registran a mano) y el cruce día por día de ausencias y jornadas espera la dimensión fecha.
 
 ## Aclaración de SHA del PR #27 (prueba R2B-02)
 * La autorización de fusión mencionaba la cabeza `2eeabd0`; el PR se fusionó desde `bd12968` (merge `4db4e22`).
