@@ -97,6 +97,26 @@ final class ErpBiSaldoPorCobrarIntegrationTest extends TestCase
         self::assertSame((int)(new ErpInformeService($this->r))->obtener($this->owner,[])['cxc']['saldo'],$this->n("SELECT SUM(saldo_por_cobrar_centavos) n FROM bi_saldo_por_cobrar_venta"));
     }
 
+    public function testUnaVentaAnuladaConservaSuDeudaHastaLaFechaDeSuAnulacion():void
+    {
+        $v=$this->venta('1');$borrador=$this->venta('1',false);
+        $this->db->query("UPDATE erp_ventas SET confirmado_en='2026-09-01 10:00:00' WHERE id=$v");
+        (new ErpVentaService($this->r))->anular($this->owner,$this->d(['venta_id'=>$v,'motivo'=>'Error de captura']));
+        (new ErpVentaService($this->r))->anular($this->owner,$this->d(['venta_id'=>$borrador,'motivo'=>'Nunca se confirmó']));
+        // El evento es de solo anexado (no se puede fechar a mano): se usa su fecha real y se comparan el día anterior y el mismo día.
+        $dia=$this->db->query("SELECT DATE(creado_en) d,DATE_SUB(DATE(creado_en),INTERVAL 1 DAY) antes FROM erp_eventos WHERE tipo='venta_anulada' AND entidad_id=$v")->fetch_assoc();
+        self::assertSame(0,$this->alCorte('2026-08-31',$v));
+        self::assertSame(2000,$this->alCorte('2026-09-01',$v),'confirmada y aún no anulada: se debía');
+        self::assertSame(2000,$this->alCorte($dia['antes'],$v),'el día antes de anularla todavía se debía');
+        self::assertSame(0,$this->alCorte($dia['d'],$v),'desde el día de la anulación ya no se debe');
+        self::assertSame(0,$this->alCorte('2099-12-31',$v));
+        self::assertSame(1,$this->n("SELECT COUNT(*) n FROM bi_cxc_movimientos WHERE venta_id=$v AND tipo_movimiento='anulacion'"));
+        // La cartera actual no la incluye, igual que el informe CxC; una venta anulada sin haberse confirmado nunca fue deuda.
+        self::assertSame(0,$this->n("SELECT COUNT(*) n FROM bi_saldo_por_cobrar_venta WHERE venta_id=$v"));
+        self::assertSame(0,$this->n("SELECT COUNT(*) n FROM bi_cxc_movimientos WHERE venta_id=$borrador"));
+        self::assertSame((int)(new ErpInformeService($this->r))->obtener($this->owner,[])['cxc']['saldo'],$this->n("SELECT COALESCE(SUM(saldo_por_cobrar_centavos),0) n FROM bi_saldo_por_cobrar_venta"));
+    }
+
     public function testElSaldoAUnCorteSaleDeLosHechosConSuFecha():void
     {
         $v=$this->venta('2');$this->efectivo($v,'15');$this->efectivo($v,'10');$this->devolver($v,'1');

@@ -16,7 +16,7 @@ Mismas garantías que los cortes anteriores: solo lectura (la prueba verifica qu
 
 * **No cuentan como cobro**: pagos simulados (proveedor `mock` o vacío) y transferencias pendientes o rechazadas. Una transferencia declarada y sin verificar aparece aparte como `por_verificar_centavos`: es dinero **esperado**, no cobrado, y no reduce el saldo hasta que se verifica (entonces entra con la fecha de la verificación).
 * **Saldo a favor del cliente** (`saldo_a_favor_cliente_centavos`): si se cobró más de lo que ahora corresponde (p. ej. una devolución comercial sin devolver el dinero), el exceso se muestra aparte; el saldo por cobrar nunca es negativo (piso en 0 por venta, igual que el sistema).
-* **Solo ventas confirmadas**: borradores y anuladas no tienen cargo ni saldo.
+* **Solo ventas que llegaron a confirmarse**: un borrador (anulado o no) nunca fue deuda. Una venta confirmada y luego **anulada** (el sistema solo lo permite sin cobros netos ni pendientes) conserva toda su historia y se compensa con una fila `anulacion` fechada el día de la anulación (evento `venta_anulada`; sin evento, el día de la confirmación), así que los cortes anteriores a la anulación todavía ven la deuda. La cartera actual (`bi_saldo_por_cobrar_venta`) no la incluye, igual que el informe CxC.
 * **Sin vencimiento**: las ventas no guardan fecha de vencimiento, así que la antigüedad se mide desde la fecha de la venta. No se inventan plazos.
 
 ## Vistas y grano
@@ -43,12 +43,13 @@ SUMX (
 Sobre `bi_saldo_por_cobrar_venta` (saldo de hoy) basta `SUM ( [saldo_por_cobrar_centavos] )`. La antigüedad por tramos usa `fecha_venta` contra la fecha de corte (la dimensión fecha es un pendiente del plan).
 
 ## Reconciliación (pruebas)
-`ErpBiSaldoPorCobrarIntegrationTest` (7 pruebas, MySQL real, flujos reales del sistema):
+`ErpBiSaldoPorCobrarIntegrationTest` (8 pruebas, MySQL real, flujos reales del sistema):
 * Saldo de cada venta = `ErpVentaService::resumen()['saldo']`; total = informe CxC existente; valores esperados calculados a mano (venta pagada y devuelta, parcial, sin cobro, con transferencia sin verificar, con prepago).
 * Saldo reconstruido desde los movimientos a la fecha actual = saldo actual; a fechas intermedias (fechas fijas: venta, dos cobros, devolución comercial) cada tramo coincide con el cálculo a mano; un cobro posterior no altera el saldo anterior.
 * Pago simulado y pago sin verificar aplicados a una venta: no reducen la deuda; transferencia real: pendiente → verificada reduce el saldo; rechazada lo deja intacto.
 * Prepago: la aplicación reduce la deuda y se marca como saldo aplicado; devolver la venta restituye al saldo de prepago y la deuda queda en cero.
 * Pago reembolsado sin filas de devolución (histórico): se reconoce por su fecha de reembolso; con devoluciones parciales registradas no se cuenta dos veces.
+* Venta anulada: conserva su deuda hasta el día de la anulación (la prueba falla sin la fila `anulacion`: 0 en vez de 2000 el día anterior) y la anulación de un borrador no deja rastro.
 * Una fila por hecho; una venta confirmada = un cargo = una fila de saldo; pagos idénticos no se colapsan; borradores y anuladas fuera.
 * Usuario real de MySQL con `SELECT` solo sobre las dos vistas: las lee, no lee ninguna tabla de origen, no escribe; ninguna vista es actualizable; sin columnas ni valores de datos personales.
 * Mutaciones comprobadas (cada una rompe la prueba): contar pagos simulados o sin verificar como cobro, fechar el cobro con la fecha de la venta, quitar el piso en 0, invertir el signo de la devolución de cobro.
