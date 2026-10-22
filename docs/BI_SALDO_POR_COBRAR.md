@@ -69,6 +69,8 @@ Sobre `bi_saldo_por_cobrar_venta` (saldo de hoy) basta `SUM ( [saldo_por_cobrar_
 * Mutaciones comprobadas (cada una rompe la prueba): contar pagos simulados o sin verificar como cobro, fechar el cobro con la fecha de la venta, quitar el piso en 0, invertir el signo de la devolución de cobro.
 
 ## Límites conocidos
+* **Reembolsos históricos sin fecha propia: fecha aproximada.** Un pago reembolsado sin `reembolsado_at` ni filas de devolución se fecha con la del cobro; no debe presentarse como cronología exacta del reembolso. Con fecha propia es exacta.
+* **El DAX de referencia no se ha ejecutado en Power BI**; solo la lógica equivalente en SQL está comprobada. Validarlo contra `bi_saldo_por_cobrar_venta` antes de publicar.
 * Un pago simulado o sin verificar aplicado a una venta es un dato anómalo (el sistema no los aplica a ventas): el BI sigue la regla del propietario y no los cuenta, aunque `ErpVentaService::resumen` sí contara un pago `completado`.
 * Sin plazos de crédito no hay «vencido» ni «por vencer»; sería una decisión de producto (plazo por cliente o por venta) antes de agregar esa columna.
 * Cuentas por cobrar del libro contable (asientos) y este saldo comercial son dos mediciones distintas del mismo hecho; su conciliación vive en el control de contabilidad, no aquí.
