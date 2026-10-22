@@ -117,8 +117,9 @@ El módulo **no se da por completo**: solo están implementados y validados el c
 | Corrección de la prueba de reintento SMTP de colaboradores (cola de correos compartida) | #44 | `19c2b06` | éxito (run 372) |
 | 059 atenciones y ocupación | #42 | `9bd7804` | éxito (run 373) |
 | 060 saldo por cobrar | #43 | `d18a03e` | éxito (run 380) |
-| 061 asistencia y comisiones (acceso laboral separado) | #45 | `2523c95` | run 383 en curso al redactar; se registra su resultado al cerrarse |
-| 062 dimensiones (fecha, producto, servicio, profesional, colaborador) | por abrir | pendiente | pendiente |
+| 061 asistencia y comisiones (acceso laboral separado) | #45 | `2523c95` | **fallo** (run 383): 1 de 1644 pruebas, `ApiSeguridadTest::testClientePuedeEliminarSuPropiaCita`, ajena a 061 (cita de ensayo con fecha fija 2026-10-22 15:00; falla desde esa hora). El paso de PHPUnit falló, así que **no se ejecutaron** en ese run el QA independiente ni el ciclo de respaldo y restauración. Corrección en #47; el CI verde de `main` con 061 queda pendiente de esa corrección |
+| Corrección de la bomba de tiempo de `ApiSeguridadTest` (fechas relativas al reloj) | #47 | pendiente | pendiente |
+| 062 dimensiones (fecha, producto, servicio, profesional, colaborador) | #46 | pendiente | pendiente |
 
 **Limitaciones que permanecen explícitas (no son errores abiertos, son alcance):**
 * **Ocupación con horarios vigentes.** `bi_ocupacion_profesional_dia` calcula la capacidad de cualquier día, también pasado, con el horario, los descansos y los bloqueos **de hoy**; no hay historial de horarios y por tanto no hay reconstrucción histórica. Un cambio de horario reescribe la capacidad de días anteriores. Un profesional inactivo tiene 0 minutos disponibles. Igual criterio que `/admin/reportes`.
