@@ -190,7 +190,7 @@ final class ErpBiAtencionesOcupacionIntegrationTest extends TestCase
             $bi->close();
         }finally{mysqli_report(MYSQLI_REPORT_OFF);$this->db->query("DROP USER IF EXISTS '$usuario'@'%'");}
         $citas=$this->n("SELECT COUNT(*) FROM citas");mysqli_report(MYSQLI_REPORT_OFF);
-        foreach(["UPDATE bi_atenciones SET estado='x'","DELETE FROM bi_atenciones","UPDATE bi_atencion_servicios SET precio_centavos=0","DELETE FROM bi_atencion_servicios","UPDATE bi_ocupacion_profesional_dia SET minutos_disponibles=0","DELETE FROM bi_ocupacion_profesional_dia"] as $sql)self::assertFalse($this->db->query($sql),"vista no actualizable: $sql");
+        foreach(["UPDATE bi_atenciones SET estado='x'","UPDATE bi_atenciones SET profesional_id=NULL","UPDATE bi_atenciones SET fecha_programada='2000-01-01'","DELETE FROM bi_atenciones","UPDATE bi_atencion_servicios SET cita_id=cita_id","UPDATE bi_atencion_servicios SET servicio_id=NULL","UPDATE bi_atencion_servicios SET precio_centavos=0","DELETE FROM bi_atencion_servicios","UPDATE bi_ocupacion_profesional_dia SET minutos_disponibles=0","DELETE FROM bi_ocupacion_profesional_dia"] as $sql)self::assertFalse($this->db->query($sql),"vista no actualizable: $sql");
         mysqli_report(MYSQLI_REPORT_OFF);
         self::assertSame($citas,$this->n("SELECT COUNT(*) FROM citas"));
     }
