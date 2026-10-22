@@ -33,12 +33,26 @@ El piso en 0 es por venta, así que el saldo a un corte **no** es la suma simple
 
 ```DAX
 Saldo por cobrar al corte =
-SUMX (
-    VALUES ( bi_cxc_movimientos[venta_id] ),
-    MAX ( 0, CALCULATE ( SUM ( bi_cxc_movimientos[importe_con_signo_centavos] ),
-                         bi_cxc_movimientos[fecha] <= MAX ( dim_fecha[fecha] ) ) )
-)
+VAR corte = MAX ( dim_fecha[fecha] )
+RETURN
+    SUMX (
+        CALCULATETABLE (
+            VALUES ( bi_cxc_movimientos[venta_id] ),
+            REMOVEFILTERS ( dim_fecha ),
+            bi_cxc_movimientos[fecha] <= corte
+        ),
+        MAX (
+            0,
+            CALCULATE (
+                SUM ( bi_cxc_movimientos[importe_con_signo_centavos] ),
+                REMOVEFILTERS ( dim_fecha ),
+                bi_cxc_movimientos[fecha] <= corte
+            )
+        )
+    )
 ```
+
+El corte se captura **antes** y se quita el filtro de la dimensión fecha (`REMOVEFILTERS`) dentro del cálculo: con la relación activa `dim_fecha[fecha]` → `bi_cxc_movimientos[fecha]`, si no se hiciera, el filtro de fecha dejaría solo las ventas con un movimiento exactamente ese día y el saldo no sería acumulado. Esta medida de referencia no se ha ejecutado en Power BI desde aquí: la lógica equivalente (suma por venta hasta el corte con piso en 0) sí está comprobada en SQL por las pruebas; valida la medida contra `bi_saldo_por_cobrar_venta` en la fecha de hoy antes de publicarla.
 
 Sobre `bi_saldo_por_cobrar_venta` (saldo de hoy) basta `SUM ( [saldo_por_cobrar_centavos] )`. La antigüedad por tramos usa `fecha_venta` contra la fecha de corte (la dimensión fecha es un pendiente del plan).
 
