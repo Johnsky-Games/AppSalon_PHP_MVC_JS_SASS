@@ -32,7 +32,7 @@ FROM cobros_devoluciones cd JOIN pagos p ON p.id = cd.pago_id JOIN erp_pago_apli
 WHERE p.estado IN ('completado', 'reembolsado') AND COALESCE(NULLIF(TRIM(p.proveedor), ''), 'mock') <> 'mock'
   AND COALESCE(p.estado_verificacion, 'confirmado') NOT IN ('pendiente_verificacion', 'rechazado')
 UNION ALL
-SELECT 'reembolso_total', p.id, 'devolucion_de_cobro', DATE(COALESCE(p.reembolsado_at, p.updated_at)), a.venta_id,
+SELECT 'reembolso_total', p.id, 'devolucion_de_cobro', DATE(COALESCE(p.reembolsado_at, p.pagado_at, p.created_at)), a.venta_id,
  a.importe_centavos - COALESCE(s.devuelto, 0), a.importe_centavos - COALESCE(s.devuelto, 0), p.metodo_pago COLLATE utf8mb4_unicode_ci, p.metodo_pago = 'prepago'
 FROM erp_pago_aplicaciones a JOIN pagos p ON p.id = a.pago_id JOIN erp_ventas v ON v.id = a.venta_id AND v.confirmado_en IS NOT NULL AND v.estado IN ('confirmada', 'anulada')
 LEFT JOIN (SELECT pago_id, SUM(monto_centavos) AS devuelto FROM cobros_devoluciones GROUP BY pago_id) s ON s.pago_id = p.id

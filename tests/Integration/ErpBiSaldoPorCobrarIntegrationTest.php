@@ -185,6 +185,19 @@ final class ErpBiSaldoPorCobrarIntegrationTest extends TestCase
         self::assertSame($this->saldo($v),$this->alCorte('2099-12-31',$v));
     }
 
+    public function testElReembolsoHistoricoSinFechaNoSeMueveConActualizacionesPosterioresDelPago():void
+    {
+        $v=$this->venta('1');$this->efectivo($v,'20');
+        $pago=(int)$this->r->uno('SELECT pago_id n FROM erp_pago_aplicaciones WHERE venta_id=?',[$v])['n'];
+        $this->db->query("UPDATE erp_ventas SET confirmado_en='2026-09-01 10:00:00' WHERE id=$v");
+        $this->db->query("UPDATE pagos SET pagado_at='2026-09-02 09:00:00',created_at='2026-09-02 09:00:00',estado='reembolsado',reembolsado_at=NULL WHERE id=$pago");
+        // Una actualización posterior cualquiera del pago (conciliación, payload) mueve updated_at a hoy, pero no debe mover el reembolso.
+        $this->db->query("UPDATE pagos SET payload_proveedor='{}' WHERE id=$pago");
+        self::assertNotSame('2026-09-02',(string)$this->r->uno('SELECT DATE(updated_at) d FROM pagos WHERE id=?',[$pago])['d'],'el ensayo de verdad movió updated_at');
+        self::assertSame('2026-09-02',(string)$this->r->uno("SELECT fecha FROM bi_cxc_movimientos WHERE origen_hecho='reembolso_total' AND hecho_id=$pago")['fecha'],'sin fecha de reembolso se usa la del cobro, que no cambia');
+        self::assertSame(2000,$this->alCorte('2026-09-02',$v),'con el cobro reembolsado el mismo día la deuda vuelve a existir en esa fecha, no más tarde');
+    }
+
     public function testElGranoSeConservaSinDuplicarHechosAlUnirTablas():void
     {
         $e=$this->escenario();

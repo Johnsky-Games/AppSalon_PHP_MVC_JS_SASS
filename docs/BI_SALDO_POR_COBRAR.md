@@ -43,12 +43,12 @@ SUMX (
 Sobre `bi_saldo_por_cobrar_venta` (saldo de hoy) basta `SUM ( [saldo_por_cobrar_centavos] )`. La antigüedad por tramos usa `fecha_venta` contra la fecha de corte (la dimensión fecha es un pendiente del plan).
 
 ## Reconciliación (pruebas)
-`ErpBiSaldoPorCobrarIntegrationTest` (8 pruebas, MySQL real, flujos reales del sistema):
+`ErpBiSaldoPorCobrarIntegrationTest` (9 pruebas, MySQL real, flujos reales del sistema):
 * Saldo de cada venta = `ErpVentaService::resumen()['saldo']`; total = informe CxC existente; valores esperados calculados a mano (venta pagada y devuelta, parcial, sin cobro, con transferencia sin verificar, con prepago).
 * Saldo reconstruido desde los movimientos a la fecha actual = saldo actual; a fechas intermedias (fechas fijas: venta, dos cobros, devolución comercial) cada tramo coincide con el cálculo a mano; un cobro posterior no altera el saldo anterior.
 * Pago simulado y pago sin verificar aplicados a una venta: no reducen la deuda; transferencia real: pendiente → verificada reduce el saldo; rechazada lo deja intacto.
 * Prepago: la aplicación reduce la deuda y se marca como saldo aplicado; devolver la venta restituye al saldo de prepago y la deuda queda en cero.
-* Pago reembolsado sin filas de devolución (histórico): se reconoce por su fecha de reembolso; con devoluciones parciales registradas no se cuenta dos veces.
+* Pago reembolsado sin filas de devolución (histórico): se reconoce por su fecha de reembolso (si falta, la del cobro; nunca `updated_at`, que cambia con cualquier actualización posterior); con devoluciones parciales registradas no se cuenta dos veces.
 * Venta anulada: conserva su deuda hasta el día de la anulación (la prueba falla sin la fila `anulacion`: 0 en vez de 2000 el día anterior) y la anulación de un borrador no deja rastro.
 * Una fila por hecho; una venta confirmada = un cargo = una fila de saldo; pagos idénticos no se colapsan; borradores y anuladas fuera.
 * Usuario real de MySQL con `SELECT` solo sobre las dos vistas: las lee, no lee ninguna tabla de origen, no escribe; ninguna vista es actualizable; sin columnas ni valores de datos personales.
