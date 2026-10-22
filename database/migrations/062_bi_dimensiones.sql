@@ -60,13 +60,13 @@ SELECT fecha, YEAR(fecha) AS anio, QUARTER(fecha) AS trimestre, MONTH(fecha) AS 
  YEARWEEK(fecha, 3) DIV 100 AS anio_iso, WEEK(fecha, 3) AS semana_iso
 FROM dias;
 
--- Grano: una fila por producto de inventario. `en_catalogo_de_venta` = a la venta HOY: tipo venta o ambos y entrada activa, igual que el punto de venta (un insumo `consumo` no se vende: es_insumo = 1; una entrada desactivada tampoco: sin precio de venta).
+-- Grano: una fila por producto de inventario. `en_catalogo_de_venta` = a la venta HOY, con el criterio de la lista de venta del punto de venta (a.activo = 1 AND p.activo = 1 AND tipo <> 'consumo'): tipo venta o ambos, entrada activa Y producto activo (un insumo `consumo` no se vende: es_insumo = 1; una entrada desactivada tampoco: sin precio de venta).
 -- Atributos del catálogo ACTUAL: los hechos guardan su propio precio e importe históricos
 -- (bi_venta_lineas), así que cambiar el precio de catálogo no reescribe lo vendido.
 CREATE OR REPLACE SQL SECURITY DEFINER VIEW bi_dim_producto AS
 SELECT DISTINCT p.id AS producto_id, p.sku, p.nombre, p.unidad, p.activo,
- COALESCE(c.tipo IN ('venta', 'ambos') AND c.activo = 1, 0) AS en_catalogo_de_venta, COALESCE(c.tipo = 'consumo', 0) AS es_insumo, COALESCE(c.activo, 0) AS catalogo_activo, c.tipo AS tipo_catalogo,
- IF(c.tipo IN ('venta', 'ambos') AND c.activo = 1, c.precio_centavos, NULL) AS precio_catalogo_centavos, c.impuesto_pb
+ COALESCE(c.tipo IN ('venta', 'ambos') AND c.activo = 1 AND p.activo = 1, 0) AS en_catalogo_de_venta, COALESCE(c.tipo = 'consumo', 0) AS es_insumo, COALESCE(c.activo, 0) AS catalogo_activo, c.tipo AS tipo_catalogo,
+ IF(c.tipo IN ('venta', 'ambos') AND c.activo = 1 AND p.activo = 1, c.precio_centavos, NULL) AS precio_catalogo_centavos, c.impuesto_pb
 FROM inventario_productos p
 LEFT JOIN erp_catalogo c ON c.producto_id = p.id;
 

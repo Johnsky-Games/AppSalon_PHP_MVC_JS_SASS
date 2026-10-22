@@ -119,6 +119,16 @@ final class ErpBiDimensionesIntegrationTest extends TestCase
         $this->ins("INSERT INTO erp_catalogo(producto_id,precio_centavos,impuesto_pb,tipo,activo,actualizado_por,actualizado_en) VALUES($p5,500,0,'venta',0,1,NOW())");
         $c5=$this->db->query("SELECT * FROM bi_dim_producto WHERE producto_id=$p5")->fetch_assoc();
         self::assertSame(['0','0','0','venta',null],[$c5['en_catalogo_de_venta'],$c5['es_insumo'],$c5['catalogo_activo'],$c5['tipo_catalogo'],$c5['precio_catalogo_centavos']],'descontinuado: no está a la venta y no muestra precio de venta');
+        // Producto desactivado en inventario con su entrada de catálogo todavía activa: la lista de venta lo excluye, y la dimensión también.
+        $p6=$this->ins("INSERT INTO inventario_productos(sku,nombre,unidad,stock_milesimas,activo) VALUES('SKU-6','Producto dado de baja','unidad',0,0)");
+        $this->ins("INSERT INTO erp_catalogo(producto_id,precio_centavos,impuesto_pb,tipo,activo,actualizado_por,actualizado_en) VALUES($p6,800,0,'venta',1,1,NOW())");
+        $c6=$this->db->query("SELECT * FROM bi_dim_producto WHERE producto_id=$p6")->fetch_assoc();
+        self::assertSame(['0','1','0',null],[$c6['en_catalogo_de_venta'],$c6['catalogo_activo'],$c6['activo'],$c6['precio_catalogo_centavos']],'producto inactivo con catálogo activo: no está a la venta ni muestra precio de venta');
+        // La dimensión coincide exactamente con la lista de venta del punto de venta (mismo criterio que ErpController).
+        $lista=array_column($this->db->query("SELECT a.producto_id FROM erp_catalogo a JOIN inventario_productos p ON p.id=a.producto_id WHERE a.activo=1 AND p.activo=1 AND a.tipo<>'consumo' ORDER BY a.producto_id")->fetch_all(MYSQLI_ASSOC),'producto_id');
+        $dim=array_column($this->db->query("SELECT producto_id FROM bi_dim_producto WHERE en_catalogo_de_venta=1 ORDER BY producto_id")->fetch_all(MYSQLI_ASSOC),'producto_id');
+        self::assertSame($lista,$dim,'a la venta en la dimensión = lista de venta del punto de venta');
+        self::assertNotEmpty($lista);
         $this->db->query("UPDATE erp_catalogo SET activo=0 WHERE servicio_id={$this->srv}");
         self::assertSame(['0','0','1999'],[$this->db->query("SELECT en_catalogo_de_venta FROM bi_dim_servicio WHERE servicio_id={$this->srv}")->fetch_row()[0],$this->db->query("SELECT catalogo_activo FROM bi_dim_servicio WHERE servicio_id={$this->srv}")->fetch_row()[0],$this->db->query("SELECT precio_actual_centavos FROM bi_dim_servicio WHERE servicio_id={$this->srv}")->fetch_row()[0]],'servicio descontinuado: no a la venta; el precio base de la agenda se conserva');
         $this->db->query("UPDATE erp_catalogo SET activo=1 WHERE servicio_id={$this->srv}");
