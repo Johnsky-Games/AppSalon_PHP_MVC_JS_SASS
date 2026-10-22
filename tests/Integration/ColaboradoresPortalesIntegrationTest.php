@@ -490,6 +490,8 @@ final class ColaboradoresPortalesIntegrationTest extends TestCase
     {
         Email::setTransport(fn() => false);
         $email = $this->email();
+        $ajeno = $this->email();
+        $this->assertSame(ColaboradorService::OK, $this->invitar($ajeno)['status']); // correo pendiente de otra persona
         $r = $this->invitar($email);
         $this->assertSame(ColaboradorService::OK, $r['status']);
         $this->assertSame('pendiente', $r['correo'], 'La UI no finge que se envió');
@@ -499,8 +501,9 @@ final class ColaboradoresPortalesIntegrationTest extends TestCase
         $this->assertSame('1', $evento['tiene']);
         // Se restablece el SMTP y el worker reintenta cuando toca el siguiente intento.
         Email::setTransport(function ($m, string $p, array $d): bool { $this->enviados[] = ['para' => $d['destinatario'], 'token' => $d['token']]; return true; });
-        $this->db->query("UPDATE correos_salida SET proximo_intento=DATE_SUB(UTC_TIMESTAMP(), INTERVAL 1 MINUTE) WHERE destinatario_email='$email'");
-        $this->assertSame(1, (new CorreoSalidaService(new CorreoSalidaRepository($this->db)))->procesarPendientes());
+        // La cola es compartida con el resto de la suite: otra invitación pendiente y vencida (de otra prueba, en orden aleatorio) no debe alterar este resultado.
+        $this->db->query("UPDATE correos_salida SET proximo_intento=DATE_SUB(UTC_TIMESTAMP(), INTERVAL 1 MINUTE) WHERE destinatario_email IN ('$email','$ajeno')");
+        $this->assertGreaterThanOrEqual(1, (new CorreoSalidaService(new CorreoSalidaRepository($this->db)))->procesarPendientes());
         $this->assertSame('enviado', $this->db->query("SELECT estado FROM correos_salida WHERE destinatario_email='$email'")->fetch_assoc()['estado']);
         $this->assertSame(1, $this->n("SELECT COUNT(*) n FROM colaborador_invitaciones i JOIN colaboradores c ON c.id=i.colaborador_id WHERE c.email_norm='$email'"));
         $this->assertSame(ColaboradorService::OK, $this->nuevaAceptacion($this->tokenEnviado($email))['status']);
