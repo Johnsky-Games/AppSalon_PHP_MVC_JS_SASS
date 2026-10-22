@@ -19,6 +19,16 @@ use mysqli;
 
 class ApiSeguridadTest extends TestCase
 {
+    /**
+     * Fecha de las citas de ensayo: SIEMPRE futura respecto del reloj de la aplicación (America/Guayaquil). Con una fecha fija la prueba
+     * deja de ser válida en cuanto pasa esa hora: la política rechaza cancelar una cita pasada (bomba de tiempo del 2026-10-22 15:00), y
+     * el caso de la cita ajena pasaría por «cita pasada» en vez de por propiedad.
+     */
+    private static function fechaFutura(): string
+    {
+        return (new \DateTimeImmutable('today', new \DateTimeZone('America/Guayaquil')))->modify('+30 days')->format('Y-m-d');
+    }
+
     private static ?mysqli $db = null;
     private static ?mysqli $dbAnterior = null;
 
@@ -146,7 +156,7 @@ class ApiSeguridadTest extends TestCase
         // 2. Crear cita perteneciente al Usuario A
         $citaRepo = new CitaRepository(self::$db);
         $citaA = new Cita([
-            'fecha' => '2026-10-20',
+            'fecha' => self::fechaFutura(),
             'hora' => '14:00',
             'usuarioId' => $idA
         ]);
@@ -188,7 +198,7 @@ class ApiSeguridadTest extends TestCase
 
         $citaRepo = new CitaRepository(self::$db);
         $cita = new Cita([
-            'fecha' => '2026-10-22',
+            'fecha' => self::fechaFutura(),
             'hora' => '15:00',
             'usuarioId' => $idUsuario
         ]);
