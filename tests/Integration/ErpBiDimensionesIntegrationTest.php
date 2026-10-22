@@ -118,6 +118,8 @@ final class ErpBiDimensionesIntegrationTest extends TestCase
         self::assertSame(['Corte de ensayo','1999','40','1'],[$s['nombre'],$s['precio_actual_centavos'],$s['duracion_minutos'],$s['en_catalogo_de_venta']],'19.99 → 1999 centavos exactos');
         self::assertSame(2,$this->n("SELECT COUNT(*) FROM bi_dim_servicio"));
         self::assertSame(1,$this->n("SELECT COUNT(*) FROM bi_dim_servicio WHERE en_catalogo_de_venta=0"));
+        $fuera=$this->db->query("SELECT precio_actual_centavos p,en_catalogo_de_venta e,tipo_catalogo t FROM bi_dim_servicio WHERE en_catalogo_de_venta=0")->fetch_assoc();
+        self::assertSame(['1000','0',null],[$fuera['p'],$fuera['e'],$fuera['t']],'un servicio fuera del catálogo de venta conserva su precio base (el de la agenda) y no se marca como de venta');
         self::assertSame(2,$this->n("SELECT COUNT(*) FROM bi_dim_profesional"),'una fila por profesional de la agenda');
         self::assertSame([1,1],[$this->n("SELECT tiene_ficha_laboral FROM bi_dim_profesional WHERE profesional_id={$this->profA}"),$this->n("SELECT SUM(tiene_ficha_laboral) FROM bi_dim_profesional")]);
         // Hechos: cada cita/servicio de cita se une a una sola fila de dimensión.
