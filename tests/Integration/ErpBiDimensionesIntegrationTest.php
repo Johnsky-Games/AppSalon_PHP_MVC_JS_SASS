@@ -47,15 +47,14 @@ final class ErpBiDimensionesIntegrationTest extends TestCase
     public function testLaDimensionDeFechaEsContinuaCubreTodosLosHechosYSusAtributosSonCorrectos():void
     {
         $this->cita('2026-03-15',$this->profA);$this->cita('2026-10-05',$this->profA);$this->cita('2027-01-01',$this->profA);
-        $this->pago('PAGO-ANTIGUO',"'2026-02-02 09:00:00'");
+        $this->ins("INSERT INTO erp_comision_liquidaciones(colaborador_id,monto_centavos,via,creado_por,creado_en) VALUES({$this->colA},500,'directa',1,'2026-02-02 09:00:00')");
         $min=$this->db->query("SELECT MIN(fecha) a,MAX(fecha) b,COUNT(*) n,COUNT(DISTINCT fecha) d FROM bi_dim_fecha")->fetch_assoc();
-        self::assertSame('2026-02-02',$min['a'],'arranca en el hecho más antiguo (aquí un pago)');
+        self::assertSame('2026-02-02',$min['a'],'arranca en la fecha más antigua de cualquier vista de hechos (aquí una liquidación)');
         self::assertGreaterThanOrEqual('2027-01-01',$min['b'],'llega al hecho más reciente (una cita futura)');
         self::assertSame([$min['n'],$min['n']],[$min['d'],(string)($this->n("SELECT DATEDIFF('{$min['b']}','{$min['a']}')")+1)],'una fila por día, sin huecos ni repetidos');
         self::assertGreaterThanOrEqual(1,$this->n("SELECT COUNT(*) FROM bi_dim_fecha WHERE fecha=DATE(UTC_TIMESTAMP() - INTERVAL 5 HOUR)"),'el rango incluye hoy (hora de Ecuador)');
         // Todo hecho tiene su día en la dimensión: ninguna relación queda sin fila.
         self::assertSame(0,$this->n("SELECT COUNT(*) FROM bi_atenciones a LEFT JOIN bi_dim_fecha f ON f.fecha=a.fecha_programada WHERE f.fecha IS NULL"));
-        self::assertSame(0,$this->n("SELECT COUNT(*) FROM pagos p LEFT JOIN bi_dim_fecha f ON f.fecha=DATE(p.pagado_at) WHERE p.pagado_at IS NOT NULL AND f.fecha IS NULL"));
         $f=fn(string $d)=>$this->db->query("SELECT * FROM bi_dim_fecha WHERE fecha='$d'")->fetch_assoc();
         $lunes=$f('2026-10-05');
         self::assertSame(['2026','4','10','202610','octubre','5','1','lunes','0','41'],[$lunes['anio'],$lunes['trimestre'],$lunes['mes'],$lunes['anio_mes'],$lunes['nombre_mes'],$lunes['dia_del_mes'],$lunes['dia_semana'],$lunes['nombre_dia'],$lunes['es_fin_de_semana'],$lunes['semana_iso']]);
@@ -68,6 +67,24 @@ final class ErpBiDimensionesIntegrationTest extends TestCase
         // Un hecho unido a la dimensión no se duplica ni se pierde.
         self::assertSame($this->n("SELECT COUNT(*) FROM bi_atenciones"),$this->n("SELECT COUNT(*) FROM bi_atenciones a JOIN bi_dim_fecha f ON f.fecha=a.fecha_programada"));
         self::assertSame($this->n("SELECT SUM(minutos_reservados) FROM bi_atenciones"),$this->n("SELECT SUM(a.minutos_reservados) FROM bi_atenciones a JOIN bi_dim_fecha f ON f.fecha=a.fecha_programada"));
+    }
+
+    public function testCadaFechaDeCadaVistaDeHechosTieneSuDiaEnLaDimension():void
+    {
+        // Hechos con fechas fuera del rango de las citas: una ausencia futura y una liquidación anterior a todo.
+        $this->cita('2026-10-05',$this->profA);
+        $this->ins("INSERT INTO erp_ausencias(colaborador_id,desde,hasta,tipo,motivo,estado,solicitante_id,creado_en) VALUES({$this->colA},'2028-02-27','2028-03-02','vacaciones','Futuras','aprobada',1,NOW())");
+        $this->ins("INSERT INTO erp_comision_liquidaciones(colaborador_id,monto_centavos,via,creado_por,creado_en) VALUES({$this->colA},500,'directa',1,'2024-05-01 10:00:00')");
+        $this->ins("INSERT INTO erp_asistencia(colaborador_id,entrada,salida,descanso_minutos,motivo,creado_por,creado_en) VALUES({$this->colA},'2025-01-06 22:00:00','2025-01-07 06:00:00',0,'Turno',1,NOW())");
+        $revisadas=0;
+        foreach($this->db->query("SELECT table_name t,column_name c,data_type d FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name LIKE 'bi\\_%' AND table_name NOT LIKE 'bi\\_dim\\_%' AND table_name<>'bi_rh_dim_colaborador' AND table_name<>'bi_ocupacion_profesional_dia' AND data_type IN ('date','datetime','timestamp')")->fetch_all(MYSQLI_ASSOC) as $col){
+            $expr=$col['d']==='date'?"x.`{$col['c']}`":"DATE(x.`{$col['c']}`)";
+            $huerfanas=$this->n("SELECT COUNT(*) FROM `{$col['t']}` x LEFT JOIN bi_dim_fecha f ON f.fecha=$expr WHERE $expr IS NOT NULL AND f.fecha IS NULL");
+            self::assertSame(0,$huerfanas,"{$col['t']}.{$col['c']} tiene fechas sin día en bi_dim_fecha: añadir la columna a los límites de la dimensión");$revisadas++;
+        }
+        self::assertGreaterThanOrEqual(28,$revisadas,'se revisaron todas las columnas de fecha de las vistas de hechos');
+        self::assertSame(1,$this->n("SELECT COUNT(*) FROM bi_dim_fecha WHERE fecha='2028-03-02'"),'la ausencia futura extiende el rango');
+        self::assertSame(1,$this->n("SELECT COUNT(*) FROM bi_dim_fecha WHERE fecha='2024-05-01'"),'la liquidación antigua extiende el rango hacia atrás');
     }
 
     public function testSinHechosLaDimensionDeFechaTieneAlMenosHoy():void
@@ -87,7 +104,16 @@ final class ErpBiDimensionesIntegrationTest extends TestCase
         $a=$this->db->query("SELECT * FROM bi_dim_producto WHERE producto_id=$p1")->fetch_assoc();
         self::assertSame(['SKU-1','Champú','1','1','venta','1250','1500'],[$a['sku'],$a['nombre'],$a['activo'],$a['en_catalogo_de_venta'],$a['tipo_catalogo'],$a['precio_catalogo_centavos'],$a['impuesto_pb']]);
         $b=$this->db->query("SELECT * FROM bi_dim_producto WHERE producto_id=$p2")->fetch_assoc();
-        self::assertSame(['0','0','0',null,null],[$b['activo'],$b['en_catalogo_de_venta'],$b['catalogo_activo'],$b['tipo_catalogo'],$b['precio_catalogo_centavos']],'sin catálogo: no se inventa precio');
+        self::assertSame(['0','0','0','0',null,null],[$b['activo'],$b['en_catalogo_de_venta'],$b['es_insumo'],$b['catalogo_activo'],$b['tipo_catalogo'],$b['precio_catalogo_centavos']],'sin catálogo: no se inventa precio');
+        // Un artículo de consumo interno no es de venta ni expone precio de venta; uno «ambos» sí.
+        $p3=$this->ins("INSERT INTO inventario_productos(sku,nombre,unidad,stock_milesimas) VALUES('SKU-3','Tinte de uso interno','unidad',0)");
+        $p4=$this->ins("INSERT INTO inventario_productos(sku,nombre,unidad,stock_milesimas) VALUES('SKU-4','Producto de venta y consumo','unidad',0)");
+        $this->ins("INSERT INTO erp_catalogo(producto_id,precio_centavos,impuesto_pb,tipo,activo,actualizado_por,actualizado_en) VALUES($p3,900,0,'consumo',1,1,NOW())");
+        $this->ins("INSERT INTO erp_catalogo(producto_id,precio_centavos,impuesto_pb,tipo,activo,actualizado_por,actualizado_en) VALUES($p4,700,0,'ambos',1,1,NOW())");
+        $c3=$this->db->query("SELECT * FROM bi_dim_producto WHERE producto_id=$p3")->fetch_assoc();
+        self::assertSame(['0','1','consumo',null],[$c3['en_catalogo_de_venta'],$c3['es_insumo'],$c3['tipo_catalogo'],$c3['precio_catalogo_centavos']],'el consumo interno no se vende ni muestra precio de venta');
+        $c4=$this->db->query("SELECT * FROM bi_dim_producto WHERE producto_id=$p4")->fetch_assoc();
+        self::assertSame(['1','0','700'],[$c4['en_catalogo_de_venta'],$c4['es_insumo'],$c4['precio_catalogo_centavos']]);
         $s=$this->db->query("SELECT * FROM bi_dim_servicio WHERE servicio_id={$this->srv}")->fetch_assoc();
         self::assertSame(['Corte de ensayo','1999','40','1'],[$s['nombre'],$s['precio_actual_centavos'],$s['duracion_minutos'],$s['en_catalogo_de_venta']],'19.99 → 1999 centavos exactos');
         self::assertSame(2,$this->n("SELECT COUNT(*) FROM bi_dim_servicio"));

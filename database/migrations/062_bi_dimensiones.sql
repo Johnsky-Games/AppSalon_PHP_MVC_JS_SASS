@@ -3,16 +3,40 @@
 -- admite UPDATE ni DELETE; la prueba lo verifica), SQL SECURITY DEFINER y sin datos personales: ninguna dimensión lleva nombres de personas,
 -- documentos ni contactos. La dimensión de colaborador es laboral (prefijo bi_rh_, mismo grupo de acceso que 061).
 
+-- Los límites salen de TODAS las columnas de fecha de las vistas de hechos (no de unas tablas de origen): la prueba recorre information_schema y exige que
+-- cada fecha de cada vista de hechos tenga su día aquí; una vista de hechos nueva con fechas debe añadirse a esta lista.
 -- Grano: una fila por día, desde la fecha más antigua de cualquier hecho (o el día de hoy en Ecuador, UTC-5 sin cambio de hora, si es anterior)
 -- hasta la más reciente (o hoy, lo que sea posterior): el rango siempre incluye hoy; hasta 10.000 días. Es UNA sola dimensión: los roles (fecha de la cita, de la venta, del asiento, del pago...) son relaciones
 -- de los hechos hacia esta misma tabla (una activa y las demás con USERELATIONSHIP), no copias.
 CREATE OR REPLACE SQL SECURITY DEFINER VIEW bi_dim_fecha AS
 WITH fuentes AS (
-  SELECT fecha FROM citas
-  UNION ALL SELECT DATE(confirmado_en) FROM erp_ventas WHERE confirmado_en IS NOT NULL
-  UNION ALL SELECT fecha FROM erp_cont_asientos
-  UNION ALL SELECT DATE(pagado_at) FROM pagos WHERE pagado_at IS NOT NULL
-  UNION ALL SELECT DATE(registrado_en) FROM inventario_movimientos
+  SELECT fecha_aplicacion AS fecha FROM bi_aplicaciones_saldo
+  UNION ALL SELECT fecha_venta_original AS fecha FROM bi_aplicaciones_saldo
+  UNION ALL SELECT fecha_programada AS fecha FROM bi_atenciones
+  UNION ALL SELECT fecha_servicio_realizado AS fecha FROM bi_atenciones
+  UNION ALL SELECT DATE(atencion_inicio_at) AS fecha FROM bi_atenciones
+  UNION ALL SELECT DATE(atencion_fin_at) AS fecha FROM bi_atenciones
+  UNION ALL SELECT DATE(ausencia_at) AS fecha FROM bi_atenciones
+  UNION ALL SELECT fecha AS fecha FROM bi_cxc_movimientos
+  UNION ALL SELECT fecha_movimiento_devolucion AS fecha FROM bi_devoluciones_dinero
+  UNION ALL SELECT fecha_venta_original AS fecha FROM bi_devoluciones_dinero
+  UNION ALL SELECT fecha_cobro_original AS fecha FROM bi_devoluciones_dinero
+  UNION ALL SELECT fecha_devolucion AS fecha FROM bi_devoluciones_venta
+  UNION ALL SELECT fecha_venta_original AS fecha FROM bi_devoluciones_venta
+  UNION ALL SELECT fecha_movimiento AS fecha FROM bi_flujo_dinero
+  UNION ALL SELECT fecha_venta_original AS fecha FROM bi_flujo_dinero
+  UNION ALL SELECT fecha_cobro_original AS fecha FROM bi_flujo_dinero
+  UNION ALL SELECT fecha AS fecha FROM bi_inventario_movimientos
+  UNION ALL SELECT fecha AS fecha FROM bi_libro_lineas
+  UNION ALL SELECT fecha_nota AS fecha FROM bi_notas_credito
+  UNION ALL SELECT fecha AS fecha FROM bi_rh_asistencia
+  UNION ALL SELECT DATE(entrada) AS fecha FROM bi_rh_asistencia
+  UNION ALL SELECT DATE(salida) AS fecha FROM bi_rh_asistencia
+  UNION ALL SELECT desde AS fecha FROM bi_rh_ausencias
+  UNION ALL SELECT hasta AS fecha FROM bi_rh_ausencias
+  UNION ALL SELECT fecha AS fecha FROM bi_rh_comisiones_liquidaciones
+  UNION ALL SELECT fecha AS fecha FROM bi_rh_comisiones_movimientos
+  UNION ALL SELECT fecha_venta AS fecha FROM bi_venta_lineas
 ),
 rango AS (
   SELECT LEAST(COALESCE(MIN(fecha), DATE(UTC_TIMESTAMP() - INTERVAL 5 HOUR)), DATE(UTC_TIMESTAMP() - INTERVAL 5 HOUR)) AS desde,
@@ -36,19 +60,20 @@ SELECT fecha, YEAR(fecha) AS anio, QUARTER(fecha) AS trimestre, MONTH(fecha) AS 
  YEARWEEK(fecha, 3) DIV 100 AS anio_iso, WEEK(fecha, 3) AS semana_iso
 FROM dias;
 
--- Grano: una fila por producto de inventario. Atributos del catálogo ACTUAL: los hechos guardan su propio precio e importe históricos
+-- Grano: una fila por producto de inventario. `en_catalogo_de_venta` exige tipo venta o ambos (un insumo `consumo` no se vende: es_insumo = 1 y sin precio de venta).
+-- Atributos del catálogo ACTUAL: los hechos guardan su propio precio e importe históricos
 -- (bi_venta_lineas), así que cambiar el precio de catálogo no reescribe lo vendido.
 CREATE OR REPLACE SQL SECURITY DEFINER VIEW bi_dim_producto AS
 SELECT DISTINCT p.id AS producto_id, p.sku, p.nombre, p.unidad, p.activo,
- c.id IS NOT NULL AS en_catalogo_de_venta, COALESCE(c.activo, 0) AS catalogo_activo, c.tipo AS tipo_catalogo,
- c.precio_centavos AS precio_catalogo_centavos, c.impuesto_pb
+ COALESCE(c.tipo IN ('venta', 'ambos'), 0) AS en_catalogo_de_venta, COALESCE(c.tipo = 'consumo', 0) AS es_insumo, COALESCE(c.activo, 0) AS catalogo_activo, c.tipo AS tipo_catalogo,
+ IF(c.tipo IN ('venta', 'ambos'), c.precio_centavos, NULL) AS precio_catalogo_centavos, c.impuesto_pb
 FROM inventario_productos p
 LEFT JOIN erp_catalogo c ON c.producto_id = p.id;
 
 -- Grano: una fila por servicio. Mismo criterio: precio y duración ACTUALES; lo reservado conserva los suyos (bi_atencion_servicios).
 CREATE OR REPLACE SQL SECURITY DEFINER VIEW bi_dim_servicio AS
 SELECT DISTINCT s.id AS servicio_id, s.nombre, ROUND(s.precio * 100) AS precio_actual_centavos, s.duracion_minutos,
- c.id IS NOT NULL AS en_catalogo_de_venta, COALESCE(c.activo, 0) AS catalogo_activo, c.tipo AS tipo_catalogo, c.impuesto_pb
+ COALESCE(c.tipo IN ('venta', 'ambos'), 0) AS en_catalogo_de_venta, COALESCE(c.activo, 0) AS catalogo_activo, c.tipo AS tipo_catalogo, c.impuesto_pb
 FROM servicios s
 LEFT JOIN erp_catalogo c ON c.servicio_id = s.id;
 

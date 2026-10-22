@@ -11,7 +11,7 @@ Sexto corte del modelo de lectura (ver `docs/BI_MODELO_LECTURA.md`). Da a Power 
 | `bi_rh_dim_colaborador` | **laboral** (con `bi_rh_*`) | un colaborador | `colaborador_id` |
 
 ## `bi_dim_fecha` y los roles de fecha
-Una **sola** tabla de fechas, continua (un día por fila, sin huecos), desde el hecho más antiguo (cita, venta confirmada, asiento contable, pago o movimiento de inventario) hasta el más reciente o el día de hoy, lo que sea posterior; el rango incluye siempre hoy (hora de Ecuador, UTC−5 sin cambio de hora), hasta 10.000 días. Sin ningún hecho tiene una sola fila: hoy.
+Una **sola** tabla de fechas, continua (un día por fila, sin huecos), desde la fecha más antigua de **cualquier columna de fecha de las vistas de hechos** (las de la tabla de abajo) hasta la más reciente o el día de hoy, lo que sea posterior; el rango incluye siempre hoy (hora de Ecuador, UTC−5 sin cambio de hora), hasta 10.000 días. Sin ningún hecho tiene una sola fila: hoy.
 
 Columnas: `fecha`, `anio`, `trimestre`, `mes`, `anio_mes` (aaaamm, ordena bien), `nombre_mes`, `dia_del_mes`, `dia_semana` (ISO, 1 = lunes), `nombre_dia`, `es_fin_de_semana`, `anio_iso` y `semana_iso` (el 1 de enero de 2027 es la semana 53 de 2026).
 
@@ -20,22 +20,29 @@ Columnas: `fecha`, `anio`, `trimestre`, `mes`, `anio_mes` (aaaamm, ordena bien),
 | Hecho | Columna de fecha | Rol |
 | --- | --- | --- |
 | `bi_atenciones` | `fecha_programada` / `fecha_servicio_realizado` | cita programada / servicio realizado |
-| `bi_venta_lineas` | `fecha_venta` | venta |
-| `bi_flujo_dinero`, `bi_devoluciones_dinero` | `fecha` | movimiento de dinero |
+| `bi_venta_lineas`, `bi_saldo_por_cobrar_venta` | `fecha_venta` | venta |
+| `bi_flujo_dinero` | `fecha_movimiento` (y `fecha_venta_original`, `fecha_cobro_original`) | movimiento de dinero / venta de origen / cobro de origen |
+| `bi_devoluciones_dinero` | `fecha_movimiento_devolucion` (y `fecha_venta_original`, `fecha_cobro_original`) | devolución de dinero |
+| `bi_devoluciones_venta` | `fecha_devolucion` (y `fecha_venta_original`) | devolución comercial |
+| `bi_aplicaciones_saldo` | `fecha_aplicacion` (y `fecha_venta_original`) | aplicación de prepago o paquete |
+| `bi_notas_credito` | `fecha_nota` | nota de crédito |
 | `bi_cxc_movimientos` | `fecha` | movimiento de cartera |
 | `bi_libro_lineas` | `fecha` | contable |
 | `bi_inventario_movimientos` | `fecha` | movimiento de inventario |
 | `bi_ocupacion_profesional_dia` | `fecha` | día de capacidad |
-| `bi_rh_asistencia`, `bi_rh_ausencias`, `bi_rh_jornadas` | `fecha`, `desde`/`hasta` | día trabajado / rango de ausencia |
-| `bi_rh_comisiones_movimientos` | `fecha` | devengo |
+| `bi_rh_asistencia` | `fecha` | día trabajado |
+| `bi_rh_ausencias` | `desde`, `hasta` | inicio / fin de ausencia (rango; el cruce día por día se hace en el modelo) |
+| `bi_rh_comisiones_movimientos`, `bi_rh_comisiones_liquidaciones` | `fecha` | devengo / liquidación |
+
+Las columnas de fecha y hora (`atencion_inicio_at`, `entrada`, `salida`, …) se relacionan por su parte de fecha; el rango de la dimensión las cubre.
 
 ```DAX
-Ventas por fecha de cobro = CALCULATE ( [Ventas netas], USERELATIONSHIP ( bi_dim_fecha[fecha], bi_flujo_dinero[fecha] ) )
+Ventas por fecha de cobro = CALCULATE ( [Ventas netas], USERELATIONSHIP ( bi_dim_fecha[fecha], bi_flujo_dinero[fecha_movimiento] ) )
 ```
 (Los nombres de medida de ejemplo son ilustrativos; la relación activa y las medidas las decide el modelo de Power BI. No se ejecutó DAX desde este entorno.)
 
 ## Producto y servicio
-Atributos del catálogo **actual**: `sku`/`nombre`/`unidad`/`activo` (producto), `nombre`/`precio_actual_centavos`/`duracion_minutos` (servicio) y los del catálogo de venta (`en_catalogo_de_venta`, `catalogo_activo`, `tipo_catalogo`, `impuesto_pb`, y `precio_catalogo_centavos` en producto). Un producto o servicio que no está en el catálogo aparece con `en_catalogo_de_venta = 0` y precio de catálogo nulo: **no se inventa precio**. Los hechos guardan el precio y la duración **de cuando ocurrieron** (`bi_venta_lineas`, `bi_atencion_servicios`), de modo que cambiar el catálogo no reescribe lo vendido ni lo reservado (la prueba lo comprueba). No incluye costo ni existencias: el costo del momento está en el hecho (`costo_total_centavos`) y las existencias se calculan con los movimientos.
+Atributos del catálogo **actual**: `sku`/`nombre`/`unidad`/`activo` (producto), `nombre`/`precio_actual_centavos`/`duracion_minutos` (servicio) y los del catálogo (`en_catalogo_de_venta`, `catalogo_activo`, `tipo_catalogo`, `impuesto_pb`, y `precio_catalogo_centavos` y `es_insumo` en producto). `en_catalogo_de_venta` exige tipo `venta` o `ambos`: un artículo de **consumo** interno (`tipo = 'consumo'`) no se vende, así que tiene `es_insumo = 1`, `en_catalogo_de_venta = 0` y **sin precio de venta**. Un producto o servicio que no está en el catálogo aparece con `en_catalogo_de_venta = 0` y precio nulo: **no se inventa precio**. Los hechos guardan el precio y la duración **de cuando ocurrieron** (`bi_venta_lineas`, `bi_atencion_servicios`), de modo que cambiar el catálogo no reescribe lo vendido ni lo reservado (la prueba lo comprueba). No incluye costo ni existencias: el costo del momento está en el hecho (`costo_total_centavos`) y las existencias se calculan con los movimientos.
 
 ## Profesional y colaborador (separación de datos)
 * `bi_dim_profesional` (comercial) lleva solo `profesional_id`, `activo` y `tiene_ficha_laboral`. **No lleva nombre** (dato personal) **ni `colaborador_id`**: el puente entre la agenda y la persona laboral no se entrega al grupo comercial. Las etiquetas legibles las pone el propietario en una tabla propia del modelo de Power BI, o se muestra el identificador. Las citas históricas sin profesional no se unen a ninguna fila y se ven como «sin profesional».
@@ -49,11 +56,12 @@ El proyecto no crea usuarios ni toca Docker; los crea el propietario.
 
 ## Reconciliación (pruebas)
 `ErpBiDimensionesIntegrationTest` (5 pruebas, MySQL real):
-* Fecha: continua y sin repetidos entre el hecho más antiguo y el más reciente, incluye hoy, ningún hecho queda sin su día (citas y pagos), atributos exactos (día de la semana, trimestre, `anio_mes`, semana ISO, fin de semana, año ISO de enero de 2027); unir un hecho a la dimensión no duplica ni pierde filas ni cambia la suma de minutos; sin hechos tiene una fila (hoy).
+* Fecha: continua y sin repetidos entre la fecha más antigua y la más reciente, incluye hoy, **cada fecha de cada columna de fecha de cada vista de hechos tiene su día** (la prueba recorre `information_schema`, de modo que una vista nueva con fechas que no se añada al rango falla), incluidas una ausencia futura y una liquidación antigua, atributos exactos (día de la semana, trimestre, `anio_mes`, semana ISO, fin de semana, año ISO de enero de 2027); unir un hecho a la dimensión no duplica ni pierde filas ni cambia la suma de minutos; sin hechos tiene una fila (hoy).
 * Producto, servicio y profesional: una fila por entidad (también las que no están en el catálogo), `19.99 → 1999` centavos exactos, sin inventar precio, unir hechos no duplica, y cambiar el precio del catálogo no cambia el precio reservado.
 * Colaborador: una fila por colaborador, rol, estado, fechas y enlace con su agenda; se une a los hechos laborales sin duplicarlos.
 * Acceso: usuarios reales de MySQL; el comercial lee sus cuatro dimensiones y **no** la laboral, el laboral lee la suya y no las comerciales, ninguno lee las tablas de origen; ninguna vista admite `UPDATE`/`DELETE`; sin columnas ni valores de datos personales (nombres, correos, teléfonos, notas).
-* Mutaciones comprobadas (cada una rompe la prueba): quitar `DISTINCT` a `bi_dim_profesional` (vista actualizable), perder el último día de la fecha, truncar el precio en lugar de redondearlo y usar el año calendario como año ISO.
+* Un artículo de consumo no se marca como de venta ni expone precio de venta.
+* Mutaciones comprobadas (cada una rompe la prueba): quitar `DISTINCT` a `bi_dim_profesional` (vista actualizable), perder el último día de la fecha, tomar los límites solo de unas tablas de origen, truncar el precio en lugar de redondearlo y usar el año calendario como año ISO.
 * `EsquemaTest` (respaldo y restauración, con y sin manifiesto) exige las 23 vistas (057–062) y compara su esquema restaurado columna por columna.
 
 ## Límites conocidos
