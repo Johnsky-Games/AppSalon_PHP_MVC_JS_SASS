@@ -6,7 +6,7 @@
 -- Los límites salen de TODAS las columnas de fecha de las vistas de hechos (no de unas tablas de origen): la prueba recorre information_schema y exige que
 -- cada fecha de cada vista de hechos tenga su día aquí; una vista de hechos nueva con fechas debe añadirse a esta lista.
 -- Grano: una fila por día, desde la fecha más antigua de cualquier hecho (o el día de hoy en Ecuador, UTC-5 sin cambio de hora, si es anterior)
--- hasta la más reciente (o hoy, lo que sea posterior): el rango siempre incluye hoy; hasta 10.000 días. Es UNA sola dimensión: los roles (fecha de la cita, de la venta, del asiento, del pago...) son relaciones
+-- hasta la más reciente (o hoy, lo que sea posterior): el rango siempre incluye hoy; hasta 100.000 días (unos 273 años). Es UNA sola dimensión: los roles (fecha de la cita, de la venta, del asiento, del pago...) son relaciones
 -- de los hechos hacia esta misma tabla (una activa y las demás con USERELATIONSHIP), no copias.
 CREATE OR REPLACE SQL SECURITY DEFINER VIEW bi_dim_fecha AS
 WITH fuentes AS (
@@ -47,10 +47,10 @@ digitos AS (
   UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9
 ),
 dias AS (
-  SELECT DATE_ADD(r.desde, INTERVAL d0.n + 10 * d1.n + 100 * d2.n + 1000 * d3.n DAY) AS fecha
+  SELECT DATE_ADD(r.desde, INTERVAL d0.n + 10 * d1.n + 100 * d2.n + 1000 * d3.n + 10000 * d4.n DAY) AS fecha
   FROM rango r
-  JOIN digitos d0 JOIN digitos d1 JOIN digitos d2 JOIN digitos d3
-  WHERE d0.n + 10 * d1.n + 100 * d2.n + 1000 * d3.n <= DATEDIFF(r.hasta, r.desde)
+  JOIN digitos d0 JOIN digitos d1 JOIN digitos d2 JOIN digitos d3 JOIN digitos d4
+  WHERE d0.n + 10 * d1.n + 100 * d2.n + 1000 * d3.n + 10000 * d4.n <= DATEDIFF(r.hasta, r.desde)
 )
 SELECT fecha, YEAR(fecha) AS anio, QUARTER(fecha) AS trimestre, MONTH(fecha) AS mes, YEAR(fecha) * 100 + MONTH(fecha) AS anio_mes,
  ELT(MONTH(fecha), 'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre') AS nombre_mes,
@@ -60,12 +60,12 @@ SELECT fecha, YEAR(fecha) AS anio, QUARTER(fecha) AS trimestre, MONTH(fecha) AS 
  YEARWEEK(fecha, 3) DIV 100 AS anio_iso, WEEK(fecha, 3) AS semana_iso
 FROM dias;
 
--- Grano: una fila por producto de inventario. `en_catalogo_de_venta` = a la venta HOY, con el criterio de la lista de venta del punto de venta (a.activo = 1 AND p.activo = 1 AND tipo <> 'consumo'): tipo venta o ambos, entrada activa Y producto activo (un insumo `consumo` no se vende: es_insumo = 1; una entrada desactivada tampoco: sin precio de venta).
+-- Grano: una fila por producto de inventario. `en_catalogo_de_venta` = a la venta HOY, con el criterio de la lista de venta del punto de venta (a.activo = 1 AND p.activo = 1 AND tipo <> 'consumo'): tipo venta o ambos, entrada activa Y producto activo (es_insumo = 1 si se usa para consumo interno: `consumo` o `ambos` («Venta y consumo»); un `consumo` puro no se vende; una entrada desactivada tampoco: sin precio de venta).
 -- Atributos del catálogo ACTUAL: los hechos guardan su propio precio e importe históricos
 -- (bi_venta_lineas), así que cambiar el precio de catálogo no reescribe lo vendido.
 CREATE OR REPLACE SQL SECURITY DEFINER VIEW bi_dim_producto AS
 SELECT DISTINCT p.id AS producto_id, p.sku, p.nombre, p.unidad, p.activo,
- COALESCE(c.tipo IN ('venta', 'ambos') AND c.activo = 1 AND p.activo = 1, 0) AS en_catalogo_de_venta, COALESCE(c.tipo = 'consumo', 0) AS es_insumo, COALESCE(c.activo, 0) AS catalogo_activo, c.tipo AS tipo_catalogo,
+ COALESCE(c.tipo IN ('venta', 'ambos') AND c.activo = 1 AND p.activo = 1, 0) AS en_catalogo_de_venta, COALESCE(c.tipo IN ('consumo', 'ambos'), 0) AS es_insumo, COALESCE(c.activo, 0) AS catalogo_activo, c.tipo AS tipo_catalogo,
  IF(c.tipo IN ('venta', 'ambos') AND c.activo = 1 AND p.activo = 1, c.precio_centavos, NULL) AS precio_catalogo_centavos, c.impuesto_pb
 FROM inventario_productos p
 LEFT JOIN erp_catalogo c ON c.producto_id = p.id;

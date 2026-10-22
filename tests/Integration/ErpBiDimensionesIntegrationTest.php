@@ -75,6 +75,8 @@ final class ErpBiDimensionesIntegrationTest extends TestCase
         // Hechos con fechas fuera del rango de las citas: una ausencia futura y una liquidación anterior a todo.
         $this->cita('2026-10-05',$this->profA);
         $this->ins("INSERT INTO erp_ausencias(colaborador_id,desde,hasta,tipo,motivo,estado,solicitante_id,creado_en) VALUES({$this->colA},'2028-02-27','2028-03-02','vacaciones','Futuras','aprobada',1,NOW())");
+        // Un hecho lejano: más de 9.999 días después del más antiguo no debe recortar el calendario (ni dejar fuera hoy).
+        $this->ins("INSERT INTO erp_ausencias(colaborador_id,desde,hasta,tipo,motivo,estado,solicitante_id,creado_en) VALUES({$this->colA},'2099-12-30','2099-12-31','vacaciones','Lejanas','aprobada',1,NOW())");
         $this->ins("INSERT INTO erp_comision_liquidaciones(colaborador_id,monto_centavos,via,creado_por,creado_en) VALUES({$this->colA},500,'directa',1,'2024-05-01 10:00:00')");
         $this->ins("INSERT INTO erp_asistencia(colaborador_id,entrada,salida,descanso_minutos,motivo,creado_por,creado_en) VALUES({$this->colA},'2025-01-06 22:00:00','2025-01-07 06:00:00',0,'Turno',1,NOW())");
         $revisadas=0;
@@ -85,6 +87,10 @@ final class ErpBiDimensionesIntegrationTest extends TestCase
         }
         self::assertGreaterThanOrEqual(28,$revisadas,'se revisaron todas las columnas de fecha de las vistas de hechos');
         self::assertSame(1,$this->n("SELECT COUNT(*) FROM bi_dim_fecha WHERE fecha='2028-03-02'"),'la ausencia futura extiende el rango');
+        self::assertSame(1,$this->n("SELECT COUNT(*) FROM bi_dim_fecha WHERE fecha='2099-12-31'"),'un hecho a más de 9.999 días del más antiguo tiene su día');
+        self::assertGreaterThan(9999,$this->n("SELECT DATEDIFF(MAX(fecha),MIN(fecha)) FROM bi_dim_fecha"),'el calendario supera los 9.999 días');
+        self::assertSame($this->n("SELECT DATEDIFF(MAX(fecha),MIN(fecha))+1 FROM bi_dim_fecha"),$this->n("SELECT COUNT(DISTINCT fecha) FROM bi_dim_fecha"),'sigue continuo');
+        self::assertSame(1,$this->n("SELECT COUNT(*) FROM bi_dim_fecha WHERE fecha=DATE(UTC_TIMESTAMP() - INTERVAL 5 HOUR)"),'hoy sigue presente');
         self::assertSame(1,$this->n("SELECT COUNT(*) FROM bi_dim_fecha WHERE fecha='2024-05-01'"),'la liquidación antigua extiende el rango hacia atrás');
     }
 
@@ -114,7 +120,7 @@ final class ErpBiDimensionesIntegrationTest extends TestCase
         $c3=$this->db->query("SELECT * FROM bi_dim_producto WHERE producto_id=$p3")->fetch_assoc();
         self::assertSame(['0','1','consumo',null],[$c3['en_catalogo_de_venta'],$c3['es_insumo'],$c3['tipo_catalogo'],$c3['precio_catalogo_centavos']],'el consumo interno no se vende ni muestra precio de venta');
         $c4=$this->db->query("SELECT * FROM bi_dim_producto WHERE producto_id=$p4")->fetch_assoc();
-        self::assertSame(['1','0','700'],[$c4['en_catalogo_de_venta'],$c4['es_insumo'],$c4['precio_catalogo_centavos']]);
+        self::assertSame(['1','1','700'],[$c4['en_catalogo_de_venta'],$c4['es_insumo'],$c4['precio_catalogo_centavos']],'«Venta y consumo» es a la vez de venta e insumo');
         // Una entrada desactivada ya no está a la venta (como en el punto de venta): sin bandera ni precio de venta, pero el dato se conserva.
         $p5=$this->ins("INSERT INTO inventario_productos(sku,nombre,unidad,stock_milesimas) VALUES('SKU-5','Producto descontinuado','unidad',0)");
         $this->ins("INSERT INTO erp_catalogo(producto_id,precio_centavos,impuesto_pb,tipo,activo,actualizado_por,actualizado_en) VALUES($p5,500,0,'venta',0,1,NOW())");
