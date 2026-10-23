@@ -115,19 +115,17 @@ DROP TRIGGER IF EXISTS trg_presup_cambio_no_update;
 DROP TRIGGER IF EXISTS trg_presup_cambio_no_delete;
 DROP TRIGGER IF EXISTS trg_presup_carga_update;
 DROP TRIGGER IF EXISTS trg_presup_carga_no_delete;
-CREATE TRIGGER trg_presup_no_update BEFORE UPDATE ON erp_presupuestos FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Un presupuesto no se edita; se crea una version nueva';
+CREATE TRIGGER trg_presup_no_update BEFORE UPDATE ON erp_presupuestos FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Un presupuesto no se edita, se crea una version nueva';
 CREATE TRIGGER trg_presup_no_delete BEFORE DELETE ON erp_presupuestos FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Un presupuesto se conserva';
 -- Solo avanzan los estados (borrador|revision -> aprobada -> reemplazada) y nada de lo demás cambia; al aprobar se fija quién y cuándo.
 CREATE TRIGGER trg_presup_version_update BEFORE UPDATE ON erp_presupuesto_versiones FOR EACH ROW IF NEW.presupuesto_id<>OLD.presupuesto_id OR NEW.numero<>OLD.numero OR NOT (NEW.origen_version_id<=>OLD.origen_version_id) OR NOT (NEW.motivo<=>OLD.motivo) OR NEW.creado_por<>OLD.creado_por OR NEW.creado_en<>OLD.creado_en
   OR NOT ((OLD.estado IN('borrador','revision') AND NEW.estado='aprobada') OR (OLD.estado='aprobada' AND NEW.estado='reemplazada'))
   OR (OLD.estado='aprobada' AND (NEW.aprobado_por<>OLD.aprobado_por OR NEW.aprobado_en<>OLD.aprobado_en)) THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='La version solo avanza de estado y se conserva'; END IF;
 CREATE TRIGGER trg_presup_version_no_delete BEFORE DELETE ON erp_presupuesto_versiones FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Las versiones de un presupuesto se conservan';
--- Las líneas solo se tocan mientras la versión esté en borrador o revisión; una cuenta de gasto o costo, imputable y activa, y nunca la de comisiones.
-CREATE TRIGGER trg_presup_linea_insert BEFORE INSERT ON erp_presupuesto_lineas FOR EACH ROW BEGIN
-  IF (SELECT estado FROM erp_presupuesto_versiones WHERE id=NEW.version_id) NOT IN('borrador','revision') THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Una version aprobada no se edita'; END IF;
-  IF NEW.tipo='gasto' AND ((SELECT tipo FROM erp_cont_cuentas WHERE id=NEW.cuenta_id) NOT IN('gasto','costo') OR (SELECT imputable+activa FROM erp_cont_cuentas WHERE id=NEW.cuenta_id)<>2
-     OR NEW.cuenta_id=(SELECT cuenta_id FROM erp_cont_roles WHERE rol='gasto_comisiones')) THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Cuenta no admitida en el presupuesto de gastos (las comisiones van en su partida)'; END IF;
-END;
+-- Las líneas solo se tocan mientras la versión esté en borrador o revisión; una cuenta de gasto o costo, imputable y activa, y nunca la de comisiones. Triggers de una sola sentencia (IF ... END IF): el lector de restauración (ProteccionesRestauradas) solo repone esa forma.
+CREATE TRIGGER trg_presup_linea_insert BEFORE INSERT ON erp_presupuesto_lineas FOR EACH ROW IF (SELECT estado FROM erp_presupuesto_versiones WHERE id=NEW.version_id) NOT IN('borrador','revision')
+  OR (NEW.tipo='gasto' AND ((SELECT tipo FROM erp_cont_cuentas WHERE id=NEW.cuenta_id) NOT IN('gasto','costo') OR (SELECT imputable+activa FROM erp_cont_cuentas WHERE id=NEW.cuenta_id)<>2
+      OR NEW.cuenta_id=(SELECT cuenta_id FROM erp_cont_roles WHERE rol='gasto_comisiones'))) THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Linea no admitida: version cerrada, o cuenta que no es de gasto o costo imputable y activa (las comisiones van en su partida)'; END IF;
 CREATE TRIGGER trg_presup_linea_update BEFORE UPDATE ON erp_presupuesto_lineas FOR EACH ROW IF NEW.version_id<>OLD.version_id OR NEW.mes<>OLD.mes OR NEW.tipo<>OLD.tipo OR NEW.objetivo_id<>OLD.objetivo_id
   OR (SELECT estado FROM erp_presupuesto_versiones WHERE id=OLD.version_id) NOT IN('borrador','revision') THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Una version aprobada no se edita'; END IF;
 CREATE TRIGGER trg_presup_linea_delete BEFORE DELETE ON erp_presupuesto_lineas FOR EACH ROW IF (SELECT estado FROM erp_presupuesto_versiones WHERE id=OLD.version_id) NOT IN('borrador','revision') THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Una version aprobada no se edita'; END IF;
