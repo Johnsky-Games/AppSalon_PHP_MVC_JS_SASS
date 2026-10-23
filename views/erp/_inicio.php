@@ -13,5 +13,6 @@ $clave=static function(string $accion,?int $venta=null):void { ?>
 <?php if(puede('erp.compras')): ?><a href="/gestion/compras">Compras</a><?php endif; ?>
 <?php if(puede('erp.reportes')): ?><a href="/gestion/indicadores">Indicadores del negocio</a><?php endif; ?>
 <?php if(puede('contabilidad.ver')): ?><a href="/gestion/contabilidad">Contabilidad</a><?php endif; ?>
+<?php if(puede('presupuestos.ver')): ?><a href="/gestion/presupuestos">Presupuestos</a><?php endif; ?>
 <?php if(puede('nomina.ver')): ?><a href="/gestion/nomina">Nómina</a><?php endif; ?>
 </nav>

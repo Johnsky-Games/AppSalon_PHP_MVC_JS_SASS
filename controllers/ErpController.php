@@ -437,6 +437,30 @@ final class ErpController
         $filas=$svc->listar($actor,$entidad,$id);$editar=$entidad!=='colaborador'||puede('erp.rh');
         self::render($router,'documentos',compact('filas','entidad','id','editar'));
     }
+    /** Presupuestos: lista, versión (cifras, historial, carga con vista previa) y comparativo contra lo real. Se escribe solo con las acciones `presupuesto_*`. */
+    public static function presupuestos(Router $router):void
+    {
+        exigir_permiso('presupuestos.ver');$r=new ErpRepository();$svc=new \Services\ErpPresupuestoService($r);
+        $id=(int)(filter_var($_GET['version']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0);
+        $datos=['lista'=>$svc->lista(),'edita'=>puede('presupuestos.editar'),'aprueba'=>puede('presupuestos.aprobar'),'version'=>null];
+        if($id){
+            $v=$svc->version($id)??null;
+            if(!$v){\Classes\ErrorResponse::render(404);return;}
+            $cargaId=(int)(filter_var($_GET['carga']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0);$carga=$cargaId?$svc->carga($cargaId):null;
+            if($carga&&(int)$carga['version_id']!==$id)$carga=null;
+            $datos=['version'=>$v,'lineas'=>$svc->lineas($id),'cambios'=>$svc->cambios($id),'comparativo'=>$svc->comparativo($id),'carga'=>$carga,'conceptos'=>$datos['edita']?$svc->conceptos():[]]+$datos;
+        }
+        self::render($router,'presupuestos',$datos);
+    }
+    /** Plantilla CSV de una versión: todos los conceptos y meses, con las cifras actuales y vacío donde no hay presupuesto. */
+    public static function presupuestoPlantilla():void
+    {
+        exigir_permiso('presupuestos.editar');
+        $id=(int)(filter_var($_GET['version']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0);
+        try{$csv=(new \Services\ErpPresupuestoService())->plantilla($id);}catch(ErpException $e){\Classes\ErrorResponse::render($e->getCode()===404?404:422);return;}
+        header('Content-Type: text/csv; charset=UTF-8');header('Content-Disposition: attachment; filename="plantilla-presupuesto-'.$id.'.csv"');
+        header('Cache-Control: private, no-store');header('X-Content-Type-Options: nosniff');echo "\xEF\xBB\xBF".$csv;detener_ejecucion(200);
+    }
     public static function documentoDescargar():void
     {
         self::equipo();$id=filter_var($_GET['id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0;
@@ -507,6 +531,10 @@ final class ErpController
             'mantenimiento_completar'=>[\Services\ErpRecursoService::class,'completarMantenimiento','recursos'],'recurso_mantenimiento'=>[\Services\ErpRecursoService::class,'mantenimiento','recursos'],'activo_crear'=>[\Services\ErpRecursoService::class,'activo','recursos'],
             'receta'=>[\Services\ErpConsumoService::class,'receta','recursos'],'consumir'=>[\Services\ErpConsumoService::class,'consumir','consumos'],
             'documento_subir'=>[\Services\ErpDocumentoService::class,'subir','documentos'],
+            'presupuesto_crear'=>[\Services\ErpPresupuestoService::class,'crear','presupuestos'],'presupuesto_linea'=>[\Services\ErpPresupuestoService::class,'linea','presupuestos'],
+            'presupuesto_cargar'=>[\Services\ErpPresupuestoService::class,'cargar','presupuestos'],'presupuesto_carga_confirmar'=>[\Services\ErpPresupuestoService::class,'confirmarCarga','presupuestos'],
+            'presupuesto_carga_descartar'=>[\Services\ErpPresupuestoService::class,'descartarCarga','presupuestos'],'presupuesto_aprobar'=>[\Services\ErpPresupuestoService::class,'aprobar','presupuestos'],
+            'presupuesto_revisar'=>[\Services\ErpPresupuestoService::class,'revisar','presupuestos'],
         ];
         $accion=is_string($_POST['accion']??null)?$_POST['accion']:'';
         if(!isset($acciones[$accion])){http_response_code(422);detener_ejecucion(422);return;}
@@ -520,6 +548,13 @@ final class ErpController
                 if(!is_array($f)||($f['error']??-1)!==UPLOAD_ERR_OK||!is_string($f['tmp_name']??null)||!is_uploaded_file($f['tmp_name'])||filesize($f['tmp_name'])>5*1024*1024)throw new ErpException('Selecciona un archivo válido de hasta 5 MB.');
                 $datos['contenido']=file_get_contents($f['tmp_name']);$datos['nombre_archivo']=$f['name'];
             }
+            if($accion==='presupuesto_cargar'){
+                $f=$_FILES['archivo']??null;
+                if(is_array($f)&&($f['error']??UPLOAD_ERR_NO_FILE)!==UPLOAD_ERR_NO_FILE){
+                    if(($f['error']??-1)!==UPLOAD_ERR_OK||!is_string($f['tmp_name']??null)||!is_uploaded_file($f['tmp_name'])||filesize($f['tmp_name'])>\Services\ErpPresupuestoService::MAX_BYTES)throw new ErpException('Selecciona un archivo CSV válido de hasta 1 MB.');
+                    $datos['csv']=file_get_contents($f['tmp_name']);
+                }
+            }
             $resultado=(new $clase())->$metodo((int)$_SESSION['id'],$datos);if($accion!=='fiscal_verificar')$id=in_array($accion,['rh_nomina','paquete_plan','paquete_archivar'],true)?0:(int)$resultado['recurso_id'];$completada=true;
             $_SESSION['erp_alertas']=['exito'=>[!empty($resultado['repetida'])?'Esta operación ya estaba registrada.':'Operación registrada correctamente.']];
         }catch(ErpException $e){
@@ -528,6 +563,11 @@ final class ErpController
         }catch(\InvalidArgumentException|\Classes\ConflictoIdempotenciaException $e){$_SESSION['erp_alertas']=['error'=>[$e->getMessage()]];}
         catch(\Throwable $e){error_log('[ERP] '.$accion.' '.get_class($e).' code='.$e->getCode());$_SESSION['erp_alertas']=['error'=>['La operación no se completó. Revisa los datos y vuelve a intentarlo.']];}
         $ruta=match($destino){'venta'=>$id?'/ventas/detalle?id='.$id:'/pdv','compra'=>'/gestion/compras'.($id?'?id='.$id:''),'personal'=>'/gestion/personal'.($id?'?id='.$id:''),'seguimiento'=>'/gestion/seguimiento'.($id?'?id='.$id:''),'prepagos'=>'/gestion/prepagos'.($id?'?id='.$id:''),'paquetes'=>'/gestion/paquetes'.($id?'?id='.$id:''),'suscripciones'=>'/gestion/suscripciones'.($id?'?id='.$id:''),default=>'/gestion/'.$destino};
+        if($destino==='presupuestos'){
+            $ver=(int)(filter_var($_POST['version_id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0);
+            if($completada&&in_array($accion,['presupuesto_crear','presupuesto_revisar'],true))$ver=$id;
+            $ruta='/gestion/presupuestos'.($ver?'?version='.$ver:'').($completada&&$accion==='presupuesto_cargar'?'&carga='.$id:'');
+        }
         if($destino==='documentos')$ruta='/gestion/documentos?'.http_build_query(['entidad'=>is_string($_POST['entidad']??null)?$_POST['entidad']:'','id'=>(int)($_POST['entidad_id']??0)]);
         if($destino==='consumos')$ruta='/agenda/detalle?id='.(int)($_POST['cita_id']??0);
         if($destino==='nomina'){$v=is_string($_POST['vista']??null)&&in_array($_POST['vista'],['resumen','corrida','novedades','parametros','condiciones','beneficios','renta','finiquitos','utilidades','iess','anual'],true)?$_POST['vista']:'resumen';$k=(int)($_POST['corrida_id']??0);$ruta='/gestion/nomina?vista='.$v.(($v==='corrida'&&$k>0)?'&corrida='.$k:'');}

@@ -78,6 +78,9 @@ final class ErpContabilidadService extends ErpService
             $c=$this->r->uno('SELECT * FROM erp_cont_cuentas WHERE codigo=? FOR SHARE',[is_string($d['cuenta']??null)?$d['cuenta']:''])??throw new ErpException('La cuenta no existe.',404);
             if((int)$c['imputable']!==1||(int)$c['activa']!==1||$c['tipo']!==self::ROLES[$rol])throw new ErpException('El rol «'.$rol.'» exige una cuenta imputable, activa y de tipo '.self::ROLES[$rol].'.');
             $anterior=$this->r->uno('SELECT cuenta_id FROM erp_cont_roles WHERE rol=? FOR UPDATE',[$rol]);
+            // La partida de comisiones de los presupuestos se define por este rol: cambiarlo reclasificaría todo el histórico y las versiones aprobadas.
+            if($rol==='gasto_comisiones'&&$anterior&&(int)$anterior['cuenta_id']!==(int)$c['id']&&$this->r->db->query("SHOW TABLES LIKE 'erp_presupuestos'")->num_rows&&$this->r->uno('SELECT id FROM erp_presupuestos LIMIT 1 FOR SHARE'))
+                throw new ErpException('Hay presupuestos que usan la partida de comisiones: la cuenta de este rol no se reasigna, porque reclasificaría el histórico y las versiones aprobadas.',409);
             $this->r->q('INSERT INTO erp_cont_roles(rol,cuenta_id,actualizado_por,actualizado_en) VALUES(?,?,?,?) ON DUPLICATE KEY UPDATE cuenta_id=VALUES(cuenta_id),actualizado_por=VALUES(actualizado_por),actualizado_en=VALUES(actualizado_en)',[$rol,(int)$c['id'],$actor,$this->r::ahora()]);
             $this->evento($actor,'cont_rol_asignado','contabilidad',1,['rol'=>$rol,'cuenta'=>$c['codigo'],'anterior'=>$anterior['cuenta_id']??null]);return (int)$c['id'];
         });
