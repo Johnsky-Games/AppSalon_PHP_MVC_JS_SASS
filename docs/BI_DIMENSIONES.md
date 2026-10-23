@@ -11,7 +11,7 @@ Sexto corte del modelo de lectura (ver `docs/BI_MODELO_LECTURA.md`). Da a Power 
 | `bi_rh_dim_colaborador` | **laboral** (con `bi_rh_*`) | un colaborador | `colaborador_id` |
 
 ## `bi_dim_fecha` y los roles de fecha
-Una **sola** tabla de fechas, continua (un día por fila, sin huecos), desde la fecha más antigua de **cualquier columna de fecha de las vistas de hechos** (las de la tabla de abajo) hasta la más reciente o el día de hoy, lo que sea posterior; el rango incluye siempre hoy (hora de Ecuador, UTC−5 sin cambio de hora), hasta 100.000 días (unos 273 años: un tope generoso que no recorta datos reales; si dos fechas distaran más, las posteriores quedarían sin día, y la prueba exige que no ocurra con datos de decenas de años). Sin ningún hecho tiene una sola fila: hoy.
+Una **sola** tabla de fechas, continua (un día por fila, sin huecos), desde la fecha más antigua de **cualquier columna de fecha de las vistas de hechos** (las de la tabla de abajo) hasta la más reciente o el día de hoy, lo que sea posterior; el rango incluye siempre hoy (hora de Ecuador, UTC−5 sin cambio de hora), hasta 100.000 días (unos 273 años: un tope generoso que no recorta datos reales; si dos fechas distaran más, las posteriores quedarían sin día **y el control de calendario (063) lo señala**). Sin ningún hecho tiene una sola fila: hoy.
 
 Columnas: `fecha`, `anio`, `trimestre`, `mes`, `anio_mes` (aaaamm, ordena bien), `nombre_mes`, `dia_del_mes`, `dia_semana` (ISO, 1 = lunes), `nombre_dia`, `es_fin_de_semana`, `anio_iso` y `semana_iso` (el 1 de enero de 2027 es la semana 53 de 2026).
 
@@ -64,7 +64,19 @@ El proyecto no crea usuarios ni toca Docker; los crea el propietario.
 * Acceso: usuarios reales de MySQL; el comercial lee sus cuatro dimensiones y **no** la laboral; el laboral lee la suya y la fecha compartida (`bi_dim_fecha`) y **no** producto, servicio ni profesional; ninguno lee las tablas de origen; ninguna vista admite `UPDATE`/`DELETE`; sin columnas ni valores de datos personales (nombres, correos, teléfonos, notas).
 * Un artículo de consumo no se marca como de venta ni expone precio de venta.
 * Mutaciones comprobadas (cada una rompe la prueba): quitar `DISTINCT` a `bi_dim_profesional` (vista actualizable), perder el último día de la fecha, tomar los límites solo de unas tablas de origen, truncar el precio en lugar de redondearlo y usar el año calendario como año ISO.
-* `EsquemaTest` (respaldo y restauración, con y sin manifiesto) exige las 23 vistas (057–062) y compara su esquema restaurado columna por columna.
+* `EsquemaTest` (respaldo y restauración, con y sin manifiesto) exige las 25 vistas (057–063) y compara su esquema restaurado columna por columna.
+
+## Control del calendario (migración 063)
+`bi_dim_fecha` genera como máximo 100.000 días; un hecho cuya fecha cae fuera de ese rango (un dato absurdo, p. ej. una ausencia en el año 2999) **se perdería sin error**. Ampliar el tope no elimina ese riesgo, así que se añadió un control que lo hace visible:
+
+| Vista | Grupo | Qué vigila |
+| --- | --- | --- |
+| `bi_control_calendario` | comercial | las 21 columnas de fecha de los hechos comerciales |
+| `bi_rh_control_calendario` | laboral | las 7 columnas de fecha de los hechos laborales (solo agregados, sin personas) |
+
+Una fila por (vista, columna) **siempre** (con ceros si no hay datos: «sin filas» no se confunde con «todo bien»): `filas_con_fecha`, `fecha_min`, `fecha_max`, `filas_sin_dia` (fechas sin su día en `bi_dim_fecha`) y `estado` = `ok` | `sin_correspondencia`. Un tablero de calidad de datos debe mostrar alerta si algún `estado` no es `ok`; la corrección es de datos (la fecha absurda) o, si es legítima, ampliar el rango de la dimensión.
+
+La prueba compara la lista vigilada con `information_schema` (toda columna de fecha de una vista de hechos), así que añadir una vista de hechos con fechas sin vigilarla **falla la prueba**. Mutaciones comprobadas: olvidar vigilar una columna, forzar `estado = 'ok'` y no contar las filas sin día. Se excluye `bi_ocupacion_profesional_dia` (su cuadrícula nace de las fechas de las citas, que sí se vigilan).
 
 ## Límites conocidos
 * El rango de fechas se calcula con los hechos existentes y hoy: no es un calendario fijo. Si hace falta un calendario más largo (por ejemplo, para presupuestos futuros), se amplía en el modelo de Power BI o con una decisión de producto.
