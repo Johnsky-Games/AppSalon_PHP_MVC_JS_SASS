@@ -78,6 +78,12 @@ final class ErpPresupuestoService extends ErpService
             if($c['estado']!=='previa')throw new ErpException('Esta carga ya se resolvió.',409);
             $v=$this->versionEditable((int)$c['version_id']);
             $filas=json_decode((string)$c['filas_json'],true,512,JSON_THROW_ON_ERROR);
+            // La vista previa vale mientras las cifras sigan como estaban: si otra persona cambió o quitó alguna después, se exige una vista nueva (no se pisa su edición).
+            foreach($filas as $f){
+                $ex=$this->r->uno('SELECT base_centavos,impuesto_centavos FROM erp_presupuesto_lineas WHERE version_id=? AND mes=? AND tipo=? AND objetivo_id=? FOR UPDATE',[(int)$v['id'],(int)$f['mes'],$f['tipo'],(int)$f['objetivo_id']]);
+                $igual=$f['base_antes']===null?$ex===null:($ex!==null&&(int)$ex['base_centavos']===(int)$f['base_antes']&&(int)$ex['impuesto_centavos']===(int)$f['impuesto_antes']);
+                if(!$igual)throw new ErpException('Las cifras cambiaron después de la vista previa (mes '.(int)$f['mes'].', '.$f['nombre'].'). Descártala y vuelve a cargar el archivo para ver la comparación actual.',409);
+            }
             $n=0;
             foreach($filas as $f){
                 $destino=$this->resolver($f['tipo'],(string)$f['objetivo_id']);

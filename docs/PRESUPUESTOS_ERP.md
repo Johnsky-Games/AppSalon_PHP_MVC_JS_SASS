@@ -63,7 +63,7 @@ Columnas `mes;tipo;referencia;nombre;base;impuesto` (separador «;», punto deci
 
 1. **Validar:** se valida el archivo entero. Con cualquier error se rechaza completo (hasta 20 avisos con su número de línea) y **no se guarda nada**.
 2. **Vista previa:** se guarda lo validado como carga `previa` (qué se crea o modifica y cuánto valía antes). No cambia ninguna cifra.
-3. **Confirmar o descartar:** al confirmar se aplica **exactamente lo previsualizado**, no el archivo otra vez, y solo si la versión sigue abierta.
+3. **Confirmar o descartar:** al confirmar se aplica **exactamente lo previsualizado**, no el archivo otra vez, y solo si la versión sigue abierta. Además, si otra persona cambió, quitó o creó alguna de esas cifras después de la vista previa, la confirmación se rechaza (409) sin aplicar nada y hay que cargar de nuevo: no se pisa una edición más reciente.
 
 Una fila con base e impuesto vacíos **no cambia nada** (no equivale a cero; para fijar cero se escribe `0`). Quitar una cifra se hace desde la pantalla. Subir de nuevo la plantilla sin tocar no cambia nada (se avisa).
 

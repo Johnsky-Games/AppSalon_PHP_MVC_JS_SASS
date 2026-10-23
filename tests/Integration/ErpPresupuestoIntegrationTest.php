@@ -302,6 +302,34 @@ final class ErpPresupuestoIntegrationTest extends TestCase
         $this->rechazo(fn()=>$this->svc()->confirmarCarga($this->finanzas,$this->d(['carga_id'=>$c4])),409);
         self::assertSame(0,$this->n("SELECT COUNT(*) FROM erp_presupuesto_lineas WHERE mes=5"));
     }
+    public function testUnaVistaPreviaObsoletaNoPisaLaEdicionDeOtraPersona():void
+    {
+        $v=$this->presupuesto();$s=$this->s1;$p=$this->p1;
+        $this->cifra($v,'servicio:'.$s,3,'100.00','15.00');$this->cifra($v,'producto:'.$p,3,'25.00','0');
+        $csv=$this->csv("3;servicio;$s;x;110.00;16.50","3;producto;$p;x;30.00;0","4;servicio;$s;x;50.00;7.50");
+        // Modifica un valor distinto al que se vio.
+        $c=$this->svc()->cargar($this->finanzas,$this->d(['version_id'=>$v,'csv'=>$csv]))['recurso_id'];
+        $this->cifra($v,'servicio:'.$s,3,'105.00','15.75');// otra persona edita lo previsualizado
+        $this->rechazo(fn()=>$this->svc()->confirmarCarga($this->finanzas,$this->d(['carga_id'=>$c])),409,'cambiaron');
+        self::assertSame(10500,$this->n("SELECT base_centavos FROM erp_presupuesto_lineas WHERE tipo='servicio' AND mes=3"),'se conserva la edición de la otra persona');
+        self::assertSame(2500,$this->n("SELECT base_centavos FROM erp_presupuesto_lineas WHERE tipo='producto' AND mes=3"),'ni siquiera las filas que sí coincidían');
+        self::assertSame(0,$this->n("SELECT COUNT(*) FROM erp_presupuesto_lineas WHERE mes=4"));
+        self::assertSame('previa',$this->svc()->carga($c)['estado']);
+        // Quitada por otra persona.
+        $c2=$this->svc()->cargar($this->finanzas,$this->d(['version_id'=>$v,'csv'=>$this->csv("3;producto;$p;x;30.00;0")]))['recurso_id'];
+        $this->cifra($v,'producto:'.$p,3,'','');
+        $this->rechazo(fn()=>$this->svc()->confirmarCarga($this->finanzas,$this->d(['carga_id'=>$c2])),409,'cambiaron');
+        self::assertSame(0,$this->n("SELECT COUNT(*) FROM erp_presupuesto_lineas WHERE tipo='producto'"),'no recrea una línea que otra persona quitó');
+        // Creada por otra persona después de previsualizar una cifra nueva.
+        $c3=$this->svc()->cargar($this->finanzas,$this->d(['version_id'=>$v,'csv'=>$this->csv("3;producto;$p;x;40.00;0")]))['recurso_id'];
+        $this->cifra($v,'producto:'.$p,3,'7.00','0');
+        $this->rechazo(fn()=>$this->svc()->confirmarCarga($this->finanzas,$this->d(['carga_id'=>$c3])),409,'cambiaron');
+        // Sin cambios intermedios sí se aplica.
+        $this->svc()->descartarCarga($this->finanzas,$this->d(['carga_id'=>$c]));$this->svc()->descartarCarga($this->finanzas,$this->d(['carga_id'=>$c2]));$this->svc()->descartarCarga($this->finanzas,$this->d(['carga_id'=>$c3]));
+        $c4=$this->svc()->cargar($this->finanzas,$this->d(['version_id'=>$v,'csv'=>$this->csv("3;producto;$p;x;40.00;0")]))['recurso_id'];
+        $this->svc()->confirmarCarga($this->finanzas,$this->d(['carga_id'=>$c4]));
+        self::assertSame(4000,$this->n("SELECT base_centavos FROM erp_presupuesto_lineas WHERE tipo='producto' AND mes=3"));
+    }
     public function testCargaCsvConErroresSeRechazaEnteraConSuLineaYNoGuardaNada():void
     {
         $v=$this->presupuesto();$s=$this->s1;
