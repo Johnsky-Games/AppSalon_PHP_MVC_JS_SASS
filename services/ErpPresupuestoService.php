@@ -147,6 +147,11 @@ final class ErpPresupuestoService extends ErpService
         if(!in_array($v['estado'],self::EDITABLES,true))throw new ErpException('La versión '.$v['numero'].' está '.($v['estado']==='aprobada'?'aprobada':'reemplazada').' y no se edita: abre una revisión.',409);
         return $v;
     }
+    /** Centavos de un importe de presupuesto: hasta 9.999.999,99 por línea y mes (el mismo tope que el esquema), que es más que el de una venta. */
+    private function monto(mixed $v,bool $cero=false):int
+    {
+        $n=ValoresExactos::decimal($v,2,$cero);if($n>999999999)throw new ErpException('Importe fuera de rango.');return $n;
+    }
     private function mes(mixed $v):int
     {
         $m=filter_var($v,FILTER_VALIDATE_INT,['options'=>['min_range'=>1,'max_range'=>12]]);
@@ -163,13 +168,13 @@ final class ErpPresupuestoService extends ErpService
     {
         $b=trim((string)$base);$i=trim((string)$imp);
         if($b==='')throw new ErpException('Indica la base sin impuestos (0 si el presupuesto es cero).');
-        $b=$this->importe($b,true);
+        $b=$this->monto($b,true);
         if(in_array($tipo,['gasto','comisiones'],true)){
-            if($i!==''&&$this->importe($i,true)!==0)throw new ErpException('Los gastos y las comisiones se presupuestan sin impuesto: deja el impuesto vacío o en 0.');
+            if($i!==''&&$this->monto($i,true)!==0)throw new ErpException('Los gastos y las comisiones se presupuestan sin impuesto: deja el impuesto vacío o en 0.');
             return [$b,0];
         }
         if($i==='')throw new ErpException('Indica el impuesto (0 si no aplica).');
-        return [$b,$this->importe($i,true)];
+        return [$b,$this->monto($i,true)];
     }
     /**
      * Valida el destino y devuelve su identificador. $porCodigo: la referencia de una cuenta de gasto es su código (CSV) en vez de su id.
@@ -184,6 +189,7 @@ final class ErpPresupuestoService extends ErpService
                 return ['objetivo_id'=>(int)$s['id'],'nombre'=>$s['nombre']]+array_merge($vacio,['servicio_id'=>(int)$s['id']]);
             case 'producto':
                 $p=$this->r->uno('SELECT id,nombre FROM inventario_productos WHERE id=?',[$this->id($ref)])??throw new ErpException('El producto '.$ref.' no existe.');
+                if(!$relajado&&!(int)$this->r->uno('SELECT activo n FROM inventario_productos WHERE id=?',[(int)$p['id']])['n'])throw new ErpException('El producto «'.$p['nombre'].'» está archivado: no admite cifras nuevas ni cambios (solo se puede quitar la que ya tenga).');
                 return ['objetivo_id'=>(int)$p['id'],'nombre'=>$p['nombre']]+array_merge($vacio,['producto_id'=>(int)$p['id']]);
             case 'gasto':
                 $c=$porCodigo?$this->r->uno('SELECT id,codigo,nombre,tipo,imputable,activa FROM erp_cont_cuentas WHERE codigo=?',[$ref])
@@ -251,7 +257,7 @@ final class ErpPresupuestoService extends ErpService
                 $ex=$this->r->uno('SELECT base_centavos,impuesto_centavos FROM erp_presupuesto_lineas WHERE version_id=? AND mes=? AND tipo=? AND objetivo_id=?',[$version,$mes,$tipo,$destino['objetivo_id']]);
                 if($ex&&(int)$ex['base_centavos']===$b&&(int)$ex['impuesto_centavos']===$im)continue;
                 // Una cifra nueva o modificada sí exige que la cuenta siga imputable y activa.
-                if($tipo==='gasto')$this->resolver($tipo,$ref,true);
+                if($tipo==='gasto'||$tipo==='producto')$this->resolver($tipo,$ref,$tipo==='gasto');
                 $filas[]=['mes'=>$mes,'tipo'=>$tipo,'objetivo_id'=>$destino['objetivo_id'],'nombre'=>$destino['nombre'],'base'=>$b,'impuesto'=>$im,'accion'=>$ex?'modificar':'crear',
                     'base_antes'=>$ex?(int)$ex['base_centavos']:null,'impuesto_antes'=>$ex?(int)$ex['impuesto_centavos']:null];
             }catch(ErpException|\InvalidArgumentException $e){

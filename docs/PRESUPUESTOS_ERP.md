@@ -87,4 +87,4 @@ El mes se une con `bi_dim_fecha.anio_mes` (AAAAMM). **La dimensión de fecha se 
 * Cobros sin presupuesto; no hay presupuesto por profesional ni por centro de costo.
 * No hay prorrateo automático anual→mensual: cada mes se escribe o se carga.
 * La política de venta bruta vs neta de devoluciones y los responsables de cada indicador son decisiones del propietario.
-* Los importes presupuestados admiten hasta 9.999.999,99 por línea y mes.
+* Los importes presupuestados admiten hasta 9.999.999,99 por línea y mes. Un producto archivado conserva su cifra (y se puede quitar) pero no admite cifras nuevas ni cambios, igual que una cuenta de gasto archivada.

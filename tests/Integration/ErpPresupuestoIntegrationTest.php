@@ -302,6 +302,29 @@ final class ErpPresupuestoIntegrationTest extends TestCase
         $this->rechazo(fn()=>$this->svc()->confirmarCarga($this->finanzas,$this->d(['carga_id'=>$c4])),409);
         self::assertSame(0,$this->n("SELECT COUNT(*) FROM erp_presupuesto_lineas WHERE mes=5"));
     }
+    public function testUnProductoArchivadoConservaSuCifraPeroNoAdmiteCifrasNuevasNiCambios():void
+    {
+        $v=$this->presupuesto();$p=$this->p1;$this->cifra($v,'producto:'.$p,2,'10.00','0');
+        $this->db->query("UPDATE inventario_productos SET activo=0 WHERE id=$p");
+        $this->rechazo(fn()=>$this->cifra($v,'producto:'.$p,2,'12.00','0'),null,'archivado');// cambiar
+        $this->rechazo(fn()=>$this->cifra($v,'producto:'.$p,5,'12.00','0'),null,'archivado');// nueva
+        $csv=$this->svc()->plantilla($v);
+        $this->rechazo(fn()=>$this->svc()->cargar($this->finanzas,$this->d(['version_id'=>$v,'csv'=>$csv])),null,'no trae cifras nuevas');// ida y vuelta sin tocar
+        $tocado=preg_replace('/^(2;producto;'.$p.';[^;]*;)10\.00;0\.00$/m','${1}11.00;0.00',$csv);self::assertNotSame($csv,$tocado);
+        $this->rechazo(fn()=>$this->svc()->cargar($this->finanzas,$this->d(['version_id'=>$v,'csv'=>$tocado])),null,'archivado');
+        $this->cifra($v,'producto:'.$p,2,'','');// quitar siempre se puede
+        self::assertSame(0,$this->n("SELECT COUNT(*) FROM erp_presupuesto_lineas WHERE tipo='producto'"));
+    }
+    public function testLosImportesAdmitenHastaElTopeDelEsquemaYNoMas():void
+    {
+        $v=$this->presupuesto();
+        $this->cifra($v,'servicio:'.$this->s1,1,'9999999.99','9999999.99');
+        self::assertSame([999999999,999999999],[$this->n("SELECT base_centavos FROM erp_presupuesto_lineas"),$this->n("SELECT impuesto_centavos FROM erp_presupuesto_lineas")],'el tope documentado (9.999.999,99) se puede escribir');
+        $this->rechazo(fn()=>$this->cifra($v,'servicio:'.$this->s1,2,'10000000.00','0'));
+        $this->cifra($v,'gasto:'.$this->cuentaOperativo,1,'5000000.00');
+        $c=$this->svc()->cargar($this->finanzas,$this->d(['version_id'=>$v,'csv'=>$this->csv("2;gasto;6.1.05;x;9999999.99;")]))['recurso_id'];
+        self::assertSame(1,(int)$this->svc()->carga($c)['n_filas'],'la carga CSV admite el mismo tope');
+    }
     public function testUnaVistaPreviaObsoletaNoPisaLaEdicionDeOtraPersona():void
     {
         $v=$this->presupuesto();$s=$this->s1;$p=$this->p1;
