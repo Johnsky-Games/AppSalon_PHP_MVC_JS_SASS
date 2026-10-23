@@ -80,6 +80,8 @@ Una fila con base e impuesto vacíos **no cambia nada** (no equivale a cero; par
 El mes se une con `bi_dim_fecha.anio_mes` (AAAAMM). **La dimensión de fecha se amplía** (064 redefine `bi_dim_fecha`) para cubrir del 1 de enero al 31 de diciembre de cada año con presupuesto: un presupuesto suele ser futuro y sin esto sus meses quedarían fuera del calendario. La prueba usa un presupuesto de 2031.
 
 ## Límites conocidos
+* **El rol contable `gasto_comisiones` no se reasigna a otra cuenta mientras existan presupuestos** (`ErpContabilidadService::rol()` responde 409): la partida de comisiones se define por ese rol y reasignarlo reclasificaría el histórico y las versiones aprobadas, y haría fallar la copia de una revisión. Volver a asignar la misma cuenta sí se permite.
+* La plantilla CSV incluye también los productos y cuentas archivados que la versión ya presupuesta, y neutraliza fórmulas (`=`, `+`, `-`, `@`) en los nombres.
 * Una cuenta de gasto archivada después de presupuestarla **no impide abrir una revisión** (la copia la conserva); solo se puede quitar su cifra, no escribirla de nuevo. El trigger exige cuenta de gasto o costo y no la de comisiones; que sea imputable y activa lo exige el servicio al escribir o cargar.
 
 * Cobros sin presupuesto; no hay presupuesto por profesional ni por centro de costo.

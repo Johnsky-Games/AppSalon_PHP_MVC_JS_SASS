@@ -261,13 +261,15 @@ final class ErpPresupuestoService extends ErpService
         $rol=$this->r->uno("SELECT cuenta_id FROM erp_cont_roles WHERE rol='gasto_comisiones'");
         $destinos=[];
         foreach($this->r->q('SELECT id,nombre FROM servicios ORDER BY nombre,id') as $s)$destinos[]=['servicio',(int)$s['id'],(string)$s['id'],$s['nombre']];
-        foreach($this->r->q('SELECT id,nombre FROM inventario_productos WHERE activo=1 ORDER BY nombre,id') as $p)$destinos[]=['producto',(int)$p['id'],(string)$p['id'],$p['nombre']];
-        foreach($this->r->q("SELECT id,codigo,nombre FROM erp_cont_cuentas WHERE tipo IN('gasto','costo') AND imputable=1 AND activa=1 ORDER BY codigo") as $c)
+        // Los conceptos archivados que la versión ya presupuesta también van: la plantilla debe traer todas las cifras actuales.
+        foreach($this->r->q('SELECT id,nombre FROM inventario_productos WHERE activo=1 OR id IN(SELECT producto_id FROM erp_presupuesto_lineas WHERE version_id=? AND producto_id IS NOT NULL) ORDER BY nombre,id',[$version]) as $p)$destinos[]=['producto',(int)$p['id'],(string)$p['id'],$p['nombre']];
+        foreach($this->r->q("SELECT id,codigo,nombre FROM erp_cont_cuentas WHERE tipo IN('gasto','costo') AND ((imputable=1 AND activa=1) OR id IN(SELECT cuenta_id FROM erp_presupuesto_lineas WHERE version_id=? AND cuenta_id IS NOT NULL)) ORDER BY codigo",[$version]) as $c)
             if(!$rol||(int)$rol['cuenta_id']!==(int)$c['id'])$destinos[]=['gasto',(int)$c['id'],$c['codigo'],$c['nombre']];
         $destinos[]=['comisiones',0,'','Comisiones'];
         if(count($destinos)*12>self::MAX_FILAS)throw new ErpException('Hay demasiados conceptos para una sola plantilla ('.count($destinos).' × 12 meses).');
         $actual=[];foreach($this->r->q('SELECT mes,tipo,objetivo_id,base_centavos,impuesto_centavos FROM erp_presupuesto_lineas WHERE version_id=?',[$version]) as $l)$actual[$l['mes'].'|'.$l['tipo'].'|'.$l['objetivo_id']]=$l;
-        $limpio=static fn(string $t)=>str_replace([';',"\r","\n"],' ',$t);
+        // Los nombres vienen del catálogo y la plantilla se abre en una hoja de cálculo: se neutralizan fórmulas (=, +, -, @) y se quitan separadores.
+        $limpio=static fn(string $t)=>str_replace([';',"\r","\n"],' ',\Classes\Exportacion\Neutralizacion::textoCsv($t));
         $fmt=static fn(int $c)=>intdiv($c,100).'.'.str_pad((string)($c%100),2,'0',STR_PAD_LEFT);
         $out="mes;tipo;referencia;nombre;base;impuesto\n";
         for($m=1;$m<=12;$m++)foreach($destinos as [$tipo,$id,$ref,$nombre]){

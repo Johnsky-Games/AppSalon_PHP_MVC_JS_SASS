@@ -219,6 +219,30 @@ final class ErpPresupuestoIntegrationTest extends TestCase
         // Ida y vuelta: la plantilla descargada, sin tocar, no cambia nada.
         $this->rechazo(fn()=>$this->svc()->cargar($this->finanzas,$this->d(['version_id'=>$v,'csv'=>$csv])),null,'no trae cifras nuevas');
     }
+    public function testLaPlantillaNeutralizaFormulasYTraeLosConceptosArchivadosQueLaVersionYaPresupuesta():void
+    {
+        $malo=$this->ins("INSERT INTO servicios(nombre,precio,duracion_minutos) VALUES('=HYPERLINK(\"http://x\",\"a\")',10.00,30)");
+        $v=$this->presupuesto();
+        $this->cifra($v,'producto:'.$this->p1,2,'10.00','0');$this->cifra($v,'gasto:'.$this->cuentaOperativo,2,'20.00');
+        $this->db->query("UPDATE inventario_productos SET activo=0 WHERE id={$this->p1}");$this->db->query("UPDATE erp_cont_cuentas SET activa=0 WHERE id={$this->cuentaOperativo}");
+        $filas=array_map(fn($l)=>explode(';',$l),array_filter(explode("\n",$this->svc()->plantilla($v))));
+        $por=[];foreach(array_slice($filas,1) as $f)$por[$f[0].'|'.$f[1].'|'.$f[2]]=$f;
+        self::assertSame('10.00',$por['2|producto|'.$this->p1][4],'el producto archivado con cifra sigue en la plantilla');
+        self::assertSame('20.00',$por['2|gasto|6.1.05'][4],'la cuenta archivada con cifra sigue en la plantilla');
+        $nombre=$por['1|servicio|'.$malo][3];
+        self::assertStringStartsWith("'=",$nombre,'una fórmula en el nombre del catálogo se neutraliza');
+    }
+    public function testLaCuentaDelRolDeComisionesNoSeReasignaConPresupuestosExistentes():void
+    {
+        $c=new ErpContabilidadService($this->r);
+        $c->rol($this->owner,$this->d(['rol'=>'gasto_comisiones','cuenta'=>'6.1.01']));// igual: sin cambio
+        $c->rol($this->owner,$this->d(['rol'=>'gasto_comisiones','cuenta'=>'6.1.03']));// sin presupuestos se puede reasignar
+        $c->rol($this->owner,$this->d(['rol'=>'gasto_comisiones','cuenta'=>'6.1.01']));
+        $v=$this->presupuesto();$this->cifra($v,'comisiones:0',1,'10.00');
+        $this->rechazo(fn()=>$c->rol($this->owner,$this->d(['rol'=>'gasto_comisiones','cuenta'=>'6.1.03'])),409,'presupuestos');
+        self::assertSame($this->cuentaComisiones,(int)$this->r->uno("SELECT cuenta_id n FROM erp_cont_roles WHERE rol='gasto_comisiones'")['n'],'el rol no cambió');
+        $c->rol($this->owner,$this->d(['rol'=>'gasto_comisiones','cuenta'=>'6.1.01']));// la misma cuenta sigue permitida
+    }
     public function testCargaCsvValidaTodoMuestraVistaPreviaYSoloAlConfirmarAplica():void
     {
         $v=$this->presupuesto();$s=$this->s1;$p=$this->p1;
