@@ -16,9 +16,9 @@ jobs:
   tests:
     name: PHP 8.2 + MySQL 8.0 (Migraciones, Frontend, Linter, PHPUnit y Backup/Restore)
     runs-on: ubuntu-latest
-    # Tope del job: ~1,9 veces la corrida más larga observada (95 min el 2026-10-23; 76-95 min en las corridas verdes de ese día).
-    # Antes el único tope era el de 6 h de GitHub: el run 409 de #48 estuvo 4 h en PHPUnit sin avanzar.
-    timeout-minutes: 180
+    # Tope del job: ~1,5 veces la corrida más lenta observada (PHPUnit 60 min + QA y resto: ~160 min en la corrida de #51 del 2026-10-23; 76-95 min en las
+    # corridas rápidas del mismo día). Antes el único tope era el de 6 h de GitHub: el run 409 de #48 estuvo 3 h 56 min en PHPUnit sin avanzar.
+    timeout-minutes: 240
 
     services:
       mysql:
@@ -134,11 +134,11 @@ jobs:
           if-no-files-found: ignore
 
       - name: Ejecutar suite completa de PHPUnit (sin caché y orden aleatorio)
-        # Observado: 33-38 min. El límite es ~2 veces eso (4500 s) y lo aplica scripts/ci_con_limite.sh: si se supera, captura procesos y consultas/bloqueos
+        # Observado: 33-38 min en corridas rápidas y 60 min en la más lenta (#51, 2026-10-23). El límite es 100 min (6000 s), ~1,7 veces lo más lento, y lo aplica scripts/ci_con_limite.sh: si se supera, captura procesos y consultas/bloqueos
         # de MySQL MIENTRAS la suite sigue viva y recién después la termina (el ejecutor, al agotar el tiempo del paso, mata el árbol sin dejar ver nada).
         # El registro de eventos (prueba a prueba) deja ver la última prueba iniciada. timeout-minutes es solo la red de seguridad.
-        timeout-minutes: 80
-        run: bash scripts/ci_con_limite.sh 4500 php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --order-by=random --colors=never --log-teamcity "$RUNNER_TEMP/phpunit-eventos.txt"
+        timeout-minutes: 105
+        run: bash scripts/ci_con_limite.sh 6000 php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --order-by=random --colors=never --log-teamcity "$RUNNER_TEMP/phpunit-eventos.txt"
 
       - name: Conservar registro de eventos de PHPUnit
         if: always()
@@ -150,21 +150,24 @@ jobs:
 
       # La validación independiente de los XLSX exportados (ronda 5) usa dos lectores ajenos a nuestro escritor: openpyxl y LibreOffice.
       - name: Instalar lectores independientes de XLSX (openpyxl y LibreOffice Calc)
-        # Observado: 22 s a 12 min (apt-get update e instalación dependen de la red).
-        timeout-minutes: 25
+        # Observado: 22 s a 12 min en corridas rápidas; en la más lenta (#51, 2026-10-23) superó los 25 min y el paso falló por su propio tope. Depende de la red
+        # (apt-get update e instalación): se limitan los tiempos de red de apt y se reintenta, de modo que una conexión detenida falle o se reintente pronto.
+        timeout-minutes: 45
         run: |
           # Instalación del sistema: el QA lanza python3 con un entorno mínimo (sin HOME) y no vería el sitio de usuario.
           sudo python3 -m pip install --break-system-packages 'openpyxl==3.1.5'
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends libreoffice-calc
+          APT=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
+          sudo apt-get "${APT[@]}" update -qq
+          sudo apt-get "${APT[@]}" install -y -qq --no-install-recommends libreoffice-calc
           python3 -c "import openpyxl; print('openpyxl', openpyxl.__version__)"
           soffice --version
 
       - name: QA independiente (tests/Qa) en base MySQL aislada — obligatorio
         # Incluye las pruebas de concurrencia con procesos reales (DEF-02, DEF-06), HTTP real, correo, esquema y navegador.
-        # Observado: 33-37 min. Límite ~2 veces eso (4500 s, scripts/ci_con_limite.sh: captura el estado antes de terminar la suite); el registro de eventos
-        # permite ver la última prueba iniciada. timeout-minutes es solo la red de seguridad.
-        timeout-minutes: 80
+        # Observado: 33-37 min en corridas rápidas (la más lenta del día no llegó a completar este paso: falló antes). Límite 100 min (6000 s,
+        # scripts/ci_con_limite.sh: captura el estado antes de terminar la suite); el registro de eventos permite ver la última prueba iniciada.
+        # timeout-minutes es solo la red de seguridad.
+        timeout-minutes: 105
         # El arnés (tests/Qa/QaCase.php) aborta si DB_NAME no cumple appsalon_qa_*_test; nunca toca appsalon_ci_test.
         env:
           DB_NAME: appsalon_qa_test
@@ -181,7 +184,7 @@ jobs:
           mysql -h 127.0.0.1 -P 3306 -uroot appsalon_qa_test < database/schema_base.sql
           php database/migrador.php up
           test -x "$CHROME_BIN"
-          bash scripts/ci_con_limite.sh 4500 php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --colors=never --log-junit "$RUNNER_TEMP/qa-junit.xml" --log-teamcity "$RUNNER_TEMP/qa-eventos.txt" tests/Qa
+          bash scripts/ci_con_limite.sh 6000 php -d variables_order=EGPCS vendor/bin/phpunit --do-not-cache-result --colors=never --log-junit "$RUNNER_TEMP/qa-junit.xml" --log-teamcity "$RUNNER_TEMP/qa-eventos.txt" tests/Qa
           php scripts/ci_verificar_omitidas.php "$RUNNER_TEMP/qa-junit.xml" .github/qa_omitidas_permitidas.txt
 
       - name: Conservar informe JUnit de QA
