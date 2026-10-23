@@ -27,7 +27,7 @@ final class ErpBiControlCalendarioIntegrationTest extends TestCase
     /** @return array<string,array<string,mixed>> filas de una vista de control indexadas por «vista.columna» */
     private function filas(string $vista):array
     {
-        $r=[];foreach($this->db->query("SELECT * FROM `$vista`")->fetch_all(MYSQLI_ASSOC) as $f)$r[$f['vista'].'.'.$f['columna']]=$f;return $r;
+        $r=[];foreach($this->db->query("SELECT * FROM `$vista` ORDER BY vista,columna")->fetch_all(MYSQLI_ASSOC) as $f)$r[$f['vista'].'.'.$f['columna']]=$f;return $r;
     }
     private function cita(string $fecha):int
     {
@@ -42,7 +42,8 @@ final class ErpBiControlCalendarioIntegrationTest extends TestCase
         sort($reales);sort($vigiladas);
         self::assertSame($reales,$vigiladas,'cada columna de fecha de una vista de hechos debe estar vigilada: añadirla a bi_dim_fecha y a las vistas de control');
         self::assertCount(28,$vigiladas);
-        self::assertSame(['bi_rh_asistencia','bi_rh_ausencias','bi_rh_comisiones_liquidaciones','bi_rh_comisiones_movimientos'],array_values(array_unique(array_map(static fn($k)=>explode('.',$k)[0],array_keys($this->filas(self::CONTROL_LABORAL))))),'la vista laboral solo vigila hechos laborales');
+        $laborales=array_values(array_unique(array_map(static fn($k)=>explode('.',$k)[0],array_keys($this->filas(self::CONTROL_LABORAL)))));sort($laborales);
+        self::assertSame(['bi_rh_asistencia','bi_rh_ausencias','bi_rh_comisiones_liquidaciones','bi_rh_comisiones_movimientos'],$laborales,'la vista laboral solo vigila hechos laborales');
         foreach(array_keys($this->filas(self::CONTROL_COMERCIAL)) as $k)self::assertStringNotContainsString('bi_rh_',$k,'la vista comercial no toca hechos laborales');
     }
 
