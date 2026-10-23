@@ -3,7 +3,7 @@
 Workflow `.github/workflows/ci.yml`, job `tests`.
 
 ## Por qué
-El 2026-10-23 el run 409 (PR #48, `3393a39`) estuvo **3 h 56 min** en el paso de PHPUnit (de 00:34 a 04:30 UTC) sin avanzar, hasta que se canceló a mano. El único tope era el de 6 h por defecto de GitHub y el paso no dejaba ningún registro de qué prueba estaba en ejecución, por lo que **la causa no se pudo determinar**. No hay evidencia para atribuirla a la infraestructura (ni a una prueba concreta): esa corrida se repitió sobre el mismo código y terminó en verde. Este cambio no pretende explicarla, sino acotar su costo y dejar evidencia si vuelve a ocurrir.
+El 2026-10-23 el run 409 (PR #48, `3393a39`) estuvo **3 h 56 min** en el paso de PHPUnit (de 00:34 a 04:30 UTC) sin avanzar, hasta que se canceló a mano. El único tope era el de 6 h por defecto de GitHub y el paso no dejaba ningún registro de qué prueba estaba en ejecución, por lo que **la causa no se pudo determinar**. No hay evidencia para atribuirla a la infraestructura ni a una prueba concreta: no se conserva registro por prueba y el log del paso no estaba disponible mientras corría. La cabeza siguiente del PR (`73175f3`) pasó en 77 min, pero con código distinto, así que no prueba nada sobre la causa. Este cambio no pretende explicarla, sino acotar su costo y dejar evidencia si vuelve a ocurrir.
 
 ## Duraciones observadas (corridas en verde del 2026-10-23: #48 `73175f3`, #49 `e6117a6`, #50 `5ebae83`)
 
