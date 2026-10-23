@@ -243,6 +243,33 @@ final class ErpPresupuestoIntegrationTest extends TestCase
         self::assertSame($this->cuentaComisiones,(int)$this->r->uno("SELECT cuenta_id n FROM erp_cont_roles WHERE rol='gasto_comisiones'")['n'],'el rol no cambió');
         $c->rol($this->owner,$this->d(['rol'=>'gasto_comisiones','cuenta'=>'6.1.01']));// la misma cuenta sigue permitida
     }
+    public function testVariasDevolucionesParcialesSumanExactamenteElImpuestoDeLaLinea():void
+    {
+        $srv=$this->ins("INSERT INTO servicios(nombre,precio,duracion_minutos) VALUES('Servicio de centavos',0.07,10)");
+        $v=$this->venta('confirmada','2026-05-05 10:00:00');$l=$this->linea($v,$srv,null,6,0,1500,1,7);// total 7 centavos = base 6 + imp. 1
+        foreach([[2,'2026-05-06 09:00:00'],[3,'2026-05-07 09:00:00'],[2,'2026-05-08 09:00:00']] as [$monto,$cuando])
+            $this->ins("INSERT INTO erp_devoluciones(venta_id,linea_id,cantidad_milesimas,monto_centavos,cantidad_entregada_milesimas,reintegrar_stock,motivo,actor_id,creado_en) VALUES($v,$l,300,$monto,0,0,'Parcial',{$this->owner},'$cuando')");
+        $r=$this->db->query("SELECT SUM(real_base_centavos) b,SUM(real_impuesto_centavos) i,SUM(devoluciones_impuesto_centavos) di,SUM(ventas_impuesto_centavos) vi FROM bi_presupuesto_real_mes WHERE tipo='servicio' AND objetivo_id=$srv")->fetch_assoc();
+        self::assertSame([0,0,1,1],[(int)$r['b'],(int)$r['i'],(int)$r['di'],(int)$r['vi']],'devuelta por completo en tres partes: ni impuesto residual ni base negativa (2+3+2 de 7 con 1 de impuesto)');
+        // Parcial real: la mitad exacta se reparte con el acumulado y nunca excede el impuesto de la línea.
+        $v2=$this->venta('confirmada','2026-06-05 10:00:00');$l2=$this->linea($v2,$srv,null,10000,0,1500,1500,11500);
+        foreach([[3833,'2026-06-06 09:00:00'],[3833,'2026-06-07 09:00:00']] as [$monto,$cuando])
+            $this->ins("INSERT INTO erp_devoluciones(venta_id,linea_id,cantidad_milesimas,monto_centavos,cantidad_entregada_milesimas,reintegrar_stock,motivo,actor_id,creado_en) VALUES($v2,$l2,333,$monto,0,0,'Parcial',{$this->owner},'$cuando')");
+        $di=(int)$this->db->query("SELECT SUM(devoluciones_impuesto_centavos) FROM bi_presupuesto_real_mes WHERE tipo='servicio' AND objetivo_id=$srv AND mes=6")->fetch_row()[0];
+        self::assertSame(intdiv(7666*1500*2+11500,2*11500),$di,'impuesto devuelto = redondeo del acumulado (7.666 de 11.500)');
+    }
+    public function testLaPlantillaDeUnaCuentaArchivadaSeAceptaSinCambiosYNoSeModifica():void
+    {
+        $v=$this->presupuesto();$this->cifra($v,'gasto:'.$this->cuentaOperativo,2,'20.00');$this->cifra($v,'servicio:'.$this->s1,3,'5.00','0.75');
+        $this->db->query("UPDATE erp_cont_cuentas SET activa=0 WHERE id={$this->cuentaOperativo}");
+        $csv=$this->svc()->plantilla($v);
+        $this->rechazo(fn()=>$this->svc()->cargar($this->finanzas,$this->d(['version_id'=>$v,'csv'=>$csv])),null,'no trae cifras nuevas');// ida y vuelta sin tocar: no se rechaza por la cuenta archivada
+        $cambiado=preg_replace('/^(3;servicio;'.$this->s1.';[^;]*;)5\.00;0\.75$/m','${1}6.00;0.90',$csv);self::assertNotSame($csv,$cambiado);
+        $c=$this->svc()->cargar($this->finanzas,$this->d(['version_id'=>$v,'csv'=>$cambiado]))['recurso_id'];
+        self::assertSame(1,(int)$this->svc()->carga($c)['n_filas'],'cambiar otro concepto con la fila archivada intacta se acepta');
+        $tocado=preg_replace('/^(2;gasto;6\.1\.05;[^;]*;)20\.00;$/m','${1}25.00;',$csv);self::assertNotSame($csv,$tocado);
+        $this->rechazo(fn()=>$this->svc()->cargar($this->finanzas,$this->d(['version_id'=>$v,'csv'=>$tocado])),null,'imputable y activa');
+    }
     public function testCargaCsvValidaTodoMuestraVistaPreviaYSoloAlConfirmarAplica():void
     {
         $v=$this->presupuesto();$s=$this->s1;$p=$this->p1;

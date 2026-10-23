@@ -169,7 +169,7 @@ final class ErpPresupuestoService extends ErpService
      * Valida el destino y devuelve su identificador. $porCodigo: la referencia de una cuenta de gasto es su código (CSV) en vez de su id.
      * @return array{objetivo_id:int,servicio_id:?int,producto_id:?int,cuenta_id:?int,nombre:string}
      */
-    private function resolver(string $tipo,string $ref,bool $porCodigo=false,bool $soloQuitar=false):array
+    private function resolver(string $tipo,string $ref,bool $porCodigo=false,bool $relajado=false):array
     {
         $vacio=['servicio_id'=>null,'producto_id'=>null,'cuenta_id'=>null];
         switch($tipo){
@@ -183,7 +183,7 @@ final class ErpPresupuestoService extends ErpService
                 $c=$porCodigo?$this->r->uno('SELECT id,codigo,nombre,tipo,imputable,activa FROM erp_cont_cuentas WHERE codigo=?',[$ref])
                     :$this->r->uno('SELECT id,codigo,nombre,tipo,imputable,activa FROM erp_cont_cuentas WHERE id=?',[$this->id($ref)]);
                 if(!$c)throw new ErpException('La cuenta contable '.$ref.' no existe.');
-                if(!in_array($c['tipo'],['gasto','costo'],true)||(!$soloQuitar&&((int)$c['imputable']!==1||(int)$c['activa']!==1)))throw new ErpException('La cuenta '.$c['codigo'].' no es una cuenta de gasto o costo imputable y activa.');
+                if(!in_array($c['tipo'],['gasto','costo'],true)||(!$relajado&&((int)$c['imputable']!==1||(int)$c['activa']!==1)))throw new ErpException('La cuenta '.$c['codigo'].' no es una cuenta de gasto o costo imputable y activa.');
                 $rol=$this->r->uno("SELECT cuenta_id FROM erp_cont_roles WHERE rol='gasto_comisiones'");
                 if($rol&&(int)$rol['cuenta_id']===(int)$c['id'])throw new ErpException('La cuenta '.$c['codigo'].' es la de comisiones: presupuéstala en la partida «Comisiones» para no contarla dos veces.');
                 return ['objetivo_id'=>(int)$c['id'],'nombre'=>$c['codigo'].' '.$c['nombre']]+array_merge($vacio,['cuenta_id'=>(int)$c['id']]);
@@ -236,13 +236,16 @@ final class ErpPresupuestoService extends ErpService
                 $mes=$this->mes($mes);
                 if($tipo==='comisiones'&&$ref!=='')throw new ErpException('la partida de comisiones no lleva referencia.');
                 if($tipo!=='comisiones'&&$ref==='')throw new ErpException('indica la referencia (id o código).');
-                $destino=$this->resolver($tipo,$tipo==='comisiones'?'0':$ref,$tipo==='gasto');
+                // Primero se resuelve sin exigir cuenta activa: una fila IGUAL a la cifra vigente de una cuenta archivada es válida (ida y vuelta de la plantilla).
+                $destino=$this->resolver($tipo,$tipo==='comisiones'?'0':$ref,$tipo==='gasto',true);
                 [$b,$im]=$this->importes($tipo,$base,$imp);
                 $clave=$mes.'|'.$tipo.'|'.$destino['objetivo_id'];
                 if(isset($vistas[$clave]))throw new ErpException('repite el mes y concepto de la línea '.$vistas[$clave].'.');
                 $vistas[$clave]=$n;
                 $ex=$this->r->uno('SELECT base_centavos,impuesto_centavos FROM erp_presupuesto_lineas WHERE version_id=? AND mes=? AND tipo=? AND objetivo_id=?',[$version,$mes,$tipo,$destino['objetivo_id']]);
                 if($ex&&(int)$ex['base_centavos']===$b&&(int)$ex['impuesto_centavos']===$im)continue;
+                // Una cifra nueva o modificada sí exige que la cuenta siga imputable y activa.
+                if($tipo==='gasto')$this->resolver($tipo,$ref,true);
                 $filas[]=['mes'=>$mes,'tipo'=>$tipo,'objetivo_id'=>$destino['objetivo_id'],'nombre'=>$destino['nombre'],'base'=>$b,'impuesto'=>$im,'accion'=>$ex?'modificar':'crear',
                     'base_antes'=>$ex?(int)$ex['base_centavos']:null,'impuesto_antes'=>$ex?(int)$ex['impuesto_centavos']:null];
             }catch(ErpException|\InvalidArgumentException $e){

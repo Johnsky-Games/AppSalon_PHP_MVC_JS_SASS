@@ -20,7 +20,7 @@ Pantalla: `/gestion/presupuestos` (menú «Presupuestos» de Gestión). Plantill
 ## Tratamiento de descuentos y devoluciones
 
 * **Descuentos:** el presupuesto de ventas es **venta neta de descuentos**. El descuento ya está fuera del total de la línea; no se presupuesta aparte. El real lo muestra como columna informativa (`descuentos_informativo_centavos`), sin restarlo otra vez.
-* **Devoluciones:** restan de las ventas **en el mes en que se registra la devolución** (`erp_devoluciones.creado_en`, fecha propia), no en el mes de la venta original. Su base e impuesto se reparten con la proporción de su línea (redondeo a mitad hacia arriba, al centavo, por devolución); una devolución completa devuelve exactamente el impuesto de la línea.
+* **Devoluciones:** restan de las ventas **en el mes en que se registra la devolución** (`erp_devoluciones.creado_en`, fecha propia), no en el mes de la venta original. Su base e impuesto se reparten con la proporción de su línea sobre el **acumulado devuelto de la línea** (redondeo a mitad hacia arriba): varias devoluciones parciales suman exactamente el impuesto de la línea, sin impuesto residual ni base negativa.
 * Solo cuentan las ventas en estado `confirmada`, y sus devoluciones también: una venta devuelta y luego anulada no suma ingreso negativo; las que están en borrador o anuladas no cuentan.
 * Pendiente de decisión del propietario: si la política de comparación debe ser venta *bruta* de devoluciones. Hoy la desviación usa venta **neta** de devoluciones y las dos componentes se ven por separado en `bi_presupuesto_real_mes`.
 
@@ -81,7 +81,7 @@ El mes se une con `bi_dim_fecha.anio_mes` (AAAAMM). **La dimensión de fecha se 
 
 ## Límites conocidos
 * **El rol contable `gasto_comisiones` no se reasigna a otra cuenta mientras existan presupuestos** (`ErpContabilidadService::rol()` responde 409): la partida de comisiones se define por ese rol y reasignarlo reclasificaría el histórico y las versiones aprobadas, y haría fallar la copia de una revisión. Volver a asignar la misma cuenta sí se permite.
-* La plantilla CSV incluye también los productos y cuentas archivados que la versión ya presupuesta, y neutraliza fórmulas (`=`, `+`, `-`, `@`) en los nombres.
+* La plantilla CSV incluye también los productos y cuentas archivados que la versión ya presupuesta (y una fila sin cambios de una cuenta archivada se acepta al subirla; cambiarla no), y neutraliza fórmulas (`=`, `+`, `-`, `@`) en los nombres.
 * Una cuenta de gasto archivada después de presupuestarla **no impide abrir una revisión** (la copia la conserva); solo se puede quitar su cifra, no escribirla de nuevo. El trigger exige cuenta de gasto o costo y no la de comisiones; que sea imputable y activa lo exige el servicio al escribir o cargar.
 
 * Cobros sin presupuesto; no hay presupuesto por profesional ni por centro de costo.
