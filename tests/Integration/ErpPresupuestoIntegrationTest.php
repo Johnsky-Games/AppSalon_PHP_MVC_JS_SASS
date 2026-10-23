@@ -575,7 +575,8 @@ final class ErpPresupuestoIntegrationTest extends TestCase
             if($x['sentido']==='gasto'){self::assertNull($x['componentes'],'los gastos y comisiones no tienen componentes de venta');continue;}
             $k=$x['componentes'];
             self::assertSame($k['venta'],$k['bruta']-$k['descuentos'],"{$x['mes']}|{$x['tipo']}: bruta − descuentos = venta");
-            self::assertSame($x['real_base'],$k['venta']-$k['devoluciones'],"{$x['mes']}|{$x['tipo']}: venta − devoluciones = lo que se compara");
+            self::assertSame($x['real_base'],$k['venta']-$k['devoluciones']-$k['anulaciones'],"{$x['mes']}|{$x['tipo']}: venta − devoluciones − anulaciones = lo que se compara");
+            self::assertSame(0,$k['anulaciones'],'el estado actual no tiene componente de anulaciones: las ventas anuladas simplemente no cuentan');
             self::assertSame($x['real_base'],$k['neta']);
         }
         $r=$c['resumen']['ventas']['componentes'];
@@ -605,6 +606,120 @@ final class ErpPresupuestoIntegrationTest extends TestCase
         self::assertArrayNotHasKey('5|servicio|'.$this->s1,$anu,'y la devolución de mayo desaparece con la venta');
         self::assertSame(1,$this->n("SELECT COUNT(*) FROM erp_eventos WHERE tipo='venta_anulada' AND entidad='venta' AND entidad_id=$vta"),'la anulación queda en el registro de eventos con su fecha y actor');
     }
+    // ---- comparativo por eventos con fecha de corte (066) ----
+    private function devolucion(int $venta,int $linea,int $monto,string $cuando):void
+    {
+        $this->ins("INSERT INTO erp_devoluciones(venta_id,linea_id,cantidad_milesimas,monto_centavos,cantidad_entregada_milesimas,reintegrar_stock,motivo,actor_id,creado_en) VALUES($venta,$linea,500,$monto,0,0,'Devolución de ensayo',{$this->owner},'$cuando')");
+    }
+    private function anulada(int $venta,string $cuando):void
+    {
+        $this->db->query("UPDATE erp_ventas SET estado='anulada' WHERE id=$venta");
+        $this->ins("INSERT INTO erp_eventos(tipo,entidad,entidad_id,actor_id,datos_json,creado_en) VALUES('venta_anulada','venta',$venta,{$this->owner},'{}','$cuando')");
+    }
+    /** Ventas del mismo año con anulaciones posteriores (servicio S1, sin la venta de otro año): ver la tabla de montos en cada prueba. */
+    private function ventasConAnulaciones():void
+    {
+        // VA: 100,00 − 10,00 desc. + 15 %: base 90,00, imp. 13,50. Devuelta en dos partes (5.175 y 5.175) y anulada después (neto 0 al anular).
+        $va=$this->venta('confirmada','2026-01-10 10:00:00');$la=$this->linea($va,$this->s1,null,10000,1000,1500,1350,10350);
+        $this->devolucion($va,$la,5175,'2026-02-05 11:00:00');$this->devolucion($va,$la,5175,'2026-03-07 11:00:00');$this->anulada($va,'2026-04-02 09:00:00');
+        // VB: 50,00 sin impuesto, devolución parcial de 20,00 el 10/02 y anulada el 03/05 (queda por anular 30,00).
+        $vb=$this->venta('confirmada','2026-01-20 10:00:00');$lb=$this->linea($vb,$this->s1,null,5000,0,0,0,5000);
+        $this->devolucion($vb,$lb,2000,'2026-02-10 11:00:00');$this->anulada($vb,'2026-05-03 09:00:00');
+        // VC: 40,00, nunca anulada (control).
+        $vc=$this->venta('confirmada','2026-02-12 10:00:00');$this->linea($vc,$this->s1,null,4000,0,0,0,4000);
+        // VD: producto P1, confirmada y anulada el mismo mes.
+        $vd=$this->venta('confirmada','2026-03-03 10:00:00');$this->linea($vd,null,$this->p1,1000,0,0,0,1000);$this->anulada($vd,'2026-03-20 09:00:00');
+        // VF: anulada SIN evento de anulación (dato antiguo): se trata como anulada en el instante de su confirmación.
+        $vf=$this->venta('anulada','2026-03-05 10:00:00');$this->linea($vf,$this->s1,null,2500,0,0,0,2500);
+        // VH: anulada el 5/04 y con una devolución (inconsistente) el 9/04, posterior a la anulación: se ignora.
+        $vh=$this->venta('confirmada','2026-04-01 10:00:00');$lh=$this->linea($vh,$this->s1,null,1000,0,0,0,1000);$this->anulada($vh,'2026-04-05 09:00:00');$this->devolucion($vh,$lh,400,'2026-04-09 11:00:00');
+    }
+    /** Suma por mes de un destino, sin los meses en cero (hay filas en cero porque el presupuesto tiene cifras en meses sin movimiento). */
+    private function sumaMeses(array $filas,string $tipo,int $obj,string $campo='real_base'):array
+    {
+        $r=[];foreach($filas as $f)if($f['tipo']===$tipo&&(int)$f['objetivo_id']===$obj)$r[$f['mes']]=($r[$f['mes']]??0)+$f[$campo];ksort($r);return array_filter($r,static fn($x)=>$x!==0);
+    }
+    public function testElCriterioPorEventosPreservaLoOcurridoAntesDeUnaAnulacionPosteriorYElEstadoActualLoReescribe():void
+    {
+        $this->ventasConAnulaciones();$v=$this->presupuestoAprobado();
+        $ev=$this->svc()->comparativo($v,'eventos');$ac=$this->svc()->comparativo($v);
+        self::assertSame(['eventos',null],[$ev['criterio'],$ev['corte']]);self::assertSame(['estado_actual',null],[$ac['criterio'],$ac['corte']],'el criterio por defecto sigue siendo el estado actual y queda identificado');
+        // S1 por eventos: cada hecho en su mes (ver comentarios de ventasConAnulaciones).
+        self::assertSame([1=>14000,2=>-2500,3=>-4500,5=>-3000],$this->sumaMeses($ev['filas'],'servicio',$this->s1),'enero conserva la venta aunque se anule después; la anulación cae en el mes en que ocurrió');
+        self::assertSame([1=>1350,2=>-675,3=>-675],$this->sumaMeses($ev['filas'],'servicio',$this->s1,'real_impuesto'),'el impuesto de las devoluciones parciales y totales suma exactamente el de la línea');
+        // El estado actual reescribe: solo queda la venta que nunca se anuló.
+        self::assertSame([2=>4000],$this->sumaMeses($ac['filas'],'servicio',$this->s1),'por estado actual las ventas anuladas desaparecen de enero y las devoluciones de febrero y marzo');
+        // Sin duplicar: sumados todos los eventos del año, coincide con el estado actual.
+        self::assertSame(array_sum($this->sumaMeses($ac['filas'],'servicio',$this->s1)),array_sum($this->sumaMeses($ev['filas'],'servicio',$this->s1)),'total anual igual en los dos criterios (misma moneda, sin duplicar importes)');
+        self::assertSame(0,array_sum($this->sumaMeses($ev['filas'],'servicio',$this->s1,'real_impuesto')));
+        $p1=$this->indexado($ev['filas'])['3|producto|'.$this->p1];
+        self::assertSame([1000,1000,0],[$p1['componentes']['venta'],$p1['componentes']['anulaciones'],$p1['real_base']],'venta y anulación del mismo mes: se ven las dos y el neto es 0');
+        self::assertSame(0,$this->indexado($ac['filas'])['3|producto|'.$this->p1]['real_base'],'por estado actual esa venta anulada no existe (la fila es solo por el presupuesto)');
+        // Cadena de componentes en cada fila: bruta − descuentos = venta; venta − devoluciones − anulaciones = neta.
+        foreach($ev['filas'] as $f){
+            if($f['componentes']===null)continue;$k=$f['componentes'];
+            self::assertSame($k['venta'],$k['bruta']-$k['descuentos'],"{$f['mes']}|{$f['tipo']}: bruta − descuentos");
+            self::assertSame($f['real_base'],$k['venta']-$k['devoluciones']-$k['anulaciones'],"{$f['mes']}|{$f['tipo']}: venta − devoluciones − anulaciones");
+        }
+        $ene=$this->indexado($ev['filas'])['1|servicio|'.$this->s1]['componentes'];
+        self::assertSame([15000,1000,14000,0,0,14000],[$ene['bruta'],$ene['descuentos'],$ene['venta'],$ene['devoluciones'],$ene['anulaciones'],$ene['neta']]);
+        $abr=$this->indexado($ev['filas'])['5|servicio|'.$this->s1]['componentes'];
+        self::assertSame([0,0,0,0,3000,-3000],[$abr['bruta'],$abr['descuentos'],$abr['venta'],$abr['devoluciones'],$abr['anulaciones'],$abr['neta']],'mayo: la anulación resta lo que quedaba de VB (50,00 − 20,00)');
+        $r=$ev['resumen']['ventas']['componentes'];
+        self::assertSame($r['venta']-$r['devoluciones']-$r['anulaciones'],$r['neta']);
+        // La anulación sin evento (dato antiguo) se marca y no queda como ingreso.
+        self::assertSame(1,$this->n("SELECT COALESCE(SUM(anulaciones_sin_evento),0) FROM bi_presupuesto_real_eventos WHERE fecha_evento='2026-03-05'"));
+        self::assertSame(0,$this->n("SELECT COALESCE(SUM(anulaciones_sin_evento),0) FROM bi_presupuesto_real_eventos WHERE fecha_evento<>'2026-03-05'"));
+    }
+    public function testLaFechaDeCorteMuestraLoQueSeSabiaALaFechaIncluyendoElDiaDeLaAnulacion():void
+    {
+        $this->ventasConAnulaciones();$v=$this->presupuestoAprobado();
+        $acum=fn(string $corte)=>array_sum($this->sumaMeses($this->svc()->comparativo($v,'eventos',$corte)['filas'],'servicio',$this->s1));
+        self::assertSame(14000,$acum('2026-01-31'));
+        self::assertSame(8000,$acum('2026-04-01'),'antes de las anulaciones de VA (2/04) y VH (5/04): VH ya vendió 10,00');
+        self::assertSame(7000,$acum('2026-05-02'),'el día anterior a la anulación de VB sigue contando sus 30,00 netos (VC 40,00 + VB 30,00)');
+        self::assertSame(4000,$acum('2026-05-03'),'el corte incluye el día de la anulación');
+        self::assertSame(4000,$acum('2026-12-31'));
+        $c=$this->svc()->comparativo($v,'eventos','2026-05-02');self::assertSame(['eventos','2026-05-02'],[$c['criterio'],$c['corte']],'el resultado identifica el criterio y el corte');
+        self::assertSame(7000,$c['resumen']['ventas']['rb'],'el resumen usa el mismo corte');
+        // Entradas no válidas.
+        foreach([['otro',null],['estado_actual','2026-05-02'],['eventos','2026-02-30'],['eventos','ayer'],['eventos','2026-5-2']] as [$cr,$co]){
+            $e=$this->rechazo(fn()=>$this->svc()->comparativo($v,$cr,$co),422);self::assertInstanceOf(ErpException::class,$e);
+        }
+    }
+    public function testLaFechaDeCorteTambienAplicaAlGastoDevengadoDelLibro():void
+    {
+        $this->hechos();$v=$this->presupuestoAprobado();
+        $f=$this->indexado($this->svc()->comparativo($v,'eventos','2026-03-16')['filas']);
+        self::assertSame(30000,$f['3|gasto|'.$this->cuentaOperativo]['real_base'],'solo el asiento del 15/03');
+        self::assertSame(0,$f['3|comisiones|0']['real_base'],'las comisiones se asientan el 20/03: aún no (la fila existe solo por su presupuesto)');
+        self::assertSame(0,$f['4|gasto|'.$this->cuentaOperativo]['real_base']??0,'abril aún no');
+        $todo=$this->indexado($this->svc()->comparativo($v,'eventos')['filas']);$act=$this->indexado($this->svc()->comparativo($v)['filas']);
+        foreach(['3|gasto|'.$this->cuentaOperativo,'4|gasto|'.$this->cuentaOperativo,'3|comisiones|0','3|gasto|'.$this->cuentaCosto] as $k)self::assertSame($act[$k]['real_base'],$todo[$k]['real_base'],"$k igual sin corte");
+    }
+    public function testUnaVentaDeOtroAnioAnuladaEnElAnioSiguienteResta_ElAcumuladoDeLosDosAniosNoSeDuplica():void
+    {
+        $ve=$this->venta('confirmada','2025-12-28 10:00:00');$le=$this->linea($ve,$this->s1,null,7700,0,0,0,7700);
+        $this->devolucion($ve,$le,3000,'2026-01-08 11:00:00');$this->anulada($ve,'2026-02-01 09:00:00');
+        $v=$this->presupuestoAprobado();$ev=$this->svc()->comparativo($v,'eventos');$ac=$this->svc()->comparativo($v);
+        self::assertSame([1=>-3000,2=>-4700],$this->sumaMeses($ev['filas'],'servicio',$this->s1),'2026 muestra la devolución y la anulación en sus meses; la venta quedó en 2025');
+        self::assertSame([],$this->sumaMeses($ac['filas'],'servicio',$this->s1),'el estado actual no muestra nada de esa venta en 2026 (anulada)');
+        self::assertSame(7700,$this->n("SELECT SUM(real_base_centavos) FROM bi_presupuesto_real_eventos WHERE anio=2025 AND tipo='servicio'"));
+        self::assertSame(0,$this->n("SELECT SUM(real_base_centavos) FROM bi_presupuesto_real_eventos WHERE tipo='servicio'"),'entre los dos años la venta anulada netea 0: ni se duplica ni se pierde');
+    }
+    public function testUnaAnulacionRealRegistraSuEventoYLaVistaLaUbicaEnEseDia():void
+    {
+        $vta=$this->venta('confirmada','2026-03-20 10:00:00');$this->linea($vta,$this->s1,null,1000,0,0,0,1000);
+        (new \Services\ErpVentaService($this->r))->anular($this->owner,$this->d(['venta_id'=>$vta,'motivo'=>'Anulación de ensayo']));
+        $dia=$this->db->query("SELECT DATE(creado_en) FROM erp_eventos WHERE tipo='venta_anulada' AND entidad='venta' AND entidad_id=$vta")->fetch_row()[0];
+        self::assertNotNull($dia,'la anulación deja su evento con fecha');
+        $f=$this->db->query("SELECT fecha_evento,anulaciones_base_centavos,anulaciones_sin_evento FROM bi_presupuesto_real_eventos WHERE anulaciones_base_centavos>0")->fetch_assoc();
+        self::assertSame([$dia,'1000','0'],[$f['fecha_evento'],$f['anulaciones_base_centavos'],$f['anulaciones_sin_evento']],'la anulación cae en el día del evento y no es una estimación');
+        self::assertSame(0,$this->n("SELECT SUM(real_base_centavos) FROM bi_presupuesto_real_eventos"));
+        $c=$this->db->query("SELECT estado,filas_sin_dia FROM bi_control_calendario WHERE vista='bi_presupuesto_real_eventos' AND columna='fecha_evento'")->fetch_assoc();
+        self::assertSame(['ok','0'],[$c['estado'],$c['filas_sin_dia']],'el control del calendario vigila la fecha de la vista de eventos');
+    }
+
     private function sesion(int $usuario,string $portal='equipo'):void
     {
         if(session_status()===PHP_SESSION_NONE)session_start();$ctx=(new \Services\AuthorizationService($this->db))->contexto($usuario);
@@ -633,6 +748,14 @@ final class ErpPresupuestoIntegrationTest extends TestCase
             $h=$this->pagina(['version'=>(string)$v]);
             foreach(['versión 1','Guardar cifra','Descargar plantilla','Validar y ver vista previa','Corte de ensayo','Fuente y fecha de cada métrica','Presupuesto frente a lo real','Historial de cambios'] as $t)self::assertStringContainsString($t,$h,$t);
             self::assertStringNotContainsString('Aprobar esta versión',$h,'finanzas prepara pero no aprueba');
+            // Criterio de lo real visible e identificable: estado actual por defecto; por eventos con corte opcional; una entrada no válida se rechaza.
+            self::assertStringContainsString('Criterio: estado actual, recalculado hoy',$h);
+            $h2=$this->pagina(['version'=>(string)$v,'criterio'=>'eventos','corte'=>'2026-05-02']);
+            self::assertStringContainsString('Criterio: por eventos con corte al 2026-05-02',$h2);self::assertStringContainsString('name="corte"',$h2);
+            self::assertStringContainsString('Criterio: por eventos, todos los eventos del año',$this->pagina(['version'=>(string)$v,'criterio'=>'eventos']));
+            foreach([['criterio'=>'otro'],['criterio'=>'eventos','corte'=>'2026-02-30']] as $mal){
+                ob_start();try{$this->pagina(['version'=>(string)$v]+$mal);}catch(\AppTerminationException $x){self::assertSame(422,$x->getStatusCode());}finally{ob_end_clean();}
+            }
             // Carga con vista previa desde el formulario.
             self::assertSame(303,$this->post(['accion'=>'presupuesto_cargar','version_id'=>(string)$v,'csv'=>$this->csv("3;comisiones;;Comisiones;100.00;")]));
             $c=(int)$this->r->uno('SELECT id FROM erp_presupuesto_cargas')['id'];self::assertSame(1,$this->n('SELECT COUNT(*) FROM erp_presupuesto_lineas'));

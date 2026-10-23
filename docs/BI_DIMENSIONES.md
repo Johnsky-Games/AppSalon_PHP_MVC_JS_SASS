@@ -71,7 +71,7 @@ El proyecto no crea usuarios ni toca Docker; los crea el propietario.
 
 | Vista | Grupo | Qué vigila |
 | --- | --- | --- |
-| `bi_control_calendario` | comercial | las 21 columnas de fecha de los hechos comerciales |
+| `bi_control_calendario` | comercial | las 22 columnas de fecha de los hechos comerciales (21 + `bi_presupuesto_real_eventos.fecha_evento`, 066) |
 | `bi_rh_control_calendario` | laboral | las 7 columnas de fecha de los hechos laborales (solo agregados, sin personas) |
 
 Una fila por (vista, columna) **siempre** (con ceros si no hay datos: «sin filas» no se confunde con «todo bien»): `filas_con_fecha`, `fecha_min`, `fecha_max`, `filas_sin_dia` (fechas sin su día en `bi_dim_fecha`) y `estado` = `ok` | `sin_correspondencia`. Un tablero de calidad de datos debe mostrar alerta si algún `estado` no es `ok`; la corrección es de datos (la fecha absurda) o, si es legítima, ampliar el rango de la dimensión.
