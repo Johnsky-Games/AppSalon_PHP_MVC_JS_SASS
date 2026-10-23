@@ -372,7 +372,7 @@ final class ErpPresupuestoService extends ErpService
             COALESCE(s.nombre,p.nombre,CONCAT(c.codigo,' ',c.nombre),IF(k.tipo='comisiones','Comisiones',IF(k.tipo='sin_clasificar','Ventas sin servicio ni producto',NULL))) nombre,
             l.id IS NOT NULL tiene,l.base_centavos pb,l.impuesto_centavos pi,
             COALESCE(r.real_base_centavos,0) rb,COALESCE(r.real_impuesto_centavos,0) ri,COALESCE(r.real_total_centavos,0) rt,
-            COALESCE(r.ventas_base_centavos,0) vb,COALESCE(r.devoluciones_base_centavos,0) db,COALESCE(r.descuentos_informativo_centavos,0) ds
+            COALESCE(r.ventas_base_centavos,0) vb,COALESCE(r.devoluciones_base_centavos,0) db,COALESCE(r.descuentos_informativo_centavos,0) ds,COALESCE(r.ventas_bruta_base_centavos,0) vbr
             FROM (SELECT mes,tipo,objetivo_id FROM erp_presupuesto_lineas WHERE version_id=? UNION SELECT mes,tipo,objetivo_id FROM bi_presupuesto_real_mes WHERE anio=?) k
             LEFT JOIN erp_presupuesto_lineas l ON l.version_id=? AND l.mes=k.mes AND l.tipo=k.tipo AND l.objetivo_id=k.objetivo_id
             LEFT JOIN bi_presupuesto_real_mes r ON r.anio=? AND r.mes=k.mes AND r.tipo=k.tipo AND r.objetivo_id=k.objetivo_id
@@ -382,6 +382,7 @@ final class ErpPresupuestoService extends ErpService
         // Por grupo: presupuesto (solo líneas presupuestadas), real de TODO el año (informativo) y real de los meses/conceptos que sí tienen presupuesto (comparable).
         $g=static fn()=>['pb'=>0,'pi'=>0,'rb'=>0,'rt'=>0,'rb_comparable'=>0,'rt_comparable'=>0,'hay'=>false];
         $res=['ventas'=>$g(),'gastos'=>$g(),'comisiones'=>$g()];
+        $res['ventas']['componentes']=['bruta'=>0,'descuentos'=>0,'venta'=>0,'devoluciones'=>0,'neta'=>0];
         foreach($filas as &$f){
             $f['mes']=(int)$f['mes'];$f['tiene']=(bool)$f['tiene'];
             $pb=$f['tiene']?(int)$f['pb']:null;$pi=$f['tiene']?(int)$f['pi']:null;
@@ -389,8 +390,11 @@ final class ErpPresupuestoService extends ErpService
             $f['real_base']=(int)$f['rb'];$f['real_impuesto']=(int)$f['ri'];$f['real_total']=(int)$f['rt'];
             $f['dev_base']=self::desviacion($f['real_base'],$pb);$f['dev_total']=self::desviacion($f['real_total'],$f['presupuesto_total']);
             $f['sentido']=in_array($f['tipo'],['gasto','comisiones'],true)?'gasto':'ingreso';
+            // Componentes explicativos de la base de venta: bruta − descuentos = venta; venta − devoluciones = neta (lo que se compara). No aplican a gastos ni comisiones.
+            $f['componentes']=$f['sentido']==='ingreso'?['bruta'=>(int)$f['vbr'],'descuentos'=>(int)$f['ds'],'venta'=>(int)$f['vb'],'devoluciones'=>(int)$f['db'],'neta'=>$f['real_base']]:null;
             $k=$f['tipo']==='comisiones'?'comisiones':($f['tipo']==='gasto'?'gastos':'ventas');
             $res[$k]['rb']+=$f['real_base'];$res[$k]['rt']+=$f['real_total'];
+            if($f['componentes']!==null)foreach($f['componentes'] as $q=>$x)$res['ventas']['componentes'][$q]+=$x;
             if($f['tiene']){
                 $res[$k]['hay']=true;$res[$k]['pb']+=$pb;$res[$k]['pi']+=$pi;$res[$k]['rb_comparable']+=$f['real_base'];$res[$k]['rt_comparable']+=$f['real_total'];
             }
