@@ -564,6 +564,47 @@ final class ErpPresupuestoIntegrationTest extends TestCase
     }
 
     // ---- interfaz ----
+    public function testLosComponentesDeLaVentaExplicanLaCifraNetaQueSeCompara():void
+    {
+        $this->hechos();$v=$this->presupuestoAprobado();$c=$this->svc()->comparativo($v);$f=$this->indexado($c['filas']);
+        $m=$f['3|servicio|'.$this->s1]['componentes'];
+        self::assertSame([10000,1000,9000,0,9000],[$m['bruta'],$m['descuentos'],$m['venta'],$m['devoluciones'],$m['neta']],'marzo: bruta 100,00 − descuento 10,00 = venta 90,00; sin devoluciones');
+        $a=$f['4|servicio|'.$this->s1]['componentes'];
+        self::assertSame([5000,0,5000,4500,500],[$a['bruta'],$a['descuentos'],$a['venta'],$a['devoluciones'],$a['neta']],'abril: venta 50,00 − devolución de base 45,00 (registrada en abril) = 5,00');
+        foreach($c['filas'] as $x){
+            if($x['sentido']==='gasto'){self::assertNull($x['componentes'],'los gastos y comisiones no tienen componentes de venta');continue;}
+            $k=$x['componentes'];
+            self::assertSame($k['venta'],$k['bruta']-$k['descuentos'],"{$x['mes']}|{$x['tipo']}: bruta − descuentos = venta");
+            self::assertSame($x['real_base'],$k['venta']-$k['devoluciones'],"{$x['mes']}|{$x['tipo']}: venta − devoluciones = lo que se compara");
+            self::assertSame($x['real_base'],$k['neta']);
+        }
+        $r=$c['resumen']['ventas']['componentes'];
+        self::assertSame([18000,1000,17000,4500,12500],[$r['bruta'],$r['descuentos'],$r['venta'],$r['devoluciones'],$r['neta']],'año 2026: 180,00 − 10,00 = 170,00 − 45,00 = 125,00 (la venta de 2025 no entra)');
+        self::assertSame($c['resumen']['ventas']['rb'],$r['neta']);
+        // La vista BI trae la misma bruta; en gastos y comisiones es 0.
+        self::assertSame(18000,$this->n("SELECT SUM(ventas_bruta_base_centavos) FROM bi_presupuesto_real_mes WHERE anio=2026 AND tipo IN('servicio','producto','sin_clasificar')"));
+        self::assertSame(0,$this->n("SELECT SUM(ventas_bruta_base_centavos) FROM bi_presupuesto_real_mes WHERE tipo IN('gasto','comisiones')"));
+        self::assertSame(0,$this->n("SELECT COUNT(*) FROM bi_presupuesto_real_mes WHERE ventas_bruta_base_centavos-descuentos_informativo_centavos<>ventas_base_centavos"),'bruta − descuentos = venta en cada fila de la vista');
+    }
+    public function testAnularUnaVentaCambiaSuMesHistoricoYUnaDevolucionPosteriorCaeEnSuPropioMes():void
+    {
+        $this->hechos();$v=$this->presupuestoAprobado();
+        $base=$this->indexado($this->svc()->comparativo($v)['filas']);
+        $vta=$this->venta('confirmada','2026-03-20 10:00:00');$lin=$this->linea($vta,$this->s1,null,1000,0,0,0,1000);
+        $con=$this->indexado($this->svc()->comparativo($v)['filas']);
+        self::assertSame($base['3|servicio|'.$this->s1]['real_base']+1000,$con['3|servicio|'.$this->s1]['real_base'],'la venta confirmada de marzo suma en marzo');
+        // Una devolución posterior NO reescribe marzo: cae en el mes en que se registra.
+        $this->ins("INSERT INTO erp_devoluciones(venta_id,linea_id,cantidad_milesimas,monto_centavos,cantidad_entregada_milesimas,reintegrar_stock,motivo,actor_id,creado_en) VALUES($vta,$lin,1000,1000,0,0,'Devolución tardía',{$this->owner},'2026-05-10 09:00:00')");
+        $dev=$this->indexado($this->svc()->comparativo($v)['filas']);
+        self::assertSame($con['3|servicio|'.$this->s1]['real_base'],$dev['3|servicio|'.$this->s1]['real_base'],'marzo conserva la venta aunque se devuelva en mayo');
+        self::assertSame(-1000,$dev['5|servicio|'.$this->s1]['real_base'],'mayo muestra la devolución como real negativo (sin venta propia en mayo)');
+        // Anular SÍ cambia el mes histórico: la venta anulada deja de contar en marzo y su devolución en mayo (no hay fecha de anulación en la venta; queda en erp_eventos).
+        (new \Services\ErpVentaService($this->r))->anular($this->owner,$this->d(['venta_id'=>$vta,'motivo'=>'Anulación de ensayo']));
+        $anu=$this->indexado($this->svc()->comparativo($v)['filas']);
+        self::assertSame($base['3|servicio|'.$this->s1]['real_base'],$anu['3|servicio|'.$this->s1]['real_base'],'tras anular, marzo vuelve a su cifra anterior: el comparativo histórico cambia');
+        self::assertArrayNotHasKey('5|servicio|'.$this->s1,$anu,'y la devolución de mayo desaparece con la venta');
+        self::assertSame(1,$this->n("SELECT COUNT(*) FROM erp_eventos WHERE tipo='venta_anulada' AND entidad='venta' AND entidad_id=$vta"),'la anulación queda en el registro de eventos con su fecha y actor');
+    }
     private function sesion(int $usuario,string $portal='equipo'):void
     {
         if(session_status()===PHP_SESSION_NONE)session_start();$ctx=(new \Services\AuthorizationService($this->db))->contexto($usuario);

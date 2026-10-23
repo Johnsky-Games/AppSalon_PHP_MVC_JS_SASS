@@ -1,4 +1,4 @@
-# Presupuestos v1 (migración 064)
+# Presupuestos v1 (migraciones 064 y 065)
 
 Un presupuesto es un **año + un escenario** («base», «optimista»…). Empieza **vacío**: solo guarda las cifras que una persona escribe o carga. **Nunca genera ventas, obligaciones, cobros ni asientos** (la prueba cuenta esas tablas antes y después de crear, cargar, aprobar y revisar).
 
@@ -22,7 +22,21 @@ Pantalla: `/gestion/presupuestos` (menú «Presupuestos» de Gestión). Plantill
 * **Descuentos:** el presupuesto de ventas es **venta neta de descuentos**. El descuento ya está fuera del total de la línea; no se presupuesta aparte. El real lo muestra como columna informativa (`descuentos_informativo_centavos`), sin restarlo otra vez.
 * **Devoluciones:** restan de las ventas **en el mes en que se registra la devolución** (`erp_devoluciones.creado_en`, fecha propia), no en el mes de la venta original. Su base e impuesto se reparten con la proporción de su línea sobre el **acumulado devuelto de la línea** (redondeo a mitad hacia arriba): varias devoluciones parciales suman exactamente el impuesto de la línea, sin impuesto residual ni base negativa.
 * Solo cuentan las ventas en estado `confirmada`, y sus devoluciones también: una venta devuelta y luego anulada no suma ingreso negativo; las que están en borrador o anuladas no cuentan.
-* Pendiente de decisión del propietario: si la política de comparación debe ser venta *bruta* de devoluciones. Hoy la desviación usa venta **neta** de devoluciones y las dos componentes se ven por separado en `bi_presupuesto_real_mes`.
+* **Decisión del propietario (2026-10-23): la desviación principal se compara contra la venta neta de devoluciones**, en base sin impuestos y, aparte, en impuestos (la desviación «con impuestos» usa base + impuesto). Para explicarla se muestran **venta bruta, descuentos y devoluciones** como componentes: `bruta − descuentos = venta` y `venta − devoluciones = venta neta` (065 añade `ventas_bruta_base_centavos` al final de `bi_presupuesto_real_mes`; la bruta es la base antes de descuentos porque el descuento se resta antes del impuesto). Los componentes no tienen presupuesto ni desviación propia.
+
+## Fechas y efecto de anulaciones y devoluciones posteriores en los comparativos históricos
+
+El comparativo se **recalcula siempre desde los hechos actuales**; no guarda una foto del mes. Qué cambia un mes ya pasado:
+
+| Hecho posterior | Qué pasa con el comparativo |
+|---|---|
+| **Devolución** de una venta de un mes anterior | **No reescribe el mes de la venta.** Cae en el mes en que se registra la devolución (`erp_devoluciones.creado_en`): ese mes puede mostrar real negativo si no tuvo ventas propias. |
+| **Anulación** de una venta confirmada | **Sí cambia meses pasados.** Una venta anulada deja de contar en el mes de su confirmación (`confirmado_en`) y sus devoluciones dejan de contar en los meses en que se registraron. La venta no guarda la fecha de anulación; quién y cuándo está en `erp_eventos` (`venta_anulada`). |
+| **Reverso contable** | Resta en la fecha del asiento de reverso (no en la del original): si se reversa en otro mes, el original sigue en su mes y el reverso aparece restando en el suyo. |
+| Asiento de **cierre** del ejercicio y su reverso | No cuentan como gasto. |
+| Cambio de la cuenta del rol `gasto_comisiones` | No se permite mientras existan presupuestos. |
+
+Consecuencias para quien analiza: una versión **aprobada** no cambia, pero **lo real** contra el que se compara sí puede cambiar hacia atrás por anulaciones. Para comparar contra una foto, exporta el comparativo en el momento del cierre. Las pruebas (`testAnularUnaVentaCambiaSuMesHistoricoYUnaDevolucionPosteriorCaeEnSuPropioMes`) fijan este comportamiento.
 
 ## Fuente y fecha de cada métrica
 
@@ -71,7 +85,7 @@ Una fila con base e impuesto vacíos **no cambia nada** (no equivale a cero; par
 
 | Vista | Grano |
 |---|---|
-| `bi_presupuesto_real_mes` | **lo real** por año, mes y destino (una sola definición, usada por la pantalla y por BI) |
+| `bi_presupuesto_real_mes` | **lo real** por año, mes y destino (una sola definición, usada por la pantalla y por BI); trae también `ventas_bruta_base_centavos` (065) |
 | `bi_presupuesto_lineas` | cifras presupuestadas de versiones aprobadas y reemplazadas (`es_vigente`); los borradores y revisiones abiertas **no salen** |
 | `bi_presupuesto_vs_real` | versión **vigente** frente a lo real, por mes y destino, con desviación y estado |
 | `bi_presupuesto_anual` | consolidado anual por destino |
@@ -86,5 +100,5 @@ El mes se une con `bi_dim_fecha.anio_mes` (AAAAMM). **La dimensión de fecha se 
 
 * Cobros sin presupuesto; no hay presupuesto por profesional ni por centro de costo.
 * No hay prorrateo automático anual→mensual: cada mes se escribe o se carga.
-* La política de venta bruta vs neta de devoluciones y los responsables de cada indicador son decisiones del propietario.
+* Los responsables de cada indicador siguen siendo decisión del propietario (la comparación contra venta neta de devoluciones ya está decidida).
 * Los importes presupuestados admiten hasta 9.999.999,99 por línea y mes. Un producto archivado conserva su cifra (y se puede quitar) pero no admite cifras nuevas ni cambios, igual que una cuenta de gasto archivada.
