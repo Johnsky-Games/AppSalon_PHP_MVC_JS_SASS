@@ -107,16 +107,45 @@ final class R2bColaRecuperacionTest extends R2bCase
             'reenviar inexistente' => function () { $n = new Navegador(self::$base); self::q('TRUNCATE intentos_login'); return $n->post('/reenviar-confirmacion', ['csrf_token' => $n->csrf('/reenviar-confirmacion'), 'email' => self::correo('p-nadie2')]); },
         ];
         foreach ($pasos as $nombre => $f) {
+            $antes = self::contadoresSmtp(self::SMTP);
             $t0 = microtime(true);
             $r = $f();
             $tiempos[$nombre] = (microtime(true) - $t0) * 1000;
+            $despues = self::contadoresSmtp(self::SMTP);
             $this->assertContains($r['status'], [200, 302], "$nombre: " . substr(strip_tags($r['body']), 0, 160));
+            // Verificación determinista: la petición no abre NINGUNA conexión ni sesión SMTP (no depende de la velocidad de la máquina) y no entrega nada.
+            $this->assertSame(0, $despues['conexiones'] - $antes['conexiones'], "$nombre: la petición abrió una conexión al SMTP");
+            $this->assertSame(0, $despues['saludos'] - $antes['saludos'], "$nombre: la petición inició una sesión SMTP");
             $this->assertSame([], self::buzonFallo(self::SMTP), "$nombre: la petición envió un correo en línea");
-            $this->assertLessThan(300, $tiempos[$nombre], sprintf('%s: %.0f ms; con un SMTP de 400 ms eso indica envío en línea', $nombre, $tiempos[$nombre]));
+            // Solo programa: ningún evento de la cola tiene intentos de envío ni fecha de envío.
+            foreach (self::q('SELECT destinatario_email,estado,intentos,enviado_en FROM correos_salida') as $ev) {
+                $this->assertSame([0, null], [(int)$ev['intentos'], $ev['enviado_en']], "$nombre: un evento de la cola ya se intentó enviar dentro de la petición");
+            }
+            // El tiempo queda solo como protección holgada contra cuelgues (no es el criterio de «no envía en línea»).
+            $this->assertLessThan(5000, $tiempos[$nombre], sprintf('%s: %.0f ms; la petición no debería tardar segundos', $nombre, $tiempos[$nombre]));
         }
         $this->assertGreaterThan(0.4 * 5, self::entregarCola(self::SMTP)['seg'], 'el SMTP lento debe estar activo: el worker paga la latencia por correo');
         // 3 altas/avisos que sobreviven + 2 recuperaciones + 1 confirmación reenviada (la del registro pendiente se cancela por el reenvío) = 7.
         $this->assertCount(7, self::buzonFallo(self::SMTP));
+    }
+
+    /**
+     * Control positivo de la verificación anterior: con el envío inmediato ACTIVO (único interruptor) las mismas medidas SÍ detectan el envío en línea
+     * (conexión, sesión SMTP y correo entregado). Sin este control, «cero conexiones» podría deberse a un contador roto.
+     */
+    public function test_los_contadores_detectan_un_envio_sincrono_cuando_el_envio_inmediato_esta_activo(): void
+    {
+        $base = self::servidor(['EMAIL_PORT' => (string)self::SMTP, 'CORREOS_ENVIO_INMEDIATO' => '1'], 'r2b_rec_ctl');
+        try {
+            $email = self::correo('ctl-sync');
+            self::q('TRUNCATE intentos_login');
+            $antes = self::contadoresSmtp(self::SMTP);
+            self::registrarHttp(new Navegador($base), $email);
+            $despues = self::contadoresSmtp(self::SMTP);
+            $this->assertGreaterThan(0, $despues['conexiones'] - $antes['conexiones'], 'un envío síncrono debe abrir una conexión TCP al SMTP');
+            $this->assertGreaterThan(0, $despues['saludos'] - $antes['saludos'], 'un envío síncrono debe iniciar una sesión SMTP');
+            $this->assertCount(1, $this->mailsPara($email), 'y entregar el correo dentro de la petición');
+        } finally { self::pararServidor('r2b_rec_ctl'); }
     }
 
     /** Interruptor ESTRICTO: solo 1/true/si/sí/on (sin importar mayúsculas ni espacios) activan el envío en línea; todo lo demás lo deja desactivado. */
