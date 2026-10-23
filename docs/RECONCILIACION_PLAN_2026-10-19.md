@@ -123,9 +123,9 @@ El módulo **no se da por completo**: solo están implementados y validados el c
 | 063 control del calendario (fechas de hechos sin día en la dimensión); autorizada con cabeza `73175f3` | #48 | `63e73b8` | éxito (run 425) |
 | Actualización de esta reconciliación (fusión de #47/#46 y runs 403/404); autorizada con cabeza `e6117a6` | #49 | `6836ff7` | éxito (run 426) |
 | 064 presupuestos v1 (ventas, gastos por cuenta, comisiones, versiones, carga CSV, comparativo y vistas BI); autorizada con cabeza `5ebae83`, fusionada con cabeza `c0726ec` (ver nota) | #50 | `2a6ea6e` | éxito (run 434): QA independiente y respaldo/restauración incluidos |
-| Topes de tiempo por etapa y diagnóstico del CI; autorizada con cabeza `b73fc6b` | #51 | `eedf730` | RUN438 |
+| Topes de tiempo por etapa y diagnóstico del CI; autorizada con cabeza `b73fc6b` | #51 | `eedf730` | éxito (run 438, 82 min): el primer CI de `main` con los topes de tiempo y el paso de diagnóstico nuevos; QA independiente y respaldo/restauración incluidos |
 
-**Estado posterior a las fusiones.** `main` queda en `eedf730` (RUN438_ESTADO). Trabajo abierto, sin fusionar: #52 (componentes de la venta del comparativo de presupuestos y efecto de anulaciones, migración 065), a la espera de revisión, CI y autorización.
+**Estado posterior a las fusiones.** `main` queda en `eedf730` (CI verde: runs 425, 426, 434 y 438, todos con todos los pasos). Trabajo abierto, sin fusionar: #52 (componentes de la venta del comparativo de presupuestos y efecto de anulaciones, migración 065), a la espera de revisión, CI y autorización.
 
 **Notas sobre las fusiones del 23 de octubre.**
 * #50 se autorizó con cabeza `5ebae83`; antes de fusionarse su cabeza cambió dos veces: `fabc07f` (incorporar `main` con #48 y #49, conservando en `EsquemaTest` las vistas de 063 y las de presupuestos) y `c0726ec` (corrección de una contradicción documental señalada por la revisión: la tabla de BI seguía listando presupuestos como inexistentes). Se fusionó con `c0726ec`, con CI verde en los dos jobs de esa cabeza, revisión sin pendientes y sin conflictos.
