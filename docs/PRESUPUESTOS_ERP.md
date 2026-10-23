@@ -21,7 +21,7 @@ Pantalla: `/gestion/presupuestos` (menú «Presupuestos» de Gestión). Plantill
 
 * **Descuentos:** el presupuesto de ventas es **venta neta de descuentos**. El descuento ya está fuera del total de la línea; no se presupuesta aparte. El real lo muestra como columna informativa (`descuentos_informativo_centavos`), sin restarlo otra vez.
 * **Devoluciones:** restan de las ventas **en el mes en que se registra la devolución** (`erp_devoluciones.creado_en`, fecha propia), no en el mes de la venta original. Su base e impuesto se reparten con la proporción de su línea (redondeo a mitad hacia arriba, al centavo, por devolución); una devolución completa devuelve exactamente el impuesto de la línea.
-* Solo cuentan las ventas en estado `confirmada`; las que están en borrador o anuladas no cuentan.
+* Solo cuentan las ventas en estado `confirmada`, y sus devoluciones también: una venta devuelta y luego anulada no suma ingreso negativo; las que están en borrador o anuladas no cuentan.
 * Pendiente de decisión del propietario: si la política de comparación debe ser venta *bruta* de devoluciones. Hoy la desviación usa venta **neta** de devoluciones y las dos componentes se ven por separado en `bi_presupuesto_real_mes`.
 
 ## Fuente y fecha de cada métrica
@@ -31,7 +31,7 @@ Pantalla: `/gestion/presupuestos` (menú «Presupuestos» de Gestión). Plantill
 | Ventas (devengado) | líneas de `erp_ventas` confirmadas (`bi_presupuesto_real_mes`) | `confirmado_en` de la venta |
 | Devoluciones | `erp_devoluciones` | `creado_en` de la devolución |
 | **Cobros (caja)** | `bi_flujo_dinero` (cobros − devoluciones de cobro), con impuestos | fecha del movimiento de caja |
-| Gasto devengado | libro contable (`bi_libro_lineas`), cuentas de tipo gasto o costo, neto deudor; un reverso resta | fecha del asiento |
+| Gasto devengado | libro contable (`bi_libro_lineas`), cuentas de tipo gasto o costo, neto deudor; un reverso resta. **Se excluye el asiento de cierre del ejercicio y su reverso** (trasladan el resultado, no son gasto) | fecha del asiento |
 | Comisiones devengadas | mismo libro, cuenta del rol `gasto_comisiones` | fecha del asiento |
 
 * **Ventas, cobros y gastos devengados son tres cosas distintas** y se muestran separadas. Los **cobros no tienen presupuesto ni desviación** en esta versión (se informan para contrastar). No incluyen ventas pagadas con saldo prepago, que no pasan por caja.
@@ -80,6 +80,7 @@ Una fila con base e impuesto vacíos **no cambia nada** (no equivale a cero; par
 El mes se une con `bi_dim_fecha.anio_mes` (AAAAMM). **La dimensión de fecha se amplía** (064 redefine `bi_dim_fecha`) para cubrir del 1 de enero al 31 de diciembre de cada año con presupuesto: un presupuesto suele ser futuro y sin esto sus meses quedarían fuera del calendario. La prueba usa un presupuesto de 2031.
 
 ## Límites conocidos
+* Una cuenta de gasto archivada después de presupuestarla **no impide abrir una revisión** (la copia la conserva); solo se puede quitar su cifra, no escribirla de nuevo. El trigger exige cuenta de gasto o costo y no la de comisiones; que sea imputable y activa lo exige el servicio al escribir o cargar.
 
 * Cobros sin presupuesto; no hay presupuesto por profesional ni por centro de costo.
 * No hay prorrateo automático anual→mensual: cada mes se escribe o se carga.

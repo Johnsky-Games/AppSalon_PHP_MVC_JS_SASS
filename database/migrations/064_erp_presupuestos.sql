@@ -122,10 +122,10 @@ CREATE TRIGGER trg_presup_version_update BEFORE UPDATE ON erp_presupuesto_versio
   OR NOT ((OLD.estado IN('borrador','revision') AND NEW.estado='aprobada') OR (OLD.estado='aprobada' AND NEW.estado='reemplazada'))
   OR (OLD.estado='aprobada' AND (NEW.aprobado_por<>OLD.aprobado_por OR NEW.aprobado_en<>OLD.aprobado_en)) THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='La version solo avanza de estado y se conserva'; END IF;
 CREATE TRIGGER trg_presup_version_no_delete BEFORE DELETE ON erp_presupuesto_versiones FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Las versiones de un presupuesto se conservan';
--- Las líneas solo se tocan mientras la versión esté en borrador o revisión; una cuenta de gasto o costo, imputable y activa, y nunca la de comisiones. Triggers de una sola sentencia (IF ... END IF): el lector de restauración (ProteccionesRestauradas) solo repone esa forma.
+-- Las líneas solo se tocan mientras la versión esté en borrador o revisión; una cuenta de gasto o costo, y nunca la de comisiones. Que la cuenta esté imputable y activa lo exige el servicio al escribir o cargar una cifra, NO el trigger: una cuenta archivada después no impide copiar la versión aprobada en una revisión. Triggers de una sola sentencia (IF ... END IF): el lector de restauración (ProteccionesRestauradas) solo repone esa forma.
 CREATE TRIGGER trg_presup_linea_insert BEFORE INSERT ON erp_presupuesto_lineas FOR EACH ROW IF (SELECT estado FROM erp_presupuesto_versiones WHERE id=NEW.version_id) NOT IN('borrador','revision')
-  OR (NEW.tipo='gasto' AND ((SELECT tipo FROM erp_cont_cuentas WHERE id=NEW.cuenta_id) NOT IN('gasto','costo') OR (SELECT imputable+activa FROM erp_cont_cuentas WHERE id=NEW.cuenta_id)<>2
-      OR NEW.cuenta_id=(SELECT cuenta_id FROM erp_cont_roles WHERE rol='gasto_comisiones'))) THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Linea no admitida: version cerrada, o cuenta que no es de gasto o costo imputable y activa (las comisiones van en su partida)'; END IF;
+  OR (NEW.tipo='gasto' AND ((SELECT tipo FROM erp_cont_cuentas WHERE id=NEW.cuenta_id) NOT IN('gasto','costo')
+      OR NEW.cuenta_id=(SELECT cuenta_id FROM erp_cont_roles WHERE rol='gasto_comisiones'))) THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Linea no admitida: version cerrada, o cuenta que no es de gasto o costo (las comisiones van en su partida)'; END IF;
 CREATE TRIGGER trg_presup_linea_update BEFORE UPDATE ON erp_presupuesto_lineas FOR EACH ROW IF NEW.version_id<>OLD.version_id OR NEW.mes<>OLD.mes OR NEW.tipo<>OLD.tipo OR NEW.objetivo_id<>OLD.objetivo_id
   OR (SELECT estado FROM erp_presupuesto_versiones WHERE id=OLD.version_id) NOT IN('borrador','revision') THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Una version aprobada no se edita'; END IF;
 CREATE TRIGGER trg_presup_linea_delete BEFORE DELETE ON erp_presupuesto_lineas FOR EACH ROW IF (SELECT estado FROM erp_presupuesto_versiones WHERE id=OLD.version_id) NOT IN('borrador','revision') THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Una version aprobada no se edita'; END IF;
@@ -201,6 +201,7 @@ FROM dias;
 --    descuentos_centavos es solo informativo). Las devoluciones restan en el mes en que se registran (erp_devoluciones.creado_en, fecha propia).
 --    La base/impuesto de una devolución se reparte con la proporción de su línea (redondeo al centavo por devolución).
 --  · Gastos = gasto devengado: neto deudor del libro (asientos, por su fecha) en cuentas de tipo gasto o costo; el reverso de un asiento ya resta.
+--    El asiento de cierre del ejercicio (tipo 'cierre') y sus reversos se excluyen: trasladan el resultado, no son gasto del período.
 --    La cuenta del rol gasto_comisiones va como tipo 'comisiones' (objetivo 0) y NO como 'gasto': el total de gastos la cuenta una sola vez.
 --  · tipo 'sin_clasificar': líneas de venta sin servicio ni producto; existe para que el real de ventas cuadre con el total.
 CREATE OR REPLACE SQL SECURITY DEFINER VIEW bi_presupuesto_real_mes AS
@@ -216,7 +217,7 @@ WITH mov AS (
    COALESCE(l.servicio_id, l.producto_id, 0), 0, 0, 0,
    d.monto_centavos - IF(l.total_centavos > 0, (d.monto_centavos * l.impuesto_centavos * 2 + l.total_centavos) DIV (2 * l.total_centavos), 0),
    IF(l.total_centavos > 0, (d.monto_centavos * l.impuesto_centavos * 2 + l.total_centavos) DIV (2 * l.total_centavos), 0)
-  FROM erp_devoluciones d JOIN erp_venta_lineas l ON l.id = d.linea_id
+  FROM erp_devoluciones d JOIN erp_venta_lineas l ON l.id = d.linea_id JOIN erp_ventas v ON v.id = l.venta_id WHERE v.estado = 'confirmada'
 ), ventas AS (
   SELECT anio, mes, tipo, objetivo_id, SUM(ventas_base) AS ventas_base, SUM(ventas_impuesto) AS ventas_impuesto, SUM(descuentos) AS descuentos,
          SUM(devol_base) AS devol_base, SUM(devol_impuesto) AS devol_impuesto
@@ -226,7 +227,8 @@ WITH mov AS (
          SUM(li.debe_centavos - li.haber_centavos) AS neto
   FROM erp_cont_lineas li JOIN erp_cont_asientos a ON a.id = li.asiento_id JOIN erp_cont_cuentas c ON c.id = li.cuenta_id
   LEFT JOIN erp_cont_roles rc ON rc.rol = 'gasto_comisiones'
-  WHERE c.tipo IN ('gasto', 'costo')
+  WHERE c.tipo IN ('gasto', 'costo') AND a.tipo <> 'cierre'
+    AND NOT EXISTS (SELECT 1 FROM erp_cont_asientos o WHERE o.id = a.reversa_de_id AND o.tipo = 'cierre')
   GROUP BY YEAR(a.fecha), MONTH(a.fecha), IF(c.id = rc.cuenta_id, 'comisiones', 'gasto'), IF(c.id = rc.cuenta_id, 0, c.id)
 )
 SELECT anio, mes, (anio * 100 + mes) AS anio_mes, tipo, objetivo_id,

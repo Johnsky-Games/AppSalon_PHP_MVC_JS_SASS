@@ -65,7 +65,9 @@ final class ErpPresupuestoIntegrationTest extends TestCase
         $v1=$this->venta('confirmada','2026-03-10 10:00:00');$l1=$this->linea($v1,$this->s1,null,10000,1000,1500,1350,10350);$this->linea($v1,null,$this->p1,2000,0,0,0,2000);
         $v2=$this->venta('confirmada','2026-04-05 10:00:00');$this->linea($v2,$this->s1,null,5000,0,1500,750,5750);$this->linea($v2,null,null,1000,0,0,0,1000);
         $v3=$this->venta('borrador',null);$this->linea($v3,$this->s1,null,99900,0,0,0,99900);
-        $v4=$this->venta('anulada','2026-03-12 10:00:00');$this->linea($v4,$this->s1,null,88800,0,0,0,88800);
+        $v4=$this->venta('anulada','2026-03-12 10:00:00');$l4=$this->linea($v4,$this->s1,null,88800,0,0,0,88800);
+        // Venta devuelta por completo y luego anulada: ni la venta ni su devolución cuentan.
+        $this->ins("INSERT INTO erp_devoluciones(venta_id,linea_id,cantidad_milesimas,monto_centavos,cantidad_entregada_milesimas,reintegrar_stock,motivo,actor_id,creado_en) VALUES($v4,$l4,1000,88800,0,0,'Devuelta y anulada',{$this->owner},'2026-03-13 11:00:00')");
         $v5=$this->venta('confirmada','2025-12-31 23:00:00');$this->linea($v5,$this->s1,null,7700,0,0,0,7700);
         $this->ins("INSERT INTO erp_devoluciones(venta_id,linea_id,cantidad_milesimas,monto_centavos,cantidad_entregada_milesimas,reintegrar_stock,motivo,actor_id,creado_en) VALUES($v1,$l1,500,5175,0,0,'Devolución de ensayo',{$this->owner},'2026-04-20 11:00:00')");
         $this->asiento('2026-03-15','6.1.05','300.00');$this->asiento('2026-03-20','6.1.01','80.00','2.1.05');$this->asiento('2026-03-25','5.1.01','40.00');
@@ -328,6 +330,31 @@ final class ErpPresupuestoIntegrationTest extends TestCase
         self::assertSame(count($anual),$this->n("SELECT COUNT(*) FROM bi_presupuesto_anual WHERE version_id=$v"));
         // Cobros: bloque aparte, sin presupuesto.
         self::assertSame([],$c['cobros']);
+    }
+    public function testElCierreDelEjercicioYSuReversoNoSeCuentanComoGasto():void
+    {
+        $this->hechos();$v=$this->presupuestoAprobado();$c=new ErpContabilidadService($this->r);
+        $antes=$this->indexado($this->svc()->comparativo($v)['filas']);
+        for($m=1;$m<=11;$m++)$c->cerrarPeriodo($this->owner,$this->d(['anio'=>2026,'mes'=>$m]));
+        $cierre=$c->cerrarEjercicio($this->owner,$this->d(['anio'=>2026]))['recurso_id'];
+        self::assertGreaterThan(0,$this->n("SELECT COUNT(*) FROM erp_cont_lineas WHERE asiento_id=$cierre AND haber_centavos>0"),'el cierre acredita las cuentas de gasto');
+        $desp=$this->indexado($this->svc()->comparativo($v)['filas']);
+        self::assertSame(array_keys($antes),array_keys($desp),'el cierre no crea filas de gasto en diciembre');
+        foreach($antes as $k=>$f)self::assertSame($f['real_base'],$desp[$k]['real_base'],"el real de $k no cambia con el cierre");
+        $c->reversar($this->owner,$this->d(['asiento_id'=>$cierre,'motivo'=>'Reapertura de ensayo','fecha'=>'2026-12-31']));
+        $rev=$this->indexado($this->svc()->comparativo($v)['filas']);
+        foreach($antes as $k=>$f)self::assertSame($f['real_base'],$rev[$k]['real_base'],"ni su reverso altera $k");
+        self::assertSame(54000,(int)$this->n("SELECT COALESCE(SUM(real_base_centavos),0) FROM bi_presupuesto_real_mes WHERE tipo IN('gasto','comisiones')"),'gasto total del año sin cierre: 300+120+40+80 = 540,00');
+    }
+    public function testUnaRevisionCopiaLaAprobadaAunqueUnaCuentaSeHayaArchivado():void
+    {
+        $v=$this->presupuestoAprobado();$p=(int)$this->r->uno('SELECT presupuesto_id n FROM erp_presupuesto_versiones WHERE id=?',[$v])['n'];
+        $this->db->query("UPDATE erp_cont_cuentas SET activa=0 WHERE id={$this->cuentaOperativo}");
+        $rev=$this->svc()->revisar($this->finanzas,$this->d(['presupuesto_id'=>$p,'motivo'=>'Cuenta archivada']))['recurso_id'];
+        self::assertSame($this->n("SELECT COUNT(*) FROM erp_presupuesto_lineas WHERE version_id=$v"),$this->n("SELECT COUNT(*) FROM erp_presupuesto_lineas WHERE version_id=$rev"),'la revisión conserva la línea de la cuenta archivada');
+        $this->rechazo(fn()=>$this->cifra($rev,'gasto:'.$this->cuentaOperativo,5,'10.00'),null,'imputable y activa');
+        $this->cifra($rev,'gasto:'.$this->cuentaOperativo,3,'','');
+        self::assertSame(0,$this->n("SELECT COUNT(*) FROM erp_presupuesto_lineas WHERE version_id=$rev AND tipo='gasto'"),'se puede quitar la línea de la cuenta archivada');
     }
     public function testElComparativoDeUnBorradorUsaLoMismoRealYLaVistaBiCoincideConElServicio():void
     {
