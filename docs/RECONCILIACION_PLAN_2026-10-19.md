@@ -117,9 +117,13 @@ El módulo **no se da por completo**: solo están implementados y validados el c
 | Corrección de la prueba de reintento SMTP de colaboradores (cola de correos compartida) | #44 | `19c2b06` | éxito (run 372) |
 | 059 atenciones y ocupación | #42 | `9bd7804` | éxito (run 373) |
 | 060 saldo por cobrar | #43 | `d18a03e` | éxito (run 380) |
-| 061 asistencia y comisiones (acceso laboral separado) | #45 | `2523c95` | **fallo** (run 383): 1 de 1644 pruebas, `ApiSeguridadTest::testClientePuedeEliminarSuPropiaCita`, ajena a 061 (cita de ensayo con fecha fija 2026-10-22 15:00; falla desde esa hora). El paso de PHPUnit falló, así que **no se ejecutaron** en ese run el QA independiente ni el ciclo de respaldo y restauración. Corrección en #47; el CI verde de `main` con 061 queda pendiente de esa corrección |
-| Corrección de la bomba de tiempo de `ApiSeguridadTest` (fechas relativas al reloj) | #47 | pendiente | pendiente |
-| 062 dimensiones (fecha, producto, servicio, profesional, colaborador) | #46 | pendiente | pendiente |
+| 061 asistencia y comisiones (acceso laboral separado) | #45 | `2523c95` | **fallo** (run 383): 1 de 1644 pruebas, `ApiSeguridadTest::testClientePuedeEliminarSuPropiaCita`, ajena a 061 (cita de ensayo con fecha fija 2026-10-22 15:00; falla desde esa hora). El paso de PHPUnit falló, así que **no se ejecutaron** en ese run el QA independiente ni el ciclo de respaldo y restauración. El run 383 **se conserva como fallo**; la corrección fue #47 y el CI de `main` verde con 061 está comprobado en los runs 403 y 404 (abajo) |
+| Corrección de la bomba de tiempo de `ApiSeguridadTest` (fechas relativas al reloj); autorizada con cabeza `4a3f34a` | #47 | `2ddf84d` | éxito (run 403): QA independiente y respaldo/restauración incluidos |
+| 062 dimensiones (fecha, producto, servicio, profesional, colaborador); autorizada con cabeza `e1ce9b3` | #46 | `c9859d6` | éxito (run 404): `main` final con 057–062 y la corrección de #47 |
+
+**Estado posterior a las fusiones.** `main` queda en `c9859d6` con CI verde (runs 403 y 404, ambos con todos los pasos). Otros trabajos abiertos, sin fusionar: #48 (control del calendario, migración 063; cabeza `73175f3`, CI verde y revisión de Codex sin hallazgos, a la espera de autorización de fusión) y la rama `feature/erp-presupuestos` (presupuestos, migración 064; sin PR abierto).
+
+**Calendario de BI (`bi_dim_fecha`).** Genera hasta 100.000 días desde el hecho más antiguo (o hoy) hasta el más reciente (o hoy). #48 añade un control que detecta fechas de hechos sin día en la dimensión, de modo que un futuro truncamiento no pase en silencio. Límite que se mantiene documentado: más de 100.000 días de rango recortarían el calendario.
 
 **Limitaciones que permanecen explícitas (no son errores abiertos, son alcance):**
 * **Ocupación con horarios vigentes.** `bi_ocupacion_profesional_dia` calcula la capacidad de cualquier día, también pasado, con el horario, los descansos y los bloqueos **de hoy**; no hay historial de horarios y por tanto no hay reconstrucción histórica. Un cambio de horario reescribe la capacidad de días anteriores. Un profesional inactivo tiene 0 minutos disponibles. Igual criterio que `/admin/reportes`.
