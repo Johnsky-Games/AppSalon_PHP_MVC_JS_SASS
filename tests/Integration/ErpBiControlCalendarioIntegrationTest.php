@@ -88,7 +88,7 @@ final class ErpBiControlCalendarioIntegrationTest extends TestCase
     {
         foreach([self::CONTROL_COMERCIAL,self::CONTROL_LABORAL] as $v){
             self::assertSame(1,$this->n("SELECT COUNT(*) FROM information_schema.views WHERE table_schema=DATABASE() AND table_name='$v' AND security_type='DEFINER'"));
-            $cols=array_column($this->db->query("SELECT column_name c FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='$v'")->fetch_all(MYSQLI_ASSOC),'c');
+            $cols=array_column($this->db->query("SELECT column_name c FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='$v' ORDER BY ordinal_position")->fetch_all(MYSQLI_ASSOC),'c');
             self::assertSame(['vista','columna','filas_con_fecha','fecha_min','fecha_max','filas_sin_dia','estado'],$cols,'solo agregados: ningún dato de persona');
         }
         $bd=BaseDatosAislada::nombre($this->db);
