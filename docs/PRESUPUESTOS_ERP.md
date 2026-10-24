@@ -1,4 +1,4 @@
-# Presupuestos v1 (migraciones 064 y 065)
+# Presupuestos v1 (migraciones 064, 065 y 066)
 
 Un presupuesto es un **año + un escenario** («base», «optimista»…). Empieza **vacío**: solo guarda las cifras que una persona escribe o carga. **Nunca genera ventas, obligaciones, cobros ni asientos** (la prueba cuenta esas tablas antes y después de crear, cargar, aprobar y revisar).
 
@@ -24,19 +24,40 @@ Pantalla: `/gestion/presupuestos` (menú «Presupuestos» de Gestión). Plantill
 * Solo cuentan las ventas en estado `confirmada`, y sus devoluciones también: una venta devuelta y luego anulada no suma ingreso negativo; las que están en borrador o anuladas no cuentan.
 * **Decisión del propietario (2026-10-23): la desviación principal se compara contra la venta neta de devoluciones**, en base sin impuestos y, aparte, en impuestos (la desviación «con impuestos» usa base + impuesto). Para explicarla se muestran **venta bruta, descuentos y devoluciones** como componentes: `bruta − descuentos = venta` y `venta − devoluciones = venta neta` (065 añade `ventas_bruta_base_centavos` al final de `bi_presupuesto_real_mes`; la bruta es la base antes de descuentos porque el descuento se resta antes del impuesto). Los componentes no tienen presupuesto ni desviación propia.
 
-## Fechas y efecto de anulaciones y devoluciones posteriores en los comparativos históricos
+## Dos criterios para «lo real» (066)
 
-El comparativo se **recalcula siempre desde los hechos actuales**; no guarda una foto del mes. Qué cambia un mes ya pasado:
+La pantalla permite elegir el criterio y **siempre dice cuál se está viendo** (`criterio` y `corte` en el resultado del servicio y en el encabezado de la sección). Los dos criterios **no son intercambiables**.
 
-| Hecho posterior | Qué pasa con el comparativo |
-|---|---|
-| **Devolución** de una venta de un mes anterior | **No reescribe el mes de la venta.** Cae en el mes en que se registra la devolución (`erp_devoluciones.creado_en`): ese mes puede mostrar real negativo si no tuvo ventas propias. |
-| **Anulación** de una venta confirmada | **Sí cambia meses pasados.** Una venta anulada deja de contar en el mes de su confirmación (`confirmado_en`) y sus devoluciones dejan de contar en los meses en que se registraron. La venta no guarda la fecha de anulación; quién y cuándo está en `erp_eventos` (`venta_anulada`). |
-| **Reverso contable** | Resta en la fecha del asiento de reverso (no en la del original): si se reversa en otro mes, el original sigue en su mes y el reverso aparece restando en el suyo. |
-| Asiento de **cierre** del ejercicio y su reverso | No cuentan como gasto. |
-| Cambio de la cuenta del rol `gasto_comisiones` | No se permite mientras existan presupuestos. |
+| | **Estado actual** (por defecto) | **Por eventos** (con fecha de corte opcional) |
+|---|---|---|
+| Fuente | `bi_presupuesto_real_mes` | `bi_presupuesto_real_eventos` |
+| Qué es | lo real recalculado hoy con el estado vigente de cada venta | cada hecho en el día en que ocurrió; no se reescribe |
+| Venta | cuenta en el mes de su confirmación si hoy está confirmada | cuenta (+) el día que se confirmó, aunque se anule después |
+| Devolución | en el mes en que se registra, solo si la venta hoy está confirmada | resta (−) el día en que se registra (si es anterior a una anulación) |
+| Anulación | la venta (y sus devoluciones) desaparece de **todos** sus meses: **reescribe meses pasados** | resta (−) **el neto que quedaba en ese momento** (venta − devoluciones hasta la anulación) el día en que se anuló |
+| Fecha de corte | no aplica | solo cuentan los eventos hasta esa fecha (inclusive): lo que se sabía a ella |
+| Gasto | libro por la fecha del asiento (un reverso resta en su fecha); se excluye el cierre del ejercicio | igual, con el mismo corte; la fecha es la contable del asiento, no la de su registro |
 
-Consecuencias para quien analiza: una versión **aprobada** no cambia, pero **lo real** contra el que se compara sí puede cambiar hacia atrás por anulaciones. Para comparar contra una foto, exporta el comparativo en el momento del cierre. Las pruebas (`testAnularUnaVentaCambiaSuMesHistoricoYUnaDevolucionPosteriorCaeEnSuPropioMes`) fijan este comportamiento.
+**Sin duplicar.** Sumados todos los eventos, el resultado coincide con el estado actual: una venta anulada netea 0 (`venta − devoluciones − anulaciones = 0`). Solo difieren **por año** cuando la venta y su anulación caen en años distintos (la venta queda en el año anterior y la anulación resta en el siguiente); entre los dos años no se duplica ni se pierde nada. Cadena de componentes en cada fila: `bruta − descuentos = venta` y `venta − devoluciones − anulaciones = neta`.
+
+**Fecha de la anulación.** La venta no guarda fecha de anulación: se toma del evento `venta_anulada` de `erp_eventos` (quién y cuándo). Una venta anulada **sin** ese evento (dato antiguo) se trata como anulada en el instante en que se confirmó (neto 0 desde el inicio, como el estado actual) y la fila lo marca en `anulaciones_sin_evento`. Una devolución posterior a la anulación (no se permite) se ignora. Una venta nunca confirmada (borrador) no cuenta.
+
+**Qué cambia un mes ya pasado según el criterio**
+
+| Hecho posterior | Estado actual | Por eventos |
+|---|---|---|
+| **Devolución** de una venta de un mes anterior | cae en el mes en que se registra; no reescribe el mes de la venta | igual |
+| **Anulación** de una venta confirmada | reescribe: la venta sale de su mes y sus devoluciones de los suyos | no reescribe: la anulación resta en el mes en que ocurrió |
+| **Reverso contable** | resta en la fecha del reverso | igual |
+| Asiento de **cierre** del ejercicio y su reverso | no cuentan como gasto | igual |
+| Cambio de la cuenta del rol `gasto_comisiones` | no se permite mientras existan presupuestos | igual |
+
+Las pruebas (`testElCriterioPorEventosPreservaLoOcurridoAntesDeUnaAnulacionPosterior…`, `testLaFechaDeCorte…`) fijan ambos comportamientos con ventas, descuentos, devoluciones parciales y totales, anulaciones, cambios de mes y de año.
+
+### Pendiente funcional (sigue abierto)
+* **El comparativo oficial sigue siendo el de estado actual**: la pantalla lo usa por defecto y las vistas `bi_presupuesto_vs_real` y `bi_presupuesto_anual` (versión aprobada frente a lo real, para tableros) **siguen calculadas con el estado actual**, por lo que anular una venta sigue reescribiendo los meses pasados en esos tableros. El criterio por eventos está en la pantalla y en `bi_presupuesto_real_eventos`; falta llevarlo a las vistas comparativas de BI y decidir (propietario) cuál criterio es el oficial para tableros y cierres.
+* No hay **foto del comparativo al cierre de un mes** (el criterio por eventos con corte la reconstruye a partir de los hechos; no es un registro inmutable de lo que se informó entonces).
+* El gasto por eventos usa la fecha **contable** del asiento: un asiento con fecha anterior registrado después aparece en su fecha contable, no en la fecha en que se supo.
 
 ## Fuente y fecha de cada métrica
 
@@ -81,11 +102,12 @@ Columnas `mes;tipo;referencia;nombre;base;impuesto` (separador «;», punto deci
 
 Una fila con base e impuesto vacíos **no cambia nada** (no equivale a cero; para fijar cero se escribe `0`). Quitar una cifra se hace desde la pantalla. Subir de nuevo la plantilla sin tocar no cambia nada (se avisa).
 
-## Vistas BI (solo lectura, `SQL SECURITY DEFINER`, sin columnas de fecha)
+## Vistas BI (solo lectura, `SQL SECURITY DEFINER`; sin columnas de fecha salvo `bi_presupuesto_real_eventos`)
 
 | Vista | Grano |
 |---|---|
-| `bi_presupuesto_real_mes` | **lo real** por año, mes y destino (una sola definición, usada por la pantalla y por BI); trae también `ventas_bruta_base_centavos` (065) |
+| `bi_presupuesto_real_mes` | **lo real con el estado actual** por año, mes y destino (una sola definición, usada por la pantalla y por BI); trae también `ventas_bruta_base_centavos` (065) |
+| `bi_presupuesto_real_eventos` (066) | **lo real por eventos**: día + tipo + destino, con venta, descuentos, devoluciones y anulaciones en la fecha en que ocurrieron (única de estas vistas con una columna de fecha, `fecha_evento`, vigilada por `bi_control_calendario`); filtrar por `fecha_evento` da la fecha de corte |
 | `bi_presupuesto_lineas` | cifras presupuestadas de versiones aprobadas y reemplazadas (`es_vigente`); los borradores y revisiones abiertas **no salen** |
 | `bi_presupuesto_vs_real` | versión **vigente** frente a lo real, por mes y destino, con desviación y estado |
 | `bi_presupuesto_anual` | consolidado anual por destino |

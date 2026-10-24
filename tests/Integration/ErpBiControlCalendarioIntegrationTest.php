@@ -41,7 +41,7 @@ final class ErpBiControlCalendarioIntegrationTest extends TestCase
         $vigiladas=array_merge(array_keys($this->filas(self::CONTROL_COMERCIAL)),array_keys($this->filas(self::CONTROL_LABORAL)));
         sort($reales);sort($vigiladas);
         self::assertSame($reales,$vigiladas,'cada columna de fecha de una vista de hechos debe estar vigilada: añadirla a bi_dim_fecha y a las vistas de control');
-        self::assertCount(28,$vigiladas);
+        self::assertCount(29,$vigiladas);// 28 + la fecha de bi_presupuesto_real_eventos (066)
         $laborales=array_values(array_unique(array_map(static fn($k)=>explode('.',$k)[0],array_keys($this->filas(self::CONTROL_LABORAL)))));sort($laborales);
         self::assertSame(['bi_rh_asistencia','bi_rh_ausencias','bi_rh_comisiones_liquidaciones','bi_rh_comisiones_movimientos'],$laborales,'la vista laboral solo vigila hechos laborales');
         foreach(array_keys($this->filas(self::CONTROL_COMERCIAL)) as $k)self::assertStringNotContainsString('bi_rh_',$k,'la vista comercial no toca hechos laborales');

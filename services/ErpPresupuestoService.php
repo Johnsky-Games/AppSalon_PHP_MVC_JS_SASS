@@ -362,27 +362,49 @@ final class ErpPresupuestoService extends ErpService
      * Comparativo de UNA versión (aprobada, reemplazada o abierta) contra lo real de su año: una fila por mes y concepto con presupuesto o con real.
      * Los conceptos se agrupan en ventas (servicio, producto, sin_clasificar), gastos (cuentas) y comisiones (partida propia). El total de gastos suma la
      * partida de comisiones UNA sola vez: gastos_totales = gastos de cuentas + comisiones.
-     * @return array{filas:list<array>,anual:list<array>,resumen:array,cobros:list<array>,anio:int}
+     *
+     * DOS CRITERIOS para lo real (se informan en el resultado y no son intercambiables):
+     *  · `estado_actual` (por defecto): recalculado hoy con el estado vigente de cada venta (bi_presupuesto_real_mes). Anular una venta reescribe los meses pasados.
+     *  · `eventos`: cada hecho cuenta el día en que ocurrió (bi_presupuesto_real_eventos): la venta el día que se confirmó, cada devolución el día en que se registró y la anulación
+     *    el día en que se anuló, restando el neto que quedaba entonces. Con `$corte` (Y-m-d, inclusive) solo cuentan los eventos hasta esa fecha, es decir, lo que se sabía a ella.
+     *    Sin corte cuentan todos los eventos del año. El corte solo aplica a este criterio.
+     * @return array{filas:list<array>,anual:list<array>,resumen:array,cobros:list<array>,anio:int,criterio:string,corte:?string}
      */
-    public function comparativo(int $version):array
+    public function comparativo(int $version,string $criterio='estado_actual',?string $corte=null):array
     {
+        if(!in_array($criterio,['estado_actual','eventos'],true))throw new ErpException('Criterio de comparación no válido.',422);
+        if($corte!==null){
+            if($criterio!=='eventos')throw new ErpException('La fecha de corte solo aplica al criterio por eventos.',422);
+            $f=\DateTimeImmutable::createFromFormat('!Y-m-d',$corte);
+            if(!$f||$f->format('Y-m-d')!==$corte)throw new ErpException('La fecha de corte no es válida (AAAA-MM-DD).',422);
+        }
         $v=$this->r->uno('SELECT v.id,p.anio FROM erp_presupuesto_versiones v JOIN erp_presupuestos p ON p.id=v.presupuesto_id WHERE v.id=?',[$version])??throw new ErpException('Versión de presupuesto no encontrada.',404);
         $anio=(int)$v['anio'];
+        // Fuente de lo real (misma forma en los dos criterios): tabla derivada por mes y destino, ya filtrada por año (y por corte en el criterio por eventos).
+        if($criterio==='eventos'){
+            $real='(SELECT anio,mes,tipo,objetivo_id,SUM(ventas_base_centavos) ventas_base_centavos,SUM(descuentos_informativo_centavos) descuentos_informativo_centavos,SUM(ventas_bruta_base_centavos) ventas_bruta_base_centavos,'
+                .'SUM(devoluciones_base_centavos) devoluciones_base_centavos,SUM(anulaciones_base_centavos) anulaciones_base_centavos,SUM(real_base_centavos) real_base_centavos,SUM(real_impuesto_centavos) real_impuesto_centavos,SUM(real_total_centavos) real_total_centavos '
+                .'FROM bi_presupuesto_real_eventos WHERE anio=?'.($corte!==null?' AND fecha_evento<=?':'').' GROUP BY anio,mes,tipo,objetivo_id)';
+            $pr=$corte!==null?[$anio,$corte]:[$anio];
+        }else{
+            $real='(SELECT mes,tipo,objetivo_id,ventas_base_centavos,descuentos_informativo_centavos,ventas_bruta_base_centavos,devoluciones_base_centavos,0 AS anulaciones_base_centavos,real_base_centavos,real_impuesto_centavos,real_total_centavos FROM bi_presupuesto_real_mes WHERE anio=?)';
+            $pr=[$anio];
+        }
         $filas=$this->r->q("SELECT k.mes,k.tipo,k.objetivo_id,
             COALESCE(s.nombre,p.nombre,CONCAT(c.codigo,' ',c.nombre),IF(k.tipo='comisiones','Comisiones',IF(k.tipo='sin_clasificar','Ventas sin servicio ni producto',NULL))) nombre,
             l.id IS NOT NULL tiene,l.base_centavos pb,l.impuesto_centavos pi,
             COALESCE(r.real_base_centavos,0) rb,COALESCE(r.real_impuesto_centavos,0) ri,COALESCE(r.real_total_centavos,0) rt,
-            COALESCE(r.ventas_base_centavos,0) vb,COALESCE(r.devoluciones_base_centavos,0) db,COALESCE(r.descuentos_informativo_centavos,0) ds,COALESCE(r.ventas_bruta_base_centavos,0) vbr
-            FROM (SELECT mes,tipo,objetivo_id FROM erp_presupuesto_lineas WHERE version_id=? UNION SELECT mes,tipo,objetivo_id FROM bi_presupuesto_real_mes WHERE anio=?) k
+            COALESCE(r.ventas_base_centavos,0) vb,COALESCE(r.devoluciones_base_centavos,0) db,COALESCE(r.descuentos_informativo_centavos,0) ds,COALESCE(r.ventas_bruta_base_centavos,0) vbr,COALESCE(r.anulaciones_base_centavos,0) an
+            FROM (SELECT mes,tipo,objetivo_id FROM erp_presupuesto_lineas WHERE version_id=? UNION SELECT mes,tipo,objetivo_id FROM $real rr) k
             LEFT JOIN erp_presupuesto_lineas l ON l.version_id=? AND l.mes=k.mes AND l.tipo=k.tipo AND l.objetivo_id=k.objetivo_id
-            LEFT JOIN bi_presupuesto_real_mes r ON r.anio=? AND r.mes=k.mes AND r.tipo=k.tipo AND r.objetivo_id=k.objetivo_id
+            LEFT JOIN $real r ON r.mes=k.mes AND r.tipo=k.tipo AND r.objetivo_id=k.objetivo_id
             LEFT JOIN servicios s ON k.tipo='servicio' AND s.id=k.objetivo_id LEFT JOIN inventario_productos p ON k.tipo='producto' AND p.id=k.objetivo_id
             LEFT JOIN erp_cont_cuentas c ON k.tipo='gasto' AND c.id=k.objetivo_id
-            ORDER BY FIELD(k.tipo,'servicio','producto','sin_clasificar','gasto','comisiones'),nombre,k.mes",[$version,$anio,$version,$anio]);
+            ORDER BY FIELD(k.tipo,'servicio','producto','sin_clasificar','gasto','comisiones'),nombre,k.mes",array_merge([$version],$pr,[$version],$pr));
         // Por grupo: presupuesto (solo líneas presupuestadas), real de TODO el año (informativo) y real de los meses/conceptos que sí tienen presupuesto (comparable).
         $g=static fn()=>['pb'=>0,'pi'=>0,'rb'=>0,'rt'=>0,'rb_comparable'=>0,'rt_comparable'=>0,'hay'=>false];
         $res=['ventas'=>$g(),'gastos'=>$g(),'comisiones'=>$g()];
-        $res['ventas']['componentes']=['bruta'=>0,'descuentos'=>0,'venta'=>0,'devoluciones'=>0,'neta'=>0];
+        $res['ventas']['componentes']=['bruta'=>0,'descuentos'=>0,'venta'=>0,'devoluciones'=>0,'anulaciones'=>0,'neta'=>0];
         foreach($filas as &$f){
             $f['mes']=(int)$f['mes'];$f['tiene']=(bool)$f['tiene'];
             $pb=$f['tiene']?(int)$f['pb']:null;$pi=$f['tiene']?(int)$f['pi']:null;
@@ -391,7 +413,7 @@ final class ErpPresupuestoService extends ErpService
             $f['dev_base']=self::desviacion($f['real_base'],$pb);$f['dev_total']=self::desviacion($f['real_total'],$f['presupuesto_total']);
             $f['sentido']=in_array($f['tipo'],['gasto','comisiones'],true)?'gasto':'ingreso';
             // Componentes explicativos de la base de venta: bruta − descuentos = venta; venta − devoluciones = neta (lo que se compara). No aplican a gastos ni comisiones.
-            $f['componentes']=$f['sentido']==='ingreso'?['bruta'=>(int)$f['vbr'],'descuentos'=>(int)$f['ds'],'venta'=>(int)$f['vb'],'devoluciones'=>(int)$f['db'],'neta'=>$f['real_base']]:null;
+            $f['componentes']=$f['sentido']==='ingreso'?['bruta'=>(int)$f['vbr'],'descuentos'=>(int)$f['ds'],'venta'=>(int)$f['vb'],'devoluciones'=>(int)$f['db'],'anulaciones'=>(int)$f['an'],'neta'=>$f['real_base']]:null;
             $k=$f['tipo']==='comisiones'?'comisiones':($f['tipo']==='gasto'?'gastos':'ventas');
             $res[$k]['rb']+=$f['real_base'];$res[$k]['rt']+=$f['real_total'];
             if($f['componentes']!==null)foreach($f['componentes'] as $q=>$x)$res['ventas']['componentes'][$q]+=$x;
@@ -421,6 +443,6 @@ final class ErpPresupuestoService extends ErpService
             'hay'=>$res['gastos']['hay']||$res['comisiones']['hay'],'rb_comparable'=>$res['gastos']['rb_comparable']+$res['comisiones']['rb_comparable']];
         $res['gastos_totales']['dev']=self::desviacion($res['gastos_totales']['rb_comparable'],$res['gastos_totales']['hay']?$res['gastos_totales']['pb']:null);
         $cobros=$this->r->q('SELECT mes,cobros_centavos,devoluciones_de_cobro_centavos,cobros_netos_centavos FROM bi_presupuesto_cobros_mes WHERE anio=? ORDER BY mes',[$anio]);
-        return ['filas'=>$filas,'anual'=>array_values($anual),'resumen'=>$res,'cobros'=>$cobros,'anio'=>$anio];
+        return ['filas'=>$filas,'anual'=>array_values($anual),'resumen'=>$res,'cobros'=>$cobros,'anio'=>$anio,'criterio'=>$criterio,'corte'=>$corte];
     }
 }
