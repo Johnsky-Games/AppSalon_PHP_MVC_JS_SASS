@@ -895,6 +895,13 @@ final class ErpPresupuestoIntegrationTest extends TestCase
             foreach(['Foto #1 al 2026-02-28','contenido íntegro','Vigente','Limitaciones de esta foto','Generar corrección','Componentes congelados'] as $t)self::assertStringContainsString($t,$h,$t);
             self::assertSame(303,$this->post(['accion'=>'presupuesto_foto_corregir','version_id'=>(string)$v,'foto_id'=>(string)$id,'motivo'=>'Revisión de cierre']));
             $h=$this->pagina(['version'=>(string)$v,'foto'=>(string)$id]);self::assertStringContainsString('Corregida por la foto #2',$h);self::assertStringNotContainsString('Generar corrección',$h);
+            // El número que se muestra es el de la foto (por corte), no su identificador de base de datos.
+            $this->db->query("ALTER TABLE erp_presupuesto_fotos AUTO_INCREMENT=700");
+            $otraV=$this->presupuesto('tercero');$this->cifra($otraV,'servicio:'.$this->s1,3,'10.00','0.00');$this->aprobar($otraV);
+            self::assertSame(303,$this->post(['accion'=>'presupuesto_foto','version_id'=>(string)$otraV,'corte'=>'2026-03-31']));
+            $f1=(int)$this->r->uno("SELECT id FROM erp_presupuesto_fotos WHERE version_id=$otraV")['id'];
+            self::assertSame(303,$this->post(['accion'=>'presupuesto_foto_corregir','version_id'=>(string)$otraV,'foto_id'=>(string)$f1,'motivo'=>'Número distinto del id']));
+            $h=$this->pagina(['version'=>(string)$otraV]);self::assertStringContainsString('Corregida por la foto #2',$h);self::assertStringNotContainsString('Corregida por la foto #'.($f1+1),$h);
             // Una foto de otro presupuesto no se muestra desde esta versión.
             $otro=$this->presupuesto('otro');$this->cifra($otro,'servicio:'.$this->s1,3,'10.00','0.00');$this->aprobar($otro);
             $h=$this->pagina(['version'=>(string)$otro,'foto'=>(string)$id]);self::assertStringNotContainsString('Foto #1 al',$h);

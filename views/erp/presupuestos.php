@@ -120,7 +120,7 @@ $v=$version;
 <?php elseif($version['estado']!=='aprobada'): ?><p>Solo se fotografía la versión aprobada vigente.</p><?php endif; ?>
 <div class="ops-table-wrap"><table class="ops-table"><caption>Fotos de este presupuesto (más recientes primero)</caption><thead><tr><th>Corte</th><th>Foto</th><th>Versión del presupuesto</th><th>Cálculo</th><th>Generada por</th><th>Generada</th><th>Estado</th><th>Motivo de la corrección</th><th></th></tr></thead><tbody>
 <?php foreach($fotos as $f): ?><tr><td><?= s($f['corte']) ?></td><td>#<?= (int)$f['numero'] ?></td><td>v<?= (int)$f['version_numero'] ?></td><td>v<?= (int)$f['version_calculo'] ?> · <?= s($f['criterio']) ?></td><td><?= s($f['generado_por_nombre']??'—') ?></td><td><?= s(substr($f['generado_en'],0,16)) ?></td>
-<td><?= $f['corregida_por_id']?'Corregida por la foto #'.(int)$f['corregida_por_id']:'Vigente' ?></td><td><?= s($f['motivo']??'—') ?></td><td><a href="?version=<?= (int)$version['id'] ?>&amp;foto=<?= (int)$f['id'] ?>">Ver</a></td></tr>
+<td><?= $f['corregida_por_id']?'Corregida por la foto #'.(int)$f['corregida_por_numero']:'Vigente' ?></td><td><?= s($f['motivo']??'—') ?></td><td><a href="?version=<?= (int)$version['id'] ?>&amp;foto=<?= (int)$f['id'] ?>">Ver</a></td></tr>
 <?php endforeach; ?><?php if(!$fotos): ?><tr><td colspan="9">Todavía no hay fotos.</td></tr><?php endif; ?></tbody></table></div>
 <?php if($foto): $lim=$foto['limitaciones']; ?>
 <h3>Foto #<?= (int)$foto['numero'] ?> al <?= s($foto['corte']) ?> · <?= s($foto['escenario']) ?> <?= (int)$foto['anio'] ?> · presupuesto v<?= (int)$foto['version_numero'] ?></h3>

@@ -217,7 +217,7 @@ final class ErpPresupuestoService extends ErpService
     public function fotos(int $presupuesto):array
     {
         return $this->r->q('SELECT f.id,f.version_id,v.numero version_numero,f.corte,f.numero,f.corrige_foto_id,f.motivo,f.criterio,f.version_calculo,f.n_lineas,f.huella,f.generado_en,u.nombre generado_por_nombre,
-            (SELECT o.id FROM erp_presupuesto_fotos o WHERE o.corrige_foto_id=f.id) corregida_por_id
+            (SELECT o.id FROM erp_presupuesto_fotos o WHERE o.corrige_foto_id=f.id) corregida_por_id,(SELECT o.numero FROM erp_presupuesto_fotos o WHERE o.corrige_foto_id=f.id) corregida_por_numero
             FROM erp_presupuesto_fotos f JOIN erp_presupuesto_versiones v ON v.id=f.version_id LEFT JOIN usuarios u ON u.id=f.generado_por WHERE f.presupuesto_id=? ORDER BY f.corte DESC,f.numero DESC LIMIT 200',[$presupuesto]);
     }
 
