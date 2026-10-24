@@ -46,6 +46,17 @@ abstract class R2bCase extends QaCase
         return json_decode((string)@file_get_contents(self::$smtpFallo[$port]['buzon'] ?? ''), true) ?: [];
     }
 
+    /**
+     * Contadores del SMTP con fallos, independientes del reloj: `conexiones` = conexiones TCP aceptadas; `saludos` = sesiones SMTP iniciadas (EHLO/HELO).
+     * Se comparan antes y después de una petición: una petición que solo programa el correo no abre ninguna.
+     * @return array{conexiones:int,saludos:int}
+     */
+    protected static function contadoresSmtp(int $port): array
+    {
+        $buzon = self::$smtpFallo[$port]['buzon'] ?? throw new \RuntimeException('SMTP no iniciado');
+        return ['conexiones' => (int)@file_get_contents($buzon . '.conexiones'), 'saludos' => (int)@file_get_contents($buzon . '.saludos')];
+    }
+
     protected static function vaciarBuzonFallo(int $port): void
     {
         file_put_contents(self::$smtpFallo[$port]['buzon'], '[]');

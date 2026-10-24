@@ -24,8 +24,12 @@ file_put_contents($buzon . '.modo', $modoInicial);
 // Los sondeos de puerto no hablan SMTP: contar saludos detecta intentos reales sin medir la velocidad de la CPU.
 $saludos = 0;
 file_put_contents($buzon . '.saludos', '0');
+// Conexiones TCP aceptadas (incluye las que luego se cuelgan o cortan antes de hablar SMTP): una petición que no debe enviar correo no puede abrir ninguna.
+$conexiones = 0;
+file_put_contents($buzon . '.conexiones', '0');
 $colgadas = [];
 while ($c = @stream_socket_accept($srv, -1)) {
+    file_put_contents($buzon . '.conexiones', (string)++$conexiones, LOCK_EX);
     $modo = trim((string)@file_get_contents($buzon . '.modo')) ?: 'ok';
     if ($modo === 'cuelga') { $colgadas[] = $c; continue; }
     stream_set_timeout($c, 30);
