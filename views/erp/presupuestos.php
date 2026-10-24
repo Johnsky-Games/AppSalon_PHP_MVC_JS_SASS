@@ -113,6 +113,32 @@ $v=$version;
 <?php endforeach; ?><?php if(!$comparativo['cobros']): ?><tr><td colspan="4">Sin cobros de caja en el año.</td></tr><?php endif; ?></tbody></table></div>
 </section>
 
+<section class="ui-card"><h2>Fotos del comparativo (cierres)</h2>
+<p>Una foto <strong>congela</strong> el comparativo oficial (por eventos) de la versión aprobada a una fecha de corte: componentes reales por mes y concepto, versión del cálculo, quién la generó y cuándo. <strong>No se edita ni se borra</strong>; una corrección genera una foto nueva vinculada a la anterior y las dos se conservan. No cambia el presupuesto ni genera ventas, cobros o asientos.</p>
+<?php if($version['estado']==='aprobada'&&$aprueba): ?><form class="formulario ui-filtros" method="POST" action="/gestion/accion" data-una-vez><?php $clave('presupuesto_foto'); ?><input type="hidden" name="version_id" value="<?= (int)$version['id'] ?>">
+<label>Fecha de corte <input type="date" name="corte" required max="<?= s(date('Y-m-d')) ?>"></label><button class="boton">Generar foto al corte</button><span> El corte debe caer en <?= (int)$version['anio'] ?> y no puede ser futuro.</span></form>
+<?php elseif($version['estado']!=='aprobada'): ?><p>Solo se fotografía la versión aprobada vigente.</p><?php endif; ?>
+<div class="ops-table-wrap"><table class="ops-table"><caption>Fotos de este presupuesto (más recientes primero)</caption><thead><tr><th>Corte</th><th>Foto</th><th>Versión del presupuesto</th><th>Cálculo</th><th>Generada por</th><th>Generada</th><th>Estado</th><th>Motivo de la corrección</th><th></th></tr></thead><tbody>
+<?php foreach($fotos as $f): ?><tr><td><?= s($f['corte']) ?></td><td>#<?= (int)$f['numero'] ?></td><td>v<?= (int)$f['version_numero'] ?></td><td>v<?= (int)$f['version_calculo'] ?> · <?= s($f['criterio']) ?></td><td><?= s($f['generado_por_nombre']??'—') ?></td><td><?= s(substr($f['generado_en'],0,16)) ?></td>
+<td><?= $f['corregida_por_id']?'Corregida por la foto #'.(int)$f['corregida_por_id']:'Vigente' ?></td><td><?= s($f['motivo']??'—') ?></td><td><a href="?version=<?= (int)$version['id'] ?>&amp;foto=<?= (int)$f['id'] ?>">Ver</a></td></tr>
+<?php endforeach; ?><?php if(!$fotos): ?><tr><td colspan="9">Todavía no hay fotos.</td></tr><?php endif; ?></tbody></table></div>
+<?php if($foto): $lim=$foto['limitaciones']; ?>
+<h3>Foto #<?= (int)$foto['numero'] ?> al <?= s($foto['corte']) ?> · <?= s($foto['escenario']) ?> <?= (int)$foto['anio'] ?> · presupuesto v<?= (int)$foto['version_numero'] ?></h3>
+<p>Criterio <strong><?= s($foto['criterio']) ?></strong> · cálculo v<?= (int)$foto['version_calculo'] ?> · generada por <?= s($foto['generado_por_nombre']??'—') ?> el <?= s(substr($foto['generado_en'],0,16)) ?> · huella <code><?= s(substr($foto['huella'],0,16)) ?>…</code>
+ · <?= $foto['integra']?'contenido íntegro (coincide con su huella)':'<strong>ATENCIÓN: el contenido ya no coincide con su huella</strong>' ?>
+<?php if($foto['corrige_foto_id']): ?> · corrige la foto <a href="?version=<?= (int)$version['id'] ?>&amp;foto=<?= (int)$foto['corrige_foto_id'] ?>">#anterior</a>: <?= s($foto['motivo']) ?><?php endif; ?>
+<?php if($foto['corregida_por_id']): ?> · <strong>corregida por la foto <a href="?version=<?= (int)$version['id'] ?>&amp;foto=<?= (int)$foto['corregida_por_id'] ?>">posterior</a></strong><?php endif; ?></p>
+<?php if(!empty($lim['notas'])): ?><div class="alerta"><strong>Limitaciones de esta foto</strong><ul><?php foreach($lim['notas'] as $n): ?><li><?= s($n) ?></li><?php endforeach; ?></ul></div><?php endif; ?>
+<div class="ops-table-wrap"><table class="ops-table"><caption>Componentes congelados</caption><thead><tr><th>Mes</th><th>Tipo</th><th>Concepto</th><th>Presup. base</th><th>Presup. impuesto</th><th>Venta bruta</th><th>Descuentos</th><th>Devoluciones</th><th>Anulaciones</th><th>Real base</th><th>Real impuesto</th><th>Anul. sin fecha</th></tr></thead><tbody>
+<?php foreach($foto['lineas'] as $l): ?><tr><td><?= s($meses[(int)$l['mes']]) ?></td><td><?= s($tipoTxt[$l['tipo']]) ?></td><td><?= s($l['nombre']??'') ?></td>
+<td><?= $l['presupuesto_base_centavos']===null?'—':$dinero($l['presupuesto_base_centavos']) ?></td><td><?= $l['presupuesto_impuesto_centavos']===null?'—':$dinero($l['presupuesto_impuesto_centavos']) ?></td>
+<td><?= $dinero($l['ventas_bruta_base_centavos']) ?></td><td><?= $dinero($l['descuentos_base_centavos']) ?></td><td><?= $dinero($l['devoluciones_base_centavos']) ?></td><td><?= $dinero($l['anulaciones_base_centavos']) ?></td><td><?= $dinero($l['real_base_centavos']) ?></td><td><?= $dinero($l['real_impuesto_centavos']) ?></td><td><?= (int)$l['anulaciones_sin_evento'] ?></td></tr>
+<?php endforeach; ?><?php if(!$foto['lineas']): ?><tr><td colspan="12">La foto no tiene líneas: no había presupuesto ni movimientos en el año a esa fecha.</td></tr><?php endif; ?></tbody></table></div>
+<?php if($aprueba&&!$foto['corregida_por_id']): ?><form class="formulario ui-filtros" method="POST" action="/gestion/accion" data-una-vez><?php $clave('presupuesto_foto_corregir'); ?><input type="hidden" name="version_id" value="<?= (int)$version['id'] ?>"><input type="hidden" name="foto_id" value="<?= (int)$foto['id'] ?>">
+<label>Motivo de la corrección <input name="motivo" maxlength="200" required></label><button class="boton boton-secundario">Generar corrección</button><span> Recalcula al mismo corte con la versión aprobada vigente; esta foto se conserva.</span></form><?php endif; ?>
+<?php endif; ?>
+</section>
+
 <section class="ui-card"><h2>Historial de cambios de esta versión</h2>
 <div class="ops-table-wrap"><table class="ops-table"><caption>Hasta 100 cambios recientes: quién, cuándo y qué valor</caption><thead><tr><th>Fecha</th><th>Quién</th><th>Mes</th><th>Tipo</th><th>Acción</th><th>Antes</th><th>Después</th><th>Origen</th></tr></thead><tbody>
 <?php foreach($cambios as $c): ?><tr><td><?= s(substr($c['creado_en'],0,16)) ?></td><td><?= s($c['actor']??'—') ?></td><td><?= s($meses[(int)$c['mes']]) ?></td><td><?= s($tipoTxt[$c['tipo']]) ?></td><td><?= s($c['accion']) ?></td>
