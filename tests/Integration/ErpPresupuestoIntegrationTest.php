@@ -20,7 +20,7 @@ use Services\{ErpContabilidadService,ErpException,ErpPresupuestoService};
  */
 final class ErpPresupuestoIntegrationTest extends TestCase
 {
-    private const VISTAS=['bi_presupuesto_real_mes','bi_presupuesto_lineas','bi_presupuesto_vs_real','bi_presupuesto_anual','bi_presupuesto_cobros_mes'];
+    private const VISTAS=['bi_presupuesto_real_mes','bi_presupuesto_fotos','bi_presupuesto_foto_lineas','bi_presupuesto_lineas','bi_presupuesto_vs_real','bi_presupuesto_anual','bi_presupuesto_cobros_mes'];
     private \mysqli $db;private ErpRepository $r;private int $owner;private int $finanzas;private int $gerente;private int $recepcion;
     private int $s1;private int $p1;private int $cuentaOperativo;private int $cuentaComisiones;private int $cuentaCosto;
     protected function setUp():void
@@ -776,5 +776,145 @@ final class ErpPresupuestoIntegrationTest extends TestCase
             $this->sesion($this->gerente);$_GET=['version'=>(string)$v];$e=200;ob_start();try{\Controllers\ErpController::presupuestoPlantilla();}catch(\AppTerminationException $x){$e=$x->getStatusCode();}finally{ob_end_clean();}self::assertSame(403,$e);
             $this->sesion($this->owner,'cliente');$e=200;ob_start();try{\Controllers\ErpController::presupuestos(new \MVC\Router());}catch(\AppTerminationException $x){$e=$x->getStatusCode();}finally{ob_end_clean();}self::assertContains($e,[302,303,403],'el portal de cliente no entra aunque la cuenta sea propietaria');
         }finally{$_SESSION=$anterior['s'];$_GET=$anterior['g'];$_POST=$anterior['p'];$_SERVER=$anterior['srv'];http_response_code(200);}
+    }
+
+    // ---- foto inmutable del comparativo (068) ----
+    private function foto(int $id):array {return $this->svc()->foto($id)??self::fail('foto');}
+    private function lineasFoto(array $foto):array {$o=[];foreach($foto['lineas'] as $l)$o[(int)$l['mes'].'|'.$l['tipo'].'|'.(int)$l['objetivo_id']]=$l;return $o;}
+
+    public function testLaFotoCongelaVersionCorteComponentesResponsableYFecha():void
+    {
+        $this->ventasConAnulaciones();$v=$this->presupuestoAprobado();
+        $id=$this->svc()->generarFoto($this->owner,$this->d(['version_id'=>$v,'corte'=>'2026-04-30']))['recurso_id'];
+        $f=$this->foto($id);
+        self::assertSame([$v,'2026-04-30',1,null,'eventos',ErpPresupuestoService::VERSION_CALCULO,$this->owner],[(int)$f['version_id'],$f['corte'],(int)$f['numero'],$f['corrige_foto_id'],$f['criterio'],(int)$f['version_calculo'],(int)$f['generado_por']]);
+        self::assertNotEmpty($f['generado_en']);self::assertTrue($f['integra'],'el contenido coincide con su huella');
+        $cmp=$this->svc()->comparativo($v,'eventos','2026-04-30');$idx=$this->indexado($cmp['filas']);$lf=$this->lineasFoto($f);
+        self::assertCount(count($idx),$lf,'una línea por mes y concepto del comparativo oficial al corte');self::assertSame((int)$f['n_lineas'],count($lf));
+        foreach($idx as $k=>$c){
+            self::assertSame([$c['real_base'],$c['real_impuesto']],[(int)$lf[$k]['real_base_centavos'],(int)$lf[$k]['real_impuesto_centavos']],"real $k");
+            if($c['componentes']!==null)self::assertSame([$c['componentes']['bruta'],$c['componentes']['descuentos'],$c['componentes']['devoluciones'],$c['componentes']['anulaciones']],
+                [(int)$lf[$k]['ventas_bruta_base_centavos'],(int)$lf[$k]['descuentos_base_centavos'],(int)$lf[$k]['devoluciones_base_centavos'],(int)$lf[$k]['anulaciones_base_centavos']],"componentes $k");
+            self::assertSame($c['tiene']?$c['presupuesto_base']:null,$lf[$k]['presupuesto_base_centavos']===null?null:(int)$lf[$k]['presupuesto_base_centavos'],"«sin presupuesto» distinto de cero en $k");
+        }
+        self::assertSame('Corte de ensayo',$lf['3|servicio|'.$this->s1]['nombre'],'el nombre del concepto queda congelado');
+        // Histórico incompleto: la venta anulada sin evento se informa, no se inventa fecha.
+        self::assertSame(1,$f['limitaciones']['anulaciones_sin_evento']);self::assertStringContainsString('no se inventó una fecha',implode(' ',$f['limitaciones']['notas']));
+        self::assertSame(1,(int)array_sum(array_column($f['lineas'],'anulaciones_sin_evento')));
+        self::assertSame(1,$this->n("SELECT COUNT(*) FROM erp_eventos WHERE tipo='presupuesto_foto_generada' AND entidad_id=$id"),'queda auditada');
+    }
+    public function testUnaFotoNoSeEditaNiSeBorraNiAdmiteLineasNuevasYLaHuellaDetectaCambios():void
+    {
+        $this->ventasConAnulaciones();$v=$this->presupuestoAprobado();
+        $id=$this->svc()->generarFoto($this->owner,$this->d(['version_id'=>$v,'corte'=>'2026-04-30']))['recurso_id'];
+        foreach(["UPDATE erp_presupuesto_fotos SET motivo='x' WHERE id=$id","DELETE FROM erp_presupuesto_fotos WHERE id=$id",
+            "UPDATE erp_presupuesto_foto_lineas SET real_base_centavos=1 WHERE foto_id=$id","DELETE FROM erp_presupuesto_foto_lineas WHERE foto_id=$id",
+            "INSERT INTO erp_presupuesto_foto_lineas(foto_id,mes,tipo,objetivo_id,ventas_bruta_base_centavos,descuentos_base_centavos,ventas_base_centavos,devoluciones_base_centavos,anulaciones_base_centavos,real_base_centavos,real_impuesto_centavos) VALUES($id,12,'servicio',999,0,0,0,0,0,0,0)"] as $sql)
+            $this->sqlFalla($sql);
+        // La huella delata una alteración hecha por fuera de las reglas (se retira el trigger solo en esta prueba, en una base aislada).
+        $this->db->query('DROP TRIGGER trg_presup_foto_linea_no_update');
+        $this->db->query("UPDATE erp_presupuesto_foto_lineas SET real_base_centavos=real_base_centavos+1 WHERE foto_id=$id LIMIT 1");
+        self::assertFalse($this->foto($id)['integra'],'un cambio en el contenido ya no coincide con la huella');
+    }
+    public function testUnaAnulacionOUnaDevolucionPosteriorNoAlteranUnaFotoAnterior():void
+    {
+        $this->ventasConAnulaciones();$v=$this->presupuestoAprobado();
+        $id=$this->svc()->generarFoto($this->owner,$this->d(['version_id'=>$v,'corte'=>'2026-02-28']))['recurso_id'];
+        $antes=$this->foto($id);
+        // Después de la foto ocurren una anulación nueva y una devolución nueva con fecha posterior al corte.
+        $vz=$this->venta('confirmada','2026-02-20 10:00:00');$lz=$this->linea($vz,$this->s1,null,6000,0,0,0,6000);$this->devolucion($vz,$lz,1000,'2026-06-02 10:00:00');$this->anulada($vz,'2026-06-10 09:00:00');
+        $despues=$this->foto($id);
+        self::assertSame($antes['lineas'],$despues['lineas'],'la foto conserva lo que se informó');self::assertTrue($despues['integra']);
+        // El comparativo calculado hoy al mismo corte ve la venta nueva del 20/02 (ocurrió antes del corte); el de estado actual la reescribe: la foto no cambia con ninguno.
+        $hoyAlCorte=$this->sumaMeses($this->svc()->comparativo($v,'eventos','2026-02-28')['filas'],'servicio',$this->s1);
+        $enFoto=[];foreach($despues['lineas'] as $l)if($l['tipo']==='servicio'&&(int)$l['objetivo_id']===$this->s1&&(int)$l['real_base_centavos']!==0)$enFoto[(int)$l['mes']]=(int)$l['real_base_centavos'];ksort($enFoto);
+        self::assertNotSame($hoyAlCorte,$enFoto,'la venta tardía hace que el cálculo de hoy al corte difiera de lo informado: por eso existe la foto');
+        self::assertSame([1=>14000,2=>-2500],$enFoto);
+    }
+    public function testUnaCorreccionGeneraUnaFotoNuevaVinculadaYConservaLaOriginal():void
+    {
+        $this->ventasConAnulaciones();$v=$this->presupuestoAprobado();
+        $id1=$this->svc()->generarFoto($this->owner,$this->d(['version_id'=>$v,'corte'=>'2026-02-28']))['recurso_id'];
+        $this->rechazo(fn()=>$this->svc()->generarFoto($this->owner,$this->d(['version_id'=>$v,'corte'=>'2026-02-28'])),409,'Ya existe una foto');
+        $this->rechazo(fn()=>$this->svc()->corregirFoto($this->owner,$this->d(['foto_id'=>$id1,'motivo'=>''])));
+        $original=$this->foto($id1);
+        // Llega una venta con fecha anterior al corte: la corrección la incluye y la original sigue igual.
+        $vz=$this->venta('confirmada','2026-02-25 10:00:00');$this->linea($vz,$this->s1,null,6000,0,0,0,6000);
+        $id2=$this->svc()->corregirFoto($this->owner,$this->d(['foto_id'=>$id1,'motivo'=>'Venta registrada tarde con fecha de febrero']))['recurso_id'];
+        $f2=$this->foto($id2);
+        self::assertSame([2,$id1,'2026-02-28','Venta registrada tarde con fecha de febrero'],[(int)$f2['numero'],(int)$f2['corrige_foto_id'],$f2['corte'],$f2['motivo']]);
+        self::assertSame($id2,(int)$this->foto($id1)['corregida_por_id']);self::assertNull($f2['corregida_por_id']);
+        self::assertSame($original['lineas'],$this->foto($id1)['lineas'],'la original se conserva intacta');self::assertTrue($this->foto($id1)['integra']);self::assertTrue($f2['integra']);
+        self::assertSame(6000,(int)$this->lineasFoto($f2)['2|servicio|'.$this->s1]['real_base_centavos']-(int)$this->lineasFoto($original)['2|servicio|'.$this->s1]['real_base_centavos'],'la corrección incluye la venta tardía; la original no');
+        // Solo se corrige la foto más reciente de un corte; la corregida no se corrige otra vez.
+        $this->rechazo(fn()=>$this->svc()->corregirFoto($this->owner,$this->d(['foto_id'=>$id1,'motivo'=>'Otra vez'])),409,'ya fue corregida');
+        $id3=$this->svc()->corregirFoto($this->owner,$this->d(['foto_id'=>$id2,'motivo'=>'Segunda corrección']))['recurso_id'];
+        self::assertSame([3,$id2],[(int)$this->foto($id3)['numero'],(int)$this->foto($id3)['corrige_foto_id']]);
+        self::assertSame(3,$this->n("SELECT COUNT(*) FROM erp_presupuesto_fotos"),'las tres versiones de la foto se conservan');
+        // Si entre tanto se aprobó una versión nueva del presupuesto, la corrección usa la vigente y deja constancia de cuál.
+        $pid=(int)$this->r->uno('SELECT presupuesto_id FROM erp_presupuesto_versiones WHERE id=?',[$v])['presupuesto_id'];
+        $rev=(int)$this->svc()->revisar($this->owner,$this->d(['presupuesto_id'=>$pid,'motivo'=>'Ajuste']))['recurso_id'];$this->cifra($rev,'servicio:'.$this->s1,5,'10.00','0.00');$this->aprobar($rev);
+        $id4=$this->svc()->corregirFoto($this->owner,$this->d(['foto_id'=>$id3,'motivo'=>'Con la versión 2']))['recurso_id'];
+        self::assertSame([$rev,$v],[(int)$this->foto($id4)['version_id'],(int)$this->foto($id1)['version_id']],'cada foto conserva la versión del presupuesto con la que se generó');
+        $this->rechazo(fn()=>$this->svc()->generarFoto($this->owner,$this->d(['version_id'=>$v,'corte'=>'2026-03-31'])),409,'reemplazada');
+        // BI: es_vigente marca solo la última del corte.
+        $vig=$this->db->query("SELECT foto_numero,es_vigente,version_presupuesto_numero FROM bi_presupuesto_fotos ORDER BY foto_numero")->fetch_all(MYSQLI_ASSOC);
+        self::assertSame([1,2,3,4],array_map('intval',array_column($vig,'foto_numero')));self::assertSame([0,0,0,1],array_map('intval',array_column($vig,'es_vigente')));
+        self::assertSame(count($this->foto($id4)['lineas']),$this->n("SELECT COUNT(*) FROM bi_presupuesto_foto_lineas WHERE foto_id=$id4"));
+        }
+    public function testLaFotoValidaCorteVersionYPermiso():void
+    {
+        $this->ventasConAnulaciones();$v=$this->presupuestoAprobado();
+        $this->rechazo(fn()=>$this->svc()->generarFoto($this->finanzas,$this->d(['version_id'=>$v,'corte'=>'2026-02-28'])),403);
+        $this->rechazo(fn()=>$this->svc()->generarFoto($this->owner,$this->d(['version_id'=>$v,'corte'=>'2027-02-28'])),null,'año del presupuesto');
+        $this->rechazo(fn()=>$this->svc()->generarFoto($this->owner,$this->d(['version_id'=>$v,'corte'=>'2026-02-30'])),null,'fecha de corte');
+        $this->rechazo(fn()=>$this->svc()->generarFoto($this->owner,$this->d(['version_id'=>$v,'corte'=>''])),null,'fecha de corte');
+        $this->rechazo(fn()=>$this->svc()->generarFoto($this->owner,$this->d(['version_id'=>$v,'corte'=>'2026-12-31'])),null,'no puede ser futuro');
+        $this->rechazo(fn()=>$this->svc()->generarFoto($this->owner,$this->d(['version_id'=>999999,'corte'=>'2026-02-28'])),404);
+        $abierta=$this->presupuesto('optimista');$this->cifra($abierta,'servicio:'.$this->s1,3,'10.00','0.00');
+        $this->rechazo(fn()=>$this->svc()->generarFoto($this->owner,$this->d(['version_id'=>$abierta,'corte'=>'2026-02-28'])),409,'aún no está aprobada');
+        $this->rechazo(fn()=>$this->svc()->corregirFoto($this->owner,$this->d(['foto_id'=>999999,'motivo'=>'x'])),404);
+        self::assertSame(0,$this->n('SELECT COUNT(*) FROM erp_presupuesto_fotos'),'ningún rechazo deja fotos a medias');
+        // Una foto sin presupuesto ni movimientos a esa fecha es válida y queda vacía, sin inventar cifras.
+        $vacio=$this->presupuesto('vacio',2026);$this->cifra($vacio,'servicio:'.$this->s1,12,'10.00','0.00');$this->aprobar($vacio);
+        $f=$this->foto($this->svc()->generarFoto($this->owner,$this->d(['version_id'=>$vacio,'corte'=>'2026-01-05']))['recurso_id']);
+        self::assertSame([1,1000,0],[count($f['lineas']),(int)$f['lineas'][0]['presupuesto_base_centavos'],(int)$f['lineas'][0]['real_base_centavos']],'solo la cifra presupuestada de diciembre; sin real a esa fecha');
+    }
+    public function testLaPantallaGeneraYMuestraFotosYSoloApruebaQuienPuede():void
+    {
+        $this->ventasConAnulaciones();$v=$this->presupuestoAprobado();
+        $anterior=['s'=>$_SESSION??[],'g'=>$_GET,'p'=>$_POST,'srv'=>$_SERVER];
+        try{
+            $this->sesion($this->finanzas);$h=$this->pagina(['version'=>(string)$v]);
+            self::assertStringContainsString('Fotos del comparativo (cierres)',$h);self::assertStringNotContainsString('Generar foto al corte',$h,'finanzas prepara pero no genera cierres');
+            $this->post(['accion'=>'presupuesto_foto','version_id'=>(string)$v,'corte'=>'2026-02-28']);self::assertSame(0,$this->n('SELECT COUNT(*) FROM erp_presupuesto_fotos'),'finanzas no puede generar el cierre');
+            $this->sesion($this->owner);$h=$this->pagina(['version'=>(string)$v]);self::assertStringContainsString('Generar foto al corte',$h);
+            self::assertSame(303,$this->post(['accion'=>'presupuesto_foto','version_id'=>(string)$v,'corte'=>'2026-02-28']));
+            $id=(int)$this->r->uno('SELECT id FROM erp_presupuesto_fotos')['id'];
+            $h=$this->pagina(['version'=>(string)$v,'foto'=>(string)$id]);
+            foreach(['Foto #1 al 2026-02-28','contenido íntegro','Vigente','Limitaciones de esta foto','Generar corrección','Componentes congelados'] as $t)self::assertStringContainsString($t,$h,$t);
+            self::assertSame(303,$this->post(['accion'=>'presupuesto_foto_corregir','version_id'=>(string)$v,'foto_id'=>(string)$id,'motivo'=>'Revisión de cierre']));
+            $h=$this->pagina(['version'=>(string)$v,'foto'=>(string)$id]);self::assertStringContainsString('Corregida por la foto #2',$h);self::assertStringNotContainsString('Generar corrección',$h);
+            // El número que se muestra es el de la foto (por corte), no su identificador de base de datos.
+            $this->db->query("ALTER TABLE erp_presupuesto_fotos AUTO_INCREMENT=700");
+            $otraV=$this->presupuesto('tercero');$this->cifra($otraV,'servicio:'.$this->s1,3,'10.00','0.00');$this->aprobar($otraV);
+            self::assertSame(303,$this->post(['accion'=>'presupuesto_foto','version_id'=>(string)$otraV,'corte'=>'2026-03-31']));
+            $f1=(int)$this->r->uno("SELECT id FROM erp_presupuesto_fotos WHERE version_id=$otraV")['id'];
+            self::assertSame(303,$this->post(['accion'=>'presupuesto_foto_corregir','version_id'=>(string)$otraV,'foto_id'=>(string)$f1,'motivo'=>'Número distinto del id']));
+            $h=$this->pagina(['version'=>(string)$otraV]);self::assertStringContainsString('Corregida por la foto #2',$h);self::assertStringNotContainsString('Corregida por la foto #'.($f1+1),$h);
+            // Una foto de otro presupuesto no se muestra desde esta versión.
+            $otro=$this->presupuesto('otro');$this->cifra($otro,'servicio:'.$this->s1,3,'10.00','0.00');$this->aprobar($otro);
+            $h=$this->pagina(['version'=>(string)$otro,'foto'=>(string)$id]);self::assertStringNotContainsString('Foto #1 al',$h);
+        }finally{$_SESSION=$anterior['s'];$_GET=$anterior['g'];$_POST=$anterior['p'];$_SERVER=$anterior['srv'];http_response_code(200);}
+    }
+    public function testLaHuellaNoDependeDelOrdenDeLineasConConceptosDeIgualNombre():void
+    {
+        $s2=$this->ins("INSERT INTO servicios(nombre,precio,duracion_minutos) VALUES('Corte de ensayo',50.00,30)");
+        $v=$this->presupuesto();$this->cifra($v,'servicio:'.$this->s1,3,'10.00','0.00');$this->cifra($v,'servicio:'.$s2,3,'20.00','0.00');$this->aprobar($v);
+        $id=$this->svc()->generarFoto($this->owner,$this->d(['version_id'=>$v,'corte'=>'2026-03-31']))['recurso_id'];
+        // Dos servicios con el mismo nombre y mes: el orden de lectura puede variar; la huella se calcula sobre un orden canónico (mes, tipo, objetivo).
+        self::assertTrue($this->foto($id)['integra']);
+        $this->db->query("ALTER TABLE erp_presupuesto_foto_lineas ADD INDEX idx_orden_ensayo (objetivo_id DESC)");
+        self::assertTrue($this->foto($id)['integra'],'un plan de ejecución distinto no cambia la verificación');
     }
 }

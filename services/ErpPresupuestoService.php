@@ -21,6 +21,8 @@ final class ErpPresupuestoService extends ErpService
     public const MAX_BYTES=1048576;
     public const MESES=[1=>'Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
     private const EDITABLES=['borrador','revision'];
+    /** Versión del cálculo de lo real que se congela en cada foto (criterio por eventos, vistas 066/067). Súbela si cambia la regla de cálculo. */
+    public const VERSION_CALCULO=1;
 
     // ------------------------------------------------------------------------------------------------------------- escritura
 
@@ -137,6 +139,113 @@ final class ErpPresupuestoService extends ErpService
             $this->evento($actor,'presupuesto_revision_abierta','presupuesto_version',$nueva,['presupuesto_id'=>(int)$p['id'],'numero'=>$numero,'origen_version_id'=>(int)$base['id'],'motivo'=>$motivo]);
             return $nueva;
         });
+    }
+
+    // ------------------------------------------------------------------------------------------------------------- foto inmutable del comparativo (068)
+
+    /**
+     * Congela el comparativo OFICIAL (por eventos) de una versión APROBADA a una fecha de corte: componentes reales por mes y concepto, versión del cálculo, quién y cuándo.
+     * Un corte ya fotografiado no se repite: se corrige con corregirFoto(). El corte no puede ser futuro (lo que aún no ocurrió no se congela) y debe caer en el año del presupuesto.
+     */
+    public function generarFoto(int $actor,array $d):array
+    {
+        return $this->ejecutar($actor,'presupuestos.aprobar','presupuesto_foto',$d,function()use($actor,$d){
+            $v=$this->r->uno('SELECT * FROM erp_presupuesto_versiones WHERE id=? FOR UPDATE',[$this->id($d['version_id']??null)])??throw new ErpException('Versión de presupuesto no encontrada.',404);
+            if($v['estado']!=='aprobada')throw new ErpException('Solo se fotografía la versión aprobada vigente: la '.($v['estado']==='reemplazada'?'versión '.$v['numero'].' fue reemplazada.':'versión '.$v['numero'].' aún no está aprobada.'),409);
+            $corte=$this->corteFoto($d['corte']??null,(int)$this->r->uno('SELECT anio FROM erp_presupuestos WHERE id=?',[(int)$v['presupuesto_id']])['anio']);
+            $this->r->uno('SELECT id FROM erp_presupuestos WHERE id=? FOR UPDATE',[(int)$v['presupuesto_id']]);
+            if($this->r->uno('SELECT id FROM erp_presupuesto_fotos WHERE presupuesto_id=? AND corte=? FOR UPDATE',[(int)$v['presupuesto_id'],$corte]))
+                throw new ErpException('Ya existe una foto de este presupuesto al '.$corte.'. Para cambiarla genera una corrección: la original se conserva.',409);
+            return $this->guardarFoto($actor,$v,$corte,1,null,null);
+        });
+    }
+
+    /** Corrige una foto: genera una foto NUEVA (número siguiente, mismo corte, vinculada a la anterior y con motivo) recalculada con la versión aprobada vigente. Ambas se conservan. */
+    public function corregirFoto(int $actor,array $d):array
+    {
+        return $this->ejecutar($actor,'presupuestos.aprobar','presupuesto_foto_corregir',$d,function()use($actor,$d){
+            $prev=$this->r->uno('SELECT * FROM erp_presupuesto_fotos WHERE id=? FOR UPDATE',[$this->id($d['foto_id']??null)])??throw new ErpException('Foto no encontrada.',404);
+            $motivo=$this->texto($d['motivo']??'',200);
+            $this->r->uno('SELECT id FROM erp_presupuestos WHERE id=? FOR UPDATE',[(int)$prev['presupuesto_id']]);
+            if($this->r->uno('SELECT id FROM erp_presupuesto_fotos WHERE corrige_foto_id=? FOR UPDATE',[(int)$prev['id']]))
+                throw new ErpException('Esta foto ya fue corregida: corrige la más reciente de ese corte.',409);
+            $v=$this->r->uno("SELECT * FROM erp_presupuesto_versiones WHERE presupuesto_id=? AND estado='aprobada' FOR UPDATE",[(int)$prev['presupuesto_id']])??throw new ErpException('El presupuesto no tiene una versión aprobada vigente.',409);
+            return $this->guardarFoto($actor,$v,(string)$prev['corte'],(int)$prev['numero']+1,(int)$prev['id'],$motivo);
+        });
+    }
+
+    private function corteFoto(mixed $corte,int $anio):string
+    {
+        $c=is_string($corte)?trim($corte):'';
+        $f=\DateTimeImmutable::createFromFormat('!Y-m-d',$c);
+        if(!$f||$f->format('Y-m-d')!==$c)throw new ErpException('Indica la fecha de corte (AAAA-MM-DD).');
+        if((int)$f->format('Y')!==$anio)throw new ErpException('El corte debe caer en el año del presupuesto ('.$anio.').');
+        if($c>substr($this->r::ahora(),0,10))throw new ErpException('El corte no puede ser futuro: lo que aún no ocurrió no se congela.');
+        return $c;
+    }
+
+    private function guardarFoto(int $actor,array $v,string $corte,int $numero,?int $corrige,?string $motivo):int
+    {
+        $cmp=$this->comparativo((int)$v['id'],'eventos',$corte);
+        $sin=[];foreach($this->r->q('SELECT mes,tipo,objetivo_id,SUM(anulaciones_sin_evento) n FROM bi_presupuesto_real_eventos WHERE anio=? AND fecha_evento<=? GROUP BY mes,tipo,objetivo_id HAVING SUM(anulaciones_sin_evento)>0',[$cmp['anio'],$corte]) as $x)$sin[(int)$x['mes'].'|'.$x['tipo'].'|'.(int)$x['objetivo_id']]=(int)$x['n'];
+        $lineas=[];
+        foreach($cmp['filas'] as $f){
+            $c=$f['componentes'];$tp=$f['tiene'];
+            $lineas[]=['mes'=>$f['mes'],'tipo'=>$f['tipo'],'objetivo_id'=>(int)$f['objetivo_id'],'nombre'=>$f['nombre']===null?null:mb_substr((string)$f['nombre'],0,200),
+                'pb'=>$tp?$f['presupuesto_base']:null,'pi'=>$tp?$f['presupuesto_impuesto']:null,
+                'bruta'=>$c['bruta']??0,'desc'=>$c['descuentos']??0,'venta'=>$c['venta']??0,'dev'=>$c['devoluciones']??0,'anul'=>$c['anulaciones']??0,
+                'rb'=>$f['real_base'],'ri'=>$f['real_impuesto'],'sin'=>$sin[$f['mes'].'|'.$f['tipo'].'|'.(int)$f['objetivo_id']]??0];
+        }
+        $total=array_sum(array_column($lineas,'sin'));
+        $lim=['anulaciones_sin_evento'=>$total,'notas'=>array_values(array_filter([
+            $total>0?$total.' anulación(es) de venta sin registro de la fecha de anulación (dato antiguo): se trataron como anuladas al confirmarse; no se inventó una fecha.':null,
+            'El gasto se fecha por la fecha contable del asiento, no por la fecha en que se registró.',
+            'Los cobros de caja no forman parte de la foto (no tienen presupuesto).']))];
+        $huella=hash('sha256',json_encode(['presupuesto_id'=>(int)$v['presupuesto_id'],'version_id'=>(int)$v['id'],'anio'=>$cmp['anio'],'corte'=>$corte,'numero'=>$numero,'corrige'=>$corrige,'motivo'=>$motivo,
+            'criterio'=>'eventos','version_calculo'=>self::VERSION_CALCULO,'lineas'=>self::canonicas($lineas)],JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE));
+        $ahora=$this->r::ahora();
+        $this->r->q('INSERT INTO erp_presupuesto_fotos(presupuesto_id,version_id,anio,corte,numero,corrige_foto_id,motivo,criterio,version_calculo,n_lineas,limitaciones_json,huella,generado_por,generado_en) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            [(int)$v['presupuesto_id'],(int)$v['id'],$cmp['anio'],$corte,$numero,$corrige,$motivo,'eventos',self::VERSION_CALCULO,count($lineas),json_encode($lim,JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE),$huella,$actor,$ahora]);
+        $id=$this->r->id();
+        foreach($lineas as $l)$this->r->q('INSERT INTO erp_presupuesto_foto_lineas(foto_id,mes,tipo,objetivo_id,nombre,presupuesto_base_centavos,presupuesto_impuesto_centavos,ventas_bruta_base_centavos,descuentos_base_centavos,ventas_base_centavos,devoluciones_base_centavos,anulaciones_base_centavos,real_base_centavos,real_impuesto_centavos,anulaciones_sin_evento) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            [$id,$l['mes'],$l['tipo'],$l['objetivo_id'],$l['nombre'],$l['pb'],$l['pi'],$l['bruta'],$l['desc'],$l['venta'],$l['dev'],$l['anul'],$l['rb'],$l['ri'],$l['sin']]);
+        $this->evento($actor,$corrige===null?'presupuesto_foto_generada':'presupuesto_foto_corregida','presupuesto_foto',$id,['presupuesto_id'=>(int)$v['presupuesto_id'],'version_id'=>(int)$v['id'],'corte'=>$corte,'numero'=>$numero,'corrige_foto_id'=>$corrige,'motivo'=>$motivo,'huella'=>$huella,'n_lineas'=>count($lineas)]);
+        return $id;
+    }
+
+    /** Fotos de un presupuesto, de la más reciente a la más antigua (con responsable, versión del presupuesto y si fue corregida). */
+    public function fotos(int $presupuesto):array
+    {
+        return $this->r->q('SELECT f.id,f.version_id,v.numero version_numero,f.corte,f.numero,f.corrige_foto_id,f.motivo,f.criterio,f.version_calculo,f.n_lineas,f.huella,f.generado_en,u.nombre generado_por_nombre,
+            (SELECT o.id FROM erp_presupuesto_fotos o WHERE o.corrige_foto_id=f.id) corregida_por_id,(SELECT o.numero FROM erp_presupuesto_fotos o WHERE o.corrige_foto_id=f.id) corregida_por_numero
+            FROM erp_presupuesto_fotos f JOIN erp_presupuesto_versiones v ON v.id=f.version_id LEFT JOIN usuarios u ON u.id=f.generado_por WHERE f.presupuesto_id=? ORDER BY f.corte DESC,f.numero DESC LIMIT 200',[$presupuesto]);
+    }
+
+    /** Una foto con sus líneas y limitaciones; `integra` dice si el contenido guardado sigue coincidiendo con su huella. */
+    public function foto(int $id):?array
+    {
+        $f=$this->r->uno('SELECT f.*,p.escenario,v.numero version_numero,u.nombre generado_por_nombre FROM erp_presupuesto_fotos f JOIN erp_presupuestos p ON p.id=f.presupuesto_id JOIN erp_presupuesto_versiones v ON v.id=f.version_id LEFT JOIN usuarios u ON u.id=f.generado_por WHERE f.id=?',[$id]);
+        if(!$f)return null;
+        $f['limitaciones']=json_decode((string)$f['limitaciones_json'],true,512,JSON_THROW_ON_ERROR);
+        $f['lineas']=$this->r->q("SELECT * FROM erp_presupuesto_foto_lineas WHERE foto_id=? ORDER BY FIELD(tipo,'servicio','producto','sin_clasificar','gasto','comisiones'),nombre,mes",[$id]);
+        $f['corregida_por_id']=($this->r->uno('SELECT id FROM erp_presupuesto_fotos WHERE corrige_foto_id=?',[$id])['id']??null);
+        $f['integra']=$this->huellaFoto($f)===$f['huella'];
+        return $f;
+    }
+    private function huellaFoto(array $f):string
+    {
+        $lineas=array_map(static fn($l)=>['mes'=>(int)$l['mes'],'tipo'=>$l['tipo'],'objetivo_id'=>(int)$l['objetivo_id'],'nombre'=>$l['nombre'],
+            'pb'=>$l['presupuesto_base_centavos']===null?null:(int)$l['presupuesto_base_centavos'],'pi'=>$l['presupuesto_impuesto_centavos']===null?null:(int)$l['presupuesto_impuesto_centavos'],
+            'bruta'=>(int)$l['ventas_bruta_base_centavos'],'desc'=>(int)$l['descuentos_base_centavos'],'venta'=>(int)$l['ventas_base_centavos'],'dev'=>(int)$l['devoluciones_base_centavos'],'anul'=>(int)$l['anulaciones_base_centavos'],
+            'rb'=>(int)$l['real_base_centavos'],'ri'=>(int)$l['real_impuesto_centavos'],'sin'=>(int)$l['anulaciones_sin_evento']],$f['lineas']);
+        return hash('sha256',json_encode(['presupuesto_id'=>(int)$f['presupuesto_id'],'version_id'=>(int)$f['version_id'],'anio'=>(int)$f['anio'],'corte'=>$f['corte'],'numero'=>(int)$f['numero'],
+            'corrige'=>$f['corrige_foto_id']===null?null:(int)$f['corrige_foto_id'],'motivo'=>$f['motivo'],'criterio'=>$f['criterio'],'version_calculo'=>(int)$f['version_calculo'],'lineas'=>self::canonicas($lineas)],JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE));
+    }
+    /** Orden estable y único (mes, tipo, objetivo) para la huella: no depende del orden de visualización ni del plan de ejecución, aunque dos conceptos tengan el mismo nombre. */
+    private static function canonicas(array $lineas):array
+    {
+        usort($lineas,static fn($a,$b)=>[$a['mes'],$a['tipo'],$a['objetivo_id']]<=>[$b['mes'],$b['tipo'],$b['objetivo_id']]);
+        return $lineas;
     }
 
     // ------------------------------------------------------------------------------------------------------------- reglas internas

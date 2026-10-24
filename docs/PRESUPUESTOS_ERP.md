@@ -56,8 +56,20 @@ Las pruebas (`testElCriterioPorEventosPreservaLoOcurridoAntesDeUnaAnulacionPoste
 
 ### Pendiente funcional (sigue abierto)
 * **El comparativo oficial sigue siendo el de estado actual**: la pantalla lo usa por defecto y las vistas `bi_presupuesto_vs_real` y `bi_presupuesto_anual` (versión aprobada frente a lo real, para tableros) **siguen calculadas con el estado actual**, por lo que anular una venta sigue reescribiendo los meses pasados en esos tableros. El criterio por eventos está en la pantalla y en `bi_presupuesto_real_eventos`; falta llevarlo a las vistas comparativas de BI y decidir (propietario) cuál criterio es el oficial para tableros y cierres.
-* No hay **foto del comparativo al cierre de un mes** (el criterio por eventos con corte la reconstruye a partir de los hechos; no es un registro inmutable de lo que se informó entonces).
+* La **foto inmutable** (068, abajo) congela lo informado en un corte; el comparativo por eventos con corte, en cambio, **se recalcula** con los hechos que hoy se conocen (un dato registrado tarde con fecha anterior al corte cambiaría ese recálculo, no la foto).
 * El gasto por eventos usa la fecha **contable** del asiento: un asiento con fecha anterior registrado después aparece en su fecha contable, no en la fecha en que se supo.
+
+## Foto inmutable del comparativo (068)
+
+Una **foto** congela el comparativo **oficial (por eventos)** de la **versión aprobada** de un presupuesto a una **fecha de corte**. Guarda: la versión del presupuesto, el corte, el criterio, la **versión del cálculo** (`VERSION_CALCULO`, hoy 1; sube si cambia la regla), los **componentes reales por mes y concepto** (presupuesto base e impuesto —NULL = «sin presupuesto», distinto de 0—, venta bruta, descuentos, devoluciones, anulaciones, real base e impuesto y anulaciones sin fecha), el nombre del concepto de ese momento, **quién** la generó, **cuándo** y una **huella** sha256 del contenido.
+
+* **Quién y dónde**: permiso `presupuestos.aprobar` (la persona que aprueba, no la que prepara). En la pantalla de la versión aprobada, sección «Fotos del comparativo (cierres)»; acciones `presupuesto_foto` y `presupuesto_foto_corregir` (idempotentes y auditadas: `presupuesto_foto_generada` / `presupuesto_foto_corregida`).
+* **Reglas del corte**: debe caer en el año del presupuesto y **no puede ser futuro** (lo que aún no ocurrió no se congela). Solo se fotografía la versión **aprobada vigente**. Un corte ya fotografiado no se repite: se corrige.
+* **Inmutabilidad**: la base rechaza `UPDATE`/`DELETE` sobre las fotos y sus líneas y no admite líneas nuevas una vez completa (`n_lineas`). Una anulación o devolución posterior **no cambia** una foto anterior; tampoco una venta registrada tarde con fecha anterior al corte.
+* **Correcciones**: `corregirFoto` genera una foto **nueva** (número siguiente, mismo corte, `corrige_foto_id` a la anterior y **motivo obligatorio**), recalculada con la versión aprobada vigente (cada foto conserva la suya). La original y las anteriores se conservan; solo se corrige la más reciente de un corte. La pantalla muestra «Corregida por la foto #N» y comprueba la huella («contenido íntegro»).
+* **Históricos incompletos**: una venta anulada sin evento `venta_anulada` (dato antiguo) se informa en la foto (`anulaciones_sin_evento`, por línea y total) y se trató como anulada al confirmarse: **no se inventa fecha** ni se presenta como exacta. El gasto usa la fecha contable del asiento. Los cobros de caja no forman parte de la foto (no tienen presupuesto).
+* **BI**: `bi_presupuesto_fotos` (cabecera; `es_vigente` = ninguna otra la corrige; corte como AAAAMMDD, sin columnas de fecha ni personas) y `bi_presupuesto_foto_lineas`.
+* Revertir 068 (guarda) avisa si existen fotos: son el registro de lo que se informó.
 
 ## Fuente y fecha de cada métrica
 
@@ -112,6 +124,7 @@ Una fila con base e impuesto vacíos **no cambia nada** (no equivale a cero; par
 | `bi_presupuesto_vs_real` | versión **vigente** frente a lo real, por mes y destino, con desviación y estado |
 | `bi_presupuesto_anual` | consolidado anual por destino |
 | `bi_presupuesto_cobros_mes` | cobros de caja por mes (sin presupuesto) |
+| `bi_presupuesto_fotos` / `bi_presupuesto_foto_lineas` (068) | cierres inmutables del comparativo oficial: cabecera y componentes por mes y concepto |
 
 El mes se une con `bi_dim_fecha.anio_mes` (AAAAMM). **La dimensión de fecha se amplía** (064 redefine `bi_dim_fecha`) para cubrir del 1 de enero al 31 de diciembre de cada año con presupuesto: un presupuesto suele ser futuro y sin esto sus meses quedarían fuera del calendario. La prueba usa un presupuesto de 2031.
 
