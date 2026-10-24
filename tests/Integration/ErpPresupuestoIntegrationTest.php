@@ -20,7 +20,7 @@ use Services\{ErpContabilidadService,ErpException,ErpPresupuestoService};
  */
 final class ErpPresupuestoIntegrationTest extends TestCase
 {
-    private const VISTAS=['bi_presupuesto_real_mes','bi_presupuesto_lineas','bi_presupuesto_vs_real','bi_presupuesto_anual','bi_presupuesto_cobros_mes'];
+    private const VISTAS=['bi_presupuesto_real_mes','bi_presupuesto_real_mes_eventos','bi_presupuesto_lineas','bi_presupuesto_vs_real','bi_presupuesto_anual','bi_presupuesto_cobros_mes'];
     private \mysqli $db;private ErpRepository $r;private int $owner;private int $finanzas;private int $gerente;private int $recepcion;
     private int $s1;private int $p1;private int $cuentaOperativo;private int $cuentaComisiones;private int $cuentaCosto;
     protected function setUp():void
@@ -436,15 +436,15 @@ final class ErpPresupuestoIntegrationTest extends TestCase
     public function testElCierreDelEjercicioYSuReversoNoSeCuentanComoGasto():void
     {
         $this->hechos();$v=$this->presupuestoAprobado();$c=new ErpContabilidadService($this->r);
-        $antes=$this->indexado($this->svc()->comparativo($v)['filas']);
+        $antes=$this->indexado($this->svc()->comparativo($v,'estado_actual')['filas']);
         for($m=1;$m<=11;$m++)$c->cerrarPeriodo($this->owner,$this->d(['anio'=>2026,'mes'=>$m]));
         $cierre=$c->cerrarEjercicio($this->owner,$this->d(['anio'=>2026]))['recurso_id'];
         self::assertGreaterThan(0,$this->n("SELECT COUNT(*) FROM erp_cont_lineas WHERE asiento_id=$cierre AND haber_centavos>0"),'el cierre acredita las cuentas de gasto');
-        $desp=$this->indexado($this->svc()->comparativo($v)['filas']);
+        $desp=$this->indexado($this->svc()->comparativo($v,'estado_actual')['filas']);
         self::assertSame(array_keys($antes),array_keys($desp),'el cierre no crea filas de gasto en diciembre');
         foreach($antes as $k=>$f)self::assertSame($f['real_base'],$desp[$k]['real_base'],"el real de $k no cambia con el cierre");
         $c->reversar($this->owner,$this->d(['asiento_id'=>$cierre,'motivo'=>'Reapertura de ensayo','fecha'=>'2026-12-31']));
-        $rev=$this->indexado($this->svc()->comparativo($v)['filas']);
+        $rev=$this->indexado($this->svc()->comparativo($v,'estado_actual')['filas']);
         foreach($antes as $k=>$f)self::assertSame($f['real_base'],$rev[$k]['real_base'],"ni su reverso altera $k");
         self::assertSame(54000,(int)$this->n("SELECT COALESCE(SUM(real_base_centavos),0) FROM bi_presupuesto_real_mes WHERE tipo IN('gasto','comisiones')"),'gasto total del año sin cierre: 300+120+40+80 = 540,00');
     }
@@ -506,7 +506,7 @@ final class ErpPresupuestoIntegrationTest extends TestCase
         $linea=(int)$this->r->uno('SELECT id n FROM erp_venta_lineas WHERE venta_id=?',[$venta])['n'];
         (new \Services\ErpDevolucionService($this->r))->devolver($this->owner,$this->d(['venta_id'=>$venta,'linea_id'=>$linea,'cantidad'=>'1','motivo'=>'Devolución de ensayo','reintegrar_stock'=>'0']));
         $v=$this->presupuesto('base',$anio);$this->cifra($v,'producto:'.$producto,(int)substr(ErpRepository::ahora(),5,2),'40.00','6.00');$this->aprobar($v);
-        $c=$this->svc()->comparativo($v);
+        $c=$this->svc()->comparativo($v,'estado_actual');
         $fila=array_values(array_filter($c['filas'],fn($f)=>$f['tipo']==='producto'&&$f['objetivo_id']===$producto));
         self::assertCount(1,$fila);
         self::assertSame([2000,300,2300],[$fila[0]['real_base'],$fila[0]['real_impuesto'],$fila[0]['real_total']],'2 × 20,00 + 15 % menos la devolución de 1 unidad (23,00 con 3,00 de IVA)');
@@ -566,7 +566,7 @@ final class ErpPresupuestoIntegrationTest extends TestCase
     // ---- interfaz ----
     public function testLosComponentesDeLaVentaExplicanLaCifraNetaQueSeCompara():void
     {
-        $this->hechos();$v=$this->presupuestoAprobado();$c=$this->svc()->comparativo($v);$f=$this->indexado($c['filas']);
+        $this->hechos();$v=$this->presupuestoAprobado();$c=$this->svc()->comparativo($v,'estado_actual');$f=$this->indexado($c['filas']);
         $m=$f['3|servicio|'.$this->s1]['componentes'];
         self::assertSame([10000,1000,9000,0,9000],[$m['bruta'],$m['descuentos'],$m['venta'],$m['devoluciones'],$m['neta']],'marzo: bruta 100,00 − descuento 10,00 = venta 90,00; sin devoluciones');
         $a=$f['4|servicio|'.$this->s1]['componentes'];
@@ -590,18 +590,18 @@ final class ErpPresupuestoIntegrationTest extends TestCase
     public function testAnularUnaVentaCambiaSuMesHistoricoYUnaDevolucionPosteriorCaeEnSuPropioMes():void
     {
         $this->hechos();$v=$this->presupuestoAprobado();
-        $base=$this->indexado($this->svc()->comparativo($v)['filas']);
+        $base=$this->indexado($this->svc()->comparativo($v,'estado_actual')['filas']);
         $vta=$this->venta('confirmada','2026-03-20 10:00:00');$lin=$this->linea($vta,$this->s1,null,1000,0,0,0,1000);
-        $con=$this->indexado($this->svc()->comparativo($v)['filas']);
+        $con=$this->indexado($this->svc()->comparativo($v,'estado_actual')['filas']);
         self::assertSame($base['3|servicio|'.$this->s1]['real_base']+1000,$con['3|servicio|'.$this->s1]['real_base'],'la venta confirmada de marzo suma en marzo');
         // Una devolución posterior NO reescribe marzo: cae en el mes en que se registra.
         $this->ins("INSERT INTO erp_devoluciones(venta_id,linea_id,cantidad_milesimas,monto_centavos,cantidad_entregada_milesimas,reintegrar_stock,motivo,actor_id,creado_en) VALUES($vta,$lin,1000,1000,0,0,'Devolución tardía',{$this->owner},'2026-05-10 09:00:00')");
-        $dev=$this->indexado($this->svc()->comparativo($v)['filas']);
+        $dev=$this->indexado($this->svc()->comparativo($v,'estado_actual')['filas']);
         self::assertSame($con['3|servicio|'.$this->s1]['real_base'],$dev['3|servicio|'.$this->s1]['real_base'],'marzo conserva la venta aunque se devuelva en mayo');
         self::assertSame(-1000,$dev['5|servicio|'.$this->s1]['real_base'],'mayo muestra la devolución como real negativo (sin venta propia en mayo)');
         // Anular SÍ cambia el mes histórico: la venta anulada deja de contar en marzo y su devolución en mayo (no hay fecha de anulación en la venta; queda en erp_eventos).
         (new \Services\ErpVentaService($this->r))->anular($this->owner,$this->d(['venta_id'=>$vta,'motivo'=>'Anulación de ensayo']));
-        $anu=$this->indexado($this->svc()->comparativo($v)['filas']);
+        $anu=$this->indexado($this->svc()->comparativo($v,'estado_actual')['filas']);
         self::assertSame($base['3|servicio|'.$this->s1]['real_base'],$anu['3|servicio|'.$this->s1]['real_base'],'tras anular, marzo vuelve a su cifra anterior: el comparativo histórico cambia');
         self::assertArrayNotHasKey('5|servicio|'.$this->s1,$anu,'y la devolución de mayo desaparece con la venta');
         self::assertSame(1,$this->n("SELECT COUNT(*) FROM erp_eventos WHERE tipo='venta_anulada' AND entidad='venta' AND entidad_id=$vta"),'la anulación queda en el registro de eventos con su fecha y actor');
@@ -642,8 +642,8 @@ final class ErpPresupuestoIntegrationTest extends TestCase
     public function testElCriterioPorEventosPreservaLoOcurridoAntesDeUnaAnulacionPosteriorYElEstadoActualLoReescribe():void
     {
         $this->ventasConAnulaciones();$v=$this->presupuestoAprobado();
-        $ev=$this->svc()->comparativo($v,'eventos');$ac=$this->svc()->comparativo($v);
-        self::assertSame(['eventos',null],[$ev['criterio'],$ev['corte']]);self::assertSame(['estado_actual',null],[$ac['criterio'],$ac['corte']],'el criterio por defecto sigue siendo el estado actual y queda identificado');
+        $ev=$this->svc()->comparativo($v,'eventos');$ac=$this->svc()->comparativo($v,'estado_actual');
+        self::assertSame(['eventos',null],[$ev['criterio'],$ev['corte']]);self::assertSame(['estado_actual',null],[$ac['criterio'],$ac['corte']],'el estado actual queda identificado');
         // S1 por eventos: cada hecho en su mes (ver comentarios de ventasConAnulaciones).
         self::assertSame([1=>14000,2=>-2500,3=>-4500,5=>-3000],$this->sumaMeses($ev['filas'],'servicio',$this->s1),'enero conserva la venta aunque se anule después; la anulación cae en el mes en que ocurrió');
         self::assertSame([1=>1350,2=>-675,3=>-675],$this->sumaMeses($ev['filas'],'servicio',$this->s1,'real_impuesto'),'el impuesto de las devoluciones parciales y totales suma exactamente el de la línea');
@@ -694,14 +694,70 @@ final class ErpPresupuestoIntegrationTest extends TestCase
         self::assertSame(30000,$f['3|gasto|'.$this->cuentaOperativo]['real_base'],'solo el asiento del 15/03');
         self::assertSame(0,$f['3|comisiones|0']['real_base'],'las comisiones se asientan el 20/03: aún no (la fila existe solo por su presupuesto)');
         self::assertSame(0,$f['4|gasto|'.$this->cuentaOperativo]['real_base']??0,'abril aún no');
-        $todo=$this->indexado($this->svc()->comparativo($v,'eventos')['filas']);$act=$this->indexado($this->svc()->comparativo($v)['filas']);
+        $todo=$this->indexado($this->svc()->comparativo($v,'eventos')['filas']);$act=$this->indexado($this->svc()->comparativo($v,'estado_actual')['filas']);
         foreach(['3|gasto|'.$this->cuentaOperativo,'4|gasto|'.$this->cuentaOperativo,'3|comisiones|0','3|gasto|'.$this->cuentaCosto] as $k)self::assertSame($act[$k]['real_base'],$todo[$k]['real_base'],"$k igual sin corte");
+    }
+    // ---- criterio oficial por eventos (067): servicio, pantalla y vistas BI ----
+    public function testElCriterioOficialPorDefectoEsPorEventosYElEstadoActualQuedaComoAnalisisOperativo():void
+    {
+        $this->ventasConAnulaciones();$v=$this->presupuestoAprobado();
+        $def=$this->svc()->comparativo($v);
+        self::assertSame(['eventos',null],[$def['criterio'],$def['corte']],'sin indicar criterio manda el oficial');
+        self::assertSame($this->sumaMeses($this->svc()->comparativo($v,'eventos')['filas'],'servicio',$this->s1),$this->sumaMeses($def['filas'],'servicio',$this->s1));
+        self::assertSame('estado_actual',$this->svc()->comparativo($v,'estado_actual')['criterio'],'el estado actual sigue disponible, identificado');
+    }
+    public function testLasVistasBiDePresupuestoUsanElCriterioPorEventosYUnaAnulacionPosteriorNoAlteraMesesAnteriores():void
+    {
+        $this->ventasConAnulaciones();$v=$this->presupuestoAprobado();
+        $ev=$this->svc()->comparativo($v,'eventos');
+        $vista=[];foreach($this->db->query("SELECT * FROM bi_presupuesto_vs_real WHERE version_id=$v")->fetch_all(MYSQLI_ASSOC) as $x){
+            self::assertSame('eventos',$x['criterio']);$vista[$x['mes'].'|'.$x['tipo'].'|'.$x['objetivo_id']]=$x;
+        }
+        foreach($ev['filas'] as $f){
+            $k=$f['mes'].'|'.$f['tipo'].'|'.$f['objetivo_id'];self::assertArrayHasKey($k,$vista,$k);
+            self::assertSame($f['real_base'],(int)$vista[$k]['real_base_centavos'],"la vista BI coincide con la pantalla oficial en $k");
+            self::assertSame($f['real_total'],(int)$vista[$k]['real_total_centavos'],"total $k");
+        }
+        // Una anulación posterior no cambia los meses anteriores a su fecha en BI: enero conserva las ventas de VA y VB.
+        self::assertSame(14000,(int)$vista['1|servicio|'.$this->s1]['real_base_centavos'],'enero conserva la venta aunque se anulara después');
+        $antes=$this->sumaMeses($ev['filas'],'servicio',$this->s1);
+        $vz=$this->venta('confirmada','2026-01-25 10:00:00');$this->linea($vz,$this->s1,null,1000,0,0,0,1000);$this->anulada($vz,'2026-06-10 09:00:00');
+        $desp=$this->sumaMeses($this->svc()->comparativo($v,'eventos')['filas'],'servicio',$this->s1);
+        self::assertSame([1=>$antes[1]+1000,6=>-1000],[1=>$desp[1],6=>$desp[6]-($antes[6]??0)],'la nueva venta y su anulación caen cada una en su mes');
+        foreach([2,3,4,5] as $m)self::assertSame($antes[$m]??0,$desp[$m]??0,"el mes $m no cambia por una anulación posterior");
+        $bi=$this->n("SELECT SUM(real_base_centavos) FROM bi_presupuesto_vs_real WHERE version_id=$v AND tipo='servicio' AND mes=1");
+        self::assertSame($antes[1]+1000,$bi);
+        // El estado actual sigue disponible en BI como fuente operativa (no oficial): ahí enero no conserva lo anulado.
+        self::assertSame(0,$this->n("SELECT COALESCE(SUM(real_base_centavos),0) FROM bi_presupuesto_real_mes WHERE anio=2026 AND mes=1 AND tipo='servicio' AND objetivo_id={$this->s1}"),'estado actual: enero sin las ventas anuladas');
+        // El consolidado anual coincide con la pantalla oficial.
+        foreach($this->db->query("SELECT * FROM bi_presupuesto_anual WHERE version_id=$v")->fetch_all(MYSQLI_ASSOC) as $b){
+            self::assertSame('eventos',$b['criterio']);
+        }
+    }
+    public function testElPresupuestoNoSumaVersionesNiEscenariosEntreSi():void
+    {
+        $this->ventasConAnulaciones();
+        $base=$this->presupuesto('base');$this->cifra($base,'servicio:'.$this->s1,1,'100.00','0.00');$this->aprobar($base);
+        $opt=$this->presupuesto('optimista');$this->cifra($opt,'servicio:'.$this->s1,1,'300.00','0.00');$this->aprobar($opt);
+        // Revisión de «base»: la versión 1 queda reemplazada y la 2 es la vigente.
+        $pid=(int)$this->r->uno('SELECT presupuesto_id FROM erp_presupuesto_versiones WHERE id=?',[$base])['presupuesto_id'];
+        $rev=(int)$this->svc()->revisar($this->owner,$this->d(['presupuesto_id'=>$pid,'motivo'=>'Ajuste de ensayo']))['recurso_id'];
+        $this->cifra($rev,'servicio:'.$this->s1,1,'150.00','0.00');$this->aprobar($rev);
+        $filas=$this->db->query("SELECT presupuesto_id,escenario,version_id,presupuesto_base_centavos,real_base_centavos FROM bi_presupuesto_vs_real WHERE tipo='servicio' AND mes=1 AND objetivo_id={$this->s1} ORDER BY escenario")->fetch_all(MYSQLI_ASSOC);
+        self::assertCount(2,$filas,'una fila por presupuesto (año + escenario), no una suma');
+        self::assertSame(['base','optimista'],array_column($filas,'escenario'));
+        self::assertSame([15000,30000],array_map('intval',array_column($filas,'presupuesto_base_centavos')),'cada escenario con su cifra; la versión 1 reemplazada de «base» no entra');
+        self::assertSame(14000,(int)$filas[0]['real_base_centavos']);self::assertSame(14000,(int)$filas[1]['real_base_centavos'],'lo real se compara con cada escenario por separado: no se duplica');
+        $anual=$this->db->query("SELECT presupuesto_id,COUNT(*) n,SUM(presupuesto_base_centavos) pb FROM bi_presupuesto_anual WHERE tipo='servicio' AND objetivo_id={$this->s1} GROUP BY presupuesto_id")->fetch_all(MYSQLI_ASSOC);
+        self::assertCount(2,$anual);self::assertEqualsCanonicalizing([15000,30000],array_map('intval',array_column($anual,'pb')));
+        foreach($anual as $a)self::assertSame(1,(int)$a['n'],'una sola fila anual por presupuesto y concepto');
+        self::assertSame(0,$this->n("SELECT COUNT(*) FROM bi_presupuesto_vs_real WHERE version_id=$base"),'la versión reemplazada no sale en el comparativo vigente');
     }
     public function testUnaVentaDeOtroAnioAnuladaEnElAnioSiguienteResta_ElAcumuladoDeLosDosAniosNoSeDuplica():void
     {
         $ve=$this->venta('confirmada','2025-12-28 10:00:00');$le=$this->linea($ve,$this->s1,null,7700,0,0,0,7700);
         $this->devolucion($ve,$le,3000,'2026-01-08 11:00:00');$this->anulada($ve,'2026-02-01 09:00:00');
-        $v=$this->presupuestoAprobado();$ev=$this->svc()->comparativo($v,'eventos');$ac=$this->svc()->comparativo($v);
+        $v=$this->presupuestoAprobado();$ev=$this->svc()->comparativo($v,'eventos');$ac=$this->svc()->comparativo($v,'estado_actual');
         self::assertSame([1=>-3000,2=>-4700],$this->sumaMeses($ev['filas'],'servicio',$this->s1),'2026 muestra la devolución y la anulación en sus meses; la venta quedó en 2025');
         self::assertSame([],$this->sumaMeses($ac['filas'],'servicio',$this->s1),'el estado actual no muestra nada de esa venta en 2026 (anulada)');
         self::assertSame(7700,$this->n("SELECT SUM(real_base_centavos) FROM bi_presupuesto_real_eventos WHERE anio=2025 AND tipo='servicio'"));
@@ -748,11 +804,12 @@ final class ErpPresupuestoIntegrationTest extends TestCase
             $h=$this->pagina(['version'=>(string)$v]);
             foreach(['versión 1','Guardar cifra','Descargar plantilla','Validar y ver vista previa','Corte de ensayo','Fuente y fecha de cada métrica','Presupuesto frente a lo real','Historial de cambios'] as $t)self::assertStringContainsString($t,$h,$t);
             self::assertStringNotContainsString('Aprobar esta versión',$h,'finanzas prepara pero no aprueba');
-            // Criterio de lo real visible e identificable: estado actual por defecto; por eventos con corte opcional; una entrada no válida se rechaza.
-            self::assertStringContainsString('Criterio: estado actual, recalculado hoy',$h);
+            // Criterio de lo real visible e identificable: por eventos (oficial) por defecto; estado actual como análisis operativo; una entrada no válida se rechaza.
+            self::assertStringContainsString('Criterio oficial: por eventos, todos los eventos del año',$h);
+            self::assertStringContainsString('Análisis operativo (no oficial): estado actual, recalculado hoy',$this->pagina(['version'=>(string)$v,'criterio'=>'estado_actual']));
             $h2=$this->pagina(['version'=>(string)$v,'criterio'=>'eventos','corte'=>'2026-05-02']);
-            self::assertStringContainsString('Criterio: por eventos con corte al 2026-05-02',$h2);self::assertStringContainsString('name="corte"',$h2);
-            self::assertStringContainsString('Criterio: por eventos, todos los eventos del año',$this->pagina(['version'=>(string)$v,'criterio'=>'eventos']));
+            self::assertStringContainsString('Criterio oficial: por eventos con corte al 2026-05-02',$h2);self::assertStringContainsString('name="corte"',$h2);
+            self::assertStringContainsString('Criterio oficial: por eventos, todos los eventos del año',$this->pagina(['version'=>(string)$v,'criterio'=>'eventos']));
             foreach([['criterio'=>'otro'],['criterio'=>'eventos','corte'=>'2026-02-30']] as $mal){
                 ob_start();try{$this->pagina(['version'=>(string)$v]+$mal);}catch(\AppTerminationException $x){self::assertSame(422,$x->getStatusCode());}finally{ob_end_clean();}
             }
