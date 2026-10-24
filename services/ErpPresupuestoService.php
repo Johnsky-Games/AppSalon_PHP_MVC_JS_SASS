@@ -202,7 +202,7 @@ final class ErpPresupuestoService extends ErpService
             'El gasto se fecha por la fecha contable del asiento, no por la fecha en que se registró.',
             'Los cobros de caja no forman parte de la foto (no tienen presupuesto).']))];
         $huella=hash('sha256',json_encode(['presupuesto_id'=>(int)$v['presupuesto_id'],'version_id'=>(int)$v['id'],'anio'=>$cmp['anio'],'corte'=>$corte,'numero'=>$numero,'corrige'=>$corrige,'motivo'=>$motivo,
-            'criterio'=>'eventos','version_calculo'=>self::VERSION_CALCULO,'lineas'=>$lineas],JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE));
+            'criterio'=>'eventos','version_calculo'=>self::VERSION_CALCULO,'lineas'=>self::canonicas($lineas)],JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE));
         $ahora=$this->r::ahora();
         $this->r->q('INSERT INTO erp_presupuesto_fotos(presupuesto_id,version_id,anio,corte,numero,corrige_foto_id,motivo,criterio,version_calculo,n_lineas,limitaciones_json,huella,generado_por,generado_en) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
             [(int)$v['presupuesto_id'],(int)$v['id'],$cmp['anio'],$corte,$numero,$corrige,$motivo,'eventos',self::VERSION_CALCULO,count($lineas),json_encode($lim,JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE),$huella,$actor,$ahora]);
@@ -239,7 +239,13 @@ final class ErpPresupuestoService extends ErpService
             'bruta'=>(int)$l['ventas_bruta_base_centavos'],'desc'=>(int)$l['descuentos_base_centavos'],'venta'=>(int)$l['ventas_base_centavos'],'dev'=>(int)$l['devoluciones_base_centavos'],'anul'=>(int)$l['anulaciones_base_centavos'],
             'rb'=>(int)$l['real_base_centavos'],'ri'=>(int)$l['real_impuesto_centavos'],'sin'=>(int)$l['anulaciones_sin_evento']],$f['lineas']);
         return hash('sha256',json_encode(['presupuesto_id'=>(int)$f['presupuesto_id'],'version_id'=>(int)$f['version_id'],'anio'=>(int)$f['anio'],'corte'=>$f['corte'],'numero'=>(int)$f['numero'],
-            'corrige'=>$f['corrige_foto_id']===null?null:(int)$f['corrige_foto_id'],'motivo'=>$f['motivo'],'criterio'=>$f['criterio'],'version_calculo'=>(int)$f['version_calculo'],'lineas'=>$lineas],JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE));
+            'corrige'=>$f['corrige_foto_id']===null?null:(int)$f['corrige_foto_id'],'motivo'=>$f['motivo'],'criterio'=>$f['criterio'],'version_calculo'=>(int)$f['version_calculo'],'lineas'=>self::canonicas($lineas)],JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE));
+    }
+    /** Orden estable y único (mes, tipo, objetivo) para la huella: no depende del orden de visualización ni del plan de ejecución, aunque dos conceptos tengan el mismo nombre. */
+    private static function canonicas(array $lineas):array
+    {
+        usort($lineas,static fn($a,$b)=>[$a['mes'],$a['tipo'],$a['objetivo_id']]<=>[$b['mes'],$b['tipo'],$b['objetivo_id']]);
+        return $lineas;
     }
 
     // ------------------------------------------------------------------------------------------------------------- reglas internas

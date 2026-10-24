@@ -900,4 +900,14 @@ final class ErpPresupuestoIntegrationTest extends TestCase
             $h=$this->pagina(['version'=>(string)$otro,'foto'=>(string)$id]);self::assertStringNotContainsString('Foto #1 al',$h);
         }finally{$_SESSION=$anterior['s'];$_GET=$anterior['g'];$_POST=$anterior['p'];$_SERVER=$anterior['srv'];http_response_code(200);}
     }
+    public function testLaHuellaNoDependeDelOrdenDeLineasConConceptosDeIgualNombre():void
+    {
+        $s2=$this->ins("INSERT INTO servicios(nombre,precio,duracion_minutos) VALUES('Corte de ensayo',50.00,30)");
+        $v=$this->presupuesto();$this->cifra($v,'servicio:'.$this->s1,3,'10.00','0.00');$this->cifra($v,'servicio:'.$s2,3,'20.00','0.00');$this->aprobar($v);
+        $id=$this->svc()->generarFoto($this->owner,$this->d(['version_id'=>$v,'corte'=>'2026-03-31']))['recurso_id'];
+        // Dos servicios con el mismo nombre y mes: el orden de lectura puede variar; la huella se calcula sobre un orden canónico (mes, tipo, objetivo).
+        self::assertTrue($this->foto($id)['integra']);
+        $this->db->query("ALTER TABLE erp_presupuesto_foto_lineas ADD INDEX idx_orden_ensayo (objetivo_id DESC)");
+        self::assertTrue($this->foto($id)['integra'],'un plan de ejecución distinto no cambia la verificación');
+    }
 }
