@@ -451,7 +451,10 @@ final class ErpController
             // Criterio de lo real: por eventos (oficial, por defecto, con fecha de corte opcional) o estado actual (análisis operativo). Una entrada no válida se rechaza, no se ignora en silencio.
             $criterio=(string)($_GET['criterio']??'eventos');$corte=trim((string)($_GET['corte']??''));$corte=$criterio==='eventos'&&$corte!==''?$corte:null;
             try{$comparativo=$svc->comparativo($id,$criterio,$corte);}catch(ErpException $e){\Classes\ErrorResponse::render(422);return;}
-            $datos=['version'=>$v,'lineas'=>$svc->lineas($id),'cambios'=>$svc->cambios($id),'comparativo'=>$comparativo,'carga'=>$carga,'conceptos'=>$datos['edita']?$svc->conceptos():[]]+$datos;
+            // Fotos inmutables del comparativo (cierres): la lista del presupuesto y, si se pide, el detalle de una de ellas (solo si es de este presupuesto).
+            $fotoId=(int)(filter_var($_GET['foto']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0);$foto=$fotoId?$svc->foto($fotoId):null;
+            if($foto&&(int)$foto['presupuesto_id']!==(int)$v['presupuesto_id'])$foto=null;
+            $datos=['version'=>$v,'lineas'=>$svc->lineas($id),'cambios'=>$svc->cambios($id),'comparativo'=>$comparativo,'carga'=>$carga,'conceptos'=>$datos['edita']?$svc->conceptos():[],'fotos'=>$svc->fotos((int)$v['presupuesto_id']),'foto'=>$foto]+$datos;
         }
         self::render($router,'presupuestos',$datos);
     }
@@ -538,6 +541,7 @@ final class ErpController
             'presupuesto_cargar'=>[\Services\ErpPresupuestoService::class,'cargar','presupuestos'],'presupuesto_carga_confirmar'=>[\Services\ErpPresupuestoService::class,'confirmarCarga','presupuestos'],
             'presupuesto_carga_descartar'=>[\Services\ErpPresupuestoService::class,'descartarCarga','presupuestos'],'presupuesto_aprobar'=>[\Services\ErpPresupuestoService::class,'aprobar','presupuestos'],
             'presupuesto_revisar'=>[\Services\ErpPresupuestoService::class,'revisar','presupuestos'],
+            'presupuesto_foto'=>[\Services\ErpPresupuestoService::class,'generarFoto','presupuestos'],'presupuesto_foto_corregir'=>[\Services\ErpPresupuestoService::class,'corregirFoto','presupuestos'],
         ];
         $accion=is_string($_POST['accion']??null)?$_POST['accion']:'';
         if(!isset($acciones[$accion])){http_response_code(422);detener_ejecucion(422);return;}
@@ -569,7 +573,7 @@ final class ErpController
         if($destino==='presupuestos'){
             $ver=(int)(filter_var($_POST['version_id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0);
             if($completada&&in_array($accion,['presupuesto_crear','presupuesto_revisar'],true))$ver=$id;
-            $ruta='/gestion/presupuestos'.($ver?'?version='.$ver:'').($completada&&$accion==='presupuesto_cargar'?'&carga='.$id:'');
+            $ruta='/gestion/presupuestos'.($ver?'?version='.$ver:'').($completada&&$accion==='presupuesto_cargar'?'&carga='.$id:'').($completada&&$ver&&in_array($accion,['presupuesto_foto','presupuesto_foto_corregir'],true)?'&foto='.$id:'');
         }
         if($destino==='documentos')$ruta='/gestion/documentos?'.http_build_query(['entidad'=>is_string($_POST['entidad']??null)?$_POST['entidad']:'','id'=>(int)($_POST['entidad_id']??0)]);
         if($destino==='consumos')$ruta='/agenda/detalle?id='.(int)($_POST['cita_id']??0);
