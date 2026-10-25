@@ -473,13 +473,13 @@ final class ErpPresupuestoService extends ErpService
      * partida de comisiones UNA sola vez: gastos_totales = gastos de cuentas + comisiones.
      *
      * DOS CRITERIOS para lo real (se informan en el resultado y no son intercambiables):
-     *  · `estado_actual` (por defecto): recalculado hoy con el estado vigente de cada venta (bi_presupuesto_real_mes). Anular una venta reescribe los meses pasados.
-     *  · `eventos`: cada hecho cuenta el día en que ocurrió (bi_presupuesto_real_eventos): la venta el día que se confirmó, cada devolución el día en que se registró y la anulación
+     *  · `eventos` (OFICIAL, por defecto): cada hecho cuenta el día en que ocurrió (bi_presupuesto_real_eventos): la venta el día que se confirmó, cada devolución el día en que se registró y la anulación
      *    el día en que se anuló, restando el neto que quedaba entonces. Con `$corte` (Y-m-d, inclusive) solo cuentan los eventos hasta esa fecha, es decir, lo que se sabía a ella.
-     *    Sin corte cuentan todos los eventos del año. El corte solo aplica a este criterio.
+     *    Sin corte cuentan todos los eventos del año. El corte solo aplica a este criterio. Una anulación o devolución posterior no altera un corte anterior a su fecha.
+     *  · `estado_actual` (análisis operativo): recalculado hoy con el estado vigente de cada venta (bi_presupuesto_real_mes). Anular una venta reescribe los meses pasados.
      * @return array{filas:list<array>,anual:list<array>,resumen:array,cobros:list<array>,anio:int,criterio:string,corte:?string}
      */
-    public function comparativo(int $version,string $criterio='estado_actual',?string $corte=null):array
+    public function comparativo(int $version,string $criterio='eventos',?string $corte=null):array
     {
         if(!in_array($criterio,['estado_actual','eventos'],true))throw new ErpException('Criterio de comparación no válido.',422);
         if($corte!==null){

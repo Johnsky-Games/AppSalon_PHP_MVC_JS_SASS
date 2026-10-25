@@ -448,8 +448,8 @@ final class ErpController
             if(!$v){\Classes\ErrorResponse::render(404);return;}
             $cargaId=(int)(filter_var($_GET['carga']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0);$carga=$cargaId?$svc->carga($cargaId):null;
             if($carga&&(int)$carga['version_id']!==$id)$carga=null;
-            // Criterio de lo real: estado actual (por defecto) o por eventos con fecha de corte opcional. Una entrada no válida se rechaza, no se ignora en silencio.
-            $criterio=(string)($_GET['criterio']??'estado_actual');$corte=trim((string)($_GET['corte']??''));$corte=$criterio==='eventos'&&$corte!==''?$corte:null;
+            // Criterio de lo real: por eventos (oficial, por defecto, con fecha de corte opcional) o estado actual (análisis operativo). Una entrada no válida se rechaza, no se ignora en silencio.
+            $criterio=(string)($_GET['criterio']??'eventos');$corte=trim((string)($_GET['corte']??''));$corte=$criterio==='eventos'&&$corte!==''?$corte:null;
             try{$comparativo=$svc->comparativo($id,$criterio,$corte);}catch(ErpException $e){\Classes\ErrorResponse::render(422);return;}
             // Fotos inmutables del comparativo (cierres): la lista del presupuesto y, si se pide, el detalle de una de ellas (solo si es de este presupuesto).
             $fotoId=(int)(filter_var($_GET['foto']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0);$foto=$fotoId?$svc->foto($fotoId):null;

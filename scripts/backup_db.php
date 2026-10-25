@@ -177,7 +177,22 @@ try {
         $lineas[] = $createSql . ";";
         $lineas[] = "";
 
-        $resDatos = $mysqli->query("SELECT * FROM `{$tablaEsc}`");
+        // Las columnas generadas (STORED/VIRTUAL, p. ej. objetivo_id o abierta_ref de los presupuestos) las recalcula MySQL al insertar: incluirlas en el INSERT
+        // hace fallar la restauración ("value specified for generated column ... is not allowed"). Se leen y se insertan solo las columnas base.
+        $stmtGen = $mysqli->prepare("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND (EXTRA LIKE '%STORED GENERATED%' OR EXTRA LIKE '%VIRTUAL GENERATED%')");
+        $stmtGen->bind_param('s', $tabla);
+        $stmtGen->execute();
+        $generadas = array_column($stmtGen->get_result()->fetch_all(MYSQLI_ASSOC), 'COLUMN_NAME');
+        $stmtGen->close();
+        $resCols = $mysqli->query("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '" . $mysqli->real_escape_string($tabla) . "' ORDER BY ORDINAL_POSITION");
+        $columnasBase = [];
+        foreach ($resCols->fetch_all(MYSQLI_ASSOC) as $c) {
+            if (!in_array($c['COLUMN_NAME'], $generadas, true)) {
+                $columnasBase[] = '`' . str_replace('`', '``', (string)$c['COLUMN_NAME']) . '`';
+            }
+        }
+        $resCols->free();
+        $resDatos = $mysqli->query('SELECT ' . ($columnasBase ? implode(', ', $columnasBase) : '*') . " FROM `{$tablaEsc}`");
         if (!$resDatos) {
             throw new RuntimeException("Fallo al leer filas de la tabla `{$tabla}`: " . $mysqli->error);
         }
