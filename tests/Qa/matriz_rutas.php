@@ -176,6 +176,7 @@ return [
     ['m' => 'GET', 'p' => '/gestion/contabilidad', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'ok' => [200, 'html']],
     ['m' => 'GET', 'p' => '/gestion/presupuestos', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'ok' => [200, 'html']],
     ['m' => 'GET', 'p' => '/gestion/presupuestos/plantilla', 'g' => 'permiso', 'roles' => ['propietario', 'finanzas'], 'ok' => [404, 'html']],
+    ['m' => 'GET', 'p' => '/gestion/inventario/conteos', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'finanzas'], 'ok' => [200, 'html']],
     ['m' => 'GET', 'p' => '/gestion/facturacion/pdf', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'finanzas'], 'ok' => [404, 'html']],
     ['m' => 'GET', 'p' => '/gestion/facturacion/ride', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'finanzas'], 'ok' => [404, 'html']],
     ['m' => 'GET', 'p' => '/gestion/facturacion/xml', 'g' => 'permiso', 'roles' => ['propietario', 'gerente', 'recepcion', 'finanzas'], 'ok' => [404, 'html']],

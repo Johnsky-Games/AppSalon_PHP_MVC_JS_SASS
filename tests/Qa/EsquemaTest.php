@@ -346,6 +346,20 @@ final class EsquemaTest extends R2bCase
         $this->assertSame('', $db->error);
         $db->query("INSERT INTO erp_presupuesto_foto_lineas(foto_id,mes,tipo,objetivo_id,nombre,ventas_bruta_base_centavos,descuentos_base_centavos,ventas_base_centavos,devoluciones_base_centavos,anulaciones_base_centavos,real_base_centavos,real_impuesto_centavos) SELECT id,3,'servicio',7,'Corte',100,0,100,0,0,100,15 FROM erp_presupuesto_fotos");
         $this->assertSame('', $db->error);
+        // Un conteo físico de inventario (070) con su línea (columna generada), lectura y ajuste: el ciclo debe conservar datos y protecciones.
+        $db->query("INSERT INTO inventario_productos(sku,nombre,unidad,stock_milesimas,costo_centavos) VALUES ('QA-CONTEO','Producto de conteo','unidad',5000,250)");
+        $db->query("INSERT INTO erp_inv_conteos(estado,alcance,descripcion,responsable_id,iniciado_por,iniciado_en,ultimo_movimiento_inicio) VALUES ('en_conteo','seleccion','Conteo de respaldo',1,1,NOW(),0)");
+        $this->assertSame('', $db->error);
+        $db->query("INSERT INTO erp_inv_conteo_lineas(conteo_id,producto_id,sku,nombre,unidad,referencia_milesimas,costo_ref_centavos,contado_milesimas,contado_por,contado_en,sistema_al_contar_milesimas,reservado_al_contar_milesimas,ultimo_mov_al_contar) SELECT c.id,p.id,p.sku,p.nombre,p.unidad,5000,250,4000,1,NOW(),5000,0,0 FROM erp_inv_conteos c JOIN inventario_productos p ON p.sku='QA-CONTEO'");
+        $this->assertSame('', $db->error);
+        $db->query("INSERT INTO erp_inv_conteo_registros(conteo_id,linea_id,contado_milesimas,sistema_milesimas,reservado_milesimas,ultimo_mov_id,actor_id,creado_en) SELECT conteo_id,id,4000,5000,0,0,1,NOW() FROM erp_inv_conteo_lineas");
+        $this->assertSame('', $db->error);
+        $db->query("INSERT INTO erp_solicitudes(tipo,datos_json,motivo,solicitante_id,creado_en) VALUES ('ajuste_stock','{}','Conteo de respaldo',1,NOW())");
+        $db->query("INSERT INTO inventario_movimientos(producto_id,actor_id,tipo,cantidad_milesimas,saldo_milesimas,costo_centavos,motivo,idempotencia,huella,registrado_en) SELECT id,1,'salida',1000,4000,250,'Ajuste de conteo','qa.conteo:1',REPEAT('c',64),NOW() FROM inventario_productos WHERE sku='QA-CONTEO'");
+        $db->query("INSERT INTO erp_inv_conceptos(nombre,naturaleza,tipo,creado_por,creado_en) VALUES ('Faltante QA','faltante_de_conteo','salida',1,NOW())");
+        $this->assertSame('', $db->error);
+        $db->query("INSERT INTO erp_inv_conteo_ajustes(conteo_id,linea_id,rol,solicitud_id,movimiento_id,tipo,cantidad_milesimas,costo_centavos,valor_centavos,concepto_id,creado_por,creado_en) SELECT l.conteo_id,l.id,'conteo',(SELECT MAX(id) FROM erp_solicitudes),(SELECT MAX(id) FROM inventario_movimientos),'salida',1000,250,250,(SELECT id FROM erp_inv_conceptos WHERE nombre='Faltante QA'),1,NOW() FROM erp_inv_conteo_lineas l");
+        $this->assertSame('', $db->error);
         $filasOrigen = [];
         foreach (array_column($this->filas($db, "SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'"), 'Tables_in_' . $o) as $t) { $filasOrigen[$t] = (int)$this->filas($db, "SELECT COUNT(*) n FROM `$t`")[0]['n']; }
         $db->close();
@@ -391,6 +405,14 @@ final class EsquemaTest extends R2bCase
             $this->assertSame(1644, $db->errno);
         }
         $this->assertSame(1, (int)$this->filas($db, 'SELECT COUNT(*) n FROM bi_presupuesto_fotos')[0]['n'], 'la vista de fotos no se restauró');
+        // El conteo físico sobrevive: la columna generada se recalcula y las protecciones siguen en pie.
+        $this->assertSame(-1000, (int)$this->filas($db, 'SELECT diferencia_milesimas d FROM erp_inv_conteo_lineas')[0]['d'], 'la diferencia generada del conteo no se recalculó');
+        foreach (["UPDATE erp_inv_conteos SET estado='aprobado'", 'DELETE FROM erp_inv_conteos', 'UPDATE erp_inv_conteo_registros SET contado_milesimas=1', 'DELETE FROM erp_inv_conteo_registros', 'UPDATE erp_inv_conteo_ajustes SET valor_centavos=1', 'DELETE FROM erp_inv_conteo_ajustes', 'DELETE FROM erp_inv_conteo_lineas'] as $sqlConteo) {
+            $this->assertFalse($db->query($sqlConteo), "la protección del conteo no sobrevivió: $sqlConteo");
+            $this->assertSame(1644, $db->errno);
+        }
+        $this->assertFalse($db->query("INSERT INTO erp_inv_conteo_ajustes(conteo_id,linea_id,rol,solicitud_id,movimiento_id,tipo,cantidad_milesimas,costo_centavos,valor_centavos,concepto_id,creado_por,creado_en) SELECT conteo_id,linea_id,rol,solicitud_id+1,movimiento_id+1,tipo,cantidad_milesimas,costo_centavos,valor_centavos,concepto_id,creado_por,creado_en FROM erp_inv_conteo_ajustes"), 'un segundo ajuste de la misma línea y rol debía ser rechazado');
+        $this->assertSame(1062, $db->errno);
         // Las FK también sobreviven (borrar un usuario con colaborador pone usuario_id=NULL).
         $db->query("UPDATE colaboradores SET usuario_id=1 WHERE email_norm='inv@rb.test'");
         $db->query('DELETE FROM usuarios WHERE id=1');
@@ -482,8 +504,8 @@ final class EsquemaTest extends R2bCase
         // 050: identificación tributaria del trabajador (+1).
         // 051: tesorería bancaria (+4). 052: depreciación de activos fijos (+5). 053: cambios de estimación de la depreciación (+1). 054: conceptos de caja y clasificación de movimientos manuales (+2). 055: conceptos de ajuste de inventario (+2).
         // 064: presupuestos, versiones, líneas, historial de cambios y cargas (+5).
-        // 068: fotos inmutables del comparativo de presupuestos y sus líneas (+2).
-        $this->assertSame(154, $n, 'tablas del esquema migrado (incluye migraciones y equipo_mutex)');
+        // 068: fotos inmutables del comparativo de presupuestos y sus líneas (+2). 070: conteo físico de inventario: conteos, líneas, lecturas y ajustes (+4).
+        $this->assertSame(158, $n, 'tablas del esquema migrado (incluye migraciones y equipo_mutex)');
         // La documentación citaba 30 (tras la 015) y el encabezado de backup_db.php "13 tablas": ya no describen la realidad.
         $this->assertFalse(str_contains((string)file_get_contents(self::RAIZ . '/scripts/backup_db.php'), '13 tablas en total'), 'documentación obsoleta en scripts/backup_db.php: dice "13 tablas en total" y el esquema migrado tiene 35');
     }
