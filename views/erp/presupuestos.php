@@ -139,6 +139,27 @@ $v=$version;
 <?php endif; ?>
 </section>
 
+<section class="ui-card"><h2>Cierre mensual (referencia oficial de lo informado)</h2>
+<p>El cierre de un mes <strong>toma una foto inmutable como referencia oficial</strong> y la vincula a la versión aprobada con la que se fotografió. La foto debe estar cortada el último día del mes. Una corrección crea un cierre nuevo con motivo y <strong>conserva el anterior</strong> y su foto. <strong>No es el cierre del período contable</strong>: no escribe en el libro ni genera asientos.</p>
+<?php $vigentes=[];foreach($cierres as $c){if(!$c['corregido_por_id'])$vigentes[(int)$c['mes']]=$c;}
+$finMes=static fn(string $corte):bool=>$corte===date('Y-m-t',strtotime($corte)); ?>
+<div class="ops-table-wrap"><table class="ops-table"><caption>Meses de <?= (int)$version['anio'] ?></caption><thead><tr><th>Mes</th><th>Estado</th><th>Foto de referencia</th><th>Versión aprobada</th><th>Cerrado por</th><th>Cuándo</th></tr></thead><tbody>
+<?php for($m=1;$m<=12;$m++): $c=$vigentes[$m]??null; ?><tr><td><?= s($meses[$m]) ?></td>
+<?php if($c): ?><td><?= (int)$c['numero']>1?'Cerrado (corrección #'.(int)$c['numero'].')':'Cerrado' ?></td><td><a href="?version=<?= (int)$version['id'] ?>&amp;foto=<?= (int)$c['foto_id'] ?>">Foto #<?= (int)$c['foto_numero'] ?> al <?= s($c['corte']) ?></a></td><td>v<?= (int)$c['version_numero'] ?></td><td><?= s($c['cerrado_por_nombre']??'—') ?></td><td><?= s(substr($c['cerrado_en'],0,16)) ?></td>
+<?php else: ?><td>Abierto</td><td>—</td><td>—</td><td>—</td><td>—</td><?php endif; ?></tr>
+<?php endfor; ?></tbody></table></div>
+<?php if($aprueba): ?><div class="ops-table-wrap"><table class="ops-table"><caption>Fotos vigentes cortadas a fin de mes: elige cuál es la referencia</caption><thead><tr><th>Mes</th><th>Foto</th><th>Versión aprobada</th><th>Acción</th></tr></thead><tbody>
+<?php $hay=false;foreach($fotos as $f): if($f['corregida_por_id']||!$finMes($f['corte']))continue; $hay=true; $m=(int)substr($f['corte'],5,2);$c=$vigentes[$m]??null; ?>
+<tr><td><?= s($meses[$m]) ?></td><td>#<?= (int)$f['numero'] ?> al <?= s($f['corte']) ?></td><td>v<?= (int)$f['version_numero'] ?></td><td>
+<?php if(!$c): ?><form class="formulario ui-filtros" method="POST" action="/gestion/accion" data-una-vez><?php $clave('presupuesto_cierre'); ?><input type="hidden" name="version_id" value="<?= (int)$version['id'] ?>"><input type="hidden" name="foto_id" value="<?= (int)$f['id'] ?>"><input type="hidden" name="mes" value="<?= $m ?>"><button class="boton">Cerrar <?= s(mb_strtolower($meses[$m])) ?> con esta foto</button></form>
+<?php elseif((int)$c['foto_id']!==(int)$f['id']): ?><form class="formulario ui-filtros" method="POST" action="/gestion/accion" data-una-vez><?php $clave('presupuesto_cierre_corregir'); ?><input type="hidden" name="version_id" value="<?= (int)$version['id'] ?>"><input type="hidden" name="foto_id" value="<?= (int)$f['id'] ?>"><input type="hidden" name="cierre_id" value="<?= (int)$c['id'] ?>"><label>Motivo <input name="motivo" maxlength="200" required></label><button class="boton boton-secundario">Corregir el cierre con esta foto</button></form>
+<?php else: ?>Referencia actual<?php endif; ?></td></tr>
+<?php endforeach; ?><?php if(!$hay): ?><tr><td colspan="4">No hay fotos vigentes cortadas el último día de un mes. Genera una foto con el corte a fin de mes para poder cerrarlo.</td></tr><?php endif; ?></tbody></table></div><?php endif; ?>
+<?php if($cierres): ?><div class="ops-table-wrap"><table class="ops-table"><caption>Historial de cierres (se conservan todos)</caption><thead><tr><th>Mes</th><th>Cierre</th><th>Foto</th><th>Versión aprobada</th><th>Cerrado por</th><th>Cuándo</th><th>Motivo de la corrección</th><th>Estado</th></tr></thead><tbody>
+<?php foreach($cierres as $c): ?><tr><td><?= s($meses[(int)$c['mes']]) ?></td><td>#<?= (int)$c['numero'] ?></td><td>#<?= (int)$c['foto_numero'] ?> al <?= s($c['corte']) ?></td><td>v<?= (int)$c['version_numero'] ?></td><td><?= s($c['cerrado_por_nombre']??'—') ?></td><td><?= s(substr($c['cerrado_en'],0,16)) ?></td><td><?= s($c['motivo']??'—') ?></td><td><?= $c['corregido_por_id']?'Corregido por el cierre #'.(int)$c['corregido_por_numero']:'Vigente' ?></td></tr>
+<?php endforeach; ?></tbody></table></div><?php endif; ?>
+</section>
+
 <section class="ui-card"><h2>Historial de cambios de esta versión</h2>
 <div class="ops-table-wrap"><table class="ops-table"><caption>Hasta 100 cambios recientes: quién, cuándo y qué valor</caption><thead><tr><th>Fecha</th><th>Quién</th><th>Mes</th><th>Tipo</th><th>Acción</th><th>Antes</th><th>Después</th><th>Origen</th></tr></thead><tbody>
 <?php foreach($cambios as $c): ?><tr><td><?= s(substr($c['creado_en'],0,16)) ?></td><td><?= s($c['actor']??'—') ?></td><td><?= s($meses[(int)$c['mes']]) ?></td><td><?= s($tipoTxt[$c['tipo']]) ?></td><td><?= s($c['accion']) ?></td>
