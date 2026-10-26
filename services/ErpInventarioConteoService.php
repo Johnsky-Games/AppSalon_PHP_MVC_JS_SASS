@@ -40,10 +40,11 @@ final class ErpInventarioConteoService extends ErpService
             }
             if(count($ids)>self::MAX_PRODUCTOS)throw new ErpException('Un conteo admite hasta '.self::MAX_PRODUCTOS.' productos: divide el alcance.');
             $ph=implode(',',array_fill(0,count($ids),'?'));
+            // Lectura actual (LOCK IN SHARE MODE): bajo REPEATABLE READ una lectura normal no vería un conteo confirmado mientras se esperaba el bloqueo.
             // Se bloquean los productos en orden creciente (igual que la aprobación) y se toma la foto de referencia con el bloqueo puesto.
             $prods=$this->r->q("SELECT * FROM inventario_productos WHERE id IN($ph) ORDER BY id FOR UPDATE",$ids);
             if(count($prods)!==count($ids))throw new ErpException('Algún producto del alcance no existe.',404);
-            $ocupados=$this->r->q("SELECT DISTINCT p.nombre FROM erp_inv_conteo_lineas l JOIN erp_inv_conteos c ON c.id=l.conteo_id JOIN inventario_productos p ON p.id=l.producto_id WHERE l.producto_id IN($ph) AND c.estado IN('en_conteo','pendiente') ORDER BY p.nombre LIMIT 5",$ids);
+            $ocupados=$this->r->q("SELECT DISTINCT p.nombre FROM erp_inv_conteo_lineas l JOIN erp_inv_conteos c ON c.id=l.conteo_id JOIN inventario_productos p ON p.id=l.producto_id WHERE l.producto_id IN($ph) AND c.estado IN('en_conteo','pendiente') ORDER BY p.nombre LIMIT 5 LOCK IN SHARE MODE",$ids);
             if($ocupados)throw new ErpException('Hay productos que ya están en otro conteo abierto: '.implode(', ',array_column($ocupados,'nombre')).'.',409);
             $ahora=ErpRepository::ahora();
             $maxMov=(int)$this->r->uno('SELECT COALESCE(MAX(id),0) m FROM inventario_movimientos')['m'];
@@ -248,9 +249,9 @@ final class ErpInventarioConteoService extends ErpService
             $dif=(int)$l['diferencia_milesimas'];
             $l['tipo']=$dif>0?'entrada':($dif<0?'salida':null);$l['cantidad']=abs($dif);
             $l['valor_centavos']=intdiv($costo*abs($dif)+500,1000);$l['stock_resultante']=$stock+$dif;
-            $entre=$this->movimientos((int)$l['producto_id'],(int)$l['ultimo_mov_ref'],(int)$l['ultimo_mov_al_contar']);
+            $entre=$this->movimientos((int)$l['producto_id'],(int)$l['ultimo_mov_ref'],(int)$l['ultimo_mov_al_contar'],$bloquear);
             if($entre['n']>0)$l['conflictos'][]=['codigo'=>'movimientos_entre_inicio_y_conteo','bloquea'=>false,'mensaje'=>$entre['n'].' movimiento(s) entre el inicio y el conteo (neto '.self::mil($entre['neto']).'): la diferencia se calculó contra el stock del sistema al contar, no contra la referencia inicial'];
-            $post=$this->movimientos((int)$l['producto_id'],(int)$l['ultimo_mov_al_contar'],null);
+            $post=$this->movimientos((int)$l['producto_id'],(int)$l['ultimo_mov_al_contar'],null,$bloquear);
             if($post['n']>0)$l['conflictos'][]=['codigo'=>'movimientos_posteriores_al_conteo','bloquea'=>false,'mensaje'=>$post['n'].' movimiento(s) después de contar (neto '.self::mil($post['neto']).'): el ajuste se aplica como diferencia sobre el stock actual'];
             if($dif<0&&$stock+$dif<$res)$l['conflictos'][]=['codigo'=>'bajo_reservas','bloquea'=>true,'mensaje'=>'el stock quedaría en '.self::mil($stock+$dif).' por debajo de lo reservado ('.self::mil($res).'): libera o consume las reservas, o recuenta'];
         }
@@ -258,9 +259,9 @@ final class ErpInventarioConteoService extends ErpService
         return $lineas;
     }
     /** @return array{n:int,neto:int} movimientos del producto con id > $desde (y ≤ $hasta si se indica). */
-    private function movimientos(int $producto,int $desde,?int $hasta):array
+    private function movimientos(int $producto,int $desde,?int $hasta,bool $actual=false):array
     {
-        $f=$this->r->uno('SELECT COUNT(*) n,COALESCE(SUM(IF(tipo=\'entrada\',cantidad_milesimas,-cantidad_milesimas)),0) neto FROM inventario_movimientos WHERE producto_id=? AND id>?'.($hasta!==null?' AND id<=?':''),$hasta!==null?[$producto,$desde,$hasta]:[$producto,$desde]);
+        $f=$this->r->uno('SELECT COUNT(*) n,COALESCE(SUM(IF(tipo=\'entrada\',cantidad_milesimas,-cantidad_milesimas)),0) neto FROM inventario_movimientos WHERE producto_id=? AND id>?'.($hasta!==null?' AND id<=?':'').($actual?' LOCK IN SHARE MODE':''),$hasta!==null?[$producto,$desde,$hasta]:[$producto,$desde]);
         return ['n'=>(int)$f['n'],'neto'=>(int)$f['neto']];
     }
     private static function mil(int $m):string {return rtrim(rtrim(number_format($m/1000,3,'.',''),'0'),'.')?:'0';}
@@ -299,7 +300,7 @@ final class ErpInventarioConteoService extends ErpService
     }
     public function productos():array
     {
-        return $this->r->q('SELECT id,sku,nombre,unidad,stock_milesimas FROM inventario_productos WHERE activo=1 ORDER BY nombre LIMIT 500');
+        return $this->r->q('SELECT id,sku,nombre,unidad,stock_milesimas FROM inventario_productos WHERE activo=1 ORDER BY nombre');
     }
     /** Personas que pueden ser responsables de un conteo (gestionan inventario). */
     public function responsables():array
