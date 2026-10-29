@@ -78,6 +78,16 @@ Una **foto** congela el comparativo **oficial (por eventos)** de la **versión a
 * Revertir 068 (guarda) avisa si existen fotos: son el registro de lo que se informó.
 * **Respaldo y restauración**: las fotos, sus líneas y la huella se conservan, y la restauración repone los triggers que las protegen (la prueba QA de respaldo/restauración siembra una foto y comprueba datos, huella y protecciones). Esa prueba destapó un defecto previo: el respaldo incluía las columnas **generadas** (`abierta_ref`, `vigente_ref`, `objetivo_id`) en los `INSERT` y MySQL rechazaba la restauración de cualquier base con versiones de presupuesto; `scripts/backup_db.php` ahora omite las columnas generadas, que MySQL recalcula.
 
+## Cierre mensual con foto (069)
+
+**Decisión del propietario (26 de octubre):** el cierre mensual de presupuestos usa la **foto inmutable** como referencia oficial de lo informado. **No equivale al cierre del período contable.**
+
+* **Qué es un cierre**: vincula explícitamente **presupuesto + mes + foto elegida + la versión aprobada** con la que se fotografió (`erp_presupuesto_cierres`). La foto debe estar **cortada el último día de ese mes** y ser la **vigente** de su corte (no una ya corregida). El responsable (`presupuestos.aprobar`), la fecha y el motivo (en correcciones) quedan registrados y auditados (`presupuesto_mes_cerrado`, `presupuesto_cierre_corregido`).
+* **Correcciones**: una corrección es un **cierre nuevo** (número siguiente, motivo obligatorio, `corrige_cierre_id`) que apunta a otra foto vigente del mismo mes (típicamente la corrección de la foto). El cierre anterior y su foto se **conservan** con su vínculo; solo se corrige el cierre más reciente de un mes; no se puede «corregir» hacia la misma foto.
+* **Inmutabilidad y coherencia en la base**: los cierres no se editan ni se borran (triggers), y la base rechaza un cierre que no coincida con su foto (presupuesto, versión aprobada, año y corte en el último día del mes).
+* **Lo que NO hace**: no escribe en el libro, no cierra períodos contables ni genera asientos (la prueba lo comprueba con los conteos del libro y de períodos). El cierre del período contable sigue su propio proceso.
+* **BI**: `bi_presupuesto_cierres` (cierre, mes, foto, versión aprobada; `es_vigente`); sin fechas ni personas. El respaldo y la restauración conservan los cierres y sus protecciones.
+
 ## Fuente y fecha de cada métrica
 
 | Métrica | Fuente | Fecha |
@@ -132,6 +142,7 @@ Una fila con base e impuesto vacíos **no cambia nada** (no equivale a cero; par
 | `bi_presupuesto_vs_real` | versión **vigente** frente a lo real **por eventos (oficial, 067)**, por mes y destino, con desviación y estado; columna `criterio` |
 | `bi_presupuesto_anual` | consolidado anual por destino (por eventos, oficial; una fila por presupuesto y concepto) |
 | `bi_presupuesto_cobros_mes` | cobros de caja por mes (sin presupuesto) |
+| `bi_presupuesto_cierres` (069) | cierres mensuales: mes, foto de referencia y versión aprobada, con `es_vigente` |
 | `bi_presupuesto_fotos` / `bi_presupuesto_foto_lineas` (068) | cierres inmutables del comparativo oficial: cabecera y componentes por mes y concepto |
 
 El mes se une con `bi_dim_fecha.anio_mes` (AAAAMM). **La dimensión de fecha se amplía** (064 redefine `bi_dim_fecha`) para cubrir del 1 de enero al 31 de diciembre de cada año con presupuesto: un presupuesto suele ser futuro y sin esto sus meses quedarían fuera del calendario. La prueba usa un presupuesto de 2031.
