@@ -458,6 +458,18 @@ final class ErpController
         }
         self::render($router,'presupuestos',$datos);
     }
+    /** Conteo físico de inventario: lista, alcance, lecturas por producto, conflictos y aprobación. Se escribe solo con las acciones `inv_conteo_*`. */
+    public static function inventarioConteos(Router $router):void
+    {
+        exigir_permiso('inventario.gestionar');$r=new ErpRepository();$svc=new \Services\ErpInventarioConteoService($r);
+        $id=(int)(filter_var($_GET['conteo']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0);
+        $conteo=$id?$svc->conteo($id):null;
+        if($id&&!$conteo){\Classes\ErrorResponse::render(404);return;}
+        $lineaId=(int)(filter_var($_GET['linea']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0);
+        $registros=$conteo&&$lineaId&&in_array($lineaId,array_map(static fn($l)=>(int)$l['id'],$conteo['lineas']),true)?$svc->registros($lineaId):[];
+        self::render($router,'inventario-conteos',['lista'=>$svc->lista(),'conteo'=>$conteo,'registros'=>$registros,'lineaRegistros'=>$lineaId,'productos'=>$svc->productos(),'responsables'=>$svc->responsables(),
+            'invConceptos'=>$r->q('SELECT id,nombre,tipo FROM erp_inv_conceptos WHERE activo=1 ORDER BY nombre'),'aprueba'=>puede('erp.aprobaciones')]);
+    }
     /** Plantilla CSV de una versión: todos los conceptos y meses, con las cifras actuales y vacío donde no hay presupuesto. */
     public static function presupuestoPlantilla():void
     {
@@ -542,6 +554,9 @@ final class ErpController
             'presupuesto_carga_descartar'=>[\Services\ErpPresupuestoService::class,'descartarCarga','presupuestos'],'presupuesto_aprobar'=>[\Services\ErpPresupuestoService::class,'aprobar','presupuestos'],
             'presupuesto_revisar'=>[\Services\ErpPresupuestoService::class,'revisar','presupuestos'],
             'presupuesto_foto'=>[\Services\ErpPresupuestoService::class,'generarFoto','presupuestos'],'presupuesto_foto_corregir'=>[\Services\ErpPresupuestoService::class,'corregirFoto','presupuestos'],
+            'inv_conteo_iniciar'=>[\Services\ErpInventarioConteoService::class,'iniciar','inv_conteos'],'inv_conteo_contar'=>[\Services\ErpInventarioConteoService::class,'contar','inv_conteos'],'inv_conteo_cerrar'=>[\Services\ErpInventarioConteoService::class,'cerrar','inv_conteos'],
+            'inv_conteo_cancelar'=>[\Services\ErpInventarioConteoService::class,'cancelar','inv_conteos'],'inv_conteo_aprobar'=>[\Services\ErpInventarioConteoService::class,'aprobar','inv_conteos'],'inv_conteo_rechazar'=>[\Services\ErpInventarioConteoService::class,'rechazar','inv_conteos'],
+            'inv_conteo_revertir'=>[\Services\ErpInventarioConteoService::class,'revertir','inv_conteos'],
             'presupuesto_cierre'=>[\Services\ErpPresupuestoService::class,'cerrarMes','presupuestos'],'presupuesto_cierre_corregir'=>[\Services\ErpPresupuestoService::class,'corregirCierre','presupuestos'],
         ];
         $accion=is_string($_POST['accion']??null)?$_POST['accion']:'';
@@ -575,6 +590,11 @@ final class ErpController
             $ver=(int)(filter_var($_POST['version_id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0);
             if($completada&&in_array($accion,['presupuesto_crear','presupuesto_revisar'],true))$ver=$id;
             $ruta='/gestion/presupuestos'.($ver?'?version='.$ver:'').($completada&&$accion==='presupuesto_cargar'?'&carga='.$id:'').($completada&&$ver&&in_array($accion,['presupuesto_foto','presupuesto_foto_corregir'],true)?'&foto='.$id:'');
+        }
+        if($destino==='inv_conteos'){
+            $ver=(int)(filter_var($_POST['conteo_id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0);
+            if($completada&&$accion==='inv_conteo_iniciar')$ver=$id;
+            $ruta='/gestion/inventario/conteos'.($ver?'?conteo='.$ver:'');
         }
         if($destino==='documentos')$ruta='/gestion/documentos?'.http_build_query(['entidad'=>is_string($_POST['entidad']??null)?$_POST['entidad']:'','id'=>(int)($_POST['entidad_id']??0)]);
         if($destino==='consumos')$ruta='/agenda/detalle?id='.(int)($_POST['cita_id']??0);
