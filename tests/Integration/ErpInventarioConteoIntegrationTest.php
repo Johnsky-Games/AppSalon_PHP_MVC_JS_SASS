@@ -252,6 +252,20 @@ final class ErpInventarioConteoIntegrationTest extends TestCase
         $this->aprobar($id,['concepto_faltante_id'=>$cf,'motivo'=>'Faltante de 2 unidades']);
         self::assertSame(8000,$this->stock($this->p1));self::assertSame(1,$this->n('SELECT COUNT(*) FROM erp_inv_conteo_ajustes'));
     }
+    public function testUnValorDeAjusteQueDesbordaSeMuestraComoConflictoQueBloqueaSinRomperLaPantallaNiLaAprobacion():void
+    {
+        [$cf]=$this->conceptos();
+        $this->db->query("INSERT INTO inventario_productos(sku,nombre,unidad,stock_milesimas,costo_centavos) VALUES('SKU-CARO','Producto de costo extremo','unidad',0,999999999)");$caro=(int)$this->db->insert_id;
+        self::assertSame('',$this->db->error);
+        $id=$this->iniciar([$caro]);$this->contar($id,$caro,'9999999.999');// 9.999.999.999 milésimas × 999.999.999 centavos desborda un entero de 64 bits
+        $l=$this->linea_an($id,$caro);// no debe lanzar TypeError: la pantalla de detalle sigue cargando
+        self::assertSame(0,$l['valor_centavos']);
+        self::assertContains('valor_excede_asiento',array_column($l['conflictos'],'codigo'));
+        $this->cerrar($id);
+        $this->rechazo(fn()=>$this->svc()->aprobar($this->gerente,$this->d(['conteo_id'=>$id,'concepto_sobrante_id'=>$cf,'motivo'=>'Intento de aprobar'])),409,'excede el máximo');
+        self::assertSame(0,$this->stock($caro),'no se aplicó ningún ajuste');
+        self::assertSame(0,$this->n('SELECT COUNT(*) FROM erp_inv_conteo_ajustes'));
+    }
     public function testNadaSeBorraYElHistorialDeLecturasSeConserva():void
     {
         [$cf]=$this->conceptos();

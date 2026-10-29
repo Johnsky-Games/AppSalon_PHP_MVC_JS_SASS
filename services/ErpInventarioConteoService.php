@@ -248,7 +248,8 @@ final class ErpInventarioConteoService extends ErpService
             }
             $dif=(int)$l['diferencia_milesimas'];
             $l['tipo']=$dif>0?'entrada':($dif<0?'salida':null);$l['cantidad']=abs($dif);
-            $l['valor_centavos']=intdiv($costo*abs($dif)+500,1000);$l['stock_resultante']=$stock+$dif;
+            $valor=self::valorAjuste($costo,abs($dif));$l['valor_centavos']=$valor??0;$l['stock_resultante']=$stock+$dif;
+            if($valor===null)$l['conflictos'][]=['codigo'=>'valor_excede_asiento','bloquea'=>true,'mensaje'=>'el valor del ajuste (cantidad × costo) excede el máximo de un asiento contable: recuenta o corrige el costo del producto'];
             $entre=$this->movimientos((int)$l['producto_id'],(int)$l['ultimo_mov_ref'],(int)$l['ultimo_mov_al_contar'],$bloquear);
             if($entre['n']>0)$l['conflictos'][]=['codigo'=>'movimientos_entre_inicio_y_conteo','bloquea'=>false,'mensaje'=>$entre['n'].' movimiento(s) entre el inicio y el conteo (neto '.self::mil($entre['neto']).'): la diferencia se calculó contra el stock del sistema al contar, no contra la referencia inicial'];
             $post=$this->movimientos((int)$l['producto_id'],(int)$l['ultimo_mov_al_contar'],null,$bloquear);
@@ -263,6 +264,13 @@ final class ErpInventarioConteoService extends ErpService
     {
         $f=$this->r->uno('SELECT COUNT(*) n,COALESCE(SUM(IF(tipo=\'entrada\',cantidad_milesimas,-cantidad_milesimas)),0) neto FROM inventario_movimientos WHERE producto_id=? AND id>?'.($hasta!==null?' AND id<=?':'').($actual?' LOCK IN SHARE MODE':''),$hasta!==null?[$producto,$desde,$hasta]:[$producto,$desde]);
         return ['n'=>(int)$f['n'],'neto'=>(int)$f['neto']];
+    }
+    /** Valor del ajuste en centavos (cantidad en milésimas × costo), o null si desborda un entero o supera el máximo de un asiento (misma cota que ErpAprobacionService::resolver). */
+    private static function valorAjuste(int $costo,int $cantidad):?int
+    {
+        if($cantidad>0&&$costo>intdiv(PHP_INT_MAX-500,$cantidad))return null;
+        $v=intdiv($costo*$cantidad+500,1000);
+        return $v>99999999999?null:$v;
     }
     private static function mil(int $m):string {return rtrim(rtrim(number_format($m/1000,3,'.',''),'0'),'.')?:'0';}
 
