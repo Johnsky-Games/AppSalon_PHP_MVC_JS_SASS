@@ -252,6 +252,34 @@ final class ErpInventarioConteoIntegrationTest extends TestCase
         $this->aprobar($id,['concepto_faltante_id'=>$cf,'motivo'=>'Faltante de 2 unidades']);
         self::assertSame(8000,$this->stock($this->p1));self::assertSame(1,$this->n('SELECT COUNT(*) FROM erp_inv_conteo_ajustes'));
     }
+    public function testLasLecturasDelSistemaAlContarSonActualesAunqueLaTransaccionYaTuvieraUnaInstantanea():void
+    {
+        // Bajo REPEATABLE READ, una lectura normal dentro de una transacción con instantánea previa no ve lo que otra sesión confirmó mientras se esperaba el bloqueo del producto.
+        $id=$this->iniciar([$this->p1]);
+        $mov=0;
+        \Classes\Transaccion::ejecutar($this->db,function()use($id,&$mov){// los niveles internos del servicio usan SAVEPOINT y conservan esta instantánea
+        $this->db->query('SELECT COUNT(*) FROM inventario_movimientos');// instantánea previa (como la consulta de autorización de ErpService::ejecutar)
+        $b=new \mysqli(getenv('DB_HOST')?:'127.0.0.1',getenv('DB_USER')?:'root',getenv('DB_PASS')?:'root',$this->db->query('SELECT DATABASE()')->fetch_row()[0],(int)(getenv('DB_PORT')?:3306));
+        $b->begin_transaction();
+        $k='ensayo:'.bin2hex(random_bytes(8));
+        $b->query("INSERT INTO inventario_movimientos(producto_id,actor_id,tipo,cantidad_milesimas,saldo_milesimas,costo_centavos,motivo,idempotencia,huella,registrado_en) VALUES({$this->p1},{$this->owner},'salida',1000,9000,250,'Movimiento confirmado durante la espera','$k','".hash('sha256',$k)."',NOW())");$mov=(int)$b->insert_id;
+        $b->query("UPDATE inventario_productos SET stock_milesimas=9000 WHERE id={$this->p1}");
+        $b->query("INSERT INTO erp_ventas(comprador_nombre,comprador_json,estado,creado_por,creado_en) VALUES('Consumidor final','{}','borrador',{$this->owner},NOW())");$v=(int)$b->insert_id;
+        $b->query("INSERT INTO erp_venta_lineas(venta_id,producto_id,nombre,cantidad_milesimas,precio_centavos,total_centavos) VALUES($v,{$this->p1},'Línea reservada',2000,1000,1000)");$l=(int)$b->insert_id;
+        $b->query("INSERT INTO erp_stock_reservas(linea_id,producto_id,cantidad_milesimas,estado,creado_en) VALUES($l,{$this->p1},2000,'activa',NOW())");
+        $b->commit();$b->close();
+        $this->contar($id,$this->p1,'8');// anidada en la transacción abierta: debe leer lo confirmado, no la instantánea
+        });
+        $linea=$this->r->uno('SELECT * FROM erp_inv_conteo_lineas WHERE conteo_id=?',[$id]);
+        self::assertSame(9000,(int)$linea['sistema_al_contar_milesimas'],'el stock leído es el actual');
+        self::assertSame($mov,(int)$linea['ultimo_mov_al_contar'],'la marca de movimientos incluye el movimiento ya reflejado en el stock');
+        self::assertSame(2000,(int)$linea['reservado_al_contar_milesimas'],'las reservas leídas son las actuales');
+        $this->cerrar($id);
+        // Nada se movió después de contar (la diferencia es −1 sobre 9): la aprobación no debe exigir confirmar movimientos.
+        [$cf]=$this->conceptos();
+        $this->aprobar($id,['concepto_faltante_id'=>$cf,'motivo'=>'Sin movimientos posteriores']);
+        self::assertSame(8000,$this->stock($this->p1),'el faltante de 1 unidad se aplicó sobre el stock actual');
+    }
     public function testUnValorDeAjusteQueDesbordaSeMuestraComoConflictoQueBloqueaSinRomperLaPantallaNiLaAprobacion():void
     {
         [$cf]=$this->conceptos();

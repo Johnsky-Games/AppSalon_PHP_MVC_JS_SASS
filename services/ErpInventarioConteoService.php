@@ -51,7 +51,7 @@ final class ErpInventarioConteoService extends ErpService
             $this->r->q('INSERT INTO erp_inv_conteos(estado,alcance,descripcion,responsable_id,iniciado_por,iniciado_en,ultimo_movimiento_inicio) VALUES(\'en_conteo\',?,?,?,?,?,?)',[$alcance,$descripcion,$responsable,$actor,$ahora,$maxMov]);
             $id=$this->r->id();
             foreach($prods as $p){
-                $ult=(int)$this->r->uno('SELECT COALESCE(MAX(id),0) m FROM inventario_movimientos WHERE producto_id=?',[(int)$p['id']])['m'];
+                $ult=(int)$this->r->uno('SELECT COALESCE(MAX(id),0) m FROM inventario_movimientos WHERE producto_id=? LOCK IN SHARE MODE',[(int)$p['id']])['m'];
                 $this->r->q('INSERT INTO erp_inv_conteo_lineas(conteo_id,producto_id,sku,nombre,unidad,referencia_milesimas,costo_ref_centavos,ultimo_mov_ref) VALUES(?,?,?,?,?,?,?,?)',
                     [$id,(int)$p['id'],$p['sku'],$p['nombre'],$p['unidad'],(int)$p['stock_milesimas'],(int)$p['costo_centavos'],$ult]);
             }
@@ -70,10 +70,10 @@ final class ErpInventarioConteoService extends ErpService
             $texto=$d['cantidad']??null;
             if(!is_scalar($texto)||trim((string)$texto)==='')throw new ErpException('Indica la cantidad contada (0 si no hay existencias). Sin cantidad, el producto queda «sin contar».');
             $cant=ValoresExactos::decimal($texto,3,true);
-            // Lectura del sistema en el mismo instante: producto bloqueado, así que stock, reservas y último movimiento son coherentes entre sí.
+            // Lectura del sistema en el mismo instante: producto bloqueado y lecturas actuales (no la instantánea de REPEATABLE READ), así que stock, reservas y último movimiento son coherentes entre sí.
             $p=$this->r->uno('SELECT stock_milesimas FROM inventario_productos WHERE id=? FOR UPDATE',[(int)$linea['producto_id']])??throw new ErpException('Producto no encontrado.',404);
-            $reservado=$this->reservado((int)$linea['producto_id']);
-            $ult=(int)$this->r->uno('SELECT COALESCE(MAX(id),0) m FROM inventario_movimientos WHERE producto_id=?',[(int)$linea['producto_id']])['m'];
+            $reservado=$this->reservado((int)$linea['producto_id'],true);
+            $ult=(int)$this->r->uno('SELECT COALESCE(MAX(id),0) m FROM inventario_movimientos WHERE producto_id=? LOCK IN SHARE MODE',[(int)$linea['producto_id']])['m'];
             $ahora=ErpRepository::ahora();
             $this->r->q('UPDATE erp_inv_conteo_lineas SET contado_milesimas=?,contado_por=?,contado_en=?,sistema_al_contar_milesimas=?,reservado_al_contar_milesimas=?,ultimo_mov_al_contar=? WHERE id=?',
                 [$cant,$actor,$ahora,(int)$p['stock_milesimas'],$reservado,$ult,(int)$linea['id']]);
@@ -170,7 +170,7 @@ final class ErpInventarioConteoService extends ErpService
             foreach($ajustes as $a){
                 if($a['tipo']==='entrada'){
                     $p=$this->r->uno('SELECT stock_milesimas FROM inventario_productos WHERE id=?',[(int)$a['producto_id']]);
-                    if((int)$p['stock_milesimas']-(int)$a['cantidad_milesimas']<$this->reservado((int)$a['producto_id']))
+                    if((int)$p['stock_milesimas']-(int)$a['cantidad_milesimas']<$this->reservado((int)$a['producto_id'],true))
                         throw new ErpException('No se puede revertir «'.$a['nombre'].'»: el stock quedaría por debajo de lo reservado o de cero.',409);
                 }
             }
@@ -199,9 +199,10 @@ final class ErpInventarioConteoService extends ErpService
         if(mb_strlen($m)<5)throw new ErpException('Explica el motivo (al menos 5 caracteres).');
         return $this->texto($m,300);
     }
-    private function reservado(int $producto):int
+    /** Con `$actual` es una lectura actual (LOCK IN SHARE MODE): bajo REPEATABLE READ una lectura normal no vería reservas confirmadas mientras se esperaba el bloqueo del producto. */
+    private function reservado(int $producto,bool $actual=false):int
     {
-        return (int)$this->r->uno("SELECT COALESCE(SUM(cantidad_milesimas),0) s FROM erp_stock_reservas WHERE producto_id=? AND estado='activa'",[$producto])['s'];
+        return (int)$this->r->uno("SELECT COALESCE(SUM(cantidad_milesimas),0) s FROM erp_stock_reservas WHERE producto_id=? AND estado='activa'".($actual?' LOCK IN SHARE MODE':''),[$producto])['s'];
     }
     /** Como en las demás aprobaciones: quien envió el conteo a aprobación no lo aprueba solo (el propietario puede). */
     private function exigirOtraPersona(int $actor,array $c):void
@@ -239,7 +240,7 @@ final class ErpInventarioConteoService extends ErpService
         $lineas=$this->r->q('SELECT * FROM erp_inv_conteo_lineas WHERE conteo_id=? ORDER BY producto_id',[(int)$conteo['id']]);
         foreach($lineas as &$l){
             $p=$this->r->uno('SELECT stock_milesimas,costo_centavos FROM inventario_productos WHERE id=?'.($bloquear?' FOR UPDATE':''),[(int)$l['producto_id']]);
-            $stock=(int)$p['stock_milesimas'];$costo=(int)$p['costo_centavos'];$res=$this->reservado((int)$l['producto_id']);
+            $stock=(int)$p['stock_milesimas'];$costo=(int)$p['costo_centavos'];$res=$this->reservado((int)$l['producto_id'],$bloquear);
             $l['stock_actual']=$stock;$l['reservado_actual']=$res;$l['disponible_actual']=$stock-$res;$l['costo_actual']=$costo;
             $l['contada']=$l['contado_milesimas']!==null;$l['tipo']=null;$l['cantidad']=0;$l['valor_centavos']=0;$l['stock_resultante']=null;$l['conflictos']=[];
             if(!$l['contada']){
