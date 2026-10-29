@@ -248,6 +248,70 @@ final class ErpPresupuestoService extends ErpService
         return $lineas;
     }
 
+    // ------------------------------------------------------------------------------------------------------------- cierre mensual con foto (069)
+
+    /**
+     * Cierra un MES del presupuesto tomando una foto inmutable como referencia oficial de lo informado. Vincula presupuesto + mes + foto + la versión aprobada con la que se fotografió.
+     * La foto debe estar cortada el último día de ese mes y ser la vigente de su corte (no corregida). NO es el cierre del período contable: no escribe en el libro ni genera asientos.
+     */
+    public function cerrarMes(int $actor,array $d):array
+    {
+        return $this->ejecutar($actor,'presupuestos.aprobar','presupuesto_cierre',$d,function()use($actor,$d){
+            $foto=$this->fotoDelCierre($d);$mes=$this->mes($d['mes']??null);
+            $this->r->uno('SELECT id FROM erp_presupuestos WHERE id=? FOR UPDATE',[(int)$foto['presupuesto_id']]);
+            $this->exigirFotoDeFinDeMes($foto,$mes);
+            if($this->r->uno('SELECT id FROM erp_presupuesto_cierres WHERE presupuesto_id=? AND mes=? FOR UPDATE',[(int)$foto['presupuesto_id'],$mes]))
+                throw new ErpException('El mes ya está cerrado. Para cambiar su referencia genera una corrección del cierre: el cierre anterior se conserva.',409);
+            return $this->guardarCierre($actor,$foto,$mes,1,null,null);
+        });
+    }
+
+    /** Corrige un cierre: genera un cierre NUEVO (número siguiente, motivo obligatorio) que apunta a otra foto vigente del mismo mes. El cierre anterior y su foto se conservan. */
+    public function corregirCierre(int $actor,array $d):array
+    {
+        return $this->ejecutar($actor,'presupuestos.aprobar','presupuesto_cierre_corregir',$d,function()use($actor,$d){
+            $prev=$this->r->uno('SELECT * FROM erp_presupuesto_cierres WHERE id=? FOR UPDATE',[$this->id($d['cierre_id']??null)])??throw new ErpException('Cierre no encontrado.',404);
+            $motivo=$this->texto($d['motivo']??'',200);
+            $this->r->uno('SELECT id FROM erp_presupuestos WHERE id=? FOR UPDATE',[(int)$prev['presupuesto_id']]);
+            if($this->r->uno('SELECT id FROM erp_presupuesto_cierres WHERE corrige_cierre_id=? FOR UPDATE',[(int)$prev['id']]))throw new ErpException('Este cierre ya fue corregido: corrige el más reciente del mes.',409);
+            $foto=$this->fotoDelCierre($d);
+            if((int)$foto['presupuesto_id']!==(int)$prev['presupuesto_id'])throw new ErpException('La foto es de otro presupuesto.',409);
+            if((int)$foto['id']===(int)$prev['foto_id'])throw new ErpException('El cierre ya referencia esa foto: elige otra (por ejemplo, la corrección de la foto).',409);
+            $this->exigirFotoDeFinDeMes($foto,(int)$prev['mes']);
+            return $this->guardarCierre($actor,$foto,(int)$prev['mes'],(int)$prev['numero']+1,(int)$prev['id'],$motivo);
+        });
+    }
+
+    private function fotoDelCierre(array $d):array
+    {
+        return $this->r->uno('SELECT * FROM erp_presupuesto_fotos WHERE id=? FOR UPDATE',[$this->id($d['foto_id']??null)])??throw new ErpException('Foto no encontrada.',404);
+    }
+    private function exigirFotoDeFinDeMes(array $foto,int $mes):void
+    {
+        $fin=(new \DateTimeImmutable(sprintf('%04d-%02d-01',(int)$foto['anio'],$mes)))->modify('last day of this month')->format('Y-m-d');
+        if($foto['corte']!==$fin)throw new ErpException('Para cerrar '.self::MESES[$mes].' la foto debe estar cortada el último día del mes ('.$fin.'); esta se cortó el '.$foto['corte'].'.',422);
+        if($this->r->uno('SELECT id FROM erp_presupuesto_fotos WHERE corrige_foto_id=? FOR UPDATE',[(int)$foto['id']]))
+            throw new ErpException('Esa foto fue corregida: usa la corrección más reciente de ese corte.',409);
+    }
+    private function guardarCierre(int $actor,array $foto,int $mes,int $numero,?int $corrige,?string $motivo):int
+    {
+        $ahora=$this->r::ahora();
+        $this->r->q('INSERT INTO erp_presupuesto_cierres(presupuesto_id,anio,mes,foto_id,version_id,numero,corrige_cierre_id,motivo,cerrado_por,cerrado_en) VALUES(?,?,?,?,?,?,?,?,?,?)',
+            [(int)$foto['presupuesto_id'],(int)$foto['anio'],$mes,(int)$foto['id'],(int)$foto['version_id'],$numero,$corrige,$motivo,$actor,$ahora]);
+        $id=$this->r->id();
+        $this->evento($actor,$corrige===null?'presupuesto_mes_cerrado':'presupuesto_cierre_corregido','presupuesto_cierre',$id,['presupuesto_id'=>(int)$foto['presupuesto_id'],'mes'=>$mes,'foto_id'=>(int)$foto['id'],'version_id'=>(int)$foto['version_id'],
+            'numero'=>$numero,'corrige_cierre_id'=>$corrige,'motivo'=>$motivo]);
+        return $id;
+    }
+    /** Cierres mensuales de un presupuesto (todos, con su trazabilidad), del mes más reciente al más antiguo. */
+    public function cierres(int $presupuesto):array
+    {
+        return $this->r->q('SELECT c.id,c.mes,c.numero,c.corrige_cierre_id,c.motivo,c.foto_id,f.numero foto_numero,f.corte,c.version_id,v.numero version_numero,c.cerrado_en,u.nombre cerrado_por_nombre,
+            (SELECT o.id FROM erp_presupuesto_cierres o WHERE o.corrige_cierre_id=c.id) corregido_por_id,(SELECT o.numero FROM erp_presupuesto_cierres o WHERE o.corrige_cierre_id=c.id) corregido_por_numero
+            FROM erp_presupuesto_cierres c JOIN erp_presupuesto_fotos f ON f.id=c.foto_id JOIN erp_presupuesto_versiones v ON v.id=c.version_id LEFT JOIN usuarios u ON u.id=c.cerrado_por
+            WHERE c.presupuesto_id=? ORDER BY c.mes DESC,c.numero DESC',[$presupuesto]);
+    }
+
     // ------------------------------------------------------------------------------------------------------------- reglas internas
 
     private function versionEditable(int $id):array

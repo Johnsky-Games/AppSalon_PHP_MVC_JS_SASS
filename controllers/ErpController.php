@@ -454,7 +454,7 @@ final class ErpController
             // Fotos inmutables del comparativo (cierres): la lista del presupuesto y, si se pide, el detalle de una de ellas (solo si es de este presupuesto).
             $fotoId=(int)(filter_var($_GET['foto']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:0);$foto=$fotoId?$svc->foto($fotoId):null;
             if($foto&&(int)$foto['presupuesto_id']!==(int)$v['presupuesto_id'])$foto=null;
-            $datos=['version'=>$v,'lineas'=>$svc->lineas($id),'cambios'=>$svc->cambios($id),'comparativo'=>$comparativo,'carga'=>$carga,'conceptos'=>$datos['edita']?$svc->conceptos():[],'fotos'=>$svc->fotos((int)$v['presupuesto_id']),'foto'=>$foto]+$datos;
+            $datos=['version'=>$v,'lineas'=>$svc->lineas($id),'cambios'=>$svc->cambios($id),'comparativo'=>$comparativo,'carga'=>$carga,'conceptos'=>$datos['edita']?$svc->conceptos():[],'fotos'=>$svc->fotos((int)$v['presupuesto_id']),'foto'=>$foto,'cierres'=>$svc->cierres((int)$v['presupuesto_id'])]+$datos;
         }
         self::render($router,'presupuestos',$datos);
     }
@@ -557,6 +557,7 @@ final class ErpController
             'inv_conteo_iniciar'=>[\Services\ErpInventarioConteoService::class,'iniciar','inv_conteos'],'inv_conteo_contar'=>[\Services\ErpInventarioConteoService::class,'contar','inv_conteos'],'inv_conteo_cerrar'=>[\Services\ErpInventarioConteoService::class,'cerrar','inv_conteos'],
             'inv_conteo_cancelar'=>[\Services\ErpInventarioConteoService::class,'cancelar','inv_conteos'],'inv_conteo_aprobar'=>[\Services\ErpInventarioConteoService::class,'aprobar','inv_conteos'],'inv_conteo_rechazar'=>[\Services\ErpInventarioConteoService::class,'rechazar','inv_conteos'],
             'inv_conteo_revertir'=>[\Services\ErpInventarioConteoService::class,'revertir','inv_conteos'],
+            'presupuesto_cierre'=>[\Services\ErpPresupuestoService::class,'cerrarMes','presupuestos'],'presupuesto_cierre_corregir'=>[\Services\ErpPresupuestoService::class,'corregirCierre','presupuestos'],
         ];
         $accion=is_string($_POST['accion']??null)?$_POST['accion']:'';
         if(!isset($acciones[$accion])){http_response_code(422);detener_ejecucion(422);return;}

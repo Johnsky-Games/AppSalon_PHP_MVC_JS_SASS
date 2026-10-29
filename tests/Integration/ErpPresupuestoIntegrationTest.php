@@ -20,7 +20,7 @@ use Services\{ErpContabilidadService,ErpException,ErpPresupuestoService};
  */
 final class ErpPresupuestoIntegrationTest extends TestCase
 {
-    private const VISTAS=['bi_presupuesto_real_mes','bi_presupuesto_real_mes_eventos','bi_presupuesto_fotos','bi_presupuesto_foto_lineas','bi_presupuesto_lineas','bi_presupuesto_vs_real','bi_presupuesto_anual','bi_presupuesto_cobros_mes'];
+    private const VISTAS=['bi_presupuesto_real_mes','bi_presupuesto_real_mes_eventos','bi_presupuesto_fotos','bi_presupuesto_foto_lineas','bi_presupuesto_cierres','bi_presupuesto_lineas','bi_presupuesto_vs_real','bi_presupuesto_anual','bi_presupuesto_cobros_mes'];
     private \mysqli $db;private ErpRepository $r;private int $owner;private int $finanzas;private int $gerente;private int $recepcion;
     private int $s1;private int $p1;private int $cuentaOperativo;private int $cuentaComisiones;private int $cuentaCosto;
     protected function setUp():void
@@ -996,5 +996,72 @@ final class ErpPresupuestoIntegrationTest extends TestCase
         $f2=$this->foto($id2);self::assertNotSame((int)$f['presupuesto_id'],(int)$f2['presupuesto_id']);self::assertSame([$opt],[(int)$f2['version_id']]);
         self::assertSame(99900,(int)$this->lineasFoto($f2)['3|servicio|'.$this->s1]['presupuesto_base_centavos']);
         self::assertSame(10000,(int)$this->lineasFoto($this->foto($id))['3|servicio|'.$this->s1]['presupuesto_base_centavos'],'la foto del escenario base conserva su cifra');
+    }
+
+    // ---- cierre mensual con foto (069) ----
+    public function testElCierreMensualVinculaLaFotoYSuVersionAprobadaYNoEsCierreContable():void
+    {
+        $this->ventasConAnulaciones();$v=$this->presupuestoAprobado();
+        $foto=$this->svc()->generarFoto($this->owner,$this->d(['version_id'=>$v,'corte'=>'2026-03-31']))['recurso_id'];
+        $contables=fn()=>[$this->n('SELECT COUNT(*) FROM erp_cont_asientos'),$this->n('SELECT COUNT(*) FROM erp_cont_lineas'),$this->n("SELECT COUNT(*) FROM erp_cont_periodos WHERE estado<>'abierto'")];
+        $antes=$contables();
+        $this->rechazo(fn()=>$this->svc()->cerrarMes($this->finanzas,$this->d(['version_id'=>$v,'foto_id'=>$foto,'mes'=>3])),403);
+        $this->rechazo(fn()=>$this->svc()->cerrarMes($this->owner,$this->d(['version_id'=>$v,'foto_id'=>$foto,'mes'=>4])),422,'último día del mes');
+        $this->rechazo(fn()=>$this->svc()->cerrarMes($this->owner,$this->d(['version_id'=>$v,'foto_id'=>999999,'mes'=>3])),404);
+        $mitad=$this->svc()->generarFoto($this->owner,$this->d(['version_id'=>$v,'corte'=>'2026-03-15']))['recurso_id'];
+        $this->rechazo(fn()=>$this->svc()->cerrarMes($this->owner,$this->d(['version_id'=>$v,'foto_id'=>$mitad,'mes'=>3])),422,'último día del mes');
+        $c=$this->svc()->cerrarMes($this->owner,$this->d(['version_id'=>$v,'foto_id'=>$foto,'mes'=>3]))['recurso_id'];
+        $f=$this->foto($foto);
+        $fila=$this->r->uno('SELECT * FROM erp_presupuesto_cierres WHERE id=?',[$c]);
+        self::assertSame([(int)$f['presupuesto_id'],2026,3,$foto,$v,1,null,null,$this->owner],[(int)$fila['presupuesto_id'],(int)$fila['anio'],(int)$fila['mes'],(int)$fila['foto_id'],(int)$fila['version_id'],(int)$fila['numero'],$fila['corrige_cierre_id'],$fila['motivo'],(int)$fila['cerrado_por']],'el cierre vincula presupuesto, mes, foto y la versión aprobada de la foto');
+        self::assertSame(1,$this->n("SELECT COUNT(*) FROM erp_eventos WHERE tipo='presupuesto_mes_cerrado' AND entidad_id=$c"),'queda auditado');
+        $this->rechazo(fn()=>$this->svc()->cerrarMes($this->owner,$this->d(['version_id'=>$v,'foto_id'=>$foto,'mes'=>3])),409,'ya está cerrado');
+        self::assertSame($antes,$contables(),'cerrar el mes del presupuesto no escribe en el libro ni cierra períodos contables');
+        // La base exige la coherencia y no deja editar ni borrar el cierre.
+        foreach(["UPDATE erp_presupuesto_cierres SET motivo='x' WHERE id=$c","DELETE FROM erp_presupuesto_cierres WHERE id=$c"] as $sql)$this->sqlFalla($sql);
+        $this->sqlFalla("INSERT INTO erp_presupuesto_cierres(presupuesto_id,anio,mes,foto_id,version_id,numero,cerrado_por,cerrado_en) VALUES({$f['presupuesto_id']},2026,5,$foto,$v,1,{$this->owner},NOW())");
+        $this->sqlFalla("INSERT INTO erp_presupuesto_cierres(presupuesto_id,anio,mes,foto_id,version_id,numero,cerrado_por,cerrado_en) VALUES({$f['presupuesto_id']},2026,3,$foto,".($v+999).",2,{$this->owner},NOW())");
+    }
+    public function testUnaCorreccionDelCierreConservaLaReferenciaAnteriorYSuTrazabilidad():void
+    {
+        $this->ventasConAnulaciones();$v=$this->presupuestoAprobado();
+        $f1=$this->svc()->generarFoto($this->owner,$this->d(['version_id'=>$v,'corte'=>'2026-03-31']))['recurso_id'];
+        $c1=$this->svc()->cerrarMes($this->owner,$this->d(['version_id'=>$v,'foto_id'=>$f1,'mes'=>3]))['recurso_id'];
+        // Una venta registrada tarde con fecha de marzo: la foto se corrige y, con ella, la referencia del cierre.
+        $vz=$this->venta('confirmada','2026-03-25 10:00:00');$this->linea($vz,$this->s1,null,6000,0,0,0,6000);
+        $f2=$this->svc()->corregirFoto($this->owner,$this->d(['foto_id'=>$f1,'motivo'=>'Venta tardía de marzo']))['recurso_id'];
+        $this->rechazo(fn()=>$this->svc()->cerrarMes($this->owner,$this->d(['version_id'=>$v,'foto_id'=>$f1,'mes'=>3])),409);
+        $this->rechazo(fn()=>$this->svc()->corregirCierre($this->owner,$this->d(['cierre_id'=>$c1,'foto_id'=>$f1,'motivo'=>'Igual'])),409,'ya referencia esa foto');
+        $this->rechazo(fn()=>$this->svc()->corregirCierre($this->owner,$this->d(['cierre_id'=>$c1,'foto_id'=>$f2,'motivo'=>''])));
+        $this->rechazo(fn()=>$this->svc()->corregirCierre($this->finanzas,$this->d(['cierre_id'=>$c1,'foto_id'=>$f2,'motivo'=>'x'])),403);
+        $c2=$this->svc()->corregirCierre($this->owner,$this->d(['cierre_id'=>$c1,'foto_id'=>$f2,'motivo'=>'La foto de marzo se corrigió']))['recurso_id'];
+        $r1=$this->r->uno('SELECT * FROM erp_presupuesto_cierres WHERE id=?',[$c1]);$r2=$this->r->uno('SELECT * FROM erp_presupuesto_cierres WHERE id=?',[$c2]);
+        self::assertSame([$f1,1,null],[(int)$r1['foto_id'],(int)$r1['numero'],$r1['corrige_cierre_id']],'el cierre anterior conserva su referencia');
+        self::assertSame([$f2,2,$c1,'La foto de marzo se corrigió'],[(int)$r2['foto_id'],(int)$r2['numero'],(int)$r2['corrige_cierre_id'],$r2['motivo']]);
+        $this->rechazo(fn()=>$this->svc()->corregirCierre($this->owner,$this->d(['cierre_id'=>$c1,'foto_id'=>$f2,'motivo'=>'Otra vez'])),409,'ya fue corregido');
+        self::assertSame(2,$this->n('SELECT COUNT(*) FROM erp_presupuesto_cierres'),'ambos cierres se conservan');
+        $lista=$this->svc()->cierres((int)$this->foto($f1)['presupuesto_id']);
+        self::assertSame([2,1],array_map(fn($x)=>(int)$x['numero'],$lista));self::assertSame($c2,(int)$lista[1]['corregido_por_id']);self::assertNull($lista[0]['corregido_por_id']);
+        $bi=$this->db->query('SELECT cierre_numero,es_vigente,foto_numero,version_presupuesto_numero FROM bi_presupuesto_cierres ORDER BY cierre_numero')->fetch_all(MYSQLI_ASSOC);
+        self::assertSame([[1,0,1,1],[2,1,2,1]],array_map(fn($x)=>[(int)$x['cierre_numero'],(int)$x['es_vigente'],(int)$x['foto_numero'],(int)$x['version_presupuesto_numero']],$bi));
+        // La versión aprobada queda registrada en el cierre aunque después se apruebe otra: un cierre posterior usa la foto (y su versión), no la versión del momento.
+        $pid=(int)$this->foto($f1)['presupuesto_id'];$rev=(int)$this->svc()->revisar($this->owner,$this->d(['presupuesto_id'=>$pid,'motivo'=>'Ajuste']))['recurso_id'];$this->cifra($rev,'servicio:'.$this->s1,5,'10.00','0.00');$this->aprobar($rev);
+        self::assertSame($v,(int)$this->r->uno('SELECT version_id FROM erp_presupuesto_cierres WHERE id=?',[$c2])['version_id'],'el cierre sigue vinculado a la versión con la que se fotografió');
+    }
+    public function testLaPantallaMuestraElCierreMensualYSusAccionesSoloAQuienAprueba():void
+    {
+        $this->ventasConAnulaciones();$v=$this->presupuestoAprobado();
+        $anterior=['s'=>$_SESSION??[],'g'=>$_GET,'p'=>$_POST,'srv'=>$_SERVER];
+        try{
+            $this->sesion($this->owner);
+            self::assertSame(303,$this->post(['accion'=>'presupuesto_foto','version_id'=>(string)$v,'corte'=>'2026-03-31']));
+            $f=(int)$this->r->uno('SELECT id FROM erp_presupuesto_fotos')['id'];
+            $h=$this->pagina(['version'=>(string)$v]);
+            foreach(['Cierre mensual (referencia oficial de lo informado)','No es el cierre del período contable','Cerrar marzo con esta foto'] as $t)self::assertStringContainsString($t,$h,$t);
+            self::assertSame(303,$this->post(['accion'=>'presupuesto_cierre','version_id'=>(string)$v,'foto_id'=>(string)$f,'mes'=>'3']));
+            self::assertSame(1,$this->n('SELECT COUNT(*) FROM erp_presupuesto_cierres'));
+            $h=$this->pagina(['version'=>(string)$v]);self::assertStringContainsString('Referencia actual',$h);self::assertStringContainsString('Historial de cierres',$h);
+            $this->sesion($this->finanzas);$h=$this->pagina(['version'=>(string)$v]);self::assertStringNotContainsString('Fotos vigentes cortadas a fin de mes',$h,'finanzas ve el cierre pero no lo opera');self::assertStringContainsString('Cerrado',$h);
+        }finally{$_SESSION=$anterior['s'];$_GET=$anterior['g'];$_POST=$anterior['p'];$_SERVER=$anterior['srv'];http_response_code(200);}
     }
 }
