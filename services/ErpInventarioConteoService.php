@@ -169,7 +169,7 @@ final class ErpInventarioConteoService extends ErpService
             foreach($ajustes as $a)$this->r->uno('SELECT id FROM inventario_productos WHERE id=? FOR UPDATE',[(int)$a['producto_id']]);
             foreach($ajustes as $a){
                 if($a['tipo']==='entrada'){
-                    $p=$this->r->uno('SELECT stock_milesimas FROM inventario_productos WHERE id=?',[(int)$a['producto_id']]);
+                    $p=$this->r->uno('SELECT stock_milesimas FROM inventario_productos WHERE id=? FOR UPDATE',[(int)$a['producto_id']]);// lectura actual: el producto ya está bloqueado y una reposición confirmada durante la espera no se ve en la instantánea
                     if((int)$p['stock_milesimas']-(int)$a['cantidad_milesimas']<$this->reservado((int)$a['producto_id'],true))
                         throw new ErpException('No se puede revertir «'.$a['nombre'].'»: el stock quedaría por debajo de lo reservado o de cero.',409);
                 }

@@ -280,6 +280,24 @@ final class ErpInventarioConteoIntegrationTest extends TestCase
         $this->aprobar($id,['concepto_faltante_id'=>$cf,'motivo'=>'Sin movimientos posteriores']);
         self::assertSame(8000,$this->stock($this->p1),'el faltante de 1 unidad se aplicó sobre el stock actual');
     }
+    public function testUnReversoValidaElStockActualAunqueUnaReposicionSeConfirmeDuranteLaEspera():void
+    {
+        [$cf,$cs]=$this->conceptos();
+        $id=$this->iniciar([$this->p1]);$this->contar($id,$this->p1,'12');$this->cerrar($id);
+        $this->aprobar($id,['concepto_sobrante_id'=>$cs,'motivo'=>'Sobrante de 2 unidades']);self::assertSame(12000,$this->stock($this->p1));
+        $this->reservar($this->p1,11000);// con 12 de stock y 11 reservadas, revertir el sobrante de 2 (→10) se rechazaría
+        $mov=0;
+        \Classes\Transaccion::ejecutar($this->db,function()use($id,$cf){
+            $this->db->query('SELECT stock_milesimas FROM inventario_productos WHERE id='.$this->p1);// instantánea previa: 12 unidades
+            $b=new \mysqli(getenv('DB_HOST')?:'127.0.0.1',getenv('DB_USER')?:'root',getenv('DB_PASS')?:'root',$this->db->query('SELECT DATABASE()')->fetch_row()[0],(int)(getenv('DB_PORT')?:3306));
+            $k='ensayo:'.bin2hex(random_bytes(8));
+            $b->query("INSERT INTO inventario_movimientos(producto_id,actor_id,tipo,cantidad_milesimas,saldo_milesimas,costo_centavos,motivo,idempotencia,huella,registrado_en) VALUES({$this->p1},{$this->owner},'entrada',3000,15000,250,'Reposición confirmada durante la espera','$k','".hash('sha256',$k)."',NOW())");
+            $b->query("UPDATE inventario_productos SET stock_milesimas=15000 WHERE id={$this->p1}");$b->close();// autoconfirmado: ahora hay 15 unidades
+            $this->svc()->revertir($this->gerente,$this->d(['conteo_id'=>$id,'concepto_salida_id'=>$cf,'motivo'=>'Revertir tras la reposición']));
+        });
+        self::assertSame(13000,$this->stock($this->p1),'15 de stock actual − 2 del reverso, por encima de las 11 reservadas');
+        self::assertSame('revertido',$this->r->uno('SELECT estado FROM erp_inv_conteos WHERE id=?',[$id])['estado']);
+    }
     public function testUnValorDeAjusteQueDesbordaSeMuestraComoConflictoQueBloqueaSinRomperLaPantallaNiLaAprobacion():void
     {
         [$cf]=$this->conceptos();
