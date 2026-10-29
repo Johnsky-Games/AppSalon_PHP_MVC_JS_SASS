@@ -298,6 +298,35 @@ final class ErpInventarioConteoIntegrationTest extends TestCase
         self::assertSame(13000,$this->stock($this->p1),'15 de stock actual − 2 del reverso, por encima de las 11 reservadas');
         self::assertSame('revertido',$this->r->uno('SELECT estado FROM erp_inv_conteos WHERE id=?',[$id])['estado']);
     }
+    private function otraSesion():\mysqli
+    {
+        return new \mysqli(getenv('DB_HOST')?:'127.0.0.1',getenv('DB_USER')?:'root',getenv('DB_PASS')?:'root',$this->db->query('SELECT DATABASE()')->fetch_row()[0],(int)(getenv('DB_PORT')?:3306));
+    }
+    public function testLaAprobacionLeeLasLineasActualesAunqueUnRecuentoYCierreSeConfirmenTrasLaInstantanea():void
+    {
+        [$cf]=$this->conceptos();
+        $id=$this->iniciar([$this->p1]);$this->contar($id,$this->p1,'8');// diferencia −2 sobre 10
+        \Classes\Transaccion::ejecutar($this->db,function()use($id,$cf){
+            $this->db->query('SELECT contado_milesimas FROM erp_inv_conteo_lineas WHERE conteo_id='.$id);// instantánea previa: contado 8
+            $b=$this->otraSesion();// otra sesión recuenta (9) y cierra el conteo, y confirma
+            $b->query("UPDATE erp_inv_conteo_lineas SET contado_milesimas=9000 WHERE conteo_id=$id");self::assertSame('',$b->error);
+            $b->query("UPDATE erp_inv_conteos SET estado='pendiente',cerrado_por={$this->finanzas},cerrado_en=NOW() WHERE id=$id");self::assertSame('',$b->error);
+            $b->close();
+            $this->aprobar($id,['concepto_faltante_id'=>$cf,'motivo'=>'Aprobado tras un recuento y cierre']);
+        });
+        self::assertSame(9000,$this->stock($this->p1),'se aplicó el recuento vigente (−1), no el de la instantánea (−2)');
+    }
+    public function testCerrarCuentaLasLineasContadasActualesAunqueOtraSesionLasConfirmeTrasLaInstantanea():void
+    {
+        $id=$this->iniciar([$this->p1]);// ninguna línea contada
+        \Classes\Transaccion::ejecutar($this->db,function()use($id){
+            $this->db->query('SELECT contado_milesimas FROM erp_inv_conteo_lineas WHERE conteo_id='.$id);// instantánea previa: nada contado
+            $b=$this->otraSesion();
+            $b->query("UPDATE erp_inv_conteo_lineas SET contado_milesimas=8000,contado_por={$this->finanzas},contado_en=NOW(),sistema_al_contar_milesimas=10000,reservado_al_contar_milesimas=0,ultimo_mov_al_contar=0 WHERE conteo_id=$id");self::assertSame('',$b->error);$b->close();
+            $this->cerrar($id);// no debe decir «cuenta al menos un producto»
+        });
+        self::assertSame('pendiente',$this->r->uno('SELECT estado FROM erp_inv_conteos WHERE id=?',[$id])['estado']);
+    }
     public function testUnValorDeAjusteQueDesbordaSeMuestraComoConflictoQueBloqueaSinRomperLaPantallaNiLaAprobacion():void
     {
         [$cf]=$this->conceptos();

@@ -89,7 +89,7 @@ final class ErpInventarioConteoService extends ErpService
         return $this->ejecutar($actor,'inventario.gestionar','inv_conteo_cerrar',$d,function()use($actor,$d){
             $c=$this->bloquearConteo($this->id($d['conteo_id']??null));
             if($c['estado']!=='en_conteo')throw new ErpException('El conteo ya no está en conteo ('.$c['estado'].').',409);
-            $n=$this->r->uno('SELECT COUNT(*) total,SUM(contado_milesimas IS NOT NULL) contadas FROM erp_inv_conteo_lineas WHERE conteo_id=?',[(int)$c['id']]);
+            $n=$this->r->uno('SELECT COUNT(*) total,SUM(contado_milesimas IS NOT NULL) contadas FROM erp_inv_conteo_lineas WHERE conteo_id=? LOCK IN SHARE MODE',[(int)$c['id']]);
             if((int)$n['contadas']===0)throw new ErpException('Cuenta al menos un producto antes de cerrar el conteo.');
             $this->r->q("UPDATE erp_inv_conteos SET estado='pendiente',cerrado_por=?,cerrado_en=? WHERE id=?",[$actor,ErpRepository::ahora(),(int)$c['id']]);
             $this->evento($actor,'inventario_conteo_cerrado','inventario_conteo',(int)$c['id'],['contadas'=>(int)$n['contadas'],'sin_contar'=>(int)$n['total']-(int)$n['contadas']]);
@@ -237,7 +237,8 @@ final class ErpInventarioConteoService extends ErpService
      */
     public function analizar(array $conteo,bool $bloquear=false):array
     {
-        $lineas=$this->r->q('SELECT * FROM erp_inv_conteo_lineas WHERE conteo_id=? ORDER BY producto_id',[(int)$conteo['id']]);
+        // Con `$bloquear` (aprobación) las líneas se leen con lectura actual: un recuento y cierre confirmados tras la instantánea de la transacción no pueden aplicarse con cantidades obsoletas.
+        $lineas=$this->r->q('SELECT * FROM erp_inv_conteo_lineas WHERE conteo_id=? ORDER BY producto_id'.($bloquear?' FOR UPDATE':''),[(int)$conteo['id']]);
         foreach($lineas as &$l){
             $p=$this->r->uno('SELECT stock_milesimas,costo_centavos FROM inventario_productos WHERE id=?'.($bloquear?' FOR UPDATE':''),[(int)$l['producto_id']]);
             $stock=(int)$p['stock_milesimas'];$costo=(int)$p['costo_centavos'];$res=$this->reservado((int)$l['producto_id'],$bloquear);
